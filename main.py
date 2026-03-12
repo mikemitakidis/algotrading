@@ -71,7 +71,7 @@ def fetch_bars(client, symbols, timeframe, limit=100):
                 timeframe=tf,
                 start=start,
                 end=end,
-                feed='sip',
+                feed='iex',
                 limit=limit
             )
             bars = client.get_stock_bars(req).df

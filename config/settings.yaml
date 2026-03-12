@@ -4,7 +4,7 @@ alpaca:
   secret_key: ""  # Set on server: export ALPACA_SECRET=your_secret
   base_url: "https://paper-api.alpaca.markets/v2"
   data_url: "https://data.alpaca.markets"
-  feed: "sip"
+  feed: "iex"
 
 bot:
   mode: "shadow"          # shadow | live
