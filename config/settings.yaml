@@ -1,27 +1,35 @@
-# Algo Trader v2 Configuration
-alpaca:
-  api_key: "PKFTA4Q3ZM7YVWTMNT55MV6V5S"
-  secret_key: ""  # Set on server: export ALPACA_SECRET=your_secret
-  base_url: "https://paper-api.alpaca.markets/v2"
-  data_url: "https://data.alpaca.markets"
-  feed: "iex"
+# Algo Trader v2 — Settings
+# Sensitive values (api_key, secret_key, telegram token) are set directly
+# on the server and are NOT stored in this file.
 
 bot:
-  mode: "shadow"          # shadow | live
+  mode: shadow          # shadow | live
   cycle_minutes: 15
   focus_size: 150
   rank_interval_hours: 6
-  min_valid_timeframes: 3  # 3=IBKR, 4=eToro
+
+alpaca:
+  api_key: ""           # Set on server only — not in GitHub
+  secret_key: ""        # Set on server only — not in GitHub
+  base_url: "https://paper-api.alpaca.markets"
+  feed: "iex"           # iex = free tier | sip = paid only
 
 signal_routing:
-  etoro_min_tfs: 4        # Only 4/4 TF signals
-  ibkr_min_tfs: 3         # 3/4 TF signals
+  etoro_min_timeframes: 4
+  ibkr_min_timeframes: 3
+
+scoring:
+  rsi_long_min: 30
+  rsi_long_max: 75
+  rsi_short_min: 52
+  vol_ratio_min: 0.7
+  vwap_dev_threshold: 0.01
+  ema_tolerance: 0.005
+
+telegram:
+  token: ""             # Set on server only — not in GitHub
+  chat_id: ""           # Set on server only — not in GitHub
 
 dashboard:
   port: 8080
-  password: "AlgoTrader2024!"
-
-telegram:
-  enabled: false
-  token: ""
-  chat_id: ""
+  password: ""          # Set on server only — not in GitHub

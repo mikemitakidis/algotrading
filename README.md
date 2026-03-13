@@ -1,19 +1,18 @@
 # Algo Trader v2
 
-Multi-timeframe algorithmic trading bot with ML signal logging.
+Multi-timeframe algorithmic trading signal engine.
 
 ## Architecture
-- **Tier A**: 1,701 US assets ranked daily → Top 150 focus set
-- **Tier B**: Top 150 analyzed across 15m/1H/4H/Daily timeframes
-- **Scoring**: Momentum + Trend + Volume must all = 1 per timeframe
-- **Routing**: 4/4 TF → eToro | 3/4 TF → IBKR
-- **ML**: Every signal logged to SQLite for XGBoost training
+- 4-timeframe confluence: 15m / 1H / 4H / Daily
+- Tier A: ranks full universe daily → Top 150 focus set
+- Tier B: full indicator analysis on focus set
+- Signal routing: 4/4 TF → eToro | 3/4 TF → IBKR
+- Shadow mode: signals logged, no live trades
 
-## Server
-- IP: 138.199.196.95
-- Dashboard: http://138.199.196.95:8080
-- Password: AlgoTrader2024!
+## Stack
+- Python 3.12, Alpaca data feed, SQLite ML database
+- Flask dashboard, GitHub auto-sync
+- pandas-ta, xgboost, lightgbm, flask
 
-## Auto-sync
-The server runs `sync.sh` which checks this repo every 60 seconds.
-Any push here auto-deploys to the server within 60 seconds.
+## Setup
+See server documentation for configuration details.
