@@ -68,7 +68,7 @@ def fetch_bars(client, symbols, timeframe):
                 timeframe=tf,
                 start=start,
                 end=end,
-                feed='iex'   # IEX = free tier. Never use 'sip' (paid only).
+                feed='iex'   # IEX = free tier. Do NOT add adjustment= it forces SIP.
             )
             raw = client.get_stock_bars(req)
             df  = raw.df
