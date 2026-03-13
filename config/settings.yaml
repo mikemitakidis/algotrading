@@ -1,18 +1,17 @@
-# Algo Trader v2 — Settings
-# Sensitive values (api_key, secret_key, telegram token) are set directly
-# on the server and are NOT stored in this file.
+# Algo Trader v2 — Configuration
+# SECRET KEY: Add via the dashboard Settings page — it is preserved between updates
 
 bot:
-  mode: shadow          # shadow | live
+  mode: shadow
   cycle_minutes: 15
   focus_size: 150
   rank_interval_hours: 6
 
 alpaca:
-  api_key: ""           # Set on server only — not in GitHub
-  secret_key: ""        # Set on server only — not in GitHub
+  api_key: "PKFTA4Q3ZM7YVWTMNT55MV6V5S"
+  secret_key: ""
   base_url: "https://paper-api.alpaca.markets"
-  feed: "iex"           # iex = free tier | sip = paid only
+  feed: "iex"
 
 signal_routing:
   etoro_min_timeframes: 4
@@ -27,9 +26,9 @@ scoring:
   ema_tolerance: 0.005
 
 telegram:
-  token: ""             # Set on server only — not in GitHub
-  chat_id: ""           # Set on server only — not in GitHub
+  token: ""
+  chat_id: ""
 
 dashboard:
   port: 8080
-  password: ""          # Set on server only — not in GitHub
+  password: "AlgoTrader2024!"

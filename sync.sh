@@ -1,35 +1,92 @@
 #!/bin/bash
-# Auto-sync from GitHub every 60 seconds
-REPO_DIR="/opt/algo-trader"
-TOKEN_FILE="/opt/algo-trader/.github_token"
+# Algo Trader v2 — GitHub Auto-Sync Daemon
+# Checks GitHub every 60 seconds. On change: pulls, preserves credentials, restarts.
 
-if [ ! -f "$TOKEN_FILE" ]; then
-    echo "$(date): ERROR - Token file not found at $TOKEN_FILE" >> /var/log/algo-sync.log
-    exit 1
-fi
+BASE=/opt/algo-trader
+CFG=$BASE/config/settings.yaml
+LOG=/var/log/algo-sync.log
 
-GITHUB_TOKEN=$(cat "$TOKEN_FILE")
-REPO_URL="https://${GITHUB_TOKEN}:x-oauth-basic@github.com/mikemitakidis/algotrading.git"
-
-echo "$(date): Sync service started" >> /var/log/algo-sync.log
+echo "$(date): Sync daemon started" >> $LOG
 
 while true; do
-    cd "$REPO_DIR"
-    git remote set-url origin "$REPO_URL" 2>/dev/null
-    git fetch origin main --quiet 2>/dev/null
+    cd $BASE
+
+    # Step 1: Save credentials that exist only on this server
+    SECRET_KEY=$(python3 -c "
+import yaml
+try:
+    with open('$CFG') as f:
+        c = yaml.safe_load(f)
+    print(c.get('alpaca',{}).get('secret_key',''))
+except: print('')
+" 2>/dev/null)
+
+    DASH_PASS=$(python3 -c "
+import yaml
+try:
+    with open('$CFG') as f:
+        c = yaml.safe_load(f)
+    print(c.get('dashboard',{}).get('password','AlgoTrader2024!'))
+except: print('AlgoTrader2024!')
+" 2>/dev/null)
+
+    TG_TOKEN=$(python3 -c "
+import yaml
+try:
+    with open('$CFG') as f:
+        c = yaml.safe_load(f)
+    print(c.get('telegram',{}).get('token',''))
+except: print('')
+" 2>/dev/null)
+
+    TG_CHAT=$(python3 -c "
+import yaml
+try:
+    with open('$CFG') as f:
+        c = yaml.safe_load(f)
+    print(c.get('telegram',{}).get('chat_id',''))
+except: print('')
+" 2>/dev/null)
+
+    # Step 2: Check for GitHub changes
+    git fetch origin main -q 2>/dev/null
     LOCAL=$(git rev-parse HEAD 2>/dev/null)
     REMOTE=$(git rev-parse origin/main 2>/dev/null)
-    
+
     if [ "$LOCAL" != "$REMOTE" ]; then
-        echo "$(date): Changes detected, pulling..." >> /var/log/algo-sync.log
-        git pull origin main --quiet 2>/dev/null
-        pkill -f "dashboard.py" 2>/dev/null; pkill -f "python3 main.py" 2>/dev/null
-        sleep 1
-        source venv/bin/activate
-        python3 dashboard.py &
+        echo "$(date): Change detected — pulling..." >> $LOG
+        git pull origin main -q >> $LOG 2>&1
+
+        # Step 3: Re-inject saved credentials back into settings.yaml
+        python3 - << PYEOF
+import yaml
+with open('$CFG') as f:
+    cfg = yaml.safe_load(f)
+if '$SECRET_KEY':
+    cfg['alpaca']['secret_key'] = '$SECRET_KEY'
+if '$DASH_PASS':
+    cfg.setdefault('dashboard', {})['password'] = '$DASH_PASS'
+if '$TG_TOKEN':
+    cfg.setdefault('telegram', {})['token'] = '$TG_TOKEN'
+if '$TG_CHAT':
+    cfg.setdefault('telegram', {})['chat_id'] = '$TG_CHAT'
+with open('$CFG', 'w') as f:
+    yaml.dump(cfg, f, default_flow_style=False)
+print("Credentials preserved after pull")
+PYEOF
+
+        echo "$(date): Restarting services..." >> $LOG
+        source $BASE/venv/bin/activate
+
+        pkill -f "python3.*main.py"   || true
+        pkill -f "python3.*dashboard" || true
         sleep 2
-        python3 main.py >> logs/bot.log 2>&1 &
-        echo "$(date): Services restarted after update" >> /var/log/algo-sync.log
+
+        nohup python3 $BASE/main.py      >> $BASE/logs/bot.log 2>&1 &
+        nohup python3 $BASE/dashboard.py >> $BASE/logs/dashboard.log 2>&1 &
+
+        echo "$(date): Services restarted" >> $LOG
     fi
+
     sleep 60
 done
