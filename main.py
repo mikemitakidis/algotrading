@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Algo Trader v2 — Fully Fixed & Diagnosed
+Algo Trader v2 — Production Ready
+Data: yfinance (free, no subscription, works immediately)
+Alpaca: reserved for order execution only (future phase)
 """
 import time, logging, sqlite3, yaml, os, sys
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
+import yfinance as yf
 
 os.makedirs('/opt/algo-trader/logs', exist_ok=True)
 os.makedirs('/opt/algo-trader/data', exist_ok=True)
@@ -20,7 +23,13 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-LOOKBACK = {'15m': 5, '1H': 15, '4H': 30, '1D': 90}
+# Timeframe map for yfinance
+YF_INTERVALS = {
+    '15m': ('15m',  '5d'),    # 15-min bars, 5 days
+    '1H':  ('1h',  '15d'),    # 1-hour bars, 15 days
+    '4H':  ('1h',  '30d'),    # 1-hour bars resampled to 4H, 30 days
+    '1D':  ('1d',  '120d'),   # Daily bars, 120 days
+}
 
 def load_config():
     with open('/opt/algo-trader/config/settings.yaml') as f:
@@ -31,71 +40,62 @@ def get_assets():
     from assets import ASSET_UNIVERSE
     return ASSET_UNIVERSE
 
-def get_client(cfg):
-    from alpaca.data.historical import StockHistoricalDataClient
-    api_key    = cfg['alpaca']['api_key']
-    secret_key = cfg['alpaca']['secret_key']
-    log.info(f"Alpaca API key loaded: {api_key[:8]}... secret: {'SET' if secret_key else 'MISSING'}")
-    if not secret_key:
-        raise ValueError("Alpaca secret_key is missing from settings.yaml!")
-    return StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
-
-def fetch_bars(client, symbols, timeframe):
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-
-    tf_map = {
-        '15m': TimeFrame(15, TimeFrameUnit.Minute),
-        '1H':  TimeFrame(1,  TimeFrameUnit.Hour),
-        '4H':  TimeFrame(4,  TimeFrameUnit.Hour),
-        '1D':  TimeFrame(1,  TimeFrameUnit.Day),
-    }
-    tf    = tf_map[timeframe]
-    days  = LOOKBACK[timeframe]
-    end   = datetime.utcnow() - timedelta(minutes=20)
-    start = end - timedelta(days=days)
-
+def fetch_bars_yf(symbols, timeframe):
+    """Fetch OHLCV bars using yfinance — free, no API key, no subscription."""
+    interval, period = YF_INTERVALS[timeframe]
     all_bars = {}
-    batch_size = 50
-    total_batches = (len(symbols) + batch_size - 1) // batch_size
+    batch_size = 100
 
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i+batch_size]
-        batch_num = i // batch_size + 1
         try:
-            req = StockBarsRequest(
-                symbol_or_symbols=batch,
-                timeframe=tf,
-                start=start,
-                end=end,
-                feed='iex'   # IEX = free tier. Do NOT add adjustment= it forces SIP.
+            raw = yf.download(
+                tickers=batch,
+                period=period,
+                interval=interval,
+                group_by='ticker',
+                auto_adjust=True,
+                progress=False,
+                threads=True
             )
-            raw = client.get_stock_bars(req)
-            df  = raw.df
-
-            if df is None or df.empty:
-                log.info(f"  Batch {batch_num}/{total_batches} ({timeframe}): empty response")
-                time.sleep(0.4)
+            if raw.empty:
                 continue
 
-            log.info(f"  Batch {batch_num}/{total_batches} ({timeframe}): got {len(df)} rows, index type: {type(df.index).__name__}")
-
-            if isinstance(df.index, pd.MultiIndex):
+            # Multi-ticker response
+            if isinstance(raw.columns, pd.MultiIndex):
                 for sym in batch:
                     try:
-                        s = df.loc[sym].copy()
-                        if len(s) >= 10:
-                            all_bars[sym] = s
-                    except KeyError:
+                        df = raw[sym].dropna()
+                        df.columns = [c.lower() for c in df.columns]
+                        if len(df) >= 14:
+                            # Resample 1H → 4H if needed
+                            if timeframe == '4H':
+                                df = df.resample('4h').agg({
+                                    'open': 'first', 'high': 'max',
+                                    'low': 'min', 'close': 'last',
+                                    'volume': 'sum'
+                                }).dropna()
+                            if len(df) >= 14:
+                                all_bars[sym] = df
+                    except Exception:
                         pass
             else:
-                # Single-symbol response — index is just timestamps
-                if len(df) >= 10 and len(batch) == 1:
-                    all_bars[batch[0]] = df.copy()
+                # Single ticker
+                df = raw.copy()
+                df.columns = [c.lower() for c in df.columns]
+                if len(df) >= 14:
+                    if timeframe == '4H':
+                        df = df.resample('4h').agg({
+                            'open': 'first', 'high': 'max',
+                            'low': 'min', 'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
+                    if len(df) >= 14 and len(batch) == 1:
+                        all_bars[batch[0]] = df
 
         except Exception as e:
-            log.warning(f"  Batch {batch_num}/{total_batches} ({timeframe}) ERROR: {str(e)[:150]}")
-        time.sleep(0.4)
+            log.warning(f"yfinance batch {i//batch_size+1} ({timeframe}): {str(e)[:100]}")
+        time.sleep(0.2)
 
     return all_bars
 
@@ -108,48 +108,63 @@ def compute_indicators(df):
         h = df['high'].astype(float)
         l = df['low'].astype(float)
 
+        # RSI 14
         delta = c.diff()
         up    = delta.clip(lower=0).rolling(14).mean()
         dn    = (-delta.clip(upper=0)).rolling(14).mean()
         rsi   = 100 - (100 / (1 + up / (dn + 1e-9)))
 
+        # MACD 12/26/9
         ema12     = c.ewm(span=12, adjust=False).mean()
         ema26     = c.ewm(span=26, adjust=False).mean()
         macd_hist = (ema12 - ema26) - (ema12 - ema26).ewm(span=9, adjust=False).mean()
 
+        # EMA 20/50
         ema20 = c.ewm(span=20, adjust=False).mean()
         ema50 = c.ewm(span=50, adjust=False).mean()
 
+        # Bollinger Bands
         n     = min(20, len(c))
         sma   = c.rolling(n).mean()
         std   = c.rolling(n).std()
-        bb_up = sma + 2 * std
-        bb_lo = sma - 2 * std
+        bb_up = sma + 2*std
+        bb_lo = sma - 2*std
         bb_rng = float(bb_up.iloc[-1] - bb_lo.iloc[-1])
         bb_pos = float((c.iloc[-1] - bb_lo.iloc[-1]) / (bb_rng + 1e-9)) if bb_rng > 0 else 0.5
 
+        # VWAP deviation
         vwap     = (c * v).cumsum() / (v.cumsum() + 1e-9)
         vwap_dev = float((c.iloc[-1] - vwap.iloc[-1]) / (vwap.iloc[-1] + 1e-9))
 
+        # OBV slope
         obv       = (np.sign(c.diff()) * v).cumsum()
         obv_slope = float((obv.iloc[-1] - obv.iloc[-5]) / (abs(obv.iloc[-5]) + 1e-9)) if len(obv) > 5 else 0.0
 
-        tr  = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+        # ATR
+        tr  = pd.concat([h-l, (h-c.shift()).abs(), (l-c.shift()).abs()], axis=1).max(axis=1)
         atr = float(tr.rolling(14).mean().iloc[-1])
 
+        # Volume ratio
         vol_ma    = v.rolling(min(20, len(v))).mean()
         vol_ratio = float(v.iloc[-1] / (vol_ma.iloc[-1] + 1e-9))
 
-        lb        = min(20, len(c) - 1)
+        # Price momentum
+        lb        = min(20, len(c)-1)
         price_chg = float((c.iloc[-1] - c.iloc[-lb]) / (c.iloc[-lb] + 1e-9))
 
         ind = {
-            'rsi': float(rsi.iloc[-1]), 'macd_hist': float(macd_hist.iloc[-1]),
-            'ema20': float(ema20.iloc[-1]), 'ema50': float(ema50.iloc[-1]),
-            'bb_pos': bb_pos, 'bb_width': float(bb_rng / (sma.iloc[-1] + 1e-9)),
-            'vwap_dev': vwap_dev, 'obv_slope': obv_slope,
-            'atr': atr, 'vol_ratio': vol_ratio,
-            'price': float(c.iloc[-1]), 'price_chg': price_chg,
+            'rsi': float(rsi.iloc[-1]),
+            'macd_hist': float(macd_hist.iloc[-1]),
+            'ema20': float(ema20.iloc[-1]),
+            'ema50': float(ema50.iloc[-1]),
+            'bb_pos': bb_pos,
+            'bb_width': float(bb_rng / (sma.iloc[-1] + 1e-9)),
+            'vwap_dev': vwap_dev,
+            'obv_slope': obv_slope,
+            'atr': atr,
+            'vol_ratio': vol_ratio,
+            'price': float(c.iloc[-1]),
+            'price_chg': price_chg,
         }
         if any(not np.isfinite(x) for x in ind.values()):
             return None
@@ -159,17 +174,18 @@ def compute_indicators(df):
         return None
 
 def score_timeframe(ind, direction='long'):
+    """All 3 categories must pass: Momentum + Trend + Volume."""
     if ind is None:
         return 0
     try:
         if direction == 'long':
-            momentum = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0)     else 0
-            trend    = 1 if (ind['ema20'] > ind['ema50'] * 0.995)                else 0
-            volume   = 1 if (ind['vwap_dev'] > -0.01 and ind['vol_ratio'] > 0.7) else 0
+            momentum = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0)          else 0
+            trend    = 1 if (ind['ema20'] > ind['ema50'] * 0.995)                     else 0
+            volume   = 1 if (ind['vwap_dev'] > -0.015 and ind['vol_ratio'] > 0.6)    else 0
         else:
-            momentum = 1 if (ind['rsi'] > 52 and ind['macd_hist'] < 0)          else 0
-            trend    = 1 if (ind['ema20'] < ind['ema50'] * 1.005)                else 0
-            volume   = 1 if (ind['vwap_dev'] < 0.01 and ind['vol_ratio'] > 0.7)  else 0
+            momentum = 1 if (ind['rsi'] > 50 and ind['macd_hist'] < 0)               else 0
+            trend    = 1 if (ind['ema20'] < ind['ema50'] * 1.005)                     else 0
+            volume   = 1 if (ind['vwap_dev'] < 0.015 and ind['vol_ratio'] > 0.6)     else 0
         return 1 if (momentum + trend + volume == 3) else 0
     except:
         return 0
@@ -206,10 +222,10 @@ def log_signal(db, sym, direction, scores, ind, route):
     except Exception as e:
         log.warning(f"DB insert {sym}: {e}")
 
-def rank_symbols(client, symbols):
-    log.info(f"Tier A: Ranking {len(symbols)} symbols on daily bars...")
-    bars   = fetch_bars(client, symbols, '1D')
-    log.info(f"Tier A: Received daily bars for {len(bars)} symbols")
+def rank_symbols(symbols):
+    """Tier A: rank all US symbols by momentum, return top 150."""
+    log.info(f"Tier A: Ranking {len(symbols)} symbols...")
+    bars   = fetch_bars_yf(symbols, '1D')
     scored = {}
     for sym, df in bars.items():
         try:
@@ -220,35 +236,31 @@ def rank_symbols(client, symbols):
             pass
     ranked = sorted(scored, key=scored.get, reverse=True)
     top    = ranked[:150]
-    log.info(f"Tier A complete. Scored: {len(scored)}. Focus set: {len(top)}")
+    log.info(f"Tier A done. Data received: {len(bars)} symbols. Scored: {len(scored)}. Focus: {len(top)}")
     if top:
-        log.info(f"Top 10 symbols: {top[:10]}")
-    else:
-        log.warning("Focus set is EMPTY — check Alpaca credentials and API access")
+        log.info(f"Top 10: {top[:10]}")
     return top
 
 def main():
     log.info("=" * 60)
-    log.info("ALGO TRADER v2 STARTING — SHADOW MODE")
+    log.info("ALGO TRADER v2 — SHADOW MODE")
+    log.info("Data source: yfinance (free, no API limits)")
     log.info("=" * 60)
 
     cfg    = load_config()
-    client = get_client(cfg)
-    assets = get_assets()
     db     = init_db()
+    assets = get_assets()
 
     us_syms = [a for a in assets if '.' not in a and '-' not in a and len(a) <= 5]
-    log.info(f"Total US symbols: {len(us_syms)}")
+    log.info(f"US symbols loaded: {len(us_syms)}")
 
-    # Quick connectivity test before full run
-    log.info("Running connectivity test with 5 symbols...")
-    test_bars = fetch_bars(client, ['AAPL','MSFT','NVDA','SPY','QQQ'], '1D')
-    log.info(f"Connectivity test: got data for {len(test_bars)}/5 symbols")
-    if not test_bars:
-        log.error("CONNECTIVITY FAILED — cannot get data from Alpaca. Check secret_key in settings.yaml")
-        log.error("Go to http://138.199.196.95:8080 → Settings → check secret_key is set")
+    # Quick connectivity test
+    log.info("Running connectivity test...")
+    test = fetch_bars_yf(['AAPL','MSFT','NVDA','SPY','QQQ'], '1D')
+    if test:
+        log.info(f"Connectivity OK: {[f'{k}:{len(v)}bars' for k,v in test.items()]}")
     else:
-        log.info(f"Connectivity OK. Sample symbol data points: {[f'{k}:{len(v)}bars' for k,v in list(test_bars.items())[:3]]}")
+        log.error("Connectivity FAILED — yfinance returned no data")
 
     focus     = []
     last_rank = datetime.utcnow() - timedelta(hours=7)
@@ -259,12 +271,13 @@ def main():
             cycle += 1
             now = datetime.utcnow()
 
+            # Re-rank every 6 hours
             if (now - last_rank).total_seconds() > 21600:
-                focus     = rank_symbols(client, us_syms)
+                focus     = rank_symbols(us_syms)
                 last_rank = now
 
             if not focus:
-                log.warning("Focus empty — retry in 5 min")
+                log.warning("Focus set empty — retrying rank in 5 min")
                 time.sleep(300)
                 last_rank = datetime.utcnow() - timedelta(hours=7)
                 continue
@@ -276,7 +289,7 @@ def main():
 
             for tf in ['1D', '4H', '1H', '15m']:
                 log.info(f"  Fetching {tf}...")
-                bars = fetch_bars(client, focus, tf)
+                bars = fetch_bars_yf(focus, tf)
                 log.info(f"  {tf}: got data for {len(bars)}/{len(focus)} symbols")
 
                 for sym, df in bars.items():
@@ -293,7 +306,7 @@ def main():
                                 cached_scores[sym] = {'long': {}, 'short': {}}
                             cached_scores[sym][direction][tf] = 1
 
-            log.info(f"  Symbols with at least 1 valid TF: {len(cached_scores)}")
+            log.info(f"  Symbols with valid TF scores: {len(cached_scores)}")
 
             signal_count = 0
             for sym, dirs in cached_scores.items():
@@ -302,7 +315,7 @@ def main():
                     if count >= 3:
                         route    = 'ETORO' if count == 4 else 'IBKR'
                         best_ind = None
-                        for pref in ['1D', '4H', '1H', '15m']:
+                        for pref in ['1D','4H','1H','15m']:
                             if sym in cached_inds and pref in cached_inds[sym]:
                                 best_ind = cached_inds[sym][pref]
                                 break
@@ -311,7 +324,7 @@ def main():
                         log.info(
                             f"*** SIGNAL [{route}] {sym} {direction.upper()} "
                             f"{count}/4 TF | RSI:{best_ind['rsi']:.1f} "
-                            f"Price:${best_ind['price']:.2f} TFs:{list(tfs.keys())}"
+                            f"Price:${best_ind['price']:.2f} | TFs:{list(tfs.keys())}"
                         )
                         log_signal(db, sym, direction, tfs, best_ind, route)
                         signal_count += 1
@@ -323,7 +336,7 @@ def main():
             log.info("Stopped.")
             break
         except Exception as e:
-            log.error(f"Cycle error: {e}", exc_info=True)
+            log.error(f"Cycle {cycle} error: {e}", exc_info=True)
             time.sleep(60)
 
 if __name__ == '__main__':
