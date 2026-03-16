@@ -1,26 +1,29 @@
 #!/bin/bash
-# Algo Trader v2 — Startup Script
-# Downloads latest code directly from GitHub (bypasses git conflicts)
-
 BASE=/opt/algo-trader
 LOG=$BASE/logs/bot.log
-RAW="https://raw.githubusercontent.com/mikemitakidis/algotrading/main"
-
 mkdir -p $BASE/logs $BASE/data
-echo "$(date): === STARTING ===" >> $LOG
 
-# Download latest files directly from GitHub raw URLs
-echo "$(date): Downloading latest code from GitHub..." >> $LOG
-wget -q -O $BASE/main.py      "$RAW/main.py"      && echo "$(date): main.py updated" >> $LOG
-wget -q -O $BASE/backtest.py  "$RAW/backtest.py"   && echo "$(date): backtest.py updated" >> $LOG
+echo "$(date): === START ===" | tee -a $LOG
 
-echo "$(date): Download done." >> $LOG
-
-# Kill only the bot process
+# Kill everything
 pkill -f "python3.*main.py" 2>/dev/null || true
-sleep 2
+sleep 1
 
-# Start the bot
+# Download latest main.py directly from GitHub (no git, no conflicts, always works)
+echo "$(date): Downloading main.py from GitHub..." | tee -a $LOG
+wget -q --timeout=30 \
+  "https://raw.githubusercontent.com/mikemitakidis/algotrading/main/main.py" \
+  -O $BASE/main.py && echo "$(date): main.py downloaded OK" | tee -a $LOG \
+  || echo "$(date): wget failed, using existing main.py" | tee -a $LOG
+
+# Verify it's the yfinance version
+if grep -q "yfinance" $BASE/main.py; then
+    echo "$(date): CONFIRMED: main.py uses yfinance" | tee -a $LOG
+else
+    echo "$(date): ERROR: main.py does NOT have yfinance - check GitHub" | tee -a $LOG
+fi
+
+# Start bot
 source $BASE/venv/bin/activate
 nohup python3 $BASE/main.py >> $BASE/logs/bot.log 2>&1 &
-echo "$(date): Bot started (PID $!)" >> $LOG
+echo "$(date): Bot started PID $!" | tee -a $LOG
