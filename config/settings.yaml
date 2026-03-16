@@ -1,0 +1,23 @@
+# Algo Trader v2 Configuration
+alpaca:
+  api_key: "PKFTA4Q3ZM7YVWTMNT55MV6V5S"
+  secret_key: "DbDfgYZV21JkkjeggWr3hTXKyrzxCW69V5Awt6SX5QqC"
+  base_url: "https://paper-api.alpaca.markets/v2"
+  data_url: "https://data.alpaca.markets"
+  feed: "iex"
+bot:
+  mode: "shadow"
+  cycle_minutes: 15
+  focus_size: 150
+  rank_interval_hours: 6
+  min_valid_timeframes: 3
+signal_routing:
+  etoro_min_tfs: 4
+  ibkr_min_tfs: 3
+dashboard:
+  port: 8080
+  password: "AlgoTrader2024!"
+telegram:
+  enabled: false
+  token: ""
+  chat_id: ""
