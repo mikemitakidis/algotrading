@@ -821,10 +821,27 @@ def stop():
 @app.route('/api/restart', methods=['POST'])
 @require_auth
 def restart():
-    # Detach fully so dashboard survives long enough to respond
-    subprocess.Popen(['bash', '-c', f'sleep 2 && bash {START_SCRIPT}'],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
+    # Download latest code directly from GitHub (bypasses git pull issues)
+    def _update_and_restart():
+        import time, urllib.request
+        time.sleep(1)
+        base = 'https://raw.githubusercontent.com/mikemitakidis/algotrading/main/'
+        files = {
+            '/opt/algo-trader/main.py':      base + 'main.py',
+            '/opt/algo-trader/dashboard.py': base + 'dashboard.py',
+            '/opt/algo-trader/start.sh':     base + 'start.sh',
+        }
+        for dest, url in files.items():
+            try:
+                urllib.request.urlretrieve(url, dest)
+            except Exception as e:
+                print(f"Download failed {dest}: {e}")
+        time.sleep(1)
+        subprocess.Popen(['bash', START_SCRIPT],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    import threading
+    threading.Thread(target=_update_and_restart, daemon=True).start()
     return jsonify({'ok': True})
 
 @app.route('/api/start', methods=['POST'])
