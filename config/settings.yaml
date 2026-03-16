@@ -1,34 +1,27 @@
-# Algo Trader v2 — Configuration
-# SECRET KEY: Add via the dashboard Settings page — it is preserved between updates
-
-bot:
-  mode: shadow
-  cycle_minutes: 15
-  focus_size: 150
-  rank_interval_hours: 6
-
+# Algo Trader v2 Configuration
 alpaca:
   api_key: "PKFTA4Q3ZM7YVWTMNT55MV6V5S"
   secret_key: ""
-  base_url: "https://paper-api.alpaca.markets"
+  base_url: "https://paper-api.alpaca.markets/v2"
+  data_url: "https://data.alpaca.markets"
   feed: "iex"
 
+bot:
+  mode: "shadow"
+  cycle_minutes: 15
+  focus_size: 150
+  rank_interval_hours: 6
+  min_valid_timeframes: 3
+
 signal_routing:
-  etoro_min_timeframes: 4
-  ibkr_min_timeframes: 3
-
-scoring:
-  rsi_long_min: 30
-  rsi_long_max: 75
-  rsi_short_min: 52
-  vol_ratio_min: 0.7
-  vwap_dev_threshold: 0.01
-  ema_tolerance: 0.005
-
-telegram:
-  token: ""
-  chat_id: ""
+  etoro_min_tfs: 4
+  ibkr_min_tfs: 3
 
 dashboard:
   port: 8080
   password: "AlgoTrader2024!"
+
+telegram:
+  enabled: false
+  token: ""
+  chat_id: ""
