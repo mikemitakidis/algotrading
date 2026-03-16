@@ -27,7 +27,13 @@ def get_password():
         return 'AlgoTrader2024!'
 
 def is_logged_in():
-    return session.get('authenticated') is True
+    # Accept session cookie (browser) OR internal header (Vercel proxy)
+    if session.get('authenticated') is True:
+        return True
+    pw = get_password()
+    if request.headers.get('X-Internal-Auth') == pw:
+        return True
+    return False
 
 def require_auth(f):
     from functools import wraps
@@ -381,14 +387,17 @@ def logout():
 def status():
     import subprocess
     running = bool(subprocess.run(['pgrep', '-f', 'main.py'], capture_output=True).stdout.strip())
-    sig_count = win_count = 0
+    sig_count = ibkr_count = etoro_count = 0
     try:
         db = sqlite3.connect(DB_PATH)
-        sig_count = db.execute('SELECT COUNT(*) FROM signals').fetchone()[0]
+        sig_count   = db.execute('SELECT COUNT(*) FROM signals').fetchone()[0]
+        ibkr_count  = db.execute("SELECT COUNT(*) FROM signals WHERE route='IBKR'").fetchone()[0]
+        etoro_count = db.execute("SELECT COUNT(*) FROM signals WHERE route='ETORO'").fetchone()[0]
         db.close()
     except: pass
     return jsonify({'running': running, 'signal_count': sig_count,
-                    'win_count': win_count, 'win_rate': 'N/A'})
+                    'ibkr_count': ibkr_count, 'etoro_count': etoro_count,
+                    'win_count': 0, 'win_rate': 'N/A'})
 
 @app.route('/api/signals')
 @require_auth
