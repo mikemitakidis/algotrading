@@ -1,6 +1,20 @@
-*.pyc
+# Python
 __pycache__/
-logs/*.log
-data/*.db
+*.pyc
+*.pyo
 venv/
 .env
+
+# Data and logs (stay on server only)
+logs/
+data/
+*.db
+*.log
+
+# Credentials (stay on server only — NEVER in GitHub)
+config/settings.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp

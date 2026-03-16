@@ -1,9 +1,11 @@
-# Algo Trader v2 Configuration
+# Algo Trader v2 — Settings Template
+# Copy to settings.yaml and fill in your values
+# This file IS tracked by git. settings.yaml is NOT.
+
 alpaca:
-  api_key: "PKFTA4Q3ZM7YVWTMNT55MV6V5S"
-  secret_key: "DbDfgYZV21JkkjeggWr3hTXKyrzxCW69V5Awt6SX5QqC"
+  api_key: "YOUR_ALPACA_API_KEY"
+  secret_key: "YOUR_ALPACA_SECRET_KEY"
   base_url: "https://paper-api.alpaca.markets/v2"
-  data_url: "https://data.alpaca.markets"
   feed: "iex"
 
 bot:
@@ -19,7 +21,7 @@ signal_routing:
 
 dashboard:
   port: 8080
-  password: "AlgoTrader2024!"
+  password: "YOUR_DASHBOARD_PASSWORD"
 
 telegram:
   enabled: false
