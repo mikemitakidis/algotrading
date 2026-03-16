@@ -461,9 +461,18 @@ def stop():
 @app.route('/api/restart', methods=['POST'])
 @require_auth
 def restart():
-    subprocess.run(['pkill', '-f', 'main.py'])
-    import time; time.sleep(1)
-    subprocess.Popen(['bash', START_SCRIPT])
+    # Detach fully so dashboard survives long enough to respond
+    subprocess.Popen(['bash', '-c', f'sleep 2 && bash {START_SCRIPT}'],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return jsonify({'ok': True})
+
+@app.route('/api/start', methods=['POST'])
+@require_auth  
+def start_bot():
+    subprocess.Popen(['bash', '-c', f'sleep 1 && bash {START_SCRIPT}'],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
     return jsonify({'ok': True})
 
 if __name__ == '__main__':
