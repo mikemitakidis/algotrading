@@ -7,7 +7,7 @@
 BASE=/opt/algo-trader
 VENV=$BASE/venv
 LOG=$BASE/logs/sync.log
-BRANCH=rebuild-from-zero   # change to main after milestone approval
+BRANCH=main
 
 mkdir -p $BASE/logs
 echo "$(date): Sync daemon started (branch: $BRANCH)" >> $LOG
