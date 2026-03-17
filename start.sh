@@ -23,7 +23,27 @@ else
     echo "$(date): ERROR: main.py does NOT have yfinance - check GitHub" | tee -a $LOG
 fi
 
-# Start bot
+# Install / verify all required packages in venv
 source $BASE/venv/bin/activate
+
+echo "$(date): Installing required packages..." | tee -a $LOG
+pip install --quiet --upgrade \
+    yfinance \
+    pandas \
+    numpy \
+    pyyaml \
+    flask \
+    requests \
+    >> $LOG 2>&1
+
+# Verify yfinance is importable before starting
+python3 -c "import yfinance; import pandas; import numpy; import flask; import yaml" 2>&1
+if [ $? -ne 0 ]; then
+    echo "$(date): ERROR — package import check failed. See log above." | tee -a $LOG
+    exit 1
+fi
+echo "$(date): All packages OK." | tee -a $LOG
+
+# Start bot
 nohup python3 $BASE/main.py >> $BASE/logs/bot.log 2>&1 &
 echo "$(date): Bot started PID $!" | tee -a $LOG
