@@ -47,7 +47,7 @@ while true; do
         sleep 2
 
         nohup $VENV/bin/python3 $BASE/dashboard/app.py >> $BASE/logs/dashboard.log 2>&1 &
-        nohup $VENV/bin/python3 $BASE/main.py          >> $BASE/logs/bot.log       2>&1 &
+        nohup $VENV/bin/python3 $BASE/main.py          > /dev/null 2>&1 &
 
         echo "$(date): Restarted. Bot:$(pgrep -f main.py) Dash:$(pgrep -f dashboard)" >> $LOG
     fi

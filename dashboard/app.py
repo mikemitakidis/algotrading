@@ -401,13 +401,15 @@ def restart():
 
 
 def _run_bot():
+    # Do NOT redirect stdout to log file here.
+    # main.py uses FileHandler internally — redirecting stdout too causes duplicate lines.
     venv_python = BASE_DIR / 'venv' / 'bin' / 'python3'
     main_py     = BASE_DIR / 'main.py'
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     subprocess.Popen(
         [str(venv_python), str(main_py)],
-        stdout=open(LOG_PATH, 'a'),
-        stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
 

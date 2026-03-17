@@ -52,7 +52,7 @@ pkill -f "python3.*app.py"    2>/dev/null || true
 sleep 1
 
 # ── 6. Start bot ──────────────────────────────────────────────────────────────
-nohup $VENV/bin/python3 $BASE/main.py >> $BASE/logs/bot.log 2>&1 &
+nohup $VENV/bin/python3 $BASE/main.py > /dev/null 2>&1 &
 echo "$(date): Bot started PID=$!" | tee -a $LOG
 
 # ── 7. Start dashboard ────────────────────────────────────────────────────────
