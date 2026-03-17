@@ -1,0 +1,25 @@
+# Secrets — never committed
+.env
+
+# Runtime data — stays on server
+logs/
+data/
+*.db
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
