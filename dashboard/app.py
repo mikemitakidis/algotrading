@@ -18,7 +18,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
+# Derive stable secret key from password so sessions survive bot restarts
+_pw = os.getenv('DASHBOARD_PASSWORD', 'changeme')
+app.secret_key = _pw + '_algo_trader_session_key'
 
 LOG_PATH = BASE_DIR / 'logs' / 'bot.log'
 DB_PATH  = BASE_DIR / 'data' / 'signals.db'
@@ -111,7 +113,7 @@ HTML = """<!DOCTYPE html>
 <body>
 
 <!-- LOGIN -->
-<div id="loginWrap" class="login" style="display:none">
+<div id="loginWrap" class="login">
   <div class="lbox">
     <div style="font-size:21px;font-weight:700;color:#58a6ff;text-align:center;margin-bottom:6px">🤖 Algo Trader</div>
     <div style="color:#8b949e;text-align:center;margin-bottom:26px">v1.0 — Shadow Mode</div>
@@ -331,15 +333,8 @@ async function act(a){
 }
 
 // Check existing session
-api('status').then(d=>{
-  if(d.running!==undefined){
-    document.getElementById('loginWrap').style.display='none';
-    document.getElementById('appWrap').style.display='block';
-    boot();
-  } else {
-    document.getElementById('loginWrap').style.display='flex';
-  }
-}).catch(()=>document.getElementById('loginWrap').style.display='flex');
+// Show login page on load — session resets on server restart
+document.getElementById('loginWrap').style.display='flex';
 </script>
 </body>
 </html>"""
