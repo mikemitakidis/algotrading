@@ -197,7 +197,7 @@ HTML = (
     '  fetch("/api/logout",{method:"POST"}).then(function(){location.reload();});'
     '}'
     
-    'function boot(){loadAll();setInterval(loadAll,25000);}'
+    'function boot(){loadAll();loadTg();setInterval(loadAll,25000);setInterval(loadTg,60000);}'
     
     'function go(p){'
     '  document.querySelectorAll(".page").forEach(function(x){x.classList.remove("on");});'
@@ -299,6 +299,36 @@ HTML = (
     '  }).catch(function(){});'
     '}'
     
+    'function telegramTest(){' +
+    '  var btn=document.getElementById("tgTestBtn");' +
+    '  if(btn)btn.disabled=true;' +
+    '  fetch("/api/telegram/test",{method:"POST"})' +
+    '  .then(function(r){return r.json();})' +
+    '  .then(function(d){' +
+    '    alert(d.message);' +
+    '    if(btn)btn.disabled=false;' +
+    '    loadTg();' +
+    '  }).catch(function(e){alert("Error: "+e.message);if(btn)btn.disabled=false;});' +
+    '}' +
+    'function loadTg(){' +
+    '  fetch("/api/telegram/status").then(function(r){return r.json();}).then(function(d){' +
+    '    var badge=document.getElementById("tgBadge");' +
+    '    var status=document.getElementById("tgStatus");' +
+    '    if(!badge||!status)return;' +
+    '    if(d.ready){' +
+    '      badge.style.background="#0d4a1a";badge.style.color="#3fb950";badge.textContent="enabled";' +
+    '      status.textContent="Telegram is configured and active.";' +
+    '      status.style.color="#3fb950";' +
+    '    }else if(d.enabled){' +
+    '      badge.style.background="#4a2d00";badge.style.color="#d29922";badge.textContent="misconfigured";' +
+    '      status.textContent="TELEGRAM_ENABLED=true but token or chat_id is missing in .env";' +
+    '      status.style.color="#d29922";' +
+    '    }else{' +
+    '      badge.style.background="#21262d";badge.style.color="#8b949e";badge.textContent="disabled";' +
+    '      status.textContent="Telegram disabled. Set TELEGRAM_ENABLED=true in .env to activate.";' +
+    '    }' +
+    '  }).catch(function(){});' +
+    '}' +
     'function act(a){'
     '  fetch("/api/"+a,{method:"POST"}).then(function(){setTimeout(loadStatus,2500);}).catch(function(){});'
     '}'
@@ -413,6 +443,31 @@ def _run_bot():
         start_new_session=True,
     )
 
+
+
+@app.route('/api/telegram/status')
+@require_auth
+def telegram_status():
+    enabled = os.getenv('TELEGRAM_ENABLED', 'false').strip().lower() in ('true', '1', 'yes')
+    has_tok = bool(os.getenv('TELEGRAM_BOT_TOKEN', '').strip())
+    has_cid = bool(os.getenv('TELEGRAM_CHAT_ID', '').strip())
+    ready   = enabled and has_tok and has_cid
+    return jsonify({'ready': ready, 'enabled': enabled,
+                    'status': 'enabled' if ready else ('disabled' if not enabled else 'misconfigured')})
+
+@app.route('/api/telegram/test', methods=['POST'])
+@require_auth
+def telegram_test():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    try:
+        from bot.config   import load as _cfg
+        from bot.notifier import send_test
+        result = send_test(_cfg())
+        msg = 'Test message sent!' if result else 'Failed -- check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env'
+        return jsonify({'ok': result, 'message': msg})
+    except Exception as e:
+        return jsonify({'ok': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))

@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
-"""
-main.py — Algo Trader v1 Entry Point
-"""
+"""main.py — Algo Trader v1 Entry Point"""
 import logging
-import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -13,17 +10,14 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / 'logs' / 'bot.log'
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# ── Logging: FileHandler only — stdout is handled by the calling process ──────
-# Using both FileHandler AND StreamHandler causes duplicate lines when the
-# calling process (deploy.sh / sync.sh) also redirects stdout to the log file.
+# FileHandler only — stdout handled by calling process to avoid duplicate lines
 root = logging.getLogger()
 if not root.handlers:
     root.setLevel(logging.INFO)
     fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    fh = logging.FileHandler(str(LOG_PATH))
+    fh  = logging.FileHandler(str(LOG_PATH))
     fh.setFormatter(fmt)
     root.addHandler(fh)
-    # Only add stdout handler when running interactively (not redirected)
     if sys.stdout.isatty():
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(fmt)
@@ -35,105 +29,108 @@ from bot.config   import load
 from bot.assets   import ASSET_UNIVERSE
 from bot.database import init_db, insert_signal
 from bot.scanner  import rank_symbols, scan_cycle
-from bot.notifier import send_alert
+from bot.notifier import (alert_startup, alert_stopped,
+                          alert_crash, alert_cycle_summary, alert_signal)
 from bot.data     import fetch_bars
 
 
 def get_symbols() -> list:
-    """Filter asset universe to clean US tickers only."""
     symbols = [s for s in ASSET_UNIVERSE if '.' not in s and '-' not in s and len(s) <= 5]
-    log.info(f'[STARTUP] Asset universe: {len(symbols)} US symbols loaded from bot.assets')
+    log.info('[STARTUP] Asset universe: %d US symbols loaded from bot.assets', len(symbols))
     return symbols
 
 
 def connectivity_test() -> bool:
     log.info('[STARTUP] Running connectivity test...')
-    bars = fetch_bars(['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'], '5d', '1d')
-    if bars:
-        summary = ' | '.join(f'{k}:{len(v)}bars' for k, v in bars.items())
-        log.info(f'[STARTUP] yfinance OK: {summary}')
-        return True
-    log.error('[STARTUP] yfinance FAILED — no data returned')
+    for attempt in range(3):
+        bars = fetch_bars(['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'], '5d', '1d')
+        if bars:
+            summary = ' | '.join(f'{k}:{len(v)}bars' for k, v in bars.items())
+            log.info('[STARTUP] yfinance OK: %s', summary)
+            return True
+        wait = [5, 15, 30][attempt]
+        log.warning('[STARTUP] yfinance connectivity attempt %d failed. Waiting %ds...', attempt+1, wait)
+        time.sleep(wait)
+    log.error('[STARTUP] yfinance FAILED after 3 attempts')
     return False
 
 
 def main():
     log.info('=' * 55)
-    log.info('ALGO TRADER v1 — SHADOW MODE — STARTING')
+    log.info('ALGO TRADER v1 -- SHADOW MODE -- STARTING')
     log.info('=' * 55)
 
-    # Config
     try:
         config = load()
         log.info('[STARTUP] Config loaded. All required keys present.')
-        log.info(f'[STARTUP] Mode: {config["bot_mode"]} | '
-                 f'Scan: {config["scan_interval_secs"]}s | '
-                 f'Focus: {config["focus_size"]}')
+        log.info('[STARTUP] Mode: %s | Scan: %ds | Focus: %d',
+                 config['bot_mode'], config['scan_interval_secs'], config['focus_size'])
     except Exception as e:
-        log.error(f'[STARTUP] Config error: {e}')
+        log.error('[STARTUP] Config error: %s', e)
         sys.exit(1)
 
-    # DB
     (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
-    conn = init_db(config['db_path'])
-
-    # Symbols
+    conn    = init_db(config['db_path'])
     symbols = get_symbols()
+
     if not symbols:
         log.error('[STARTUP] No symbols loaded. Exiting.')
         sys.exit(1)
 
-    # Connectivity
     if not connectivity_test():
-        log.error('[STARTUP] Cannot reach yfinance. Check server internet access.')
+        log.error('[STARTUP] Cannot reach yfinance. Exiting.')
         sys.exit(1)
 
-    # Telegram
-    if config['telegram_token'] and config['telegram_chat_id']:
-        log.info('[STARTUP] Telegram: CONFIGURED — alerts will be sent')
+    if config['telegram_enabled']:
+        log.info('[STARTUP] Telegram: ENABLED -- alerts will be sent')
     else:
-        log.info('[STARTUP] Telegram: not configured — alerts skipped (set TELEGRAM_TOKEN and TELEGRAM_CHAT_ID in .env to enable)')
+        log.info('[STARTUP] Telegram: disabled -- set TELEGRAM_ENABLED=true in .env to enable')
 
-    # Main loop
-    focus: list = []
-    last_rank   = datetime(2000, 1, 1, tzinfo=timezone.utc)
-    cycle       = 0
+    alert_startup(config)
 
-    while True:
-        try:
+    focus     = []
+    last_rank = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    cycle     = 0
+
+    try:
+        while True:
             cycle += 1
             now     = datetime.now(timezone.utc)
             elapsed = (now - last_rank).total_seconds()
 
             if elapsed >= config['rank_interval_secs']:
-                log.info(f'[TIER-A] Re-ranking (last rank {elapsed/3600:.1f}h ago)...')
+                log.info('[TIER-A] Re-ranking (%.1fh since last rank)...', elapsed/3600)
                 focus     = rank_symbols(symbols, config['focus_size'])
                 last_rank = now
 
             if not focus:
-                log.warning('[MAIN] Focus set empty after ranking. Retrying in 5 min.')
+                log.warning('[MAIN] Focus empty after ranking. Retrying in 5 min.')
                 time.sleep(300)
                 last_rank = datetime(2000, 1, 1, tzinfo=timezone.utc)
                 continue
 
-            log.info(f'[MAIN] === Cycle {cycle} starting ===')
+            log.info('[MAIN] === Cycle %d starting ===', cycle)
             signals = scan_cycle(focus, config)
 
             for signal in signals:
                 row_id = insert_signal(conn, signal)
                 if row_id:
-                    send_alert(config, signal)
+                    alert_signal(config, signal)
 
-            log.info(f'[MAIN] === Cycle {cycle} complete. Signals: {len(signals)}. '
-                     f'Next in {config["scan_interval_secs"]}s ===')
+            alert_cycle_summary(config, cycle, len(signals), len(focus))
+
+            log.info('[MAIN] === Cycle %d complete. Signals: %d. Next in %ds ===',
+                     cycle, len(signals), config['scan_interval_secs'])
             time.sleep(config['scan_interval_secs'])
 
-        except KeyboardInterrupt:
-            log.info('[MAIN] Stopped.')
-            break
-        except Exception as e:
-            log.error(f'[MAIN] Unhandled error cycle {cycle}: {e}', exc_info=True)
-            time.sleep(60)
+    except KeyboardInterrupt:
+        log.info('[MAIN] Stopped by user.')
+        alert_stopped(config, 'Clean shutdown')
+
+    except Exception as e:
+        log.error('[MAIN] Unhandled crash: %s', e, exc_info=True)
+        alert_crash(config, str(e))
+        raise
 
 
 if __name__ == '__main__':
