@@ -219,13 +219,27 @@ async function api(path,method='GET',body=null){
 
 async function login(){
   const pw=document.getElementById('pw').value;
-  const r=await api('login','POST',{password:pw});
-  if(r.ok){
-    document.getElementById('loginWrap').style.display='none';
-    document.getElementById('appWrap').style.display='block';
-    boot();
-  } else {
-    document.getElementById('lerr').textContent='Incorrect password';
+  if(!pw){
+    document.getElementById('lerr').textContent='Enter a password';
+    return;
+  }
+  document.getElementById('lerr').textContent='Checking...';
+  try{
+    const resp = await fetch('/api/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pw})
+    });
+    const r = await resp.json();
+    if(r.ok===true){
+      document.getElementById('loginWrap').style.display='none';
+      document.getElementById('appWrap').style.display='block';
+      boot();
+    } else {
+      document.getElementById('lerr').textContent='Incorrect password';
+    }
+  } catch(e){
+    document.getElementById('lerr').textContent='Connection error: '+e.message;
   }
 }
 
