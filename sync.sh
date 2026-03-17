@@ -15,6 +15,8 @@ while true; do
         pkill -f "python3.*dashboard" 2>/dev/null || true
         sleep 2
         source $BASE/venv/bin/activate
+        pip install --quiet yfinance pandas numpy pyyaml flask requests >> $LOG 2>&1
+        echo "$(date): pip install done" >> $LOG
         nohup python3 $BASE/dashboard.py >> $BASE/logs/dashboard.log 2>&1 &
         nohup python3 $BASE/main.py      >> $BASE/logs/bot.log       2>&1 &
         echo "$(date): Restarted. Bot:$(pgrep -f main.py) Dash:$(pgrep -f dashboard.py)" >> $LOG
