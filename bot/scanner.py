@@ -1,61 +1,53 @@
 """
 bot/scanner.py
-Categorical scoring, Tier A ranking, Tier B scan cycle.
-Imports from data.py and indicators.py only.
-No DB writes. No alerts. No Flask.
+Tier A ranking and Tier B scan cycle.
+Uses cached focus set from data.py to survive rate limits and restarts.
 """
 import logging
 from datetime import datetime, timezone
 
-from bot.data import fetch_bars, resample_to_4h
+from bot.data       import fetch_bars, resample_to_4h, save_focus_cache
 from bot.indicators import compute
 
 log = logging.getLogger(__name__)
 
-# Timeframe definitions: (label, period, interval, resample_to_4h)
 TIMEFRAMES = [
-    ('1D',  '3mo',  '1d',   False),
-    ('4H',  '1mo',  '1h',   True),   # fetch 1H, resample to 4H
-    ('1H',  '15d',  '1h',   False),
-    ('15m', '5d',   '15m',  False),
+    ('1D',  '3mo',  '1d',  False),
+    ('4H',  '1mo',  '1h',  True),
+    ('1H',  '15d',  '1h',  False),
+    ('15m', '5d',   '15m', False),
 ]
 
 
 def score_timeframe(ind: dict, direction: str) -> int:
-    """
-    Score a single timeframe for a given direction.
-    Returns 1 only if ALL 3 categories pass.
-    Returns 0 if any category fails or ind is None.
-
-    Categories:
-    - Momentum: RSI range + MACD histogram direction
-    - Trend:    EMA20 vs EMA50 alignment
-    - Volume:   VWAP deviation + volume ratio
-    """
     if not ind:
         return 0
-
     if direction == 'long':
-        momentum = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0) else 0
-        trend    = 1 if (ind['ema20'] > ind['ema50'] * 0.995)            else 0
-        volume   = 1 if (ind['vwap_dev'] > -0.015 and ind['vol_ratio'] > 0.6) else 0
+        m   = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0)          else 0
+        t   = 1 if (ind['ema20'] > ind['ema50'] * 0.995)                     else 0
+        vol = 1 if (ind['vwap_dev'] > -0.015 and ind['vol_ratio'] > 0.6)    else 0
     elif direction == 'short':
-        momentum = 1 if (ind['rsi'] > 50 and ind['macd_hist'] < 0)      else 0
-        trend    = 1 if (ind['ema20'] < ind['ema50'] * 1.005)            else 0
-        volume   = 1 if (ind['vwap_dev'] < 0.015 and ind['vol_ratio'] > 0.6) else 0
+        m   = 1 if (ind['rsi'] > 50 and ind['macd_hist'] < 0)               else 0
+        t   = 1 if (ind['ema20'] < ind['ema50'] * 1.005)                     else 0
+        vol = 1 if (ind['vwap_dev'] < 0.015 and ind['vol_ratio'] > 0.6)     else 0
     else:
         return 0
-
-    return 1 if (momentum + trend + volume == 3) else 0
+    return 1 if (m + t + vol == 3) else 0
 
 
 def rank_symbols(symbols: list, focus_size: int = 150) -> list:
     """
-    Tier A: fetch daily bars for all symbols, score by momentum, return top N.
+    Tier A: rank all symbols on daily bars, return top N by momentum score.
+    Saves result to disk cache after successful ranking.
+    Returns empty list if no data received (caller handles degraded mode).
     """
-    log.info(f"[TIER-A] Ranking {len(symbols)} symbols on daily bars...")
+    log.info('[TIER-A] Ranking %d symbols (batch size=20, paced)...', len(symbols))
     bars = fetch_bars(symbols, '3mo', '1d')
-    log.info(f"[TIER-A] Bars received for {len(bars)} symbols")
+
+    if not bars:
+        log.warning('[TIER-A] No data received from yfinance. '
+                    'Rate limited or network issue. Will retry next cycle.')
+        return []
 
     scored = {}
     for sym, df in bars.items():
@@ -63,36 +55,45 @@ def rank_symbols(symbols: list, focus_size: int = 150) -> list:
         if ind:
             scored[sym] = ind['pchg'] * 100 + (ind['vol_ratio'] - 1) * 5
 
+    if not scored:
+        log.warning('[TIER-A] Indicators computed for 0 symbols.')
+        return []
+
     ranked = sorted(scored, key=scored.get, reverse=True)
     focus  = ranked[:focus_size]
 
-    log.info(f"[TIER-A] Scored: {len(scored)}. Focus set: {len(focus)}. Top 5: {focus[:5]}")
+    log.info('[TIER-A] Done. Bars: %d | Scored: %d | Focus: %d | Top 5: %s',
+             len(bars), len(scored), len(focus), focus[:5])
+
+    # Persist to disk — used by main loop on restart
+    save_focus_cache(focus, {k: scored[k] for k in focus})
     return focus
 
 
 def scan_cycle(focus: list, config: dict) -> list:
     """
-    Tier B: full 4-timeframe scan on focus symbols.
-
-    Returns list of signal dicts ready for DB insert and Telegram alert.
-    Each signal dict contains all indicator values + routing info.
+    Tier B: run 4-timeframe scan on focus symbols.
+    Returns list of signal dicts. Never crashes — returns [] on total failure.
     """
-    log.info(f"[CYCLE] Scanning {len(focus)} symbols across 4 timeframes...")
+    log.info('[CYCLE] Scanning %d symbols across 4 timeframes (paced)...', len(focus))
 
-    # Cache: sym -> {tf_label -> indicator dict}
-    cached_inds: dict   = {}
-    # Cache: sym -> {direction -> {tf_label -> 1}}
+    cached_inds:   dict = {}
     cached_scores: dict = {}
+    tfs_completed = []
 
     for tf_label, period, interval, do_resample in TIMEFRAMES:
-        log.info(f"[CYCLE] Fetching {tf_label} ({interval}, {period})...")
+        log.info('[CYCLE] Fetching %s (%s, %s)...', tf_label, interval, period)
         bars = fetch_bars(focus, period, interval)
-        log.info(f"[CYCLE] {tf_label}: got {len(bars)}/{len(focus)} symbols")
+
+        if not bars:
+            log.warning('[CYCLE] %s: no data — skipping this timeframe', tf_label)
+            continue
+
+        tfs_completed.append(tf_label)
 
         for sym, df in bars.items():
             if do_resample:
                 df = resample_to_4h(df)
-
             ind = compute(df)
             if ind is None:
                 continue
@@ -104,9 +105,14 @@ def scan_cycle(focus: list, config: dict) -> list:
                     cached_scores.setdefault(sym, {'long': {}, 'short': {}})
                     cached_scores[sym][direction][tf_label] = 1
 
-    log.info(f"[CYCLE] Symbols with ≥1 valid TF score: {len(cached_scores)}")
+    log.info('[CYCLE] Timeframes completed: %s | Symbols with hits: %d',
+             tfs_completed, len(cached_scores))
 
-    # Evaluate confluences
+    if not tfs_completed:
+        log.warning('[CYCLE] No timeframes returned data this cycle. '
+                    'Possible sustained rate limit — will retry next cycle.')
+        return []
+
     signals = []
     now_utc = datetime.now(timezone.utc).isoformat()
 
@@ -117,8 +123,6 @@ def scan_cycle(focus: list, config: dict) -> list:
                 continue
 
             route = 'ETORO' if count == 4 else 'IBKR'
-
-            # Use best available indicator set (prefer longer timeframe)
             best_ind = next(
                 (cached_inds[sym][t] for t in ('1D', '4H', '1H', '15m')
                  if sym in cached_inds and t in cached_inds[sym]),
@@ -128,23 +132,21 @@ def scan_cycle(focus: list, config: dict) -> list:
                 continue
 
             signal = {
-                'timestamp': now_utc,
-                'symbol':    sym,
-                'direction': direction,
-                'route':     route,
-                'tf_15m':    tfs.get('15m', 0),
-                'tf_1h':     tfs.get('1H',  0),
-                'tf_4h':     tfs.get('4H',  0),
-                'tf_1d':     tfs.get('1D',  0),
+                'timestamp':   now_utc,
+                'symbol':      sym,
+                'direction':   direction,
+                'route':       route,
+                'tf_15m':      tfs.get('15m', 0),
+                'tf_1h':       tfs.get('1H',  0),
+                'tf_4h':       tfs.get('4H',  0),
+                'tf_1d':       tfs.get('1D',  0),
                 'valid_count': count,
                 **best_ind,
             }
             signals.append(signal)
-            log.info(
-                f"[SIGNAL] {route} {sym} {direction.upper()} {count}/4 TF | "
-                f"RSI:{best_ind['rsi']:.1f} Price:${best_ind['price']:.2f} | "
-                f"TFs:{list(tfs.keys())}"
-            )
+            log.info('[SIGNAL] %s %s %s %d/4 TF | RSI:%.1f Price:$%.2f',
+                     route, sym, direction.upper(), count,
+                     best_ind['rsi'], best_ind['price'])
 
-    log.info(f"[CYCLE] Done. Signals generated: {len(signals)}")
+    log.info('[CYCLE] Complete. Signals: %d', len(signals))
     return signals
