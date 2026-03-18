@@ -329,9 +329,15 @@ HTML = (
     '    }' +
     '  }).catch(function(){});' +
     '}' +
-    'function act(a){'
-    '  fetch("/api/"+a,{method:"POST"}).then(function(){setTimeout(loadStatus,2500);}).catch(function(){});'
-    '}'
+    'function act(a){' +
+    '  var btns=document.querySelectorAll(".btn");' +
+    '  btns.forEach(function(b){b.disabled=true;b.style.opacity="0.6";});' +
+    '  var st=document.getElementById("stText");' +
+    '  if(st)st.textContent=(a==="restart"?"Restarting...":a==="start"?"Starting...":"Stopping...");' +
+    '  fetch("/api/"+a,{method:"POST"})' +
+    '  .then(function(){setTimeout(function(){loadStatus();btns.forEach(function(b){b.disabled=false;b.style.opacity="1";});},4000);setTimeout(loadStatus,8000);})' +
+    '  .catch(function(e){btns.forEach(function(b){b.disabled=false;b.style.opacity="1";});alert("Error: "+e.message);});' +
+    '}' +
     
     '</script>'
     '</body>'
