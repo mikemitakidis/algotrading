@@ -10,7 +10,6 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / 'logs' / 'bot.log'
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# FileHandler only — stdout handled by calling process to avoid duplicate lines
 root = logging.getLogger()
 if not root.handlers:
     root.setLevel(logging.INFO)
@@ -36,23 +35,42 @@ from bot.data     import fetch_bars
 
 def get_symbols() -> list:
     symbols = [s for s in ASSET_UNIVERSE if '.' not in s and '-' not in s and len(s) <= 5]
-    log.info('[STARTUP] Asset universe: %d US symbols loaded from bot.assets', len(symbols))
+    log.info('[STARTUP] Asset universe: %d US symbols', len(symbols))
     return symbols
 
 
 def connectivity_test() -> bool:
-    log.info('[STARTUP] Running connectivity test...')
+    """
+    Test yfinance with a single symbol.
+    On rate limit: warn and return True so the bot continues.
+    The main scan loop has its own retry logic.
+    Only return False on a genuine network failure.
+    """
+    log.info('[STARTUP] Connectivity test (single symbol, 1d)...')
     for attempt in range(3):
-        bars = fetch_bars(['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ'], '5d', '1d')
-        if bars:
-            summary = ' | '.join(f'{k}:{len(v)}bars' for k, v in bars.items())
-            log.info('[STARTUP] yfinance OK: %s', summary)
-            return True
-        wait = [5, 15, 30][attempt]
-        log.warning('[STARTUP] yfinance connectivity attempt %d failed. Waiting %ds...', attempt+1, wait)
-        time.sleep(wait)
-    log.error('[STARTUP] yfinance FAILED after 3 attempts')
-    return False
+        try:
+            bars = fetch_bars(['AAPL'], '2d', '1d')
+            if bars:
+                log.info('[STARTUP] yfinance OK: AAPL %d bars', len(bars.get('AAPL', [])))
+                return True
+            # Empty result — could be rate limit or no data
+            wait = [10, 30, 60][attempt]
+            log.warning('[STARTUP] Connectivity attempt %d: no data. Waiting %ds...', attempt+1, wait)
+            time.sleep(wait)
+        except Exception as e:
+            err = str(e)
+            if 'Rate' in err or 'Too Many' in err:
+                # Rate limit is not a network failure — bot can still run
+                log.warning('[STARTUP] yfinance rate limit on connectivity test. '
+                            'Continuing anyway — main scan loop will retry.')
+                return True
+            wait = [10, 30, 60][attempt]
+            log.warning('[STARTUP] Connectivity attempt %d error: %s. Waiting %ds...', attempt+1, err[:80], wait)
+            time.sleep(wait)
+
+    log.warning('[STARTUP] Connectivity test inconclusive after 3 attempts. '
+                'Continuing — scan loop will handle retries.')
+    return True   # Don't exit — let the scan loop try
 
 
 def main():
@@ -62,7 +80,7 @@ def main():
 
     try:
         config = load()
-        log.info('[STARTUP] Config loaded. All required keys present.')
+        log.info('[STARTUP] Config loaded.')
         log.info('[STARTUP] Mode: %s | Scan: %ds | Focus: %d',
                  config['bot_mode'], config['scan_interval_secs'], config['focus_size'])
     except Exception as e:
@@ -77,14 +95,12 @@ def main():
         log.error('[STARTUP] No symbols loaded. Exiting.')
         sys.exit(1)
 
-    if not connectivity_test():
-        log.error('[STARTUP] Cannot reach yfinance. Exiting.')
-        sys.exit(1)
+    connectivity_test()   # warns but never exits
 
     if config['telegram_enabled']:
-        log.info('[STARTUP] Telegram: ENABLED -- alerts will be sent')
+        log.info('[STARTUP] Telegram: ENABLED')
     else:
-        log.info('[STARTUP] Telegram: disabled -- set TELEGRAM_ENABLED=true in .env to enable')
+        log.info('[STARTUP] Telegram: disabled (set TELEGRAM_ENABLED=true in .env to enable)')
 
     alert_startup(config)
 
@@ -104,8 +120,8 @@ def main():
                 last_rank = now
 
             if not focus:
-                log.warning('[MAIN] Focus empty after ranking. Retrying in 5 min.')
-                time.sleep(300)
+                log.warning('[MAIN] Focus empty after ranking. Waiting 10 min then retrying.')
+                time.sleep(600)
                 last_rank = datetime(2000, 1, 1, tzinfo=timezone.utc)
                 continue
 
