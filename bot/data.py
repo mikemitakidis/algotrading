@@ -25,8 +25,8 @@ import yfinance as yf
 
 log = logging.getLogger(__name__)
 
-DELAY_MIN  = 2.0
-DELAY_MAX  = 5.0
+DELAY_MIN  = 8.0
+DELAY_MAX  = 12.0
 MIN_BARS   = 30
 
 _BASE      = Path(__file__).resolve().parent.parent
@@ -130,7 +130,7 @@ def fetch_bars(symbols, period, interval):
             else:
                 skipped += 1
         except RateLimitError:
-            rl_wait = 60
+            rl_wait = 90
             skipped += 1
             log.warning('[DATA] Rate limited at %s (%d/%d) — next fresh fetch waits 60s',
                         sym, i+1, len(symbols))
