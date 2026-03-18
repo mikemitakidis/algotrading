@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""main.py — Algo Trader v1"""
+"""main.py - Algo Trader v1"""
 import logging
 import sys
 import time
@@ -25,18 +25,11 @@ if not root.handlers:
 log = logging.getLogger(__name__)
 
 from bot.config   import load
-from bot.assets   import ASSET_UNIVERSE
+from bot.focus    import FOCUS_SYMBOLS
 from bot.database import init_db, insert_signal
-from bot.scanner  import rank_symbols, scan_cycle
-from bot.data     import load_focus_cache
+from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
                           alert_crash, alert_cycle_summary, alert_signal)
-
-
-def get_symbols() -> list:
-    symbols = [s for s in ASSET_UNIVERSE if '.' not in s and '-' not in s and len(s) <= 5]
-    log.info('[STARTUP] Asset universe: %d US symbols', len(symbols))
-    return symbols
 
 
 def main():
@@ -47,25 +40,22 @@ def main():
     try:
         config = load()
         log.info('[STARTUP] Config loaded.')
-        log.info('[STARTUP] Mode: %s | Scan: %ds | Rank every: %ds | Focus: %d',
-                 config['bot_mode'], config['scan_interval_secs'],
-                 config['rank_interval_secs'], config['focus_size'])
+        log.info('[STARTUP] Mode: %s | Scan: %ds | Focus: %d',
+                 config['bot_mode'], config['scan_interval_secs'], config['focus_size'])
     except Exception as e:
         log.error('[STARTUP] Config error: %s', e)
         sys.exit(1)
 
     (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
-    conn    = init_db(config['db_path'])
-    symbols = get_symbols()
+    conn = init_db(config['db_path'])
 
-    if not symbols:
-        log.error('[STARTUP] No symbols loaded. Exiting.')
-        sys.exit(1)
-
-    # No aggressive connectivity test — yfinance rate limits are per-IP
-    # and startup tests make it worse. The scan loop handles all retries.
-    log.info('[STARTUP] Skipping startup connectivity test (avoids triggering rate limits)')
-    log.info('[STARTUP] Data provider: Yahoo Finance (yfinance) | Batch size: 20 | Paced with jitter')
+    # V1: use curated focus list directly — no Tier A ranking
+    # Tier A dynamic ranking re-enabled in V2 once bar cache is warm
+    focus = FOCUS_SYMBOLS[:config['focus_size']]
+    log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
+    log.info('[STARTUP] Data: Yahoo Finance | 1 symbol/request | 2-5s delay | disk cache')
+    log.info('[STARTUP] First cycle: ~%d min. After cache warms: ~2 min.',
+             len(focus) * 4 * 3 // 60)
 
     if config['telegram_enabled']:
         log.info('[STARTUP] Telegram: ENABLED')
@@ -74,49 +64,13 @@ def main():
 
     alert_startup(config)
 
-    # Try loading cached focus set — avoids immediate full re-rank on restart
-    focus = load_focus_cache(max_age_secs=config['rank_interval_secs'])
-    if focus:
-        last_rank = datetime.now(timezone.utc)
-        log.info('[STARTUP] Loaded %d symbols from focus cache — skipping initial rank', len(focus))
-    else:
-        focus     = []
-        last_rank = datetime(2000, 1, 1, tzinfo=timezone.utc)
-        log.info('[STARTUP] No valid focus cache — will rank on first cycle')
-
     cycle = 0
 
     try:
         while True:
             cycle += 1
-            now     = datetime.now(timezone.utc)
-            elapsed = (now - last_rank).total_seconds()
+            log.info('[MAIN] === Cycle %d starting | %d symbols ===', cycle, len(focus))
 
-            # Re-rank if cache is stale
-            if elapsed >= config['rank_interval_secs']:
-                log.info('[MAIN] Re-ranking (%.1fh since last rank)...', elapsed / 3600)
-                new_focus = rank_symbols(symbols, config['focus_size'])
-                if new_focus:
-                    focus     = new_focus
-                    last_rank = now
-                    log.info('[MAIN] Focus set updated: %d symbols', len(focus))
-                else:
-                    # Rate limited during ranking — use existing focus if available
-                    if focus:
-                        log.warning('[MAIN] Ranking failed — keeping existing focus (%d symbols)', len(focus))
-                        last_rank = now  # reset timer to avoid hammering
-                    else:
-                        log.warning('[MAIN] Ranking failed and no existing focus. '
-                                    'Waiting 10 min before retry...')
-                        time.sleep(600)
-                        continue
-
-            if not focus:
-                log.warning('[MAIN] Focus empty. Waiting 10 min...')
-                time.sleep(600)
-                continue
-
-            log.info('[MAIN] === Cycle %d starting | Focus: %d symbols ===', cycle, len(focus))
             signals = scan_cycle(focus, config)
 
             inserted = 0
@@ -126,7 +80,7 @@ def main():
                     inserted += 1
                     alert_signal(config, signal)
 
-            if inserted > 0:
+            if inserted:
                 log.info('[MAIN] DB: %d signals inserted', inserted)
 
             alert_cycle_summary(config, cycle, len(signals), len(focus))

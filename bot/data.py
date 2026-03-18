@@ -33,7 +33,7 @@ _BASE      = Path(__file__).resolve().parent.parent
 _CACHE_DIR = _BASE / 'data' / 'bar_cache'
 _FOCUS_F   = _BASE / 'data' / 'focus_cache.json'
 
-BAR_TTL = {'1d': 6*3600, '1h': 2*3600, '15m': 30*60}
+BAR_TTL = {'1d': 23*3600, '1h': 4*3600, '15m': 60*60}
 
 
 def _session():
