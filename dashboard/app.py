@@ -1390,9 +1390,10 @@ function renderBtResults(d){
     var trades_by_sym = {};
     (d.trades||[]).forEach(function(t){ trades_by_sym[t.symbol] = (trades_by_sym[t.symbol]||0)+1; });
     symList.forEach(function(sym){
-      var cov = sd.tf_coverage || {};
-      var fst = sd.fetch_status || {};
-      var ferr = sd.fetch_error || '';
+      var sd    = diagData[sym] || {};
+      var cov   = sd.tf_coverage  || {};
+      var fst   = sd.fetch_status || {};
+      var ferr  = sd.fetch_error  || '';
       var covStr = Object.keys(cov).map(function(k){
         return '<span style="color:#58a6ff">' + k + '</span>:' + cov[k];
       }).join(' &nbsp; ');
@@ -1405,17 +1406,19 @@ function renderBtResults(d){
           return '<span style="font-size:10px;color:'+col+'">' + k + ':' + fst[k] + '</span>';
         }).join(' ');
       }
-      var rej = sd.rejected || {};
-      var rejStr = Object.keys(rej).map(function(k){ return k+'×'+rej[k]; }).join(', ') || '<span style="color:#3fb950">none</span>';
-      var cands = sd.candidates || 0;
+      var rej    = sd.rejected   || {};
+      var rejStr = Object.keys(rej).map(function(k){ return k+'×'+rej[k]; }).join(', ')
+                   || '<span style="color:#3fb950">none</span>';
+      var cands  = sd.candidates || 0;
       var tcount = trades_by_sym[sym] || 0;
       dhtml += '<tr>';
       dhtml += '<td><b>' + sym + '</b></td>';
-      dhtml += '<td style="font-size:11px">' + (covStr || '<span style="color:#f85149;font-weight:700">no data loaded</span>') + fetchStr + '</td>';
+      dhtml += '<td style="font-size:11px">'
+             + (covStr || '<span style="color:#f85149;font-weight:700">no data loaded</span>')
+             + fetchStr + '</td>';
       dhtml += '<td>' + cands + '</td>';
       dhtml += '<td style="font-size:11px;color:#d29922">' + rejStr + '</td>';
       dhtml += '<td><b>' + tcount + '</b></td>';
-      dhtml += '</tr>';
       dhtml += '</tr>';
     });
     dhtml += '</table>';
