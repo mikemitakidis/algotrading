@@ -569,13 +569,15 @@ def telegram_test():
     import sys
     sys.path.insert(0, str(BASE_DIR))
     try:
+        # Reload .env with override=True so dashboard sees saved values
+        load_dotenv(BASE_DIR / '.env', override=True)
         from bot.config   import load as _cfg
         from bot.notifier import send_test
-        result = send_test(_cfg())
-        msg = 'Test message sent!' if result else 'Failed -- check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env'
-        return jsonify({'ok': result, 'message': msg})
+        config = _cfg()
+        ok, detail = send_test(config)
+        return jsonify({'ok': ok, 'message': detail})
     except Exception as e:
-        return jsonify({'ok': False, 'message': str(e)}), 500
+        return jsonify({'ok': False, 'message': f'Internal error: {str(e)}'}), 500
 
 
 

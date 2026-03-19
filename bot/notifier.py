@@ -2,14 +2,8 @@
 bot/notifier.py
 Telegram alert module.
 
-Alert types:
-  startup, stopped, crash, signal, cycle_summary
-
-Spam control:
-  per (symbol, direction) cooldown tracked in memory
-
-Failure handling:
-  never raises — logs and returns False on any error
+Alert types: startup, stopped, crash, signal, cycle_summary
+send_test: returns (bool, str) with real API error on failure
 """
 import logging
 import time
@@ -32,8 +26,8 @@ def _is_enabled(config: dict) -> bool:
 
 
 def _send(config: dict, text: str) -> bool:
-    token   = config['telegram_token'].strip()
-    chat_id = config['telegram_chat_id'].strip()
+    token   = config.get('telegram_token', '').strip()
+    chat_id = config.get('telegram_chat_id', '').strip()
     url     = TELEGRAM_API.format(token=token)
     try:
         resp = requests.post(
@@ -70,10 +64,7 @@ def alert_startup(config: dict) -> bool:
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     text = (
         '&#x1F7E2; <b>Algo Trader v1 &#x2014; Started</b>\n'
-        'Mode: %s\n'
-        'Focus size: %d symbols\n'
-        'Scan interval: %d min\n'
-        'Time: %s'
+        'Mode: %s\nFocus: %d symbols\nScan: %d min\nTime: %s'
     ) % (
         config.get('bot_mode', 'shadow').upper(),
         config.get('focus_size', 150),
@@ -96,7 +87,6 @@ def alert_crash(config: dict, error: str) -> bool:
         return False
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     text = '&#x1F4A5; <b>Algo Trader v1 &#x2014; CRASH</b>\nError: %s\nTime: %s' % (error[:200], ts)
-    log.warning('[TELEGRAM] Sending crash alert: %s', error[:80])
     return _send(config, text)
 
 
@@ -134,32 +124,23 @@ def alert_signal(config: dict, signal: dict) -> bool:
     else:
         sl, tp, arrow = price + 2*atr, price - 3*atr, '&#x1F534;'
 
-    route_label = {
-        'ETORO': '&#x2B50; ETORO (4/4)',
-        'IBKR':  '&#x1F4CA; IBKR (3/4)',
-    }.get(route, route)
+    route_label = {'ETORO': '&#x2B50; ETORO (4/4)', 'IBKR': '&#x1F4CA; IBKR (3/4)'}.get(route, route)
 
     text = (
         '%s <b>%s &#x2014; %s</b>\n'
         'Route: %s\n'
-        '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
+        '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
         '&#x1F4B0; Entry: <b>$%.2f</b>\n'
         '&#x1F6D1; SL:    $%.2f  (2xATR)\n'
         '&#x1F3AF; TP:    $%.2f  (3xATR)\n'
-        '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
-        'RSI:        %.1f\n'
-        'MACD Hist:  %.4f\n'
-        'EMA Trend:  %s\n'
-        'ATR:        %.2f\n'
-        '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
+        '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
+        'RSI: %.1f | MACD: %.4f\n'
+        'EMA: %s\nATR: %.2f\n'
         'TFs: %s (%d/4)\n'
-        'Mode: SHADOW\n'
-        'Time: %s UTC'
+        'Mode: SHADOW | Time: %s UTC'
     ) % (
-        arrow, sym, direction.upper(),
-        route_label,
-        price, sl, tp,
-        rsi, macd, ema_trend, atr,
+        arrow, sym, direction.upper(), route_label,
+        price, sl, tp, rsi, macd, ema_trend, atr,
         tf_str, count, ts,
     )
 
@@ -178,27 +159,64 @@ def alert_cycle_summary(config: dict, cycle: int,
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     text = (
         '&#x1F4CB; <b>Cycle %d Summary</b>\n'
-        'Symbols scanned: %d\n'
-        'Signals found:   %d\n'
-        'Time: %s'
+        'Symbols scanned: %d\nSignals found: %d\nTime: %s'
     ) % (cycle, symbols_scanned, signal_count, ts)
     return _send(config, text)
 
 
-def send_test(config: dict) -> bool:
-    """Send a test message. Used by dashboard test button."""
-    if not _is_enabled(config):
-        log.warning('[TELEGRAM] Test requested but Telegram is not enabled/configured')
-        return False
+def send_test(config: dict) -> tuple:
+    """
+    Send a test message to Telegram.
+    Returns (success: bool, detail: str) with the REAL API error on failure.
+    Never returns a generic error — always shows what Telegram actually said.
+    """
+    if not config.get('telegram_enabled'):
+        return False, 'Telegram is disabled. Set Enable = Enabled and save first.'
+
+    token   = config.get('telegram_token', '').strip()
+    chat_id = config.get('telegram_chat_id', '').strip()
+
+    if not token:
+        return False, 'No bot token set. Enter your token from @BotFather and save.'
+    if not chat_id:
+        return False, 'No Chat ID set. Enter your numeric Telegram chat ID and save.'
+
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     text = (
         '&#x2705; <b>Algo Trader &#x2014; Telegram Test</b>\n'
-        'Configuration is working correctly.\n'
-        'Time: %s'
+        'Configuration is working correctly.\nTime: %s'
     ) % ts
-    result = _send(config, text)
-    if result:
-        log.info('[TELEGRAM] Test message sent successfully')
-    else:
-        log.warning('[TELEGRAM] Test message FAILED -- check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env')
-    return result
+
+    url = TELEGRAM_API.format(token=token)
+    try:
+        resp = requests.post(
+            url,
+            json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'},
+            timeout=10,
+        )
+        data = {}
+        try:
+            data = resp.json()
+        except Exception:
+            pass
+
+        if resp.status_code == 200 and data.get('ok'):
+            log.info('[TELEGRAM] Test message sent successfully')
+            return True, 'Test message sent successfully!'
+
+        # Return REAL Telegram API error
+        err = data.get('description', f'HTTP {resp.status_code}')
+        if resp.status_code == 401:
+            err = 'Invalid bot token. Check the token from @BotFather.'
+        elif resp.status_code == 400 and 'chat not found' in err.lower():
+            err = 'Chat not found. Make sure you have messaged your bot at least once.'
+        elif resp.status_code == 400:
+            err = f'Bad request: {err}'
+
+        log.warning('[TELEGRAM] Test failed: %s', err)
+        return False, err
+
+    except requests.exceptions.Timeout:
+        return False, 'Request timed out. Check server internet access.'
+    except Exception as e:
+        return False, f'Connection error: {str(e)}'
