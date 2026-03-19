@@ -362,7 +362,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
   </div>
 
   <!-- Progress -->
-  <div id="btProgress" style="display:none" class="card" style="margin-bottom:18px">
+  <div id="btProgress" style="display:none;margin-bottom:18px" class="card">
     <div class="ct">Running...</div>
     <div style="background:#21262d;border-radius:6px;height:10px;overflow:hidden;margin-bottom:8px">
       <div id="btProgressBar" style="height:100%;background:#1f6feb;border-radius:6px;width:0%;transition:width .4s"></div>
@@ -419,7 +419,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
   </div>
 
   <!-- Diagnostics -->
-  <div id="btDiagSection" style="display:none" class="card" style="margin-top:18px">
+  <div id="btDiagSection" style="display:none;margin-top:18px" class="card">
     <div class="ct">Diagnostics <span style="font-size:10px;color:#8b949e;font-weight:400">Why these trades? Why 0 trades?</span></div>
     <div style="font-size:11px;color:#8b949e;margin-bottom:12px">
       Shows data coverage per timeframe, candidate signals before filtering, and rejection reasons.
@@ -1235,6 +1235,8 @@ function runBacktest(){
   if(prog) prog.style.display = 'block';
   if(summ) summ.style.display = 'none';
   if(trad) trad.style.display = 'none';
+  var diagHide = document.getElementById('btDiagSection');
+  if(diagHide) diagHide.style.display = 'none';
 
   fetch('/api/backtest/run', {
     method:  'POST',
@@ -1347,13 +1349,13 @@ function renderBtResults(d){
 
   // Trade table
   var trades = d.trades || [];
-  // Diagnostics panel
+  // Diagnostics panel — always visible after a completed run
   var btDiag = document.getElementById('btDiagSection');
   var btDiagContent = document.getElementById('btDiagContent');
   var diagData = d.diagnostics || {};
   var symList  = d.symbols || [];
-  if(Object.keys(diagData).length && btDiag){
-    btDiag.style.display = 'block';
+  if(btDiag) btDiag.style.display = 'block';
+  {
     var dhtml = '';
     // Strategy version + confluence
     var sv    = d.strategy_version || '-';
