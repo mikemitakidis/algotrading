@@ -89,7 +89,7 @@ def scan_cycle(focus, config):
     if available_tfs == 0:
         log.warning('[CYCLE] No timeframes returned data. '
                     'Cache may be empty. Bot will retry next cycle.')
-        return []
+        return [], {"tfs_available": 0, "tfs_list": [], "symbols_scanned": len(focus)}
 
     # Minimum valid TFs required for a signal (scales with available data)
     # With 4 TFs available: need 3 (normal)
@@ -154,4 +154,10 @@ def scan_cycle(focus, config):
 
     log.info('[CYCLE] Complete. %d signals generated from %d/%d TFs.',
              len(signals), available_tfs, len(TIMEFRAMES))
-    return signals
+
+    meta = {
+        'tfs_available':  available_tfs,
+        'tfs_list':       tfs_with_data,
+        'symbols_scanned': len(focus),
+    }
+    return signals, meta

@@ -1,27 +1,31 @@
 """
 dashboard/app.py
-Flask dashboard. Reads bot.log and signals.db only.
-No backtick JS template literals — uses string concatenation for safety.
+Flask dashboard for Algo Trader v1.
+Reads bot_state.json, bot.log, and signals.db only — does not trade.
+No JS backtick template literals.
 """
+import json
 import os
 import sqlite3
 import subprocess
 import threading
 import time
 from pathlib import Path
+from datetime import datetime, timezone
 
-from flask import Flask, request, jsonify, session, render_template_string
+from flask import Flask, request, jsonify, session
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR   = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 app = Flask(__name__)
 _pw = os.getenv('DASHBOARD_PASSWORD', 'changeme')
 app.secret_key = _pw + '_algo_session'
 
-LOG_PATH = BASE_DIR / 'logs' / 'bot.log'
-DB_PATH  = BASE_DIR / 'data' / 'signals.db'
+LOG_PATH   = BASE_DIR / 'logs' / 'bot.log'
+DB_PATH    = BASE_DIR / 'data' / 'signals.db'
+STATE_PATH = BASE_DIR / 'data' / 'bot_state.json'
 
 
 def get_password():
@@ -38,435 +42,800 @@ def require_auth(f):
     return decorated
 
 
-HTML = (
-    '<!DOCTYPE html>'
-    '<html lang="en">'
-    '<head>'
-    '<meta charset="UTF-8">'
-    '<title>Algo Trader v1</title>'
-    '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    '<style>'
-    '*{box-sizing:border-box;margin:0;padding:0}'
-    'body{background:#0d1117;color:#e6edf3;font-family:Segoe UI,Arial,sans-serif;min-height:100vh}'
-    'nav{background:#161b22;border-bottom:1px solid #30363d;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:52px}'
-    '.brand{font-size:17px;font-weight:700;color:#58a6ff}'
-    '.brand em{background:#1f6feb;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;font-style:normal}'
-    'nav a{color:#8b949e;text-decoration:none;padding:7px 13px;border-radius:6px;font-size:14px;cursor:pointer}'
-    'nav a:hover,nav a.active{background:#21262d;color:#e6edf3}'
-    'nav a.out{color:#f85149}'
-    '.page{display:none;padding:24px;max-width:1400px;margin:0 auto}'
-    '.page.on{display:block}'
-    '.g2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}'
-    '.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px}'
-    '.ct{font-size:11px;font-weight:600;color:#8b949e;letter-spacing:1px;text-transform:uppercase;margin-bottom:14px}'
-    '.sr{display:flex;align-items:center;gap:10px;margin-bottom:14px}'
-    '.dot{width:12px;height:12px;border-radius:50%}'
-    '.dot.g{background:#3fb950;box-shadow:0 0 7px #3fb950}'
-    '.dot.r{background:#f85149}'
-    '.st{font-size:19px;font-weight:600}'
-    '.br{display:flex;gap:10px;flex-wrap:wrap}'
-    '.btn{padding:8px 16px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}'
-    '.gs{background:#238636;color:#fff}.rs{background:#da3633;color:#fff}.bl{background:#1f6feb;color:#fff}.gy{background:#21262d;color:#e6edf3}'
-    '.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#30363d;border-radius:8px;overflow:hidden}'
-    '.metric{background:#161b22;padding:16px;text-align:center}'
-    '.mv{font-size:30px;font-weight:700;color:#58a6ff}'
-    '.mv.g{color:#3fb950}.mv.y{color:#d29922}'
-    '.ml{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-top:3px}'
-    '.logbox{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px;font-family:Courier New,monospace;font-size:12px;height:380px;overflow-y:auto;line-height:1.6;white-space:pre-wrap}'
-    'table{width:100%;border-collapse:collapse;font-size:13px}'
-    'th{background:#21262d;color:#8b949e;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.7px}'
-    'td{padding:9px 12px;border-top:1px solid #21262d}'
-    '.tag{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}'
-    '.tl{background:#0d4a1a;color:#3fb950}.ts{background:#4a0d0d;color:#f85149}'
-    '.te{background:#2d1f00;color:#d29922}.ti{background:#0d2d5a;color:#58a6ff}'
-    '.rfbtn{float:right;background:none;border:1px solid #30363d;color:#8b949e;padding:4px 11px;border-radius:6px;cursor:pointer;font-size:12px}'
-    '.login{display:flex;align-items:center;justify-content:center;min-height:100vh}'
-    '.lbox{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:38px;width:340px}'
-    '.lbox input{width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:10px 13px;border-radius:7px;font-size:15px;margin-bottom:12px;outline:none;font-family:inherit}'
-    '.lbox input:focus{border-color:#58a6ff}'
-    '.lbox button{width:100%;background:#238636;color:#fff;border:none;padding:11px;border-radius:7px;font-size:15px;font-weight:600;cursor:pointer}'
-    '</style>'
-    '</head>'
-    '<body>'
-    
-    '<div id="loginWrap" class="login">'
-    '<div class="lbox">'
-    '<div style="font-size:21px;font-weight:700;color:#58a6ff;text-align:center;margin-bottom:6px">&#x1F916; Algo Trader</div>'
-    '<div style="color:#8b949e;text-align:center;margin-bottom:26px">v1.0 &mdash; Shadow Mode</div>'
-    '<input type="password" id="pw" placeholder="Password" onkeydown="if(event.key===\'Enter\')doLogin()">'
-    '<button onclick="doLogin()">Login</button>'
-    '<div id="lerr" style="color:#f85149;text-align:center;margin-top:9px;font-size:13px"></div>'
-    '</div>'
-    '</div>'
-    
-    '<div id="appWrap" style="display:none">'
-    '<nav>'
-    '<div class="brand">&#x1F916; Algo Trader <em>v1.0</em></div>'
-    '<div>'
-    '<a onclick="go(\'overview\')" id="n-overview" class="active">Overview</a>'
-    '<a onclick="go(\'signals\')"  id="n-signals">Signals</a>'
-    '<a onclick="go(\'logs\')"     id="n-logs">Logs</a>'
-    '<a onclick="go(\'settings\')" id="n-settings">Settings</a>'
-    '<a onclick="doLogout()" class="out">Logout</a>'
-    '</div>'
-    '</nav>'
-    
-    '<div id="overview" class="page on">'
-    '<div class="g2">'
-    '<div class="card">'
-    '<div class="ct">Bot Status</div>'
-    '<div class="sr"><div class="dot r" id="dot"></div><div class="st" id="stText">Loading...</div></div>'
-    '<div class="br">'
-    '<button class="btn gs" onclick="act(\'start\')">&#x25B6; Start</button>'
-    '<button class="btn rs" onclick="act(\'stop\')">&#x23F9; Stop</button>'
-    '<button class="btn bl" onclick="act(\'restart\')">&#x21BA; Restart</button>'
-    '</div>'
-    '</div>'
-    '<div class="card">'
-    '<div class="ct">Signals</div>'
-    '<div class="metrics">'
-    '<div class="metric"><div class="mv" id="mT">0</div><div class="ml">Total</div></div>'
-    '<div class="metric"><div class="mv g" id="mI">0</div><div class="ml">IBKR</div></div>'
-    '<div class="metric"><div class="mv y" id="mE">0</div><div class="ml">eToro</div></div>'
-    '</div>'
-    '</div>'
-    '</div>'
-    
-    '<div class="card" style="margin-bottom:20px">'
-    '<div class="ct">Recent Signals <button class="rfbtn" onclick="loadSig()">&#x21BB;</button></div>'
-    '<div id="sigWrap"><div style="color:#8b949e;text-align:center;padding:28px">No signals yet &mdash; bot is scanning...</div></div>'
-    '</div>'
-    
-    '<div class="card">'
-    '<div class="ct">Live Log <button class="rfbtn" onclick="loadLog()">&#x21BB;</button></div>'
-    '<div class="logbox" id="logbox">Loading...</div>'
-    '</div>'
-    '</div>'
-    
-    '<div id="signals" class="page">'
-    '<div class="card" style="margin-bottom:16px">'
-    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
-    '<input style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 12px;border-radius:7px;font-size:13px;width:160px;font-family:inherit" placeholder="Symbol..." id="sfilt" oninput="renderSig()">'
-    '<select style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 12px;border-radius:7px;font-size:13px;font-family:inherit" id="rfilt" onchange="renderSig()">'
-    '<option value="">All Routes</option><option>ETORO</option><option>IBKR</option>'
-    '</select>'
-    '<select style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 12px;border-radius:7px;font-size:13px;font-family:inherit" id="dfilt" onchange="renderSig()">'
-    '<option value="">All Directions</option><option>long</option><option>short</option>'
-    '</select>'
-    '<button class="btn bl" style="font-size:12px;padding:7px 13px" onclick="loadAllSig()">&#x21BB; Refresh</button>'
-    '<span id="scount" style="color:#8b949e;font-size:13px;margin-left:auto"></span>'
-    '</div>'
-    '</div>'
-    '<div class="card" style="overflow-x:auto"><div id="allSig"></div></div>'
-    '</div>'
-    
-    '<div id="logs" class="page">'
-    '<div class="card" style="margin-bottom:16px">'
-    '<div style="display:flex;gap:10px;flex-wrap:wrap">'
-    '<button class="btn gy" onclick="setLF(\'all\')">All</button>'
-    '<button class="btn gy" onclick="setLF(\'sig\')">Signals</button>'
-    '<button class="btn gy" onclick="setLF(\'err\')">Errors/Warnings</button>'
-    '<button class="btn bl" onclick="loadFullLog()">&#x21BB; Refresh</button>'
-    '</div>'
-    '</div>'
-    '<div class="card"><div class="logbox" id="fullLog" style="height:580px">Loading...</div></div>'
-    '</div>'
-    '<div id="settings" class="page">' +
-    '<div class="card" style="margin-bottom:20px">' +
-    '<div class="ct">Telegram Alerts <span id="tgBig" style="margin-left:8px;font-size:10px;padding:2px 8px;border-radius:8px;background:#21262d;color:#8b949e">loading...</span></div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">' +
-    '<div><div style="font-size:12px;color:#8b949e;margin-bottom:8px">Current status:</div>' +
-    '<span id="tgStatusBig" style="font-size:13px;color:#8b949e">Loading...</span></div>' +
-    '<div style="display:flex;align-items:flex-end"><button class="btn gs" id="tgTestBig" onclick="sendTgTest()" style="font-size:13px">Send Test Message</button></div>' +
-    '</div>' +
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
-    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Enable Telegram</div>' +
-    '<select id="tgEnabled" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit">' +
-    '<option value="false">Disabled</option><option value="true">Enabled</option></select></div>' +
-    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Cooldown (seconds)</div>' +
-    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">Suppress duplicate alerts</div>' +
-    '<input type="number" id="tgCooldown" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit" value="14400"></div>' +
-    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Bot Token</div>' +
-    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">From @BotFather on Telegram</div>' +
-    '<input type="password" id="tgToken" placeholder="1234567890:ABCdef..." style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit"></div>' +
-    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Chat ID</div>' +
-    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">Your numeric Telegram chat ID</div>' +
-    '<div style="display:flex;gap:8px;align-items:center">' +
-    '<input type="text" id="tgChatId" placeholder="123456789" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;flex:1;font-family:inherit">' +
-    '<button class="btn bl" style="font-size:12px;padding:8px 12px;white-space:nowrap" onclick="findChatId()">Find My ID</button>' +
-    '</div>' +
-    '<div id="chatIdResult" style="font-size:12px;color:#8b949e;margin-top:6px"></div></div>' +
-    '</div>' +
-    '<div style="margin-top:20px;display:flex;gap:12px;align-items:center">' +
-    '<button class="btn gs" style="padding:10px 28px;font-size:14px" onclick="saveTgSettings()">Save &amp; Restart Bot</button>' +
-    '<span id="tgSaveMsg" style="font-size:13px;color:#8b949e"></span>' +
-    '</div></div>' +
-    '<div class="card">' +
-    '<div class="ct">Dashboard Password</div>' +
-    '<div style="max-width:400px">' +
-    '<input type="password" id="newPw" placeholder="New password" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit;margin-bottom:12px">' +
-    '<button class="btn gs" style="font-size:13px" onclick="savePw()">Save Password</button>' +
-    '<span id="pwSaveMsg" style="font-size:13px;color:#8b949e;margin-left:12px"></span>' +
-    '</div></div>' +
-    '</div>' +
+# ─────────────────────────────────────────────────────────────────────────────
+# HTML Template
+# ─────────────────────────────────────────────────────────────────────────────
 
-    '</div>'
-    
-    '<script>'
-    'var _sigs=[], _lf="all";'
-    
-    'function doLogin(){'
-    '  var pw=document.getElementById("pw").value;'
-    '  if(!pw){document.getElementById("lerr").textContent="Enter a password";return;}'
-    '  document.getElementById("lerr").textContent="Checking...";'
-    '  fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})})'
-    '  .then(function(r){return r.json();})'
-    '  .then(function(d){'
-    '    if(d.ok===true){'
-    '      document.getElementById("loginWrap").style.display="none";'
-    '      document.getElementById("appWrap").style.display="block";'
-    '      boot();'
-    '    }else{'
-    '      document.getElementById("lerr").textContent="Incorrect password";'
-    '    }'
-    '  })'
-    '  .catch(function(e){document.getElementById("lerr").textContent="Error: "+e.message;});'
-    '}'
-    
-    'function doLogout(){'
-    '  fetch("/api/logout",{method:"POST"}).then(function(){location.reload();});'
-    '}'
-    
-    'function boot(){loadAll();loadTg();setInterval(loadAll,25000);setInterval(loadTg,60000);}'
-    
-    'function go(p){'
-    '  document.querySelectorAll(".page").forEach(function(x){x.classList.remove("on");});'
-    '  document.querySelectorAll("nav a").forEach(function(x){x.classList.remove("active");});'
-    '  document.getElementById(p).classList.add("on");'
-    '  var n=document.getElementById("n-"+p);'
-    '  if(n)n.classList.add("active");'
-    '  if(p==="logs")loadFullLog();'
-    '  if(p==="signals")loadAllSig();'
-    '  if(p==="settings")loadTgSettings();' +
-    '}'
-    
-    'function loadAll(){loadStatus();loadSig();loadLog();}'
-    
-    'function loadStatus(){'
-    '  fetch("/api/status").then(function(r){return r.json();}).then(function(d){'
-    '    document.getElementById("dot").className="dot "+(d.running?"g":"r");'
-    '    document.getElementById("stText").textContent=d.running?"Running - SHADOW mode":"Stopped";'
-    '    document.getElementById("mT").textContent=(d.counts&&d.counts.total)||0;'
-    '    document.getElementById("mI").textContent=(d.counts&&d.counts.ibkr)||0;'
-    '    document.getElementById("mE").textContent=(d.counts&&d.counts.etoro)||0;'
-    '  }).catch(function(){});'
-    '}'
-    
-    'function makeRow(s){'
-    '  var tc="tag t"+(s.direction==="long"?"l":"s");'
-    '  var rc="tag t"+(s.route==="ETORO"?"e":"i");'
-    '  var ts=(s.timestamp||"").slice(0,19);'
-    '  var rsi=(s.rsi||0).toFixed(1);'
-    '  var macd=(s.macd_hist||0).toFixed(4);'
-    '  var atr=(s.atr||0).toFixed(2);'
-    '  var price="$"+(s.price||0).toFixed(2);'
-    '  return "<tr><td>"+ts+"</td><td><b>"+s.symbol+"</b></td>"'
-    '    +"<td><span class=\'"+tc+"\'>"+s.direction.toUpperCase()+"</span></td>"'
-    '    +"<td><span class=\'"+rc+"\'>"+s.route+"</span></td>"'
-    '    +"<td>"+s.valid_count+"/4</td>"'
-    '    +"<td>"+rsi+"</td><td>"+macd+"</td><td>"+atr+"</td><td><b>"+price+"</b></td></tr>";'
-    '}'
-    
-    'var HDR="<table><tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Route</th><th>TFs</th><th>RSI</th><th>MACD</th><th>ATR</th><th>Price</th></tr>";'
-    
-    'function loadSig(){'
-    '  fetch("/api/signals?limit=10").then(function(r){return r.json();}).then(function(d){'
-    '    var w=document.getElementById("sigWrap");'
-    '    var sigs=d.signals||[];'
-    '    if(!sigs.length){w.innerHTML="<div style=\'color:#8b949e;text-align:center;padding:28px\'>No signals yet</div>";return;}'
-    '    w.innerHTML=HDR+sigs.map(makeRow).join("")+"</table>";'
-    '  }).catch(function(){});'
-    '}'
-    
-    'function loadAllSig(){'
-    '  fetch("/api/signals?limit=500").then(function(r){return r.json();}).then(function(d){'
-    '    _sigs=d.signals||[];renderSig();'
-    '  }).catch(function(){});'
-    '}'
-    
-    'function renderSig(){'
-    '  var s=(document.getElementById("sfilt").value||"").toLowerCase();'
-    '  var r=document.getElementById("rfilt").value;'
-    '  var d=document.getElementById("dfilt").value;'
-    '  var f=_sigs.filter(function(x){'
-    '    return(!s||(x.symbol||"").toLowerCase().indexOf(s)>=0)&&(!r||x.route===r)&&(!d||x.direction===d);'
-    '  });'
-    '  document.getElementById("scount").textContent=f.length+" signals";'
-    '  var w=document.getElementById("allSig");'
-    '  if(!f.length){w.innerHTML="<div style=\'color:#8b949e;padding:18px\'>No signals match filter.</div>";return;}'
-    '  w.innerHTML=HDR+f.map(makeRow).join("")+"</table>";'
-    '}'
-    
-    'function colorLine(l){'
-    '  if(l.indexOf("[SIGNAL]")>=0||l.indexOf("ETORO")>=0||l.indexOf("IBKR")>=0)'
-    '    return "<span style=\'color:#3fb950;font-weight:600\'>"+l+"</span>";'
-    '  if(l.indexOf("ERROR")>=0)'
-    '    return "<span style=\'color:#f85149\'>"+l+"</span>";'
-    '  if(l.indexOf("WARNING")>=0)'
-    '    return "<span style=\'color:#d29922\'>"+l+"</span>";'
-    '  if(l.indexOf("[TIER-A]")>=0||l.indexOf("[CYCLE]")>=0||l.indexOf("yfinance OK")>=0)'
-    '    return "<span style=\'color:#58a6ff\'>"+l+"</span>";'
-    '  return "<span style=\'color:#8b949e\'>"+l+"</span>";'
-    '}'
-    
-    'function setLF(f){_lf=f;loadFullLog();}'
-    
-    'function loadLog(){'
-    '  fetch("/api/logs?lines=80").then(function(r){return r.json();}).then(function(d){'
-    '    var el=document.getElementById("logbox");'
-    '    el.innerHTML=(d.lines||[]).map(colorLine).join("\\n");'
-    '    el.scrollTop=el.scrollHeight;'
-    '  }).catch(function(){});'
-    '}'
-    
-    'function loadFullLog(){'
-    '  fetch("/api/logs?lines=500").then(function(r){return r.json();}).then(function(d){'
-    '    var lines=d.lines||[];'
-    '    if(_lf==="sig")lines=lines.filter(function(l){return l.indexOf("[SIGNAL]")>=0||l.indexOf("ETORO")>=0||l.indexOf("IBKR")>=0;});'
-    '    if(_lf==="err")lines=lines.filter(function(l){return l.indexOf("ERROR")>=0||l.indexOf("WARNING")>=0;});'
-    '    var el=document.getElementById("fullLog");'
-    '    el.innerHTML=lines.map(colorLine).join("\\n");'
-    '    el.scrollTop=el.scrollHeight;'
-    '  }).catch(function(){});'
-    '}'
-    
-    'function telegramTest(){' +
-    '  var btn=document.getElementById("tgTestBtn");' +
-    '  if(btn)btn.disabled=true;' +
-    '  fetch("/api/telegram/test",{method:"POST"})' +
-    '  .then(function(r){return r.json();})' +
-    '  .then(function(d){' +
-    '    alert(d.message);' +
-    '    if(btn)btn.disabled=false;' +
-    '    loadTg();' +
-    '  }).catch(function(e){alert("Error: "+e.message);if(btn)btn.disabled=false;});' +
-    '}' +
-    'function loadTg(){' +
-    '  fetch("/api/telegram/status").then(function(r){return r.json();}).then(function(d){' +
-    '    var badge=document.getElementById("tgBadge");' +
-    '    var status=document.getElementById("tgStatus");' +
-    '    if(!badge||!status)return;' +
-    '    if(d.ready){' +
-    '      badge.style.background="#0d4a1a";badge.style.color="#3fb950";badge.textContent="enabled";' +
-    '      status.textContent="Telegram is configured and active.";' +
-    '      status.style.color="#3fb950";' +
-    '    }else if(d.enabled){' +
-    '      badge.style.background="#4a2d00";badge.style.color="#d29922";badge.textContent="misconfigured";' +
-    '      status.textContent="TELEGRAM_ENABLED=true but token or chat_id is missing in .env";' +
-    '      status.style.color="#d29922";' +
-    '    }else{' +
-    '      badge.style.background="#21262d";badge.style.color="#8b949e";badge.textContent="disabled";' +
-    '      status.textContent="Telegram disabled. Set TELEGRAM_ENABLED=true in .env to activate.";' +
-    '    }' +
-    '  }).catch(function(){});' +
-    '}' +
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Algo Trader v1</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#e6edf3;font-family:Segoe UI,Arial,sans-serif;min-height:100vh}
+nav{background:#161b22;border-bottom:1px solid #30363d;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:52px;position:sticky;top:0;z-index:100}
+.brand{font-size:17px;font-weight:700;color:#58a6ff}
+.brand em{background:#1f6feb;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;font-style:normal}
+nav a{color:#8b949e;text-decoration:none;padding:7px 13px;border-radius:6px;font-size:14px;cursor:pointer;user-select:none}
+nav a:hover,nav a.active{background:#21262d;color:#e6edf3}
+nav a.out{color:#f85149}
+.page{display:none;padding:24px;max-width:1400px;margin:0 auto}
+.page.on{display:block}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:18px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:18px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:22px}
+.ct{font-size:11px;font-weight:600;color:#8b949e;letter-spacing:1px;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.sr{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.dot.g{background:#3fb950;box-shadow:0 0 8px #3fb950}
+.dot.r{background:#f85149}
+.dot.y{background:#d29922;box-shadow:0 0 8px #d29922}
+.dot.b{background:#58a6ff;box-shadow:0 0 8px #58a6ff}
+.dot.gy{background:#6e7681}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.dot.pulse{animation:pulse 1.4s ease-in-out infinite}
+.st{font-size:19px;font-weight:700}
+.sub{font-size:12px;color:#8b949e;margin-top:2px}
+.br{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.btn{padding:8px 16px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.gs{background:#238636;color:#fff}.rs{background:#da3633;color:#fff}.bl{background:#1f6feb;color:#fff}.gy-btn{background:#21262d;color:#e6edf3}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+.badge-scan{background:#2d2000;color:#d29922;border:1px solid #d29922}
+.badge-cool{background:#0d4a1a;color:#3fb950;border:1px solid #3fb950}
+.badge-start{background:#0d2d5a;color:#58a6ff;border:1px solid #58a6ff}
+.badge-stop{background:#21262d;color:#6e7681;border:1px solid #6e7681}
+.badge-crash{background:#4a0d0d;color:#f85149;border:1px solid #f85149}
+.metric-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:#30363d;border-radius:8px;overflow:hidden;margin-top:4px}
+.metric{background:#161b22;padding:14px;text-align:center}
+.mv{font-size:26px;font-weight:700;color:#58a6ff}
+.mv.g{color:#3fb950}.mv.y{color:#d29922}.mv.r{color:#f85149}
+.ml{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.logbox{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px;font-family:'Courier New',monospace;font-size:12px;height:340px;overflow-y:auto;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#21262d;color:#8b949e;padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.7px}
+td{padding:9px 12px;border-top:1px solid #21262d;vertical-align:middle}
+tr:hover td{background:#1c2128}
+.tag{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
+.tl{background:#0d4a1a;color:#3fb950}.ts{background:#4a0d0d;color:#f85149}
+.te{background:#2d1f00;color:#d29922}.ti{background:#0d2d5a;color:#58a6ff}
+.tw{background:#21262d;color:#8b949e}
+.rfbtn{background:none;border:1px solid #30363d;color:#8b949e;padding:4px 11px;border-radius:6px;cursor:pointer;font-size:12px;margin-left:auto}
+.rfbtn:hover{background:#21262d;color:#e6edf3}
+.login{display:flex;align-items:center;justify-content:center;min-height:100vh}
+.lbox{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:38px;width:340px}
+.lbox input{width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:10px 13px;border-radius:7px;font-size:15px;margin-bottom:12px;outline:none;font-family:inherit}
+.lbox input:focus{border-color:#58a6ff}
+.lbox button{width:100%;background:#238636;color:#fff;border:none;padding:11px;border-radius:7px;font-size:15px;font-weight:600;cursor:pointer}
+.stat-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #21262d}
+.stat-item:last-child{border-bottom:none}
+.stat-label{font-size:12px;color:#8b949e;min-width:130px}
+.stat-value{font-size:13px;font-weight:600;color:#e6edf3}
+.empty-state{color:#8b949e;text-align:center;padding:32px;font-size:13px}
+.countdown{font-size:28px;font-weight:700;color:#58a6ff;font-variant-numeric:tabular-nums}
+.countdown.done{color:#3fb950}
+.filter-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.filter-bar input,.filter-bar select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 12px;border-radius:7px;font-size:13px;font-family:inherit;outline:none}
+.filter-bar input:focus,.filter-bar select:focus{border-color:#58a6ff}
+.tfsbar{display:flex;gap:4px;margin-top:6px}
+.tfpip{padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;background:#21262d;color:#6e7681}
+.tfpip.on{background:#0d2d5a;color:#58a6ff}
+.btn-feedback{font-size:12px;color:#8b949e;margin-left:4px;min-height:20px}
+.section-title{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:12px}
+input[type=password],input[type=text],input[type=number],select{outline:none}
+</style>
+</head>
+<body>
 
-    'function loadTgSettings(){' +
-    '  fetch("/api/telegram/status").then(function(r){return r.json();}).then(function(d){' +
-    '    var big=document.getElementById("tgBig");' +
-    '    var sb=document.getElementById("tgStatusBig");' +
-    '    if(d.ready){' +
-    '      if(big){big.style.background="#0d4a1a";big.style.color="#3fb950";big.textContent="enabled";}' +
-    '      if(sb)sb.textContent="Telegram is configured and active.";' +
-    '      if(sb)sb.style.color="#3fb950";' +
-    '      var en=document.getElementById("tgEnabled");if(en)en.value="true";' +
-    '    }else if(d.enabled){' +
-    '      if(big){big.style.background="#2d1f00";big.style.color="#d29922";big.textContent="misconfigured";}' +
-    '      if(sb){sb.textContent="Enabled but token or chat ID missing.";sb.style.color="#d29922";}' +
-    '    }else{' +
-    '      if(big){big.style.background="#21262d";big.style.color="#8b949e";big.textContent="disabled";}' +
-    '      if(sb){sb.textContent="Telegram disabled. Fill in settings below and save.";sb.style.color="#8b949e";}' +
-    '    }' +
-    '    fetch("/api/telegram/current").then(function(r){return r.json();}).then(function(c){' +
-    '      var en=document.getElementById("tgEnabled");' +
-    '      var cd=document.getElementById("tgCooldown");' +
-    '      if(en)en.value=c.enabled?"true":"false";' +
-    '      if(cd)cd.value=c.cooldown||14400;' +
-    '    }).catch(function(){});' +
-    '  }).catch(function(){});' +
-    '}' +
+<!-- ── Login ── -->
+<div id="loginWrap" class="login">
+<div class="lbox">
+  <div style="font-size:21px;font-weight:700;color:#58a6ff;text-align:center;margin-bottom:6px">&#x1F916; Algo Trader</div>
+  <div style="color:#8b949e;text-align:center;margin-bottom:26px">v1.0 &mdash; Shadow Mode</div>
+  <input type="password" id="pw" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+  <button onclick="doLogin()">Login</button>
+  <div id="lerr" style="color:#f85149;text-align:center;margin-top:9px;font-size:13px"></div>
+</div>
+</div>
 
-    'function saveTgSettings(){' +
-    '  var payload={' +
-    '    enabled:document.getElementById("tgEnabled").value==="true",' +
-    '    token:document.getElementById("tgToken").value,' +
-    '    chat_id:document.getElementById("tgChatId").value,' +
-    '    cooldown:parseInt(document.getElementById("tgCooldown").value)||14400' +
-    '  };' +
-    '  var msg=document.getElementById("tgSaveMsg");' +
-    '  if(msg)msg.textContent="Saving...";' +
-    '  fetch("/api/telegram/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})' +
-    '  .then(function(r){return r.json();})' +
-    '  .then(function(d){' +
-    '    if(msg)msg.textContent=d.ok?"Saved! Bot restarting...": "Error: "+(d.error||"failed");' +
-    '    if(msg)msg.style.color=d.ok?"#3fb950":"#f85149";' +
-    '    setTimeout(function(){loadTgSettings();loadTg();},2000);' +
-    '  })' +
-    '  .catch(function(e){if(msg){msg.textContent="Error: "+e.message;msg.style.color="#f85149";}});' +
-    '}' +
+<!-- ── App ── -->
+<div id="appWrap" style="display:none">
+<nav>
+  <div class="brand">&#x1F916; Algo Trader <em>v1.0</em></div>
+  <div>
+    <a onclick="go('overview')"  id="n-overview"  class="active">Overview</a>
+    <a onclick="go('signals')"   id="n-signals">Signals</a>
+    <a onclick="go('logs')"      id="n-logs">Logs</a>
+    <a onclick="go('settings')"  id="n-settings">Settings</a>
+    <a onclick="doLogout()" class="out">Logout</a>
+  </div>
+</nav>
 
-    'function sendTgTest(){' +
-    '  var btn=document.getElementById("tgTestBig");' +
-    '  if(btn)btn.disabled=true;' +
-    '  fetch("/api/telegram/test",{method:"POST"})' +
-    '  .then(function(r){return r.json();})' +
-    '  .then(function(d){alert(d.message);if(btn)btn.disabled=false;loadTgSettings();})' +
-    '  .catch(function(e){alert("Error: "+e.message);if(btn)btn.disabled=false;});' +
-    '}' +
+<!-- ════════════════ OVERVIEW ════════════════ -->
+<div id="overview" class="page on">
 
-    'function findChatId(){' +
-    '  var el=document.getElementById("chatIdResult");' +
-    '  if(el)el.textContent="Checking Telegram for recent messages...";' +
-    '  fetch("/api/telegram/getupdates")' +
-    '  .then(function(r){return r.json();})' +
-    '  .then(function(d){' +
-    '    if(!d.ok){if(el)el.textContent="Error: "+d.error;return;}' +
-    '    if(!d.chats||!d.chats.length){' +
-    '      if(el)el.textContent="No messages found. Send a message to your bot first, then try again.";return;}' +
-    '    var c=d.chats[0];' +
-    '    document.getElementById("tgChatId").value=c.chat_id;' +
-    '    if(el)el.textContent="Found: "+c.chat_id+" ("+c.first_name+" "+c.username+") - auto-filled above";' +
-    '    if(el)el.style.color="#3fb950";' +
-    '  })' +
-    '  .catch(function(e){if(el)el.textContent="Error: "+e.message;});' +
-    '}' +
+  <!-- Row 1: Bot Status + Phase -->
+  <div class="g2">
 
-    'function savePw(){' +
-    '  var pw=document.getElementById("newPw").value;' +
-    '  if(!pw){alert("Enter a password");return;}' +
-    '  fetch("/api/settings/password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})})' +
-    '  .then(function(r){return r.json();})' +
-    '  .then(function(d){' +
-    '    var msg=document.getElementById("pwSaveMsg");' +
-    '    if(msg){msg.textContent=d.ok?"Saved!":"Error: "+(d.error||"failed");msg.style.color=d.ok?"#3fb950":"#f85149";}' +
-    '  }).catch(function(e){alert("Error: "+e.message);});' +
-    '}' +
+    <div class="card">
+      <div class="ct">Bot Status</div>
+      <div class="sr">
+        <div class="dot gy" id="dot"></div>
+        <div>
+          <div class="st" id="stText">Loading...</div>
+          <div class="sub" id="stSub">&nbsp;</div>
+        </div>
+      </div>
+      <div class="br">
+        <button class="btn gs" id="btnStart"   onclick="act('start')">&#x25B6; Start</button>
+        <button class="btn rs" id="btnStop"    onclick="act('stop')">&#x23F9; Stop</button>
+        <button class="btn bl" id="btnRestart" onclick="act('restart')">&#x21BA; Restart</button>
+        <span class="btn-feedback" id="actFeedback"></span>
+      </div>
+    </div>
 
-    'function act(a){' +
-    '  var btns=document.querySelectorAll(".btn");' +
-    '  btns.forEach(function(b){b.disabled=true;b.style.opacity="0.6";});' +
-    '  var st=document.getElementById("stText");' +
-    '  if(st)st.textContent=(a==="restart"?"Restarting...":a==="start"?"Starting...":"Stopping...");' +
-    '  fetch("/api/"+a,{method:"POST"})' +
-    '  .then(function(){setTimeout(function(){loadStatus();btns.forEach(function(b){b.disabled=false;b.style.opacity="1";});},4000);setTimeout(loadStatus,8000);})' +
-    '  .catch(function(e){btns.forEach(function(b){b.disabled=false;b.style.opacity="1";});alert("Error: "+e.message);});' +
-    '}' +
-    
-    '</script>'
-    '</body>'
-    '</html>'
-)
+    <div class="card">
+      <div class="ct">Current Phase</div>
+      <div style="margin-bottom:12px">
+        <span class="badge badge-stop" id="phaseBadge">unknown</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Cycle #</span>
+        <span class="stat-value" id="cycleNum">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Next scan in</span>
+        <span class="countdown" id="countdown">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Last scan at</span>
+        <span class="stat-value" id="lastCycleAt">&mdash;</span>
+      </div>
+    </div>
 
+  </div>
+
+  <!-- Row 2: Last Cycle + System -->
+  <div class="g2">
+
+    <div class="card">
+      <div class="ct">Last Cycle Summary</div>
+      <div class="stat-item">
+        <span class="stat-label">Signals generated</span>
+        <span class="stat-value" id="lcSignals">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Timeframes OK</span>
+        <span class="stat-value" id="lcTfs">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Symbols scanned</span>
+        <span class="stat-value" id="lcSymbols">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Duration</span>
+        <span class="stat-value" id="lcDuration">&mdash;</span>
+      </div>
+      <div class="tfsbar" id="tfsbar"></div>
+    </div>
+
+    <div class="card">
+      <div class="ct">System</div>
+      <div class="stat-item">
+        <span class="stat-label">Mode</span>
+        <span class="stat-value" id="sysMode">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Focus symbols</span>
+        <span class="stat-value" id="sysFocus">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">DB total signals</span>
+        <span class="stat-value" id="sysDbTotal">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">DB by route</span>
+        <span class="stat-value" id="sysDbRoutes">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Telegram</span>
+        <span class="stat-value" id="sysTg">&mdash;</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Scan interval</span>
+        <span class="stat-value" id="sysInterval">&mdash;</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Recent Signals -->
+  <div class="card" style="margin-bottom:18px">
+    <div class="ct">
+      Recent Signals
+      <button class="rfbtn" onclick="loadSig()">&#x21BB; Refresh</button>
+    </div>
+    <div id="sigWrap"><div class="empty-state">No signals yet &mdash; bot is scanning in shadow mode</div></div>
+  </div>
+
+  <!-- Live Log -->
+  <div class="card">
+    <div class="ct">
+      Live Log
+      <button class="rfbtn" onclick="loadLog()">&#x21BB; Refresh</button>
+    </div>
+    <div class="logbox" id="logbox">Loading...</div>
+  </div>
+
+</div><!-- /overview -->
+
+<!-- ════════════════ SIGNALS ════════════════ -->
+<div id="signals" class="page">
+  <div class="card" style="margin-bottom:16px">
+    <div class="filter-bar">
+      <input style="width:150px" placeholder="Symbol..." id="sfilt" oninput="renderSig()">
+      <select id="rfilt" onchange="renderSig()">
+        <option value="">All Routes</option>
+        <option>ETORO</option><option>IBKR</option><option>WATCH</option>
+      </select>
+      <select id="dfilt" onchange="renderSig()">
+        <option value="">All Directions</option>
+        <option>long</option><option>short</option>
+      </select>
+      <button class="btn bl" style="font-size:12px;padding:7px 13px" onclick="loadAllSig()">&#x21BB; Refresh</button>
+      <span id="scount" style="color:#8b949e;font-size:13px;margin-left:auto"></span>
+    </div>
+  </div>
+  <div class="card" style="overflow-x:auto"><div id="allSig"></div></div>
+</div>
+
+<!-- ════════════════ LOGS ════════════════ -->
+<div id="logs" class="page">
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn gy-btn" id="lf-all" onclick="setLF('all')">All</button>
+      <button class="btn gy-btn" id="lf-sig" onclick="setLF('sig')">Signals only</button>
+      <button class="btn gy-btn" id="lf-err" onclick="setLF('err')">Errors/Warnings</button>
+      <button class="btn gy-btn" id="lf-cyc" onclick="setLF('cyc')">Cycle events</button>
+      <button class="btn bl"     onclick="loadFullLog()">&#x21BB; Refresh</button>
+    </div>
+  </div>
+  <div class="card"><div class="logbox" id="fullLog" style="height:600px">Loading...</div></div>
+</div>
+
+<!-- ════════════════ SETTINGS ════════════════ -->
+<div id="settings" class="page">
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="ct">
+      Telegram Alerts
+      <span id="tgBig" style="font-size:10px;padding:2px 8px;border-radius:8px;background:#21262d;color:#8b949e">loading...</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+
+      <div>
+        <div class="section-title">Current status</div>
+        <span id="tgStatusBig" style="font-size:13px;color:#8b949e">Loading...</span>
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="btn gs" id="tgTestBig" onclick="sendTgTest()" style="font-size:13px">&#x1F4E4; Send Test</button>
+      </div>
+
+      <div>
+        <div class="section-title">Enable Telegram</div>
+        <select id="tgEnabled" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit">
+          <option value="false">Disabled</option>
+          <option value="true">Enabled</option>
+        </select>
+      </div>
+
+      <div>
+        <div class="section-title">Cooldown (seconds)</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Suppress duplicate alerts</div>
+        <input type="number" id="tgCooldown" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit" value="14400">
+      </div>
+
+      <div>
+        <div class="section-title">Bot Token</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:4px">From @BotFather on Telegram</div>
+        <input type="password" id="tgToken" placeholder="1234567890:ABCdef..." style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit">
+      </div>
+
+      <div>
+        <div class="section-title">Chat ID</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:4px">Your numeric Telegram chat ID</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="tgChatId" placeholder="123456789" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;flex:1;font-family:inherit">
+          <button class="btn bl" style="font-size:12px;padding:8px 12px;white-space:nowrap" onclick="findChatId()">Find My ID</button>
+        </div>
+        <div id="chatIdResult" style="font-size:12px;color:#8b949e;margin-top:6px"></div>
+      </div>
+
+    </div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <button class="btn gs" style="padding:10px 28px;font-size:14px" onclick="saveTgSettings()">Save &amp; Restart Bot</button>
+      <span id="tgSaveMsg" style="font-size:13px;color:#8b949e"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Dashboard Password</div>
+    <div style="max-width:400px">
+      <input type="password" id="newPw" placeholder="New password" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit;margin-bottom:12px">
+      <button class="btn gs" style="font-size:13px" onclick="savePw()">Save Password</button>
+      <span id="pwSaveMsg" style="font-size:13px;color:#8b949e;margin-left:12px"></span>
+    </div>
+  </div>
+
+</div><!-- /settings -->
+</div><!-- /appWrap -->
+
+<script>
+// ─── globals ───
+var _sigs = [];
+var _lf   = 'all';
+var _nextCycleAt = null;
+var _cdownTimer  = null;
+var _lastStatus  = {};
+
+// ─── auth ───
+function doLogin(){
+  var pw = document.getElementById('pw').value;
+  if(!pw){ document.getElementById('lerr').textContent='Enter a password'; return; }
+  document.getElementById('lerr').textContent = 'Checking...';
+  fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw})})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.ok){
+      document.getElementById('loginWrap').style.display = 'none';
+      document.getElementById('appWrap').style.display   = 'block';
+      boot();
+    } else {
+      document.getElementById('lerr').textContent = 'Incorrect password';
+    }
+  }).catch(function(e){ document.getElementById('lerr').textContent = 'Error: ' + e.message; });
+}
+
+function doLogout(){
+  fetch('/api/logout', {method:'POST'}).then(function(){ location.reload(); });
+}
+
+// ─── navigation ───
+function go(p){
+  document.querySelectorAll('.page').forEach(function(x){ x.classList.remove('on'); });
+  document.querySelectorAll('nav a').forEach(function(x){ x.classList.remove('active'); });
+  var pg = document.getElementById(p);
+  if(pg) pg.classList.add('on');
+  var nav = document.getElementById('n-' + p);
+  if(nav) nav.classList.add('active');
+  if(p === 'logs')     loadFullLog();
+  if(p === 'signals')  loadAllSig();
+  if(p === 'settings') loadTgSettings();
+}
+
+// ─── boot ───
+function boot(){
+  loadAll();
+  loadTg();
+  setInterval(loadAll,  20000);
+  setInterval(loadTg,   60000);
+  startCountdown();
+}
+
+function loadAll(){ loadStatus(); loadSig(); loadLog(); }
+
+// ─── status ───
+function loadStatus(){
+  fetch('/api/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    _lastStatus = d;
+    applyStatus(d);
+  }).catch(function(){});
+}
+
+function applyStatus(d){
+  // running dot + text
+  var dot  = document.getElementById('dot');
+  var stTx = document.getElementById('stText');
+  var stSb = document.getElementById('stSub');
+  var phase = (d.phase || 'unknown').toLowerCase();
+
+  if(d.running){
+    if(phase === 'scanning'){
+      dot.className = 'dot y pulse';
+      stTx.textContent = 'Running \u2014 SCANNING';
+    } else {
+      dot.className = 'dot g';
+      stTx.textContent = 'Running \u2014 ' + (d.mode || 'shadow').toUpperCase() + ' MODE';
+    }
+    stSb.textContent = d.uptime_started ? ('Since ' + fmtTime(d.uptime_started)) : '';
+  } else {
+    dot.className = 'dot ' + (phase === 'crashed' ? 'r' : 'gy');
+    stTx.textContent = phase === 'crashed' ? 'CRASHED' : 'Stopped';
+    stSb.textContent = '';
+  }
+
+  // phase badge
+  var badge = document.getElementById('phaseBadge');
+  if(badge){
+    badge.className = 'badge ' + phaseBadgeClass(phase);
+    badge.textContent = phase;
+  }
+
+  // cycle info
+  setText('cycleNum', d.cycle > 0 ? ('#' + d.cycle) : '\u2014');
+  setText('lastCycleAt', d.last_cycle_at ? fmtTime(d.last_cycle_at) : '\u2014');
+
+  // next cycle countdown
+  _nextCycleAt = d.next_cycle_at || null;
+  if(phase === 'scanning') _nextCycleAt = null;
+
+  // last cycle summary
+  setText('lcSignals',  d.last_cycle_signals != null ? (d.last_cycle_signals + (d.last_cycle_signals === 1 ? ' signal' : ' signals')) : '\u2014');
+  setText('lcTfs',      d.last_cycle_tfs     != null ? (d.last_cycle_tfs + ' / 4') : '\u2014');
+  setText('lcSymbols',  d.last_cycle_symbols  != null ? d.last_cycle_symbols : '\u2014');
+  setText('lcDuration', d.last_cycle_duration_s != null ? (d.last_cycle_duration_s + 's') : '\u2014');
+
+  // TF pips
+  var tfsbar = document.getElementById('tfsbar');
+  if(tfsbar){
+    var all = ['1D','4H','1H','15m'];
+    var got = d.last_cycle_tfs_list || [];
+    tfsbar.innerHTML = all.map(function(tf){
+      var on = got.indexOf(tf) >= 0 ? ' on' : '';
+      return '<span class="tfpip' + on + '">' + tf + '</span>';
+    }).join('');
+  }
+
+  // system
+  setText('sysMode',     (d.mode || '\u2014').toUpperCase());
+  setText('sysFocus',    d.focus_count != null ? (d.focus_count + ' symbols') : '\u2014');
+  setText('sysInterval', d.scan_interval_secs ? fmtSecs(d.scan_interval_secs) : '\u2014');
+
+  // DB counts
+  var counts = d.counts || {};
+  setText('sysDbTotal',  counts.total != null ? counts.total : '\u2014');
+  if(counts.total != null){
+    setText('sysDbRoutes', 'eToro: ' + (counts.etoro||0) + ' \u00b7 IBKR: ' + (counts.ibkr||0));
+  } else {
+    setText('sysDbRoutes', '\u2014');
+  }
+
+  // Telegram
+  var tg  = d.telegram || {};
+  var tgEl = document.getElementById('sysTg');
+  if(tgEl){
+    if(tg.ready){
+      tgEl.innerHTML = '<span style="color:#3fb950">&#x2714; Enabled &amp; ready</span>';
+    } else if(tg.enabled){
+      tgEl.innerHTML = '<span style="color:#d29922">&#x26A0; Enabled but misconfigured</span>';
+    } else {
+      tgEl.innerHTML = '<span style="color:#6e7681">Disabled</span>';
+    }
+  }
+}
+
+function phaseBadgeClass(phase){
+  if(phase === 'scanning') return 'badge-scan';
+  if(phase === 'cooldown') return 'badge-cool';
+  if(phase === 'starting') return 'badge-start';
+  if(phase === 'crashed')  return 'badge-crash';
+  return 'badge-stop';
+}
+
+// ─── countdown ───
+function startCountdown(){
+  if(_cdownTimer) clearInterval(_cdownTimer);
+  _cdownTimer = setInterval(tickCountdown, 1000);
+}
+
+function tickCountdown(){
+  var el = document.getElementById('countdown');
+  if(!el) return;
+  if(!_nextCycleAt){
+    var phase = (_lastStatus.phase || '').toLowerCase();
+    el.className = 'countdown';
+    if(phase === 'scanning'){
+      el.textContent = 'scanning...';
+    } else if(!_lastStatus.running){
+      el.textContent = '\u2014';
+    } else {
+      el.textContent = '\u2014';
+    }
+    return;
+  }
+  var diff = Math.round((new Date(_nextCycleAt) - Date.now()) / 1000);
+  if(diff <= 0){
+    el.className = 'countdown done';
+    el.textContent = 'soon...';
+  } else {
+    el.className = 'countdown';
+    var m = Math.floor(diff / 60);
+    var s = diff % 60;
+    el.textContent = (m > 0 ? m + 'm ' : '') + s + 's';
+  }
+}
+
+// ─── bot actions ───
+function act(a){
+  var allBtns = [document.getElementById('btnStart'), document.getElementById('btnStop'), document.getElementById('btnRestart')];
+  var fb = document.getElementById('actFeedback');
+  allBtns.forEach(function(b){ if(b) b.disabled = true; });
+  var label = a === 'start' ? 'Starting\u2026' : a === 'stop' ? 'Stopping\u2026' : 'Restarting\u2026';
+  if(fb) fb.textContent = label;
+  fetch('/api/' + a, {method:'POST'})
+  .then(function(){
+    setTimeout(function(){
+      loadStatus();
+      if(fb) fb.textContent = 'Done.';
+      allBtns.forEach(function(b){ if(b) b.disabled = false; });
+      setTimeout(function(){ if(fb) fb.textContent = ''; }, 3000);
+    }, 4000);
+    setTimeout(loadStatus, 9000);
+  })
+  .catch(function(e){
+    allBtns.forEach(function(b){ if(b) b.disabled = false; });
+    if(fb){ fb.textContent = 'Error: ' + e.message; fb.style.color = '#f85149'; }
+  });
+}
+
+// ─── signals ───
+var HDR = '<table><tr>'
+  + '<th>Time</th><th>Symbol</th><th>Dir</th><th>Route</th>'
+  + '<th>TFs</th><th>RSI</th><th>MACD Hist</th><th>ATR</th><th>Price</th>'
+  + '</tr>';
+
+function makeRow(s){
+  var tc = 'tag t' + (s.direction === 'long' ? 'l' : 's');
+  var rc = s.route === 'ETORO' ? 'tag te' : s.route === 'IBKR' ? 'tag ti' : 'tag tw';
+  var ts = (s.timestamp||'').slice(0,19).replace('T',' ');
+  var rsi  = s.rsi       != null ? (+s.rsi).toFixed(1)       : '\u2014';
+  var macd = s.macd_hist != null ? (+s.macd_hist).toFixed(4) : '\u2014';
+  var atr  = s.atr       != null ? (+s.atr).toFixed(2)       : '\u2014';
+  var price = s.price    != null ? ('$' + (+s.price).toFixed(2)) : '\u2014';
+  var tfs  = [s.tf_1d?'1D':'', s.tf_4h?'4H':'', s.tf_1h?'1H':'', s.tf_15m?'15m':''].filter(Boolean).join(' ');
+  return '<tr>'
+    + '<td style="color:#8b949e">' + ts + '</td>'
+    + '<td><b>' + (s.symbol||'') + '</b></td>'
+    + '<td><span class="' + tc + '">' + (s.direction||'').toUpperCase() + '</span></td>'
+    + '<td><span class="' + rc + '">' + (s.route||'') + '</span></td>'
+    + '<td><span style="font-size:12px;color:#58a6ff">' + (s.valid_count||0) + '/4</span>'
+    + (tfs ? '<br><span style="font-size:10px;color:#6e7681">' + tfs + '</span>' : '') + '</td>'
+    + '<td>' + rsi + '</td>'
+    + '<td style="font-family:monospace">' + macd + '</td>'
+    + '<td>' + atr + '</td>'
+    + '<td><b>' + price + '</b></td>'
+    + '</tr>';
+}
+
+function loadSig(){
+  fetch('/api/signals?limit=10')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var w = document.getElementById('sigWrap');
+    var sigs = d.signals || [];
+    if(!sigs.length){
+      w.innerHTML = '<div class="empty-state">No signals yet \u2014 bot is scanning in shadow mode</div>';
+      return;
+    }
+    w.innerHTML = HDR + sigs.map(makeRow).join('') + '</table>';
+  }).catch(function(){});
+}
+
+function loadAllSig(){
+  fetch('/api/signals?limit=500')
+  .then(function(r){ return r.json(); })
+  .then(function(d){ _sigs = d.signals || []; renderSig(); })
+  .catch(function(){});
+}
+
+function renderSig(){
+  var s = (document.getElementById('sfilt').value||'').toLowerCase();
+  var r = document.getElementById('rfilt').value;
+  var d = document.getElementById('dfilt').value;
+  var f = _sigs.filter(function(x){
+    return (!s || (x.symbol||'').toLowerCase().indexOf(s) >= 0)
+      && (!r || x.route === r)
+      && (!d || x.direction === d);
+  });
+  setText('scount', f.length + ' signals');
+  var w = document.getElementById('allSig');
+  if(!f.length){ w.innerHTML = '<div class="empty-state">No signals match filter.</div>'; return; }
+  w.innerHTML = HDR + f.map(makeRow).join('') + '</table>';
+}
+
+// ─── log coloring ───
+function colorLine(l){
+  if(!l) return '<span style="color:#21262d">&nbsp;</span>';
+  var esc = l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  if(esc.indexOf('[SIGNAL]') >= 0)
+    return '<span style="color:#3fb950;font-weight:700">' + esc + '</span>';
+  if(esc.indexOf('ERROR') >= 0)
+    return '<span style="color:#f85149;font-weight:600">' + esc + '</span>';
+  if(esc.indexOf('WARNING') >= 0)
+    return '<span style="color:#d29922">' + esc + '</span>';
+  if(esc.indexOf('[STARTUP]') >= 0)
+    return '<span style="color:#58a6ff;font-weight:600">' + esc + '</span>';
+  if(esc.indexOf('[MAIN]') >= 0 && esc.indexOf('Cycle') >= 0)
+    return '<span style="color:#58a6ff">' + esc + '</span>';
+  if(esc.indexOf('[CYCLE]') >= 0)
+    return '<span style="color:#79c0ff">' + esc + '</span>';
+  if(esc.indexOf('ETORO') >= 0 || esc.indexOf('IBKR') >= 0)
+    return '<span style="color:#3fb950">' + esc + '</span>';
+  if(esc.indexOf('=====') >= 0 || esc.indexOf('SHADOW MODE') >= 0)
+    return '<span style="color:#58a6ff;font-weight:700">' + esc + '</span>';
+  return '<span style="color:#8b949e">' + esc + '</span>';
+}
+
+function setLF(f){
+  _lf = f;
+  ['all','sig','err','cyc'].forEach(function(x){
+    var el = document.getElementById('lf-' + x);
+    if(el) el.style.opacity = (x === f) ? '1' : '0.5';
+  });
+  loadFullLog();
+}
+
+function loadLog(){
+  fetch('/api/logs?lines=80')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var el = document.getElementById('logbox');
+    el.innerHTML = (d.lines||[]).map(colorLine).join('\n');
+    el.scrollTop = el.scrollHeight;
+  }).catch(function(){});
+}
+
+function loadFullLog(){
+  fetch('/api/logs?lines=600')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var lines = d.lines || [];
+    if(_lf === 'sig') lines = lines.filter(function(l){ return l.indexOf('[SIGNAL]') >= 0 || l.indexOf('ETORO') >= 0 || l.indexOf('IBKR') >= 0; });
+    if(_lf === 'err') lines = lines.filter(function(l){ return l.indexOf('ERROR') >= 0 || l.indexOf('WARNING') >= 0; });
+    if(_lf === 'cyc') lines = lines.filter(function(l){ return l.indexOf('[CYCLE]') >= 0 || l.indexOf('[MAIN]') >= 0; });
+    var el = document.getElementById('fullLog');
+    el.innerHTML = lines.length ? lines.map(colorLine).join('\n') : '<span style="color:#8b949e">No lines match this filter.</span>';
+    el.scrollTop = el.scrollHeight;
+  }).catch(function(){});
+}
+
+// ─── telegram (settings page) ───
+function loadTg(){
+  fetch('/api/telegram/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    // overview badge
+    // (handled inside loadStatus via d.telegram)
+    // settings page badge
+    var badge = document.getElementById('tgBig');
+    if(badge){
+      if(d.ready)       { badge.style.background='#0d4a1a'; badge.style.color='#3fb950'; badge.textContent='enabled'; }
+      else if(d.enabled){ badge.style.background='#4a2d00'; badge.style.color='#d29922'; badge.textContent='misconfigured'; }
+      else              { badge.style.background='#21262d'; badge.style.color='#8b949e'; badge.textContent='disabled'; }
+    }
+  }).catch(function(){});
+}
+
+function loadTgSettings(){
+  fetch('/api/telegram/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var big = document.getElementById('tgBig');
+    var sb  = document.getElementById('tgStatusBig');
+    if(d.ready){
+      if(big){ big.style.background='#0d4a1a'; big.style.color='#3fb950'; big.textContent='enabled'; }
+      if(sb){ sb.textContent='Telegram is configured and active.'; sb.style.color='#3fb950'; }
+    } else if(d.enabled){
+      if(big){ big.style.background='#2d1f00'; big.style.color='#d29922'; big.textContent='misconfigured'; }
+      if(sb){ sb.textContent='Enabled but token or chat ID missing.'; sb.style.color='#d29922'; }
+    } else {
+      if(big){ big.style.background='#21262d'; big.style.color='#8b949e'; big.textContent='disabled'; }
+      if(sb){ sb.textContent='Telegram disabled. Fill in settings below and save.'; sb.style.color='#8b949e'; }
+    }
+    fetch('/api/telegram/current')
+    .then(function(r){ return r.json(); })
+    .then(function(c){
+      var en = document.getElementById('tgEnabled');
+      var cd = document.getElementById('tgCooldown');
+      if(en) en.value = c.enabled ? 'true' : 'false';
+      if(cd) cd.value = c.cooldown || 14400;
+    }).catch(function(){});
+  }).catch(function(){});
+}
+
+function saveTgSettings(){
+  var payload = {
+    enabled:  document.getElementById('tgEnabled').value === 'true',
+    token:    document.getElementById('tgToken').value,
+    chat_id:  document.getElementById('tgChatId').value,
+    cooldown: parseInt(document.getElementById('tgCooldown').value) || 14400
+  };
+  var msg = document.getElementById('tgSaveMsg');
+  if(msg) msg.textContent = 'Saving...';
+  fetch('/api/telegram/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(msg){ msg.textContent = d.ok ? 'Saved! Bot restarting...' : 'Error: ' + (d.error||'failed'); msg.style.color = d.ok ? '#3fb950' : '#f85149'; }
+    setTimeout(function(){ loadTgSettings(); loadTg(); }, 2000);
+  }).catch(function(e){ if(msg){ msg.textContent = 'Error: ' + e.message; msg.style.color = '#f85149'; } });
+}
+
+function sendTgTest(){
+  var btn = document.getElementById('tgTestBig');
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending...'; }
+  fetch('/api/telegram/test', {method:'POST'})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(btn){ btn.disabled = false; btn.textContent = '&#x1F4E4; Send Test'; }
+    alert(d.ok ? ('Sent! ' + (d.message||'')) : ('Failed: ' + (d.message||d.error||'unknown')));
+    loadTgSettings();
+  }).catch(function(e){ if(btn){ btn.disabled = false; btn.textContent = '&#x1F4E4; Send Test'; } alert('Error: ' + e.message); });
+}
+
+function findChatId(){
+  var el = document.getElementById('chatIdResult');
+  if(el) el.textContent = 'Checking Telegram for recent messages...';
+  fetch('/api/telegram/getupdates')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(!d.ok){ if(el) el.textContent = 'Error: ' + d.error; return; }
+    if(!d.chats || !d.chats.length){ if(el) el.textContent = 'No messages found. Send a message to your bot first, then try again.'; return; }
+    var c = d.chats[0];
+    document.getElementById('tgChatId').value = c.chat_id;
+    if(el){ el.textContent = 'Found: ' + c.chat_id + ' (' + c.first_name + ' ' + c.username + ') \u2014 auto-filled above'; el.style.color = '#3fb950'; }
+  }).catch(function(e){ if(el) el.textContent = 'Error: ' + e.message; });
+}
+
+function savePw(){
+  var pw = document.getElementById('newPw').value;
+  if(!pw){ alert('Enter a password'); return; }
+  fetch('/api/settings/password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw})})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var msg = document.getElementById('pwSaveMsg');
+    if(msg){ msg.textContent = d.ok ? 'Saved!' : 'Error: ' + (d.error||'failed'); msg.style.color = d.ok ? '#3fb950' : '#f85149'; }
+  }).catch(function(e){ alert('Error: ' + e.message); });
+}
+
+// ─── utils ───
+function setText(id, val){
+  var el = document.getElementById(id);
+  if(el) el.textContent = val;
+}
+
+function fmtTime(iso){
+  if(!iso) return '\u2014';
+  try{
+    var d = new Date(iso);
+    if(isNaN(d)) return iso;
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})
+      + ' ' + d.toLocaleDateString([], {month:'short', day:'numeric'});
+  }catch(e){ return iso; }
+}
+
+function fmtSecs(s){
+  if(s < 60) return s + 's';
+  if(s < 3600) return Math.round(s/60) + 'm';
+  return Math.round(s/3600) + 'h';
+}
+
+// init filter buttons visual state
+document.addEventListener('DOMContentLoaded', function(){
+  setLF('all');
+});
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flask routes
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/')
 def index():
@@ -488,12 +857,16 @@ def logout():
     return jsonify({'ok': True})
 
 
-@app.route('/api/status')
-@require_auth
-def status():
-    running = bool(
-        subprocess.run(['pgrep', '-f', 'main.py'], capture_output=True).stdout.strip()
-    )
+# ── Status ──────────────────────────────────────────────────────────────────
+
+def _read_bot_state() -> dict:
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _db_counts() -> dict:
     counts = {'total': 0, 'ibkr': 0, 'etoro': 0}
     try:
         conn = sqlite3.connect(str(DB_PATH))
@@ -503,8 +876,57 @@ def status():
         conn.close()
     except Exception:
         pass
-    return jsonify({'running': running, 'counts': counts})
+    return counts
 
+
+def _tg_status() -> dict:
+    load_dotenv(BASE_DIR / '.env', override=True)
+    enabled  = os.getenv('TELEGRAM_ENABLED', 'false').strip().lower() in ('true', '1', 'yes')
+    has_tok  = bool(os.getenv('TELEGRAM_BOT_TOKEN', '').strip())
+    has_cid  = bool(os.getenv('TELEGRAM_CHAT_ID', '').strip())
+    ready    = enabled and has_tok and has_cid
+    return {
+        'ready':   ready,
+        'enabled': enabled,
+        'status':  'enabled' if ready else ('misconfigured' if enabled else 'disabled'),
+    }
+
+
+@app.route('/api/status')
+@require_auth
+def status():
+    running = bool(
+        subprocess.run(['pgrep', '-f', 'main.py'], capture_output=True).stdout.strip()
+    )
+    state  = _read_bot_state()
+    counts = _db_counts()
+    tg     = _tg_status()
+
+    # If pgrep says stopped but state file says running phase → likely crashed
+    if not running and state.get('phase') in ('scanning', 'cooldown', 'starting'):
+        state['phase'] = 'stopped'
+
+    return jsonify({
+        'running':               running,
+        'phase':                 state.get('phase', 'stopped'),
+        'mode':                  state.get('mode', 'shadow'),
+        'cycle':                 state.get('cycle', 0),
+        'focus_count':           state.get('focus_count'),
+        'scan_interval_secs':    state.get('scan_interval_secs'),
+        'uptime_started':        state.get('uptime_started'),
+        'last_cycle_at':         state.get('last_cycle_at'),
+        'last_cycle_signals':    state.get('last_cycle_signals'),
+        'last_cycle_tfs':        state.get('last_cycle_tfs'),
+        'last_cycle_tfs_list':   state.get('last_cycle_tfs_list', []),
+        'last_cycle_symbols':    state.get('last_cycle_symbols'),
+        'last_cycle_duration_s': state.get('last_cycle_duration_s'),
+        'next_cycle_at':         state.get('next_cycle_at'),
+        'counts':                counts,
+        'telegram':              tg,
+    })
+
+
+# ── Signals ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/signals')
 @require_auth
@@ -521,16 +943,32 @@ def signals():
         return jsonify({'signals': [], 'error': str(e)})
 
 
+# ── Logs ─────────────────────────────────────────────────────────────────────
+
 @app.route('/api/logs')
 @require_auth
 def logs():
-    lines = min(int(request.args.get('lines', 100)), 500)
+    lines = min(int(request.args.get('lines', 100)), 600)
     try:
         with open(LOG_PATH) as f:
             all_lines = f.readlines()
         return jsonify({'lines': [l.rstrip() for l in all_lines[-lines:]]})
     except Exception:
         return jsonify({'lines': ['Log file not found']})
+
+
+# ── Bot control ──────────────────────────────────────────────────────────────
+
+def _run_bot():
+    venv_python = BASE_DIR / 'venv' / 'bin' / 'python3'
+    main_py     = BASE_DIR / 'main.py'
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [str(venv_python), str(main_py)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 @app.route('/api/start', methods=['POST'])
@@ -559,30 +997,54 @@ def restart():
     return jsonify({'ok': True})
 
 
-def _run_bot():
-    # Do NOT redirect stdout to log file here.
-    # main.py uses FileHandler internally — redirecting stdout too causes duplicate lines.
-    venv_python = BASE_DIR / 'venv' / 'bin' / 'python3'
-    main_py     = BASE_DIR / 'main.py'
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(
-        [str(venv_python), str(main_py)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-
+# ── Telegram ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/telegram/status')
 @require_auth
 def telegram_status():
-    enabled = os.getenv('TELEGRAM_ENABLED', 'false').strip().lower() in ('true', '1', 'yes')
-    has_tok = bool(os.getenv('TELEGRAM_BOT_TOKEN', '').strip())
-    has_cid = bool(os.getenv('TELEGRAM_CHAT_ID', '').strip())
-    ready   = enabled and has_tok and has_cid
-    return jsonify({'ready': ready, 'enabled': enabled,
-                    'status': 'enabled' if ready else ('disabled' if not enabled else 'misconfigured')})
+    tg = _tg_status()
+    return jsonify(tg)
+
+
+@app.route('/api/telegram/current')
+@require_auth
+def telegram_current():
+    env = _read_env()
+    return jsonify({
+        'enabled':   env.get('TELEGRAM_ENABLED', 'false').lower() in ('true', '1', 'yes'),
+        'cooldown':  int(env.get('TELEGRAM_COOLDOWN_SECS', '14400')),
+        'has_token': bool(env.get('TELEGRAM_BOT_TOKEN', '').strip()),
+        'has_chat_id': bool(env.get('TELEGRAM_CHAT_ID', '').strip()),
+    })
+
+
+@app.route('/api/telegram/save', methods=['POST'])
+@require_auth
+def telegram_save():
+    data = request.get_json(silent=True) or {}
+    try:
+        updates = {
+            'TELEGRAM_ENABLED':       'true' if data.get('enabled') else 'false',
+            'TELEGRAM_COOLDOWN_SECS': str(int(data.get('cooldown', 14400))),
+        }
+        if data.get('token', '').strip():
+            updates['TELEGRAM_BOT_TOKEN'] = data['token'].strip()
+        if data.get('chat_id', '').strip():
+            updates['TELEGRAM_CHAT_ID'] = data['chat_id'].strip()
+        _write_env(updates)
+        load_dotenv(BASE_DIR / '.env', override=True)
+
+        def _restart():
+            time.sleep(1)
+            subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
+            time.sleep(1)
+            _run_bot()
+        threading.Thread(target=_restart, daemon=True).start()
+
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
 
 @app.route('/api/telegram/test', methods=['POST'])
 @require_auth
@@ -590,7 +1052,6 @@ def telegram_test():
     import sys
     sys.path.insert(0, str(BASE_DIR))
     try:
-        # Reload .env with override=True so dashboard sees saved values
         load_dotenv(BASE_DIR / '.env', override=True)
         from bot.config   import load as _cfg
         from bot.notifier import send_test
@@ -601,9 +1062,56 @@ def telegram_test():
         return jsonify({'ok': False, 'message': f'Internal error: {str(e)}'}), 500
 
 
+@app.route('/api/telegram/getupdates')
+@require_auth
+def telegram_getupdates():
+    load_dotenv(BASE_DIR / '.env', override=True)
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    if not token:
+        return jsonify({'ok': False, 'error': 'No bot token configured'})
+    try:
+        import requests as _req
+        resp = _req.get(f'https://api.telegram.org/bot{token}/getUpdates', timeout=10)
+        data = resp.json()
+        if not data.get('ok'):
+            return jsonify({'ok': False, 'error': data.get('description', f'HTTP {resp.status_code}')})
+        chats = []
+        for update in data.get('result', []):
+            msg  = update.get('message') or update.get('channel_post') or {}
+            chat = msg.get('chat', {})
+            if chat:
+                chats.append({'chat_id': chat.get('id'), 'type': chat.get('type'),
+                               'username': chat.get('username', ''), 'first_name': chat.get('first_name', ''),
+                               'text': msg.get('text', '')[:40]})
+        seen, unique = set(), []
+        for c in chats:
+            if c['chat_id'] not in seen:
+                seen.add(c['chat_id']); unique.append(c)
+        return jsonify({'ok': True, 'chats': unique, 'count': len(data.get('result', []))})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+# ── Settings ─────────────────────────────────────────────────────────────────
+
+@app.route('/api/settings/password', methods=['POST'])
+@require_auth
+def save_password():
+    data = request.get_json(silent=True) or {}
+    pw = data.get('password', '').strip()
+    if not pw:
+        return jsonify({'ok': False, 'error': 'Password cannot be empty'}), 400
+    try:
+        _write_env({'DASHBOARD_PASSWORD': pw})
+        load_dotenv(BASE_DIR / '.env', override=True)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ── .env helpers ─────────────────────────────────────────────────────────────
 
 def _read_env() -> dict:
-    """Read current .env file into a dict. Returns {} if file missing."""
     env_path = BASE_DIR / '.env'
     result = {}
     if not env_path.exists():
@@ -617,159 +1125,33 @@ def _read_env() -> dict:
 
 
 def _write_env(updates: dict):
-    """
-    Write updates to .env file. Preserves existing keys not in updates.
-    Creates the file if it does not exist.
-    """
     env_path = BASE_DIR / '.env'
-    existing = {}
-    lines_with_comments = []
-
+    existing, lines_with_comments = {}, []
     if env_path.exists():
         for line in env_path.read_text().splitlines():
             stripped = line.strip()
             if stripped.startswith('#') or not stripped:
-                lines_with_comments.append(line)
-                continue
+                lines_with_comments.append(line); continue
             if '=' in stripped:
                 k, _, v = stripped.partition('=')
                 existing[k.strip()] = (v.strip(), len(lines_with_comments))
                 lines_with_comments.append(line)
-
-    # Apply updates
-    existing_keys = set(existing.keys())
-    output_lines = []
-    keys_written = set()
-
+    output_lines, keys_written = [], set()
     for line in lines_with_comments:
         stripped = line.strip()
         if not stripped or stripped.startswith('#'):
-            output_lines.append(line)
-            continue
+            output_lines.append(line); continue
         if '=' in stripped:
-            k, _, _ = stripped.partition('=')
-            k = k.strip()
+            k = stripped.partition('=')[0].strip()
             if k in updates:
-                output_lines.append(f'{k}={updates[k]}')
-                keys_written.add(k)
+                output_lines.append(f'{k}={updates[k]}'); keys_written.add(k)
             else:
                 output_lines.append(line)
-
-    # Add any new keys not in existing file
     for k, v in updates.items():
         if k not in keys_written:
             output_lines.append(f'{k}={v}')
-
     env_path.write_text('\n'.join(output_lines) + '\n')
 
-
-@app.route('/api/telegram/current')
-@require_auth
-def telegram_current():
-    """Return current Telegram settings from .env (token/chat_id masked)."""
-    env = _read_env()
-    return jsonify({
-        'enabled':  env.get('TELEGRAM_ENABLED', 'false').lower() in ('true', '1', 'yes'),
-        'cooldown': int(env.get('TELEGRAM_COOLDOWN_SECS', '14400')),
-        'has_token':   bool(env.get('TELEGRAM_BOT_TOKEN', '').strip()),
-        'has_chat_id': bool(env.get('TELEGRAM_CHAT_ID', '').strip()),
-    })
-
-
-@app.route('/api/telegram/save', methods=['POST'])
-@require_auth
-def telegram_save():
-    """Save Telegram settings to .env and restart the bot."""
-    data = request.get_json(silent=True) or {}
-    try:
-        updates = {
-            'TELEGRAM_ENABLED':      'true' if data.get('enabled') else 'false',
-            'TELEGRAM_COOLDOWN_SECS': str(int(data.get('cooldown', 14400))),
-        }
-        # Only update token/chat_id if non-empty (preserve existing if blank)
-        if data.get('token', '').strip():
-            updates['TELEGRAM_BOT_TOKEN'] = data['token'].strip()
-        if data.get('chat_id', '').strip():
-            updates['TELEGRAM_CHAT_ID'] = data['chat_id'].strip()
-
-        _write_env(updates)
-
-        # Reload env in this process
-        load_dotenv(BASE_DIR / '.env', override=True)
-
-        # Restart bot only (not dashboard)
-        def _restart():
-            import time
-            time.sleep(1)
-            subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-            time.sleep(1)
-            _run_bot()
-        threading.Thread(target=_restart, daemon=True).start()
-
-        return jsonify({'ok': True})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-@app.route('/api/settings/password', methods=['POST'])
-@require_auth
-def save_password():
-    """Save new dashboard password to .env."""
-    data = request.get_json(silent=True) or {}
-    pw = data.get('password', '').strip()
-    if not pw:
-        return jsonify({'ok': False, 'error': 'Password cannot be empty'}), 400
-    try:
-        _write_env({'DASHBOARD_PASSWORD': pw})
-        load_dotenv(BASE_DIR / '.env', override=True)
-        return jsonify({'ok': True})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-
-@app.route('/api/telegram/getupdates')
-@require_auth
-def telegram_getupdates():
-    """Call Telegram getUpdates to find the real chat_id from recent messages."""
-    load_dotenv(BASE_DIR / '.env', override=True)
-    token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
-    if not token:
-        return jsonify({'ok': False, 'error': 'No bot token configured'})
-    try:
-        import requests as _req
-        resp = _req.get(
-            f'https://api.telegram.org/bot{token}/getUpdates',
-            timeout=10
-        )
-        data = resp.json()
-        if not data.get('ok'):
-            desc = data.get('description', f'HTTP {resp.status_code}')
-            return jsonify({'ok': False, 'error': desc})
-
-        chats = []
-        for update in data.get('result', []):
-            msg = update.get('message') or update.get('channel_post') or {}
-            chat = msg.get('chat', {})
-            if chat:
-                chats.append({
-                    'chat_id':   chat.get('id'),
-                    'type':      chat.get('type'),
-                    'username':  chat.get('username', ''),
-                    'first_name': chat.get('first_name', ''),
-                    'text':      msg.get('text', '')[:40],
-                })
-        # Deduplicate by chat_id
-        seen = set()
-        unique = []
-        for c in chats:
-            if c['chat_id'] not in seen:
-                seen.add(c['chat_id'])
-                unique.append(c)
-
-        return jsonify({'ok': True, 'chats': unique,
-                        'count': len(data.get('result', []))})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)})
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
