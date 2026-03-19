@@ -149,6 +149,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('overview')"  id="n-overview"  class="active">Overview</a>
     <a onclick="go('signals')"   id="n-signals">Signals</a>
     <a onclick="go('logs')"      id="n-logs">Logs</a>
+    <a onclick="go('strategy')"  id="n-strategy">Strategy</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
@@ -306,6 +307,216 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
   <div class="card"><div class="logbox" id="fullLog" style="height:600px">Loading...</div></div>
 </div>
 
+
+<!-- ════════════════ STRATEGY ════════════════ -->
+<div id="strategy" class="page">
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="ct">
+      Strategy Engine
+      <span id="stratBadge" style="font-size:10px;padding:2px 9px;border-radius:8px;background:#0d2d5a;color:#58a6ff">v1</span>
+      <span id="stratUpdated" style="font-size:11px;color:#6e7681;margin-left:4px"></span>
+      <button class="rfbtn" onclick="loadStrategy()">&#x21BB; Refresh</button>
+    </div>
+    <div style="font-size:12px;color:#8b949e;margin-bottom:16px">
+      All thresholds below are the exact values the live bot uses to score signals.
+      Changes take effect after the bot restarts (saved automatically).
+      <span style="color:#3fb950">&#x2714; Active in live strategy</span>
+      &nbsp;&nbsp;
+      <span style="color:#58a6ff">&#x1F4BE; Collected for ML/backtesting</span>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn gs" style="font-size:13px" onclick="saveStrategy()">Save &amp; Restart Bot</button>
+      <button class="btn gy-btn" style="font-size:13px" onclick="resetStrategy()">Reset to Defaults</button>
+      <span id="stratSaveMsg" style="font-size:13px;color:#8b949e;margin-left:4px"></span>
+    </div>
+  </div>
+
+  <div class="g2">
+
+    <!-- Timeframes -->
+    <div class="card">
+      <div class="ct">Timeframes <span style="color:#3fb950;font-size:10px">&#x2714; Active</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:12px">Enable/disable timeframes used in confluence scoring.</div>
+      <div id="tfToggles"></div>
+    </div>
+
+    <!-- Confluence -->
+    <div class="card">
+      <div class="ct">Confluence <span style="color:#3fb950;font-size:10px">&#x2714; Active</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:12px">How many timeframes must independently agree for a signal to fire.</div>
+      <div class="stat-item">
+        <span class="stat-label">Min valid TFs</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="number" id="s_min_valid_tfs" min="1" max="4" step="1"
+            style="width:70px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:6px 10px;border-radius:6px;font-size:14px;font-family:inherit">
+          <span style="font-size:11px;color:#6e7681">/ 4 TFs &nbsp; default: 3</span>
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:#8b949e">
+        3 = strict (recommended) &nbsp;|&nbsp; 2 = more signals, lower confidence
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Long + Short Rules -->
+  <div class="g2">
+
+    <div class="card">
+      <div class="ct">Long Signal Rules <span style="color:#3fb950;font-size:10px">&#x2714; Active</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:14px">All 3 conditions must pass on a timeframe for it to count as a long agreement.</div>
+
+      <div class="section-title" style="margin-bottom:8px">Momentum (RSI + MACD)</div>
+      <div class="stat-item">
+        <span class="stat-label">RSI minimum</span>
+        <input type="number" id="s_long_rsi_min" min="1" max="99" step="1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 30</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">RSI maximum</span>
+        <input type="number" id="s_long_rsi_max" min="2" max="100" step="1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 75</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">MACD hist &gt;</span>
+        <input type="number" id="s_long_macd_gt" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0</span>
+      </div>
+
+      <div class="section-title" style="margin-top:14px;margin-bottom:8px">Trend (EMA)</div>
+      <div class="stat-item">
+        <span class="stat-label">EMA20/50 tolerance</span>
+        <input type="number" id="s_long_ema_tol" min="0" max="0.1" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0.005</span>
+      </div>
+
+      <div class="section-title" style="margin-top:14px;margin-bottom:8px">Volume</div>
+      <div class="stat-item">
+        <span class="stat-label">VWAP dev min</span>
+        <input type="number" id="s_long_vwap_min" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: -0.015</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Volume ratio min</span>
+        <input type="number" id="s_long_vol_min" min="0" max="5" step="0.1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0.6</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Short Signal Rules <span style="color:#3fb950;font-size:10px">&#x2714; Active</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:14px">All 3 conditions must pass on a timeframe for it to count as a short agreement.</div>
+
+      <div class="section-title" style="margin-bottom:8px">Momentum (RSI + MACD)</div>
+      <div class="stat-item">
+        <span class="stat-label">RSI minimum</span>
+        <input type="number" id="s_short_rsi_min" min="1" max="99" step="1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 50</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">MACD hist &lt;</span>
+        <input type="number" id="s_short_macd_lt" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0</span>
+      </div>
+
+      <div class="section-title" style="margin-top:14px;margin-bottom:8px">Trend (EMA)</div>
+      <div class="stat-item">
+        <span class="stat-label">EMA20/50 tolerance</span>
+        <input type="number" id="s_short_ema_tol" min="0" max="0.1" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0.005</span>
+      </div>
+
+      <div class="section-title" style="margin-top:14px;margin-bottom:8px">Volume</div>
+      <div class="stat-item">
+        <span class="stat-label">VWAP dev max</span>
+        <input type="number" id="s_short_vwap_max" step="0.001"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0.015</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Volume ratio min</span>
+        <input type="number" id="s_short_vol_min" min="0" max="5" step="0.1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 0.6</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Risk + Routing -->
+  <div class="g2">
+
+    <div class="card">
+      <div class="ct">Risk / ATR Parameters <span style="color:#58a6ff;font-size:10px">&#x1F4BE; ML use</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:14px">
+        Stop and target are computed from ATR(14) at signal time and logged for every signal.<br>
+        <b>Shadow mode only</b> — no broker execution in V1.
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">ATR stop multiplier</span>
+        <input type="number" id="s_atr_stop" min="0.1" max="20" step="0.1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 2.0</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">ATR target multiplier</span>
+        <input type="number" id="s_atr_target" min="0.1" max="50" step="0.1"
+          style="width:80px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 3.0</span>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#6e7681">
+        Long: Stop = Entry &minus; (ATR &times; stop_mult) &nbsp;|&nbsp; Target = Entry + (ATR &times; target_mult)<br>
+        Short: Stop = Entry + (ATR &times; stop_mult) &nbsp;|&nbsp; Target = Entry &minus; (ATR &times; target_mult)
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="ct">Route Labels <span style="color:#3fb950;font-size:10px">&#x2714; Active</span></div>
+      <div style="font-size:11px;color:#8b949e;margin-bottom:14px">
+        Route is a label only &mdash; no real execution in shadow mode.<br>
+        ETORO and IBKR are placeholders for future broker integration.
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">eToro min TFs</span>
+        <input type="number" id="s_etoro_min" min="1" max="4" step="1"
+          style="width:70px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 4</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">IBKR min TFs</span>
+        <input type="number" id="s_ibkr_min" min="1" max="4" step="1"
+          style="width:70px;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:5px 8px;border-radius:6px;font-size:13px;font-family:inherit">
+        <span style="font-size:11px;color:#6e7681">def: 2</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">WATCH</span>
+        <span style="font-size:12px;color:#6e7681">Below IBKR min &mdash; logged only, not stored</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Audit Trail -->
+  <div class="card">
+    <div class="ct">
+      Change History
+      <button class="rfbtn" onclick="loadStrategy()">&#x21BB;</button>
+    </div>
+    <div id="auditWrap"><div class="empty-state">No changes recorded yet.</div></div>
+  </div>
+
+</div><!-- /strategy -->
+
 <!-- ════════════════ SETTINGS ════════════════ -->
 <div id="settings" class="page">
 
@@ -414,6 +625,7 @@ function go(p){
   if(p === 'logs')     loadFullLog();
   if(p === 'signals')  loadAllSig();
   if(p === 'settings') loadTgSettings();
+  if(p === 'strategy')  loadStrategy();
 }
 
 // ─── boot ───
@@ -824,6 +1036,199 @@ function fmtSecs(s){
   return Math.round(s/3600) + 'h';
 }
 
+
+// ─── strategy page ───
+var _stratData = {};
+
+function loadStrategy(){
+  fetch('/api/strategy')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    _stratData = d;
+    var cfg = d.strategy || {};
+    var ver = cfg.version || 1;
+    var upd = cfg.updated_at ? fmtTime(cfg.updated_at) : 'defaults';
+    var by  = cfg.updated_by || '';
+    setText('stratBadge',   'v' + ver);
+    setText('stratUpdated', 'Last saved: ' + upd + (by && by !== 'defaults' ? ' by ' + by : ''));
+
+    // Timeframes
+    var tfWrap = document.getElementById('tfToggles');
+    if(tfWrap){
+      var tfs = cfg.timeframes || {};
+      var order = ['tf_1d','tf_4h','tf_1h','tf_15m'];
+      var labels = {'tf_1d':'Daily (1D)','tf_4h':'4-Hour (4H)','tf_1h':'1-Hour (1H)','tf_15m':'15-Min (15m)'};
+      var html = '';
+      order.forEach(function(k){
+        var en = (tfs[k] && tfs[k].enabled !== false) ? true : false;
+        html += '<div class="stat-item"><span class="stat-label">' + (labels[k]||k) + '</span>';
+        html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer">';
+        html += '<input type="checkbox" id="tf_' + k + '" ' + (en?'checked':'') + ' style="width:16px;height:16px;cursor:pointer">';
+        html += '<span style="font-size:12px;color:#8b949e">' + (en?'Enabled':'Disabled') + '</span>';
+        html += '</label></div>';
+      });
+      tfWrap.innerHTML = html;
+      // Update label on change
+      order.forEach(function(k){
+        var el = document.getElementById('tf_' + k);
+        if(el) el.addEventListener('change', function(){
+          var lbl = el.parentElement.querySelector('span');
+          if(lbl) lbl.textContent = el.checked ? 'Enabled' : 'Disabled';
+        });
+      });
+    }
+
+    // Confluence
+    setInput('s_min_valid_tfs', (cfg.confluence||{}).min_valid_tfs);
+
+    // Long rules
+    var lg = cfg.long || {};
+    setInput('s_long_rsi_min',  lg.rsi_min);
+    setInput('s_long_rsi_max',  lg.rsi_max);
+    setInput('s_long_macd_gt',  lg.macd_hist_gt);
+    setInput('s_long_ema_tol',  lg.ema_tolerance);
+    setInput('s_long_vwap_min', lg.vwap_dev_min);
+    setInput('s_long_vol_min',  lg.vol_ratio_min);
+
+    // Short rules
+    var sh = cfg.short || {};
+    setInput('s_short_rsi_min',  sh.rsi_min);
+    setInput('s_short_macd_lt',  sh.macd_hist_lt);
+    setInput('s_short_ema_tol',  sh.ema_tolerance);
+    setInput('s_short_vwap_max', sh.vwap_dev_max);
+    setInput('s_short_vol_min',  sh.vol_ratio_min);
+
+    // Risk
+    var rk = cfg.risk || {};
+    setInput('s_atr_stop',   rk.atr_stop_mult);
+    setInput('s_atr_target', rk.atr_target_mult);
+
+    // Routing
+    var rt = cfg.routing || {};
+    setInput('s_etoro_min', rt.etoro_min_tfs);
+    setInput('s_ibkr_min',  rt.ibkr_min_tfs);
+
+    // Audit trail
+    renderAudit(d.audit || []);
+  }).catch(function(e){ console.error('loadStrategy', e); });
+}
+
+function renderAudit(entries){
+  var wrap = document.getElementById('auditWrap');
+  if(!wrap) return;
+  if(!entries.length){
+    wrap.innerHTML = '<div class="empty-state">No changes recorded yet.</div>';
+    return;
+  }
+  var html = '<table><tr><th>Time</th><th>Version</th><th>By</th><th>Confluence</th><th>Long RSI</th><th>Short RSI</th><th>ATR Stop/Target</th><th>Routing</th></tr>';
+  entries.forEach(function(e){
+    var ts   = e.ts   ? fmtTime(e.ts) : '-';
+    var conf = (e.confluence||{}).min_valid_tfs || '-';
+    var lrsi = ((e.long||{}).rsi_min||'-') + '-' + ((e.long||{}).rsi_max||'-');
+    var srsi = (e.short||{}).rsi_min || '-';
+    var atr  = ((e.risk||{}).atr_stop_mult||'-') + '/' + ((e.risk||{}).atr_target_mult||'-');
+    var rt   = ((e.routing||{}).etoro_min_tfs||'-') + '/' + ((e.routing||{}).ibkr_min_tfs||'-');
+    html += '<tr>';
+    html += '<td style="color:#8b949e">' + ts + '</td>';
+    html += '<td><span style="color:#58a6ff">v' + (e.version||'-') + '</span></td>';
+    html += '<td>' + (e.by||'-') + '</td>';
+    html += '<td>' + conf + '/4</td>';
+    html += '<td>' + lrsi + '</td>';
+    html += '<td>&gt;' + srsi + '</td>';
+    html += '<td>' + atr + '</td>';
+    html += '<td>' + rt + '</td>';
+    html += '</tr>';
+  });
+  html += '</table>';
+  wrap.innerHTML = html;
+}
+
+function saveStrategy(){
+  var msg = document.getElementById('stratSaveMsg');
+  if(msg){ msg.textContent = 'Validating...'; msg.style.color = '#8b949e'; }
+
+  var tfs = {};
+  ['tf_1d','tf_4h','tf_1h','tf_15m'].forEach(function(k){
+    var el = document.getElementById('tf_' + k);
+    var cur = (_stratData.strategy && _stratData.strategy.timeframes && _stratData.strategy.timeframes[k]) || {};
+    tfs[k] = Object.assign({}, cur, {enabled: el ? el.checked : true});
+  });
+
+  var payload = {
+    timeframes: tfs,
+    confluence: { min_valid_tfs: intVal('s_min_valid_tfs', 3) },
+    long: {
+      rsi_min:       floatVal('s_long_rsi_min',  30),
+      rsi_max:       floatVal('s_long_rsi_max',  75),
+      macd_hist_gt:  floatVal('s_long_macd_gt',  0),
+      ema_tolerance: floatVal('s_long_ema_tol',  0.005),
+      vwap_dev_min:  floatVal('s_long_vwap_min', -0.015),
+      vol_ratio_min: floatVal('s_long_vol_min',  0.6),
+    },
+    short: {
+      rsi_min:       floatVal('s_short_rsi_min',  50),
+      macd_hist_lt:  floatVal('s_short_macd_lt',  0),
+      ema_tolerance: floatVal('s_short_ema_tol',  0.005),
+      vwap_dev_max:  floatVal('s_short_vwap_max', 0.015),
+      vol_ratio_min: floatVal('s_short_vol_min',  0.6),
+    },
+    risk: {
+      atr_stop_mult:   floatVal('s_atr_stop',   2.0),
+      atr_target_mult: floatVal('s_atr_target', 3.0),
+    },
+    routing: {
+      etoro_min_tfs: intVal('s_etoro_min', 4),
+      ibkr_min_tfs:  intVal('s_ibkr_min',  2),
+    },
+  };
+
+  fetch('/api/strategy/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.ok){
+      if(msg){ msg.textContent = 'Saved! Bot restarting...'; msg.style.color = '#3fb950'; }
+      setTimeout(loadStrategy, 2500);
+    } else {
+      var errs = (d.errors||[d.error||'Unknown error']).join(' | ');
+      if(msg){ msg.textContent = 'Error: ' + errs; msg.style.color = '#f85149'; }
+    }
+  }).catch(function(e){ if(msg){ msg.textContent = 'Error: ' + e.message; msg.style.color = '#f85149'; } });
+}
+
+function resetStrategy(){
+  if(!confirm('Reset all strategy parameters to defaults? This cannot be undone.')) return;
+  var msg = document.getElementById('stratSaveMsg');
+  fetch('/api/strategy/reset', {method:'POST'})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.ok){
+      if(msg){ msg.textContent = 'Reset to defaults. Bot restarting...'; msg.style.color = '#3fb950'; }
+      setTimeout(loadStrategy, 2500);
+    } else {
+      if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color = '#f85149'; }
+    }
+  }).catch(function(e){ if(msg){ msg.textContent = 'Error: ' + e.message; msg.style.color = '#f85149'; } });
+}
+
+function setInput(id, val){
+  var el = document.getElementById(id);
+  if(el && val !== undefined && val !== null) el.value = val;
+}
+
+function floatVal(id, def){
+  var el = document.getElementById(id);
+  if(!el) return def;
+  var v = parseFloat(el.value);
+  return isNaN(v) ? def : v;
+}
+
+function intVal(id, def){
+  var el = document.getElementById(id);
+  if(!el) return def;
+  var v = parseInt(el.value);
+  return isNaN(v) ? def : v;
+}
+
 // init filter buttons visual state
 document.addEventListener('DOMContentLoaded', function(){
   setLF('all');
@@ -1107,6 +1512,60 @@ def save_password():
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+
+# ── Strategy ─────────────────────────────────────────────────────────────────
+
+@app.route('/api/strategy')
+@require_auth
+def strategy_get():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.strategy import load as _load, get_audit, DEFAULTS
+    return jsonify({
+        'strategy': _load(),
+        'defaults': DEFAULTS,
+        'audit':    get_audit(20),
+    })
+
+
+@app.route('/api/strategy/save', methods=['POST'])
+@require_auth
+def strategy_save():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.strategy import save as _save
+    data = request.get_json(silent=True) or {}
+    errors = _save(data, updated_by='dashboard')
+    if errors:
+        return jsonify({'ok': False, 'errors': errors}), 400
+    # Restart bot so it picks up new thresholds
+    def _restart():
+        import time
+        time.sleep(1)
+        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
+        time.sleep(1)
+        _run_bot()
+    threading.Thread(target=_restart, daemon=True).start()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/strategy/reset', methods=['POST'])
+@require_auth
+def strategy_reset():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.strategy import reset as _reset
+    _reset()
+    def _restart():
+        import time
+        time.sleep(1)
+        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
+        time.sleep(1)
+        _run_bot()
+    threading.Thread(target=_restart, daemon=True).start()
+    return jsonify({'ok': True})
 
 
 # ── .env helpers ─────────────────────────────────────────────────────────────

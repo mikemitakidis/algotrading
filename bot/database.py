@@ -42,7 +42,13 @@ SCHEMA = [
     ('atr',         'REAL'),
     ('vol_ratio',   'REAL'),
     ('price',       'REAL'),
-    ('pchg',        'REAL'),
+    ('pchg',            'REAL'),
+    # Risk levels computed at signal time (ATR-based, shadow mode only)
+    ('entry_price',     'REAL'),
+    ('stop_loss',       'REAL'),
+    ('target_price',    'REAL'),
+    # Strategy version at time of signal (for ML/backtesting)
+    ('strategy_version','INTEGER DEFAULT 1'),
 ]
 
 # Columns that must exist for inserts to work
@@ -137,8 +143,9 @@ def insert_signal(conn: sqlite3.Connection, signal: dict) -> int | None:
                 tf_15m, tf_1h, tf_4h, tf_1d, valid_count, route,
                 rsi, macd_hist, ema20, ema50,
                 bb_pos, bb_width, vwap_dev, obv_slope,
-                atr, vol_ratio, price, pchg)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                atr, vol_ratio, price, pchg,
+                entry_price, stop_loss, target_price, strategy_version)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 signal.get('timestamp', ''),
                 signal.get('symbol', ''),
@@ -161,6 +168,10 @@ def insert_signal(conn: sqlite3.Connection, signal: dict) -> int | None:
                 signal.get('vol_ratio'),
                 signal.get('price'),
                 signal.get('pchg'),
+                signal.get('entry_price'),
+                signal.get('stop_loss'),
+                signal.get('target_price'),
+                signal.get('strategy_version', 1),
             )
         )
         conn.commit()

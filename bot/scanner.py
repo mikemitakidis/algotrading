@@ -2,67 +2,127 @@
 bot/scanner.py
 4-timeframe scan cycle with partial-data support.
 
-Key design: run signal scoring on whatever timeframes returned data.
-Do not require all 4 TFs — partial data is better than no cycle.
-Signal routing adjusts to available TF count:
-  - 4/4 TFs valid -> ETORO
-  - 3/4 TFs valid -> IBKR
-  - 2/4 TFs valid -> IBKR (lower confidence, logged)
-  - 1/4 TFs valid -> logged only, not inserted
+All scoring thresholds come from bot/strategy.py (loaded from data/strategy.json).
+This means dashboard edits to strategy parameters take effect after bot restart.
+
+Signal routing (ETORO / IBKR / WATCH) is label-only in shadow mode.
+Entry/stop/target are computed and logged for every signal (ML/backtesting use).
 """
 import logging
 from datetime import datetime, timezone
 
 from bot.data       import fetch_bars, resample_to_4h
 from bot.indicators import compute
+from bot.strategy   import load as load_strategy
 
 log = logging.getLogger(__name__)
 
-TIMEFRAMES = [
-    ('1D',  '3mo', '1d',  False),
-    ('4H',  '1mo', '1h',  True),
-    ('1H',  '15d', '1h',  False),
-    ('15m', '5d',  '15m', False),
-]
 
+def score_timeframe(ind: dict, direction: str, strategy: dict) -> int:
+    """
+    Score one timeframe for one direction.
+    Returns 1 if ALL three conditions pass, 0 otherwise.
 
-def score_timeframe(ind, direction):
+    Three conditions:
+      momentum — RSI + MACD histogram
+      trend    — EMA20 vs EMA50
+      volume   — VWAP deviation + volume ratio
+    """
     if not ind:
         return 0
+
     if direction == 'long':
-        m   = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0)       else 0
-        t   = 1 if (ind['ema20'] > ind['ema50'] * 0.995)                  else 0
-        vol = 1 if (ind['vwap_dev'] > -0.015 and ind['vol_ratio'] > 0.6) else 0
-    else:
-        m   = 1 if (ind['rsi'] > 50 and ind['macd_hist'] < 0)            else 0
-        t   = 1 if (ind['ema20'] < ind['ema50'] * 1.005)                  else 0
-        vol = 1 if (ind['vwap_dev'] < 0.015 and ind['vol_ratio'] > 0.6)  else 0
-    return 1 if (m + t + vol == 3) else 0
+        cfg      = strategy.get('long', {})
+        rsi_min  = float(cfg.get('rsi_min',       30))
+        rsi_max  = float(cfg.get('rsi_max',        75))
+        macd_gt  = float(cfg.get('macd_hist_gt',  0.0))
+        ema_tol  = float(cfg.get('ema_tolerance', 0.005))
+        vwap_min = float(cfg.get('vwap_dev_min', -0.015))
+        vol_min  = float(cfg.get('vol_ratio_min', 0.6))
+
+        momentum = 1 if (rsi_min < ind['rsi'] < rsi_max and ind['macd_hist'] > macd_gt) else 0
+        trend    = 1 if (ind['ema20'] > ind['ema50'] * (1.0 - ema_tol))                 else 0
+        volume   = 1 if (ind['vwap_dev'] > vwap_min and ind['vol_ratio'] > vol_min)     else 0
+
+    else:  # short
+        cfg      = strategy.get('short', {})
+        rsi_min  = float(cfg.get('rsi_min',        50))
+        macd_lt  = float(cfg.get('macd_hist_lt',  0.0))
+        ema_tol  = float(cfg.get('ema_tolerance', 0.005))
+        vwap_max = float(cfg.get('vwap_dev_max',  0.015))
+        vol_min  = float(cfg.get('vol_ratio_min',  0.6))
+
+        momentum = 1 if (ind['rsi'] > rsi_min and ind['macd_hist'] < macd_lt)         else 0
+        trend    = 1 if (ind['ema20'] < ind['ema50'] * (1.0 + ema_tol))               else 0
+        volume   = 1 if (ind['vwap_dev'] < vwap_max and ind['vol_ratio'] > vol_min)   else 0
+
+    return 1 if (momentum + trend + volume == 3) else 0
 
 
-def scan_cycle(focus, config):
+def _build_timeframes(strategy: dict) -> list:
     """
-    Run 4-TF scan on focus symbols.
-    Works with partial data — uses whatever TFs returned data.
-    Writes signals to DB for any symbol with >= 2 valid TFs.
-    Returns list of signal dicts.
+    Build the ordered list of timeframes to scan based on strategy config.
+    Returns list of (label, period, interval, do_resample) tuples.
+    Only includes enabled timeframes.
     """
-    log.info('[CYCLE] Scanning %d symbols across 4 timeframes...', len(focus))
+    order = [
+        ('tf_1d',  '1D'),
+        ('tf_4h',  '4H'),
+        ('tf_1h',  '1H'),
+        ('tf_15m', '15m'),
+    ]
+    tf_cfg = strategy.get('timeframes', {})
+    result = []
+    for tf_key, tf_label in order:
+        cfg = tf_cfg.get(tf_key, {})
+        if cfg.get('enabled', True):
+            result.append((
+                tf_label,
+                cfg.get('period',   '3mo'),
+                cfg.get('interval', '1d'),
+                cfg.get('resample', False),
+            ))
+    return result
 
-    cached_inds   = {}   # sym -> {tf -> ind}
-    cached_scores = {}   # sym -> {direction -> {tf -> 1}}
+
+def scan_cycle(focus: list, config: dict):
+    """
+    Run scan on focus symbols across all enabled timeframes.
+    Strategy thresholds are loaded fresh from data/strategy.json on every call.
+
+    Returns (signals, meta) tuple.
+    signals: list of signal dicts ready for DB insert
+    meta:    dict with cycle statistics for the state file
+    """
+    strategy   = load_strategy()
+    timeframes = _build_timeframes(strategy)
+    confluence = strategy.get('confluence', {})
+    risk_cfg   = strategy.get('risk', {})
+    routing    = strategy.get('routing', {})
+
+    atr_stop   = float(risk_cfg.get('atr_stop_mult',   2.0))
+    atr_target = float(risk_cfg.get('atr_target_mult', 3.0))
+    etoro_min  = int(routing.get('etoro_min_tfs',  4))
+    ibkr_min   = int(routing.get('ibkr_min_tfs',   2))
+    strat_ver  = int(strategy.get('version', 1))
+
+    log.info('[CYCLE] Scanning %d symbols | strategy v%d | %d TFs enabled',
+             len(focus), strat_ver, len(timeframes))
+
+    cached_inds   = {}   # sym -> {tf_label -> ind}
+    cached_scores = {}   # sym -> {direction -> {tf_label -> 1}}
     tfs_with_data = []
 
-    for tf_label, period, interval, do_resample in TIMEFRAMES:
+    for tf_label, period, interval, do_resample in timeframes:
         log.info('[CYCLE] Fetching %s (%s)...', tf_label, interval)
         bars = fetch_bars(focus, period, interval)
 
         if not bars:
-            log.warning('[CYCLE] %s: no data available (fresh or cached) — skipping', tf_label)
+            log.warning('[CYCLE] %s: no data — skipping', tf_label)
             continue
 
         tfs_with_data.append(tf_label)
-        log.info('[CYCLE] %s: %d/%d symbols available', tf_label, len(bars), len(focus))
+        log.info('[CYCLE] %s: %d/%d symbols', tf_label, len(bars), len(focus))
 
         for sym, df in bars.items():
             if do_resample:
@@ -74,39 +134,32 @@ def scan_cycle(focus, config):
             cached_inds.setdefault(sym, {})[tf_label] = ind
 
             for direction in ('long', 'short'):
-                s = score_timeframe(ind, direction)
-                if s:
+                if score_timeframe(ind, direction, strategy):
                     cached_scores.setdefault(sym, {'long': {}, 'short': {}})
                     cached_scores[sym][direction][tf_label] = 1
-                    log.debug('[SCORE] %s %s %s: PASS (RSI=%.1f MACD=%.4f EMA20/50=%.2f/%.2f vol=%.2f)',
-                              sym, tf_label, direction, ind['rsi'], ind['macd_hist'],
-                              ind['ema20'], ind['ema50'], ind['vol_ratio'])
 
     available_tfs = len(tfs_with_data)
-    log.info('[CYCLE] Timeframes with data: %d/4 %s', available_tfs, tfs_with_data)
-    log.info('[CYCLE] Symbols with >= 1 valid TF score: %d', len(cached_scores))
+    log.info('[CYCLE] TFs with data: %d/%d %s', available_tfs, len(timeframes), tfs_with_data)
+    log.info('[CYCLE] Symbols with >=1 valid TF score: %d', len(cached_scores))
 
     if available_tfs == 0:
-        log.warning('[CYCLE] No timeframes returned data. '
-                    'Cache may be empty. Bot will retry next cycle.')
-        return [], {"tfs_available": 0, "tfs_list": [], "symbols_scanned": len(focus)}
+        log.warning('[CYCLE] No TF data. Cache may be empty — retrying next cycle.')
+        return [], {'tfs_available': 0, 'tfs_list': [], 'symbols_scanned': len(focus)}
 
-    # Minimum valid TFs required for a signal (scales with available data)
-    # With 4 TFs available: need 3 (normal)
-    # With 3 TFs available: need 2
-    # With 2 TFs available: need 2
-    # With 1 TF available:  need 1 (cache-only mode, logged separately)
-    if available_tfs >= 3:
-        min_valid = 3
-    elif available_tfs == 2:
-        min_valid = 2
+    # Minimum valid TFs scales with available data, but respects confluence setting
+    cfg_min = int(confluence.get('min_valid_tfs', 3))
+    if available_tfs >= len(timeframes):
+        min_valid = cfg_min
+    elif available_tfs >= 2:
+        min_valid = max(2, cfg_min - 1)
     else:
         min_valid = 1
 
-    log.info('[CYCLE] Signal threshold: %d/%d valid TFs required', min_valid, available_tfs)
+    log.info('[CYCLE] Signal threshold: %d/%d valid TFs (config=%d)',
+             min_valid, available_tfs, cfg_min)
 
-    signals   = []
-    now_utc   = datetime.now(timezone.utc).isoformat()
+    signals  = []
+    now_utc  = datetime.now(timezone.utc).isoformat()
 
     for sym, dirs in cached_scores.items():
         for direction, tfs in dirs.items():
@@ -114,19 +167,15 @@ def scan_cycle(focus, config):
             if count < min_valid:
                 continue
 
-            # Route based on count relative to AVAILABLE tfs
-            if count >= 4:
+            # Route label (shadow mode — no execution)
+            if count >= etoro_min:
                 route = 'ETORO'
-            elif count >= 3:
-                route = 'IBKR'
-            elif count >= 2:
+            elif count >= ibkr_min:
                 route = 'IBKR'
             else:
-                route = 'WATCH'   # 1-TF only — logged but threshold may exclude
-
-            if min_valid == 1 and count == 1:
                 route = 'WATCH'
 
+            # Use best available indicator set (prefer higher TFs)
             best_ind = next(
                 (cached_inds[sym][t] for t in ('1D', '4H', '1H', '15m')
                  if sym in cached_inds and t in cached_inds[sym]),
@@ -135,25 +184,40 @@ def scan_cycle(focus, config):
             if not best_ind:
                 continue
 
+            # Compute risk levels from ATR
+            entry  = best_ind['price']
+            atr    = best_ind['atr']
+            if direction == 'long':
+                stop_loss    = round(entry - atr_stop   * atr, 4)
+                target_price = round(entry + atr_target * atr, 4)
+            else:
+                stop_loss    = round(entry + atr_stop   * atr, 4)
+                target_price = round(entry - atr_target * atr, 4)
+
             signal = {
-                'timestamp':   now_utc,
-                'symbol':      sym,
-                'direction':   direction,
-                'route':       route,
-                'tf_15m':      tfs.get('15m', 0),
-                'tf_1h':       tfs.get('1H',  0),
-                'tf_4h':       tfs.get('4H',  0),
-                'tf_1d':       tfs.get('1D',  0),
-                'valid_count': count,
+                'timestamp':        now_utc,
+                'symbol':           sym,
+                'direction':        direction,
+                'route':            route,
+                'tf_15m':           tfs.get('15m', 0),
+                'tf_1h':            tfs.get('1H',  0),
+                'tf_4h':            tfs.get('4H',  0),
+                'tf_1d':            tfs.get('1D',  0),
+                'valid_count':      count,
+                'entry_price':      round(entry, 4),
+                'stop_loss':        stop_loss,
+                'target_price':     target_price,
+                'strategy_version': strat_ver,
                 **best_ind,
             }
             signals.append(signal)
-            log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f | TFs:%s',
+            log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f SL:$%.2f TP:$%.2f | TFs:%s',
                      route, sym, direction.upper(), count, available_tfs,
-                     best_ind['rsi'], best_ind['price'], list(tfs.keys()))
+                     best_ind['rsi'], entry, stop_loss, target_price,
+                     list(tfs.keys()))
 
-    log.info('[CYCLE] Complete. %d signals generated from %d/%d TFs.',
-             len(signals), available_tfs, len(TIMEFRAMES))
+    log.info('[CYCLE] Complete. %d signals from %d/%d TFs.',
+             len(signals), available_tfs, len(timeframes))
 
     meta = {
         'tfs_available':  available_tfs,
