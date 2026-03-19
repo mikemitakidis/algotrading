@@ -685,7 +685,7 @@ function loadLog(){
   .then(function(r){ return r.json(); })
   .then(function(d){
     var el = document.getElementById('logbox');
-    el.innerHTML = (d.lines||[]).map(colorLine).join('\n');
+    el.innerHTML = (d.lines||[]).map(colorLine).join('<br>');
     el.scrollTop = el.scrollHeight;
   }).catch(function(){});
 }
@@ -699,7 +699,7 @@ function loadFullLog(){
     if(_lf === 'err') lines = lines.filter(function(l){ return l.indexOf('ERROR') >= 0 || l.indexOf('WARNING') >= 0; });
     if(_lf === 'cyc') lines = lines.filter(function(l){ return l.indexOf('[CYCLE]') >= 0 || l.indexOf('[MAIN]') >= 0; });
     var el = document.getElementById('fullLog');
-    el.innerHTML = lines.length ? lines.map(colorLine).join('\n') : '<span style="color:#8b949e">No lines match this filter.</span>';
+    el.innerHTML = lines.length ? lines.map(colorLine).join('<br>') : '<span style="color:#8b949e">No lines match this filter.</span>';
     el.scrollTop = el.scrollHeight;
   }).catch(function(){});
 }
