@@ -30,13 +30,13 @@ def score_timeframe(ind, direction):
     if not ind:
         return 0
     if direction == 'long':
-        m   = 1 if (30 < ind['rsi'] < 75 and ind['macd_hist'] > 0)       else 0
-        t   = 1 if (ind['ema20'] > ind['ema50'] * 0.995)                  else 0
-        vol = 1 if (ind['vwap_dev'] > -0.015 and ind['vol_ratio'] > 0.6) else 0
+        m   = 1 if (25 < ind['rsi'] < 78 and ind['macd_hist'] > 0)       else 0
+        t   = 1 if (ind['ema20'] > ind['ema50'] * 0.990)                  else 0
+        vol = 1 if (ind['vwap_dev'] > -0.03 and ind['vol_ratio'] > 0.4)  else 0
     else:
-        m   = 1 if (ind['rsi'] > 50 and ind['macd_hist'] < 0)            else 0
-        t   = 1 if (ind['ema20'] < ind['ema50'] * 1.005)                  else 0
-        vol = 1 if (ind['vwap_dev'] < 0.015 and ind['vol_ratio'] > 0.6)  else 0
+        m   = 1 if (ind['rsi'] > 48 and ind['macd_hist'] < 0)            else 0
+        t   = 1 if (ind['ema20'] < ind['ema50'] * 1.010)                  else 0
+        vol = 1 if (ind['vwap_dev'] < 0.03 and ind['vol_ratio'] > 0.4)   else 0
     return 1 if (m + t + vol == 3) else 0
 
 
@@ -74,9 +74,13 @@ def scan_cycle(focus, config):
             cached_inds.setdefault(sym, {})[tf_label] = ind
 
             for direction in ('long', 'short'):
-                if score_timeframe(ind, direction):
+                s = score_timeframe(ind, direction)
+                if s:
                     cached_scores.setdefault(sym, {'long': {}, 'short': {}})
                     cached_scores[sym][direction][tf_label] = 1
+                    log.debug('[SCORE] %s %s %s: PASS (RSI=%.1f MACD=%.4f EMA20/50=%.2f/%.2f vol=%.2f)',
+                              sym, tf_label, direction, ind['rsi'], ind['macd_hist'],
+                              ind['ema20'], ind['ema50'], ind['vol_ratio'])
 
     available_tfs = len(tfs_with_data)
     log.info('[CYCLE] Timeframes with data: %d/4 %s', available_tfs, tfs_with_data)
@@ -93,7 +97,7 @@ def scan_cycle(focus, config):
     # With 2 TFs available: need 2
     # With 1 TF available:  need 1 (cache-only mode, logged separately)
     if available_tfs >= 3:
-        min_valid = 3
+        min_valid = 2   # lowered from 3: market rarely shows 3+ TF confluence
     elif available_tfs == 2:
         min_valid = 2
     else:
