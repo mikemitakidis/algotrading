@@ -418,6 +418,15 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <div style="overflow-x:auto"><div id="btTradeTable"></div></div>
   </div>
 
+  <!-- Diagnostics -->
+  <div id="btDiagSection" style="display:none" class="card" style="margin-top:18px">
+    <div class="ct">Diagnostics <span style="font-size:10px;color:#8b949e;font-weight:400">Why these trades? Why 0 trades?</span></div>
+    <div style="font-size:11px;color:#8b949e;margin-bottom:12px">
+      Shows data coverage per timeframe, candidate signals before filtering, and rejection reasons.
+    </div>
+    <div id="btDiagContent"></div>
+  </div>
+
 </div><!-- /backtest -->
 
 <!-- ════════════════ STRATEGY ════════════════ -->
@@ -1208,6 +1217,9 @@ function runBacktest(){
 
   if(!rawSyms){ if(msg){ msg.textContent='Enter at least one symbol.'; msg.style.color='#f85149'; } return; }
   if(!start || !end){ if(msg){ msg.textContent='Set start and end dates.'; msg.style.color='#f85149'; } return; }
+  // Warn if date range is too short for indicators
+  var days = Math.round((new Date(end) - new Date(start)) / 86400000);
+  if(days < 90 && msg){ msg.textContent = 'Note: short range (<90d). 1H/4H/15m data may be limited. Daily indicators need 60+ bars.'; msg.style.color = '#d29922'; }
 
   var symbols = rawSyms.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
   if(symbols.length > 10){ if(msg){ msg.textContent='Max 10 symbols per run.'; msg.style.color='#f85149'; } return; }
@@ -1335,6 +1347,49 @@ function renderBtResults(d){
 
   // Trade table
   var trades = d.trades || [];
+  // Diagnostics panel
+  var btDiag = document.getElementById('btDiagSection');
+  var btDiagContent = document.getElementById('btDiagContent');
+  var diagData = d.diagnostics || {};
+  var symList  = d.symbols || [];
+  if(Object.keys(diagData).length && btDiag){
+    btDiag.style.display = 'block';
+    var dhtml = '';
+    // Strategy version + confluence
+    var sv    = d.strategy_version || '-';
+    var sconf = (d.strategy_confluence || {}).min_valid_tfs || '-';
+    dhtml += '<div style="font-size:12px;color:#58a6ff;margin-bottom:10px">Strategy v' + sv + ' | Min confluence: ' + sconf + '/4 TFs</div>';
+    // Per-symbol table
+    dhtml += '<table><tr><th>Symbol</th><th>TF Coverage (bars)</th><th>Candidate signals</th><th>Rejection reasons</th><th>Trades</th></tr>';
+    var trades_by_sym = {};
+    (d.trades||[]).forEach(function(t){ trades_by_sym[t.symbol] = (trades_by_sym[t.symbol]||0)+1; });
+    symList.forEach(function(sym){
+      var sd = diagData[sym] || {};
+      var cov = sd.tf_coverage || {};
+      var covStr = Object.keys(cov).map(function(k){ return k+':'+cov[k]; }).join(' &nbsp; ');
+      var rej = sd.rejected || {};
+      var rejStr = Object.keys(rej).map(function(k){ return k+'×'+rej[k]; }).join(', ') || '<span style="color:#3fb950">none</span>';
+      var cands = sd.candidates || 0;
+      var tcount = trades_by_sym[sym] || 0;
+      dhtml += '<tr>';
+      dhtml += '<td><b>' + sym + '</b></td>';
+      dhtml += '<td style="font-size:11px;color:#58a6ff">' + (covStr || '<span style="color:#f85149">no data</span>') + '</td>';
+      dhtml += '<td>' + cands + '</td>';
+      dhtml += '<td style="font-size:11px;color:#d29922">' + rejStr + '</td>';
+      dhtml += '<td><b>' + tcount + '</b></td>';
+      dhtml += '</tr>';
+    });
+    dhtml += '</table>';
+    // Explanation of common reasons
+    dhtml += '<div style="margin-top:14px;font-size:11px;color:#6e7681">';
+    dhtml += '<b>Rejection reason guide:</b> &nbsp;';
+    dhtml += '<code>only_N_of_M_tfs</code> = signal scored on N TFs but needed M &nbsp;|&nbsp; ';
+    dhtml += '<code>no_indicators</code> = insufficient bars for indicator computation &nbsp;|&nbsp; ';
+    dhtml += 'Cooldown = same symbol/direction within 3 days (not counted above)';
+    dhtml += '</div>';
+    if(btDiagContent) btDiagContent.innerHTML = dhtml;
+  }
+
   setText('btTradeCount', trades.length + ' trades');
   var wrap = document.getElementById('btTradeTable');
   if(wrap){

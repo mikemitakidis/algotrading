@@ -203,11 +203,21 @@ def _evaluate_outcome(daily_df: pd.DataFrame,
 
         # If both triggered on same bar, conservative: stop wins
         if hit_stop:
-            ret_pct = round((stop - entry) / entry * 100, 3)
+            # Long LOSS: price fell to stop (-)
+            # Short LOSS: price rose to stop — (entry-stop)/entry is negative
+            if direction == 'long':
+                ret_pct = round((stop - entry) / entry * 100, 3)
+            else:
+                ret_pct = round((entry - stop) / entry * 100, 3)
             return {'outcome': 'LOSS', 'bars_held': i + 1,
                     'exit_price': stop, 'return_pct': ret_pct}
         if hit_target:
-            ret_pct = round((target - entry) / entry * 100, 3)
+            # Long WIN: price rose to target (+)
+            # Short WIN: price fell to target — (entry-target)/entry is positive
+            if direction == 'long':
+                ret_pct = round((target - entry) / entry * 100, 3)
+            else:
+                ret_pct = round((entry - target) / entry * 100, 3)
             return {'outcome': 'WIN', 'bars_held': i + 1,
                     'exit_price': target, 'return_pct': ret_pct}
 
@@ -223,16 +233,19 @@ def _evaluate_outcome(daily_df: pd.DataFrame,
 
 
 def _walk_symbol(sym: str, tf_data: dict, trading_days: list,
-                 strategy: dict) -> list:
+                 strategy: dict, diag: dict = None) -> list:
     """
     Walk forward through trading_days for one symbol.
     Returns list of signal/trade dicts.
+    diag: optional dict to collect diagnostics (mutated in place)
     """
     if not tf_data:
+        if diag is not None: diag.setdefault('no_data', []).append(sym)
         return []
 
     daily_df  = tf_data.get('1D')
     if daily_df is None:
+        if diag is not None: diag.setdefault('no_daily', []).append(sym)
         return []
 
     confluence = strategy.get('confluence', {})
@@ -277,7 +290,14 @@ def _walk_symbol(sym: str, tf_data: dict, trading_days: list,
             count = len(scores)
 
             if count < min_valid or best_ind is None:
+                if diag is not None:
+                    reason = 'no_indicators' if best_ind is None else f'only_{count}_of_{min_valid}_tfs'
+                    diag.setdefault('rejected', {}).setdefault(reason, 0)
+                    diag['rejected'][reason] += 1
                 continue
+            if diag is not None:
+                diag.setdefault('candidates', 0)
+                diag['candidates'] = diag.get('candidates', 0) + 1
 
             # Route label
             if count >= etoro_min:
@@ -468,6 +488,7 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
         all_trades  = []
         total_syms  = len(symbols)
 
+        diag_per_sym = {}
         for i, sym in enumerate(symbols):
             pct = int((i / total_syms) * 90)
             _write_results({
@@ -495,9 +516,17 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
                 (daily_df.index.date <= end)
             ].index.tolist()
 
-            sym_trades = _walk_symbol(sym, tf_data, trading_days, strategy)
+            sym_diag = {'tf_coverage': {}, 'candidates': 0, 'rejected': {}}
+            for tf_label, df in tf_data.items():
+                sym_diag['tf_coverage'][tf_label] = len(df)
+            sym_trades = _walk_symbol(sym, tf_data, trading_days, strategy, sym_diag)
             all_trades.extend(sym_trades)
-            log.info('[BT] %s: %d signals', sym, len(sym_trades))
+            diag_per_sym[sym] = sym_diag
+            log.info('[BT] %s: %d signals | TFs: %s | candidates: %d | rejected: %s',
+                     sym, len(sym_trades),
+                     {k: v for k, v in sym_diag['tf_coverage'].items()},
+                     sym_diag.get('candidates', 0),
+                     sym_diag.get('rejected', {}))
 
         # Sort by date
         all_trades.sort(key=lambda t: t['date'])
@@ -515,8 +544,10 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
             'start_date':       start_str,
             'end_date':         end_str,
             'strategy_version': strategy.get('version', 1),
+            'strategy_confluence': strategy.get('confluence', {}),
             'trades':           all_trades,
             'stats':            stats,
+            'diagnostics':      diag_per_sym,
             'progress':         100,
             'progress_msg':     f'Done — {stats.get("total",0)} trades',
         })
