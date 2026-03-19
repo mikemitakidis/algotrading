@@ -24,6 +24,10 @@ if not root.handlers:
 
 log = logging.getLogger(__name__)
 
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
+
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
 from bot.database import init_db, insert_signal

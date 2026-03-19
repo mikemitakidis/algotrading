@@ -67,7 +67,7 @@ def _load_cached(sym, interval):
     try:
         d = json.loads(p.read_text())
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
-        df.index = pd.to_datetime(df.index)
+        df.index = pd.to_datetime(df.index, utc=True)
         if len(df) >= MIN_BARS:
             return df
     except Exception:
@@ -86,7 +86,7 @@ def _load_fresh_cached(sym, interval):
         if age > BAR_TTL.get(interval, 3600):
             return None
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
-        df.index = pd.to_datetime(df.index)
+        df.index = pd.to_datetime(df.index, utc=True)
         return df if len(df) >= MIN_BARS else None
     except Exception:
         return None
@@ -205,6 +205,10 @@ def fetch_bars(symbols, period, interval):
 
 
 def resample_to_4h(df):
+    # Ensure DatetimeIndex before resampling (cache loads may have plain Index)
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df = df.copy()
+        df.index = pd.to_datetime(df.index, utc=True)
     return df.resample('4h').agg(
         {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     ).dropna()
