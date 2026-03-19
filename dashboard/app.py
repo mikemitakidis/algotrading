@@ -359,6 +359,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
       <button class="btn gs" id="btRunBtn" style="font-size:14px;padding:10px 28px" onclick="runBacktest()">&#x25B6; Run Backtest</button>
       <span id="btRunMsg" style="font-size:13px;color:#8b949e"></span>
     </div>
+    <div id="btDataStatus" style="font-size:12px;margin-top:10px;min-height:18px"></div>
   </div>
 
   <!-- Progress -->
@@ -1237,6 +1238,8 @@ function runBacktest(){
   if(trad) trad.style.display = 'none';
   var diagHide = document.getElementById('btDiagSection');
   if(diagHide) diagHide.style.display = 'none';
+  var dsEl = document.getElementById('btDataStatus');
+  if(dsEl) dsEl.innerHTML = '';
 
   fetch('/api/backtest/run', {
     method:  'POST',
@@ -1296,6 +1299,27 @@ function renderBtResults(d){
   var trad = document.getElementById('btTradesSection');
   if(summ) summ.style.display = 'block';
   if(trad) trad.style.display = 'block';
+
+  // Data status banner
+  var diagAll = d.diagnostics || {};
+  var allSyms = d.symbols || [];
+  var noDataSyms = allSyms.filter(function(s){
+    var st = diagAll[s]; if(!st) return true;
+    return Object.keys(st.tf_coverage||{}).length === 0;
+  });
+  var dataMsg = document.getElementById('btDataStatus');
+  if(dataMsg){
+    if(noDataSyms.length === 0 && allSyms.length > 0){
+      dataMsg.innerHTML = '&#x2714; Data loaded for all ' + allSyms.length + ' symbol(s)';
+      dataMsg.style.color = '#3fb950';
+    } else if(noDataSyms.length === allSyms.length){
+      dataMsg.innerHTML = '&#x26A0; No data loaded for any symbol. Check Diagnostics panel below for fetch errors.';
+      dataMsg.style.color = '#f85149';
+    } else {
+      dataMsg.innerHTML = '&#x26A0; Partial data: ' + (allSyms.length-noDataSyms.length) + '/' + allSyms.length + ' symbols loaded. Missing: ' + noDataSyms.join(', ');
+      dataMsg.style.color = '#d29922';
+    }
+  }
 
   setText('bs_total',   s.total || 0);
   setText('bs_wr',      (s.win_rate||0) + '%');
@@ -1366,19 +1390,32 @@ function renderBtResults(d){
     var trades_by_sym = {};
     (d.trades||[]).forEach(function(t){ trades_by_sym[t.symbol] = (trades_by_sym[t.symbol]||0)+1; });
     symList.forEach(function(sym){
-      var sd = diagData[sym] || {};
       var cov = sd.tf_coverage || {};
-      var covStr = Object.keys(cov).map(function(k){ return k+':'+cov[k]; }).join(' &nbsp; ');
+      var fst = sd.fetch_status || {};
+      var ferr = sd.fetch_error || '';
+      var covStr = Object.keys(cov).map(function(k){
+        return '<span style="color:#58a6ff">' + k + '</span>:' + cov[k];
+      }).join(' &nbsp; ');
+      var fetchStr = '';
+      if(ferr){
+        fetchStr = '<br><span style="font-size:10px;color:#f85149">' + ferr + '</span>';
+      } else if(Object.keys(fst).length){
+        fetchStr = '<br>' + Object.keys(fst).map(function(k){
+          var col = fst[k]==='ok' ? '#3fb950' : '#f85149';
+          return '<span style="font-size:10px;color:'+col+'">' + k + ':' + fst[k] + '</span>';
+        }).join(' ');
+      }
       var rej = sd.rejected || {};
       var rejStr = Object.keys(rej).map(function(k){ return k+'×'+rej[k]; }).join(', ') || '<span style="color:#3fb950">none</span>';
       var cands = sd.candidates || 0;
       var tcount = trades_by_sym[sym] || 0;
       dhtml += '<tr>';
       dhtml += '<td><b>' + sym + '</b></td>';
-      dhtml += '<td style="font-size:11px;color:#58a6ff">' + (covStr || '<span style="color:#f85149">no data</span>') + '</td>';
+      dhtml += '<td style="font-size:11px">' + (covStr || '<span style="color:#f85149;font-weight:700">no data loaded</span>') + fetchStr + '</td>';
       dhtml += '<td>' + cands + '</td>';
       dhtml += '<td style="font-size:11px;color:#d29922">' + rejStr + '</td>';
       dhtml += '<td><b>' + tcount + '</b></td>';
+      dhtml += '</tr>';
       dhtml += '</tr>';
     });
     dhtml += '</table>';
