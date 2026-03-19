@@ -53,9 +53,8 @@ def main():
     # Tier A dynamic ranking re-enabled in V2 once bar cache is warm
     focus = FOCUS_SYMBOLS[:config['focus_size']]
     log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
-    log.info('[STARTUP] Data: Yahoo Finance | 1 symbol/request | 2-5s delay | disk cache')
-    log.info('[STARTUP] First cycle: ~%d min. After cache warms: ~2 min.',
-             len(focus) * 4 * 3 // 60)
+    log.info('[STARTUP] Data: Yahoo Finance | 1 symbol/request | 8-12s delay | browser session | disk cache')
+    log.info('[STARTUP] First cycle uses disk cache where available. Fresh fetches: 8-12s each.')
 
     if config['telegram_enabled']:
         log.info('[STARTUP] Telegram: ENABLED')
