@@ -149,6 +149,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('overview')"  id="n-overview"  class="active">Overview</a>
     <a onclick="go('signals')"   id="n-signals">Signals</a>
     <a onclick="go('logs')"      id="n-logs">Logs</a>
+    <a onclick="go('backtest')"  id="n-backtest">Backtest</a>
     <a onclick="go('strategy')"  id="n-strategy">Strategy</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
     <a onclick="doLogout()" class="out">Logout</a>
@@ -307,6 +308,117 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
   <div class="card"><div class="logbox" id="fullLog" style="height:600px">Loading...</div></div>
 </div>
 
+
+
+<!-- ════════════════ BACKTEST ════════════════ -->
+<div id="backtest" class="page">
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="ct">Backtest Configuration</div>
+    <div style="font-size:12px;color:#8b949e;margin-bottom:16px">
+      Uses the <b>exact same</b> indicators, thresholds, and confluence rules as the live bot.
+      Same strategy version currently active: <span id="btStratVer" style="color:#58a6ff">loading...</span>
+    </div>
+    <div class="g2" style="margin-bottom:16px">
+      <div>
+        <div class="section-title" style="margin-bottom:6px">Symbols</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Comma-separated. Max 10. Must be in focus list or valid US tickers.</div>
+        <textarea id="btSymbols" rows="3"
+          style="width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:13px;font-family:inherit;resize:vertical"
+          placeholder="AAPL, MSFT, NVDA"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('mega')">Mega-cap (5)</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('tech')">Tech (8)</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('mixed')">Mixed (10)</button>
+        </div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-bottom:6px">Date Range</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:6px">
+          Daily data: up to 2 years &nbsp;|&nbsp; 1H data: up to 730 days &nbsp;|&nbsp; 15m data: last 60 days only
+        </div>
+        <div class="stat-item" style="border:none;padding:4px 0">
+          <span class="stat-label">Start date</span>
+          <input type="date" id="btStart"
+            style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 10px;border-radius:6px;font-size:13px;font-family:inherit">
+        </div>
+        <div class="stat-item" style="border:none;padding:4px 0">
+          <span class="stat-label">End date</span>
+          <input type="date" id="btEnd"
+            style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 10px;border-radius:6px;font-size:13px;font-family:inherit">
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btDatePreset(30)">30d</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btDatePreset(90)">90d</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btDatePreset(180)">6mo</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btDatePreset(365)">1yr</button>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn gs" id="btRunBtn" style="font-size:14px;padding:10px 28px" onclick="runBacktest()">&#x25B6; Run Backtest</button>
+      <span id="btRunMsg" style="font-size:13px;color:#8b949e"></span>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div id="btProgress" style="display:none" class="card" style="margin-bottom:18px">
+    <div class="ct">Running...</div>
+    <div style="background:#21262d;border-radius:6px;height:10px;overflow:hidden;margin-bottom:8px">
+      <div id="btProgressBar" style="height:100%;background:#1f6feb;border-radius:6px;width:0%;transition:width .4s"></div>
+    </div>
+    <div id="btProgressMsg" style="font-size:12px;color:#8b949e">Initialising...</div>
+  </div>
+
+  <!-- Summary Stats -->
+  <div id="btSummarySection" style="display:none">
+    <div class="g4" style="margin-bottom:18px">
+      <div class="card" style="text-align:center">
+        <div class="mv" id="bs_total">-</div><div class="ml">Total Trades</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="mv g" id="bs_wr">-</div><div class="ml">Win Rate</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="mv" id="bs_pf">-</div><div class="ml">Profit Factor</div>
+      </div>
+      <div class="card" style="text-align:center">
+        <div class="mv r" id="bs_dd">-</div><div class="ml">Max Drawdown</div>
+      </div>
+    </div>
+
+    <div class="g2" style="margin-bottom:18px">
+      <div class="card">
+        <div class="ct">Returns</div>
+        <div class="stat-item"><span class="stat-label">Avg return</span><span class="stat-value" id="bs_avg_ret">-</span></div>
+        <div class="stat-item"><span class="stat-label">Avg win</span><span class="stat-value" id="bs_avg_win" style="color:#3fb950">-</span></div>
+        <div class="stat-item"><span class="stat-label">Avg loss</span><span class="stat-value" id="bs_avg_los" style="color:#f85149">-</span></div>
+        <div class="stat-item"><span class="stat-label">Final equity (100 start)</span><span class="stat-value" id="bs_eq">-</span></div>
+        <div class="stat-item"><span class="stat-label">Wins / Losses / Timeouts</span><span class="stat-value" id="bs_wlt">-</span></div>
+      </div>
+      <div class="card">
+        <div class="ct">By Confluence</div>
+        <div id="bs_by_conf"></div>
+        <div class="ct" style="margin-top:16px">By Direction</div>
+        <div id="bs_by_dir"></div>
+        <div class="ct" style="margin-top:16px">By Route</div>
+        <div id="bs_by_route"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trade List -->
+  <div id="btTradesSection" style="display:none" class="card">
+    <div class="ct">
+      Trade List
+      <span id="btTradeCount" style="color:#8b949e;font-size:11px;margin-left:4px"></span>
+      <a id="btCsvLink" href="/api/backtest/csv" target="_blank"
+        style="margin-left:auto;background:none;border:1px solid #30363d;color:#58a6ff;padding:4px 11px;border-radius:6px;cursor:pointer;font-size:12px;text-decoration:none">&#x2B07; CSV</a>
+    </div>
+    <div style="overflow-x:auto"><div id="btTradeTable"></div></div>
+  </div>
+
+</div><!-- /backtest -->
 
 <!-- ════════════════ STRATEGY ════════════════ -->
 <div id="strategy" class="page">
@@ -626,6 +738,7 @@ function go(p){
   if(p === 'signals')  loadAllSig();
   if(p === 'settings') loadTgSettings();
   if(p === 'strategy')  loadStrategy();
+  if(p === 'backtest')  initBacktest();
 }
 
 // ─── boot ───
@@ -1036,6 +1149,228 @@ function fmtSecs(s){
   return Math.round(s/3600) + 'h';
 }
 
+
+
+// ─── backtest page ───
+var _btPollTimer = null;
+
+var BT_PRESETS = {
+  mega:  'AAPL, MSFT, NVDA, GOOGL, AMZN',
+  tech:  'AAPL, MSFT, NVDA, AMD, AVGO, CRM, ADBE, QCOM',
+  mixed: 'AAPL, MSFT, NVDA, JPM, V, UNH, XOM, JNJ, WMT, NFLX',
+};
+
+function initBacktest(){
+  // Load current strategy version
+  fetch('/api/strategy')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var ver = (d.strategy || {}).version || 1;
+    setText('btStratVer', 'v' + ver);
+  }).catch(function(){});
+
+  // Set default dates: 90 days back to today
+  var today = new Date();
+  var start = new Date(today); start.setDate(today.getDate() - 90);
+  var el_end   = document.getElementById('btEnd');
+  var el_start = document.getElementById('btStart');
+  if(el_end)   el_end.value   = today.toISOString().slice(0,10);
+  if(el_start) el_start.value = start.toISOString().slice(0,10);
+
+  // Check if a result is already available
+  fetch('/api/backtest/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.status === 'done') renderBtResults(d);
+    else if(d.status === 'running') startBtPoll();
+  }).catch(function(){});
+}
+
+function btPreset(key){
+  var el = document.getElementById('btSymbols');
+  if(el && BT_PRESETS[key]) el.value = BT_PRESETS[key];
+}
+
+function btDatePreset(days){
+  var today = new Date();
+  var start = new Date(today); start.setDate(today.getDate() - days);
+  var el_e = document.getElementById('btEnd');
+  var el_s = document.getElementById('btStart');
+  if(el_e) el_e.value = today.toISOString().slice(0,10);
+  if(el_s) el_s.value = start.toISOString().slice(0,10);
+}
+
+function runBacktest(){
+  var rawSyms = (document.getElementById('btSymbols').value || '').trim();
+  var start   = (document.getElementById('btStart').value  || '').trim();
+  var end     = (document.getElementById('btEnd').value    || '').trim();
+  var msg     = document.getElementById('btRunMsg');
+
+  if(!rawSyms){ if(msg){ msg.textContent='Enter at least one symbol.'; msg.style.color='#f85149'; } return; }
+  if(!start || !end){ if(msg){ msg.textContent='Set start and end dates.'; msg.style.color='#f85149'; } return; }
+
+  var symbols = rawSyms.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
+  if(symbols.length > 10){ if(msg){ msg.textContent='Max 10 symbols per run.'; msg.style.color='#f85149'; } return; }
+
+  if(msg){ msg.textContent = 'Launching...'; msg.style.color = '#58a6ff'; }
+  var btn = document.getElementById('btRunBtn');
+  if(btn) btn.disabled = true;
+
+  // Hide previous results
+  var prog = document.getElementById('btProgress');
+  var summ = document.getElementById('btSummarySection');
+  var trad = document.getElementById('btTradesSection');
+  if(prog) prog.style.display = 'block';
+  if(summ) summ.style.display = 'none';
+  if(trad) trad.style.display = 'none';
+
+  fetch('/api/backtest/run', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify({symbols: symbols, start_date: start, end_date: end})
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.ok){
+      if(msg){ msg.textContent = 'Running...'; msg.style.color = '#d29922'; }
+      startBtPoll();
+    } else {
+      if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color = '#f85149'; }
+      if(btn) btn.disabled = false;
+    }
+  }).catch(function(e){
+    if(msg){ msg.textContent = 'Error: ' + e.message; msg.style.color = '#f85149'; }
+    if(btn) btn.disabled = false;
+  });
+}
+
+function startBtPoll(){
+  if(_btPollTimer) clearInterval(_btPollTimer);
+  _btPollTimer = setInterval(pollBtStatus, 2500);
+}
+
+function pollBtStatus(){
+  fetch('/api/backtest/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var bar = document.getElementById('btProgressBar');
+    var pmsg = document.getElementById('btProgressMsg');
+    if(bar)  bar.style.width = (d.progress||0) + '%';
+    if(pmsg) pmsg.textContent = d.progress_msg || '';
+
+    if(d.status === 'done' || d.status === 'error'){
+      clearInterval(_btPollTimer);
+      _btPollTimer = null;
+      var btn = document.getElementById('btRunBtn');
+      var msg = document.getElementById('btRunMsg');
+      if(btn) btn.disabled = false;
+      var prog = document.getElementById('btProgress');
+      if(prog) prog.style.display = 'none';
+      if(d.status === 'error'){
+        if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color='#f85149'; }
+      } else {
+        if(msg){ msg.textContent = ''; }
+        renderBtResults(d);
+      }
+    }
+  }).catch(function(){});
+}
+
+function renderBtResults(d){
+  var s = d.stats || {};
+  var summ = document.getElementById('btSummarySection');
+  var trad = document.getElementById('btTradesSection');
+  if(summ) summ.style.display = 'block';
+  if(trad) trad.style.display = 'block';
+
+  setText('bs_total',   s.total || 0);
+  setText('bs_wr',      (s.win_rate||0) + '%');
+  setText('bs_pf',      s.profit_factor != null ? s.profit_factor : 'n/a');
+  setText('bs_dd',      (s.max_drawdown_pct||0) + '%');
+  setText('bs_avg_ret', (s.avg_return_pct||0) + '%');
+  setText('bs_avg_win', (s.avg_win_pct||0)    + '%');
+  setText('bs_avg_los', (s.avg_loss_pct||0)   + '%');
+  setText('bs_eq',      (s.final_equity||100));
+  setText('bs_wlt',     (s.wins||0) + ' / ' + (s.losses||0) + ' / ' + (s.timeouts||0));
+
+  // By confluence
+  var cEl = document.getElementById('bs_by_conf');
+  if(cEl){
+    var bc = s.by_confluence || {};
+    var html = '';
+    Object.keys(bc).sort().forEach(function(k){
+      var v = bc[k];
+      html += '<div class="stat-item"><span class="stat-label">' + k + ' TFs</span>';
+      html += '<span class="stat-value">' + v.total + ' trades &nbsp; WR: ' + v.win_rate + '%</span></div>';
+    });
+    cEl.innerHTML = html || '<div style="color:#6e7681;font-size:12px">No data</div>';
+  }
+
+  // By direction
+  var dEl = document.getElementById('bs_by_dir');
+  if(dEl){
+    var bd = s.by_direction || {};
+    var html = '';
+    Object.keys(bd).forEach(function(k){
+      var v = bd[k];
+      var col = k === 'long' ? '#3fb950' : '#f85149';
+      html += '<div class="stat-item"><span class="stat-label" style="color:' + col + '">' + k.toUpperCase() + '</span>';
+      html += '<span class="stat-value">' + v.total + ' trades &nbsp; WR: ' + v.win_rate + '% &nbsp; Avg: ' + v.avg_ret + '%</span></div>';
+    });
+    dEl.innerHTML = html || '<div style="color:#6e7681;font-size:12px">No data</div>';
+  }
+
+  // By route
+  var rEl = document.getElementById('bs_by_route');
+  if(rEl){
+    var br = s.by_route || {};
+    var html = '';
+    Object.keys(br).forEach(function(k){
+      var v = br[k];
+      html += '<div class="stat-item"><span class="stat-label">' + k + '</span>';
+      html += '<span class="stat-value">' + v.total + ' trades &nbsp; WR: ' + v.win_rate + '%</span></div>';
+    });
+    rEl.innerHTML = html || '<div style="color:#6e7681;font-size:12px">No data</div>';
+  }
+
+  // Trade table
+  var trades = d.trades || [];
+  setText('btTradeCount', trades.length + ' trades');
+  var wrap = document.getElementById('btTradeTable');
+  if(wrap){
+    if(!trades.length){
+      wrap.innerHTML = '<div class="empty-state">No signals generated in this date range with current strategy settings.</div>';
+    } else {
+      var html = '<table><tr>'
+        + '<th>Date</th><th>Symbol</th><th>Dir</th><th>Route</th>'
+        + '<th>TFs</th><th>Entry</th><th>Stop</th><th>Target</th>'
+        + '<th>RSI</th><th>ATR</th><th>Outcome</th><th>Return</th><th>Bars</th>'
+        + '</tr>';
+      trades.forEach(function(t){
+        var oc = t.outcome === 'WIN' ? '#3fb950' : t.outcome === 'LOSS' ? '#f85149' : '#d29922';
+        var dc = t.direction === 'long' ? '#3fb950' : '#f85149';
+        var rc = t.return_pct >= 0 ? '#3fb950' : '#f85149';
+        html += '<tr>';
+        html += '<td style="color:#8b949e">' + t.date + '</td>';
+        html += '<td><b>' + t.symbol + '</b></td>';
+        html += '<td><span class="tag t' + (t.direction==='long'?'l':'s') + '">' + t.direction.toUpperCase() + '</span></td>';
+        html += '<td><span class="tag t' + (t.route==='ETORO'?'e':'i') + '">' + t.route + '</span></td>';
+        html += '<td style="font-size:11px;color:#58a6ff">' + (t.valid_count||0) + '/4<br><span style="color:#6e7681">' + (t.tfs_triggered||[]).join(' ') + '</span></td>';
+        html += '<td>$' + (t.entry_price||0) + '</td>';
+        html += '<td style="color:#f85149">$' + (t.stop_loss||0) + '</td>';
+        html += '<td style="color:#3fb950">$' + (t.target_price||0) + '</td>';
+        html += '<td>' + (t.rsi||0) + '</td>';
+        html += '<td>' + (t.atr||0) + '</td>';
+        html += '<td><span style="color:' + oc + ';font-weight:700">' + t.outcome + '</span></td>';
+        html += '<td style="color:' + rc + '">' + (t.return_pct >= 0 ? '+' : '') + (t.return_pct||0) + '%</td>';
+        html += '<td style="color:#6e7681">' + (t.bars_held||'-') + 'd</td>';
+        html += '</tr>';
+      });
+      html += '</table>';
+      wrap.innerHTML = html;
+    }
+  }
+}
 
 // ─── strategy page ───
 var _stratData = {};
@@ -1513,6 +1848,71 @@ def save_password():
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
+
+
+
+# ── Backtest ──────────────────────────────────────────────────────────────────
+
+@app.route('/api/backtest/run', methods=['POST'])
+@require_auth
+def backtest_run():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import start_backtest, read_results
+    data = request.get_json(silent=True) or {}
+    symbols    = data.get('symbols', [])
+    start_date = data.get('start_date', '')
+    end_date   = data.get('end_date',   '')
+    if not symbols or not start_date or not end_date:
+        return jsonify({'ok': False, 'error': 'symbols, start_date and end_date required'}), 400
+    if len(symbols) > 10:
+        return jsonify({'ok': False, 'error': 'Max 10 symbols per run'}), 400
+    # Check not already running
+    cur = read_results()
+    if cur.get('status') == 'running':
+        return jsonify({'ok': False, 'error': 'A backtest is already running'}), 409
+    start_backtest(symbols, start_date, end_date)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/backtest/status')
+@require_auth
+def backtest_status():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import read_results
+    return jsonify(read_results())
+
+
+@app.route('/api/backtest/csv')
+@require_auth
+def backtest_csv():
+    import sys, io, csv as _csv
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import read_results
+    from flask import Response
+    data   = read_results()
+    trades = data.get('trades', [])
+    if not trades:
+        return Response('No results', mimetype='text/plain')
+    keys = ['date','symbol','direction','route','valid_count',
+            'tfs_triggered','entry_price','stop_loss','target_price',
+            'outcome','return_pct','bars_held',
+            'rsi','macd_hist','atr','bb_pos','vwap_dev','vol_ratio',
+            'strategy_version']
+    buf = io.StringIO()
+    w   = _csv.DictWriter(buf, fieldnames=keys, extrasaction='ignore')
+    w.writeheader()
+    for t in trades:
+        row = dict(t)
+        row['tfs_triggered'] = ' '.join(t.get('tfs_triggered', []))
+        w.writerow(row)
+    filename = f"backtest_{data.get('start_date','')}_to_{data.get('end_date','')}.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
 
 
 # ── Strategy ─────────────────────────────────────────────────────────────────
