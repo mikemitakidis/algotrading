@@ -106,6 +106,7 @@ HTML = (
     '<a onclick="go(\'overview\')" id="n-overview" class="active">Overview</a>'
     '<a onclick="go(\'signals\')"  id="n-signals">Signals</a>'
     '<a onclick="go(\'logs\')"     id="n-logs">Logs</a>'
+    '<a onclick="go(\'settings\')" id="n-settings">Settings</a>'
     '<a onclick="doLogout()" class="out">Logout</a>'
     '</div>'
     '</nav>'
@@ -170,6 +171,41 @@ HTML = (
     '</div>'
     '<div class="card"><div class="logbox" id="fullLog" style="height:580px">Loading...</div></div>'
     '</div>'
+    '<div id="settings" class="page">' +
+    '<div class="card" style="margin-bottom:20px">' +
+    '<div class="ct">Telegram Alerts <span id="tgBig" style="margin-left:8px;font-size:10px;padding:2px 8px;border-radius:8px;background:#21262d;color:#8b949e">loading...</span></div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">' +
+    '<div><div style="font-size:12px;color:#8b949e;margin-bottom:8px">Current status:</div>' +
+    '<span id="tgStatusBig" style="font-size:13px;color:#8b949e">Loading...</span></div>' +
+    '<div style="display:flex;align-items:flex-end"><button class="btn gs" id="tgTestBig" onclick="sendTgTest()" style="font-size:13px">Send Test Message</button></div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Enable Telegram</div>' +
+    '<select id="tgEnabled" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit">' +
+    '<option value="false">Disabled</option><option value="true">Enabled</option></select></div>' +
+    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Cooldown (seconds)</div>' +
+    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">Suppress duplicate alerts</div>' +
+    '<input type="number" id="tgCooldown" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit" value="14400"></div>' +
+    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Bot Token</div>' +
+    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">From @BotFather on Telegram</div>' +
+    '<input type="password" id="tgToken" placeholder="1234567890:ABCdef..." style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit"></div>' +
+    '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Chat ID</div>' +
+    '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">Your numeric Telegram chat ID</div>' +
+    '<input type="text" id="tgChatId" placeholder="123456789" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit"></div>' +
+    '</div>' +
+    '<div style="margin-top:20px;display:flex;gap:12px;align-items:center">' +
+    '<button class="btn gs" style="padding:10px 28px;font-size:14px" onclick="saveTgSettings()">Save &amp; Restart Bot</button>' +
+    '<span id="tgSaveMsg" style="font-size:13px;color:#8b949e"></span>' +
+    '</div></div>' +
+    '<div class="card">' +
+    '<div class="ct">Dashboard Password</div>' +
+    '<div style="max-width:400px">' +
+    '<input type="password" id="newPw" placeholder="New password" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit;margin-bottom:12px">' +
+    '<button class="btn gs" style="font-size:13px" onclick="savePw()">Save Password</button>' +
+    '<span id="pwSaveMsg" style="font-size:13px;color:#8b949e;margin-left:12px"></span>' +
+    '</div></div>' +
+    '</div>' +
+
     '</div>'
     
     '<script>'
@@ -207,6 +243,7 @@ HTML = (
     '  if(n)n.classList.add("active");'
     '  if(p==="logs")loadFullLog();'
     '  if(p==="signals")loadAllSig();'
+    '  if(p==="settings")loadTgSettings();' +
     '}'
     
     'function loadAll(){loadStatus();loadSig();loadLog();}'
@@ -329,6 +366,71 @@ HTML = (
     '    }' +
     '  }).catch(function(){});' +
     '}' +
+
+    'function loadTgSettings(){' +
+    '  fetch("/api/telegram/status").then(function(r){return r.json();}).then(function(d){' +
+    '    var big=document.getElementById("tgBig");' +
+    '    var sb=document.getElementById("tgStatusBig");' +
+    '    if(d.ready){' +
+    '      if(big){big.style.background="#0d4a1a";big.style.color="#3fb950";big.textContent="enabled";}' +
+    '      if(sb)sb.textContent="Telegram is configured and active.";' +
+    '      if(sb)sb.style.color="#3fb950";' +
+    '      var en=document.getElementById("tgEnabled");if(en)en.value="true";' +
+    '    }else if(d.enabled){' +
+    '      if(big){big.style.background="#2d1f00";big.style.color="#d29922";big.textContent="misconfigured";}' +
+    '      if(sb){sb.textContent="Enabled but token or chat ID missing.";sb.style.color="#d29922";}' +
+    '    }else{' +
+    '      if(big){big.style.background="#21262d";big.style.color="#8b949e";big.textContent="disabled";}' +
+    '      if(sb){sb.textContent="Telegram disabled. Fill in settings below and save.";sb.style.color="#8b949e";}' +
+    '    }' +
+    '    fetch("/api/telegram/current").then(function(r){return r.json();}).then(function(c){' +
+    '      var en=document.getElementById("tgEnabled");' +
+    '      var cd=document.getElementById("tgCooldown");' +
+    '      if(en)en.value=c.enabled?"true":"false";' +
+    '      if(cd)cd.value=c.cooldown||14400;' +
+    '    }).catch(function(){});' +
+    '  }).catch(function(){});' +
+    '}' +
+
+    'function saveTgSettings(){' +
+    '  var payload={' +
+    '    enabled:document.getElementById("tgEnabled").value==="true",' +
+    '    token:document.getElementById("tgToken").value,' +
+    '    chat_id:document.getElementById("tgChatId").value,' +
+    '    cooldown:parseInt(document.getElementById("tgCooldown").value)||14400' +
+    '  };' +
+    '  var msg=document.getElementById("tgSaveMsg");' +
+    '  if(msg)msg.textContent="Saving...";' +
+    '  fetch("/api/telegram/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})' +
+    '  .then(function(r){return r.json();})' +
+    '  .then(function(d){' +
+    '    if(msg)msg.textContent=d.ok?"Saved! Bot restarting...": "Error: "+(d.error||"failed");' +
+    '    if(msg)msg.style.color=d.ok?"#3fb950":"#f85149";' +
+    '    setTimeout(function(){loadTgSettings();loadTg();},2000);' +
+    '  })' +
+    '  .catch(function(e){if(msg){msg.textContent="Error: "+e.message;msg.style.color="#f85149";}});' +
+    '}' +
+
+    'function sendTgTest(){' +
+    '  var btn=document.getElementById("tgTestBig");' +
+    '  if(btn)btn.disabled=true;' +
+    '  fetch("/api/telegram/test",{method:"POST"})' +
+    '  .then(function(r){return r.json();})' +
+    '  .then(function(d){alert(d.message);if(btn)btn.disabled=false;loadTgSettings();})' +
+    '  .catch(function(e){alert("Error: "+e.message);if(btn)btn.disabled=false;});' +
+    '}' +
+
+    'function savePw(){' +
+    '  var pw=document.getElementById("newPw").value;' +
+    '  if(!pw){alert("Enter a password");return;}' +
+    '  fetch("/api/settings/password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})})' +
+    '  .then(function(r){return r.json();})' +
+    '  .then(function(d){' +
+    '    var msg=document.getElementById("pwSaveMsg");' +
+    '    if(msg){msg.textContent=d.ok?"Saved!":"Error: "+(d.error||"failed");msg.style.color=d.ok?"#3fb950":"#f85149";}' +
+    '  }).catch(function(e){alert("Error: "+e.message);});' +
+    '}' +
+
     'function act(a){' +
     '  var btns=document.querySelectorAll(".btn");' +
     '  btns.forEach(function(b){b.disabled=true;b.style.opacity="0.6";});' +
@@ -474,6 +576,132 @@ def telegram_test():
         return jsonify({'ok': result, 'message': msg})
     except Exception as e:
         return jsonify({'ok': False, 'message': str(e)}), 500
+
+
+
+def _read_env() -> dict:
+    """Read current .env file into a dict. Returns {} if file missing."""
+    env_path = BASE_DIR / '.env'
+    result = {}
+    if not env_path.exists():
+        return result
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, _, v = line.partition('=')
+            result[k.strip()] = v.strip().strip('"').strip("'")
+    return result
+
+
+def _write_env(updates: dict):
+    """
+    Write updates to .env file. Preserves existing keys not in updates.
+    Creates the file if it does not exist.
+    """
+    env_path = BASE_DIR / '.env'
+    existing = {}
+    lines_with_comments = []
+
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#') or not stripped:
+                lines_with_comments.append(line)
+                continue
+            if '=' in stripped:
+                k, _, v = stripped.partition('=')
+                existing[k.strip()] = (v.strip(), len(lines_with_comments))
+                lines_with_comments.append(line)
+
+    # Apply updates
+    existing_keys = set(existing.keys())
+    output_lines = []
+    keys_written = set()
+
+    for line in lines_with_comments:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            output_lines.append(line)
+            continue
+        if '=' in stripped:
+            k, _, _ = stripped.partition('=')
+            k = k.strip()
+            if k in updates:
+                output_lines.append(f'{k}={updates[k]}')
+                keys_written.add(k)
+            else:
+                output_lines.append(line)
+
+    # Add any new keys not in existing file
+    for k, v in updates.items():
+        if k not in keys_written:
+            output_lines.append(f'{k}={v}')
+
+    env_path.write_text('\n'.join(output_lines) + '\n')
+
+
+@app.route('/api/telegram/current')
+@require_auth
+def telegram_current():
+    """Return current Telegram settings from .env (token/chat_id masked)."""
+    env = _read_env()
+    return jsonify({
+        'enabled':  env.get('TELEGRAM_ENABLED', 'false').lower() in ('true', '1', 'yes'),
+        'cooldown': int(env.get('TELEGRAM_COOLDOWN_SECS', '14400')),
+        'has_token':   bool(env.get('TELEGRAM_BOT_TOKEN', '').strip()),
+        'has_chat_id': bool(env.get('TELEGRAM_CHAT_ID', '').strip()),
+    })
+
+
+@app.route('/api/telegram/save', methods=['POST'])
+@require_auth
+def telegram_save():
+    """Save Telegram settings to .env and restart the bot."""
+    data = request.get_json(silent=True) or {}
+    try:
+        updates = {
+            'TELEGRAM_ENABLED':      'true' if data.get('enabled') else 'false',
+            'TELEGRAM_COOLDOWN_SECS': str(int(data.get('cooldown', 14400))),
+        }
+        # Only update token/chat_id if non-empty (preserve existing if blank)
+        if data.get('token', '').strip():
+            updates['TELEGRAM_BOT_TOKEN'] = data['token'].strip()
+        if data.get('chat_id', '').strip():
+            updates['TELEGRAM_CHAT_ID'] = data['chat_id'].strip()
+
+        _write_env(updates)
+
+        # Reload env in this process
+        load_dotenv(BASE_DIR / '.env', override=True)
+
+        # Restart bot only (not dashboard)
+        def _restart():
+            import time
+            time.sleep(1)
+            subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
+            time.sleep(1)
+            _run_bot()
+        threading.Thread(target=_restart, daemon=True).start()
+
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/password', methods=['POST'])
+@require_auth
+def save_password():
+    """Save new dashboard password to .env."""
+    data = request.get_json(silent=True) or {}
+    pw = data.get('password', '').strip()
+    if not pw:
+        return jsonify({'ok': False, 'error': 'Password cannot be empty'}), 400
+    try:
+        _write_env({'DASHBOARD_PASSWORD': pw})
+        load_dotenv(BASE_DIR / '.env', override=True)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
