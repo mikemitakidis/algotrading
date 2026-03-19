@@ -191,7 +191,11 @@ HTML = (
     '<input type="password" id="tgToken" placeholder="1234567890:ABCdef..." style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit"></div>' +
     '<div><div style="font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:4px">Chat ID</div>' +
     '<div style="font-size:11px;color:#8b949e;margin-bottom:4px">Your numeric Telegram chat ID</div>' +
-    '<input type="text" id="tgChatId" placeholder="123456789" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;width:100%;font-family:inherit"></div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<input type="text" id="tgChatId" placeholder="123456789" style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:14px;flex:1;font-family:inherit">' +
+    '<button class="btn bl" style="font-size:12px;padding:8px 12px;white-space:nowrap" onclick="findChatId()">Find My ID</button>' +
+    '</div>' +
+    '<div id="chatIdResult" style="font-size:12px;color:#8b949e;margin-top:6px"></div></div>' +
     '</div>' +
     '<div style="margin-top:20px;display:flex;gap:12px;align-items:center">' +
     '<button class="btn gs" style="padding:10px 28px;font-size:14px" onclick="saveTgSettings()">Save &amp; Restart Bot</button>' +
@@ -418,6 +422,23 @@ HTML = (
     '  .then(function(r){return r.json();})' +
     '  .then(function(d){alert(d.message);if(btn)btn.disabled=false;loadTgSettings();})' +
     '  .catch(function(e){alert("Error: "+e.message);if(btn)btn.disabled=false;});' +
+    '}' +
+
+    'function findChatId(){' +
+    '  var el=document.getElementById("chatIdResult");' +
+    '  if(el)el.textContent="Checking Telegram for recent messages...";' +
+    '  fetch("/api/telegram/getupdates")' +
+    '  .then(function(r){return r.json();})' +
+    '  .then(function(d){' +
+    '    if(!d.ok){if(el)el.textContent="Error: "+d.error;return;}' +
+    '    if(!d.chats||!d.chats.length){' +
+    '      if(el)el.textContent="No messages found. Send a message to your bot first, then try again.";return;}' +
+    '    var c=d.chats[0];' +
+    '    document.getElementById("tgChatId").value=c.chat_id;' +
+    '    if(el)el.textContent="Found: "+c.chat_id+" ("+c.first_name+" "+c.username+") - auto-filled above";' +
+    '    if(el)el.style.color="#3fb950";' +
+    '  })' +
+    '  .catch(function(e){if(el)el.textContent="Error: "+e.message;});' +
     '}' +
 
     'function savePw(){' +
@@ -704,6 +725,51 @@ def save_password():
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/telegram/getupdates')
+@require_auth
+def telegram_getupdates():
+    """Call Telegram getUpdates to find the real chat_id from recent messages."""
+    load_dotenv(BASE_DIR / '.env', override=True)
+    token = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+    if not token:
+        return jsonify({'ok': False, 'error': 'No bot token configured'})
+    try:
+        import requests as _req
+        resp = _req.get(
+            f'https://api.telegram.org/bot{token}/getUpdates',
+            timeout=10
+        )
+        data = resp.json()
+        if not data.get('ok'):
+            desc = data.get('description', f'HTTP {resp.status_code}')
+            return jsonify({'ok': False, 'error': desc})
+
+        chats = []
+        for update in data.get('result', []):
+            msg = update.get('message') or update.get('channel_post') or {}
+            chat = msg.get('chat', {})
+            if chat:
+                chats.append({
+                    'chat_id':   chat.get('id'),
+                    'type':      chat.get('type'),
+                    'username':  chat.get('username', ''),
+                    'first_name': chat.get('first_name', ''),
+                    'text':      msg.get('text', '')[:40],
+                })
+        # Deduplicate by chat_id
+        seen = set()
+        unique = []
+        for c in chats:
+            if c['chat_id'] not in seen:
+                seen.add(c['chat_id'])
+                unique.append(c)
+
+        return jsonify({'ok': True, 'chats': unique,
+                        'count': len(data.get('result', []))})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
