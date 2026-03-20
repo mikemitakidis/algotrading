@@ -84,44 +84,51 @@ def read_results() -> dict:
 
 def _fetch_yf(sym: str, start: date, end: date, interval: str) -> tuple:
     """
-    Fetch historical bars for one symbol using the same browser session
-    as the live bot (bot.data._browser_session).
+    Fetch OHLCV bars using the IDENTICAL path as the live bot:
+      yf.Ticker(sym, session=_browser_session()).history(start=, end=, interval=)
 
     Returns (df, status_str) where:
-      df is a clean lowercase OHLCV DataFrame or None
-      status_str is a human-readable fetch status for diagnostics
+      df      — clean lowercase OHLCV DataFrame, UTC index, or None
+      status  — 'ok' | 'empty_response' | 'too_few_bars_N' |
+                'rate_limited' | 'network_error' | 'error:...'
     """
+    import yfinance as yf
+
+    # Add warmup bars so indicators are fully primed from day 1 of the range
+    warmup_days = 120 if interval == '1d' else 60
+    fetch_start = start - timedelta(days=warmup_days)
+    fetch_end   = end   + timedelta(days=2)   # end is exclusive in yfinance
+
+    # Map 4H resample source: we always fetch 1h and resample — handled by caller
+    # Map interval string to yfinance-compatible value
+    yf_interval = interval   # '1d', '1h', '15m' are all valid directly
+
     try:
-        import yfinance as yf
-        # Add warmup lookback so indicators have enough bars from day 1
-        warmup_days = 120 if interval == '1d' else 40
-        fetch_start = start - timedelta(days=warmup_days)
-        fetch_end   = end   + timedelta(days=2)  # inclusive
-
         session = _browser_session()
-
-        df = yf.download(
-            sym,
-            start    = fetch_start.strftime('%Y-%m-%d'),
-            end      = fetch_end.strftime('%Y-%m-%d'),
-            interval = interval,
-            auto_adjust      = True,
-            progress         = False,
-            threads          = False,
-            multi_level_index = False,   # flat columns: Close, High, Low, Open, Volume
-            session          = session,  # same browser session as live bot
+        ticker  = yf.Ticker(sym, session=session)
+        df = ticker.history(
+            start       = fetch_start.strftime('%Y-%m-%d'),
+            end         = fetch_end.strftime('%Y-%m-%d'),
+            interval    = yf_interval,
+            auto_adjust = True,
+            actions     = False,
+            raise_errors = False,
         )
+
         if df is None or df.empty:
+            log.warning('[BT] %s %s: empty_response (start=%s end=%s)',
+                        sym, interval, fetch_start, fetch_end)
             return None, 'empty_response'
 
-        # Normalise column names to lowercase
-        df.columns = [c.lower() if isinstance(c, str) else str(c[0]).lower()
-                      for c in df.columns]
+        # Normalise columns to lowercase
+        df.columns = [c.lower() for c in df.columns]
         keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
         if not keep:
+            log.warning('[BT] %s %s: missing OHLCV columns — got %s', sym, interval, list(df.columns))
             return None, 'missing_ohlcv_columns'
         df = df[keep].dropna()
 
+        # Ensure UTC DatetimeIndex
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index, utc=True)
         elif df.index.tz is None:
@@ -130,21 +137,27 @@ def _fetch_yf(sym: str, start: date, end: date, interval: str) -> tuple:
             df.index = df.index.tz_convert('UTC')
 
         if len(df) < MIN_WARMUP_BARS:
+            log.warning('[BT] %s %s: only %d bars (need %d)',
+                        sym, interval, len(df), MIN_WARMUP_BARS)
             return None, f'too_few_bars_{len(df)}'
 
+        first_ts = df.index[0].strftime('%Y-%m-%d')
+        last_ts  = df.index[-1].strftime('%Y-%m-%d')
+        log.info('[BT] %s %s: %d bars  %s -> %s  (fetch ok)',
+                 sym, interval, len(df), first_ts, last_ts)
         return df, 'ok'
 
     except Exception as e:
         err = str(e)
         if any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany')):
             status = 'rate_limited'
-        elif any(k in err for k in ('403', 'Forbidden', 'proxy', 'Proxy', 'tunnel')):
+        elif any(k in err for k in ('403', 'Forbidden', 'proxy', 'Proxy', 'tunnel', 'Tunnel')):
             status = 'network_error'
         elif 'No data found' in err or 'no data' in err.lower():
             status = 'no_data_from_provider'
         else:
-            status = f'error: {err[:80]}'
-        log.warning('[BT] Fetch failed %s/%s: %s', sym, interval, status)
+            status = f'error:{err[:120]}'
+        log.warning('[BT] %s %s fetch exception: %s', sym, interval, status)
         return None, status
 
 
@@ -152,23 +165,35 @@ def _fetch_all_tfs(sym: str, start: date, end: date,
                    timeframes: list) -> tuple:
     """
     Fetch data for all enabled timeframes for one symbol.
-    Returns (result_dict, fetch_statuses) where:
+    Returns (result_dict, fetch_meta) where:
       result_dict: tf_label -> DataFrame (only successful fetches)
-      fetch_statuses: tf_label -> status string (for diagnostics)
+      fetch_meta:  tf_label -> {status, bars, first, last}
     """
-    result   = {}
-    statuses = {}
+    result = {}
+    meta   = {}
+    # Track already-fetched intervals to avoid duplicate HTTP calls
+    # (4H and 1H both use interval '1h' — fetch once, resample for 4H)
+    raw_cache = {}
+
     for tf_label, period, interval, do_resample in timeframes:
-        raw, status = _fetch_yf(sym, start, end, interval)
-        statuses[tf_label] = status
+        if interval not in raw_cache:
+            raw_cache[interval] = _fetch_yf(sym, start, end, interval)
+        raw, status = raw_cache[interval]
+
         if raw is None:
-            log.warning('[BT] %s %s: %s', sym, tf_label, status)
+            meta[tf_label] = {'status': status, 'bars': 0, 'first': None, 'last': None}
             continue
-        if do_resample:
-            raw = resample_to_4h(raw)
-        result[tf_label] = raw
-        log.info('[BT] %s %s: %d bars loaded', sym, tf_label, len(raw))
-    return result, statuses
+
+        df = resample_to_4h(raw) if do_resample else raw
+        result[tf_label] = df
+        meta[tf_label] = {
+            'status': 'ok',
+            'bars':   len(df),
+            'first':  df.index[0].strftime('%Y-%m-%d')  if len(df) else None,
+            'last':   df.index[-1].strftime('%Y-%m-%d') if len(df) else None,
+        }
+
+    return result, meta
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -533,14 +558,18 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
 
             tf_data, fetch_statuses = _fetch_all_tfs(sym, start, end, timeframes)
             if not tf_data:
-                reasons = ', '.join(f'{k}:{v}' for k,v in fetch_statuses.items())
-                log.warning('[BT] No data for %s — skipping. Fetch statuses: %s', sym, reasons)
+                reasons = ', '.join(
+                    f'{k}:{v.get("status","?")}' for k,v in fetch_statuses.items()
+                )
+                log.warning('[BT] No data for %s — skipping. Statuses: %s', sym, reasons)
                 diag_per_sym[sym] = {
-                    'tf_coverage': {},
-                    'fetch_status': fetch_statuses,
-                    'candidates': 0,
-                    'rejected': {},
-                    'fetch_error': reasons,
+                    'tf_coverage':  {k: v.get('bars',0) for k,v in fetch_statuses.items()},
+                    'fetch_status': {k: v.get('status','?') for k,v in fetch_statuses.items()},
+                    'tf_first':     {},
+                    'tf_last':      {},
+                    'candidates':   0,
+                    'rejected':     {},
+                    'fetch_error':  reasons,
                 }
                 continue
 
@@ -553,18 +582,25 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
                 (daily_df.index.date <= end)
             ].index.tolist()
 
-            sym_diag = {'tf_coverage': {}, 'fetch_status': {}, 'candidates': 0, 'rejected': {}}
-            for tf_label, df in tf_data.items():
-                sym_diag['tf_coverage'][tf_label] = len(df)
-            for tf_label, status in fetch_statuses.items():
-                sym_diag['fetch_status'][tf_label] = status
+            sym_diag = {
+                'tf_coverage':  {},
+                'fetch_status': {},
+                'tf_first':     {},
+                'tf_last':      {},
+                'candidates':   0,
+                'rejected':     {},
+            }
+            for tf_label, m in fetch_statuses.items():
+                sym_diag['tf_coverage'][tf_label]  = m.get('bars', 0)
+                sym_diag['fetch_status'][tf_label] = m.get('status', 'unknown')
+                if m.get('first'): sym_diag['tf_first'][tf_label] = m['first']
+                if m.get('last'):  sym_diag['tf_last'][tf_label]  = m['last']
             sym_trades = _walk_symbol(sym, tf_data, trading_days, strategy, sym_diag)
             all_trades.extend(sym_trades)
             diag_per_sym[sym] = sym_diag
-            log.info('[BT] %s: %d signals | TFs: %s | fetch: %s | candidates: %d | rejected: %s',
-                     sym, len(sym_trades),
-                     {k: v for k, v in sym_diag['tf_coverage'].items()},
-                     sym_diag.get('fetch_status', {}),
+            cov_summary = {k: f'{v}bars' for k,v in sym_diag['tf_coverage'].items()}
+            log.info('[BT] %s: %d signals | coverage: %s | candidates: %d | rejected: %s',
+                     sym, len(sym_trades), cov_summary,
                      sym_diag.get('candidates', 0),
                      sym_diag.get('rejected', {}))
 

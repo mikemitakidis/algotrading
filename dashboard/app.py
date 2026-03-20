@@ -1393,18 +1393,26 @@ function renderBtResults(d){
       var sd    = diagData[sym] || {};
       var cov   = sd.tf_coverage  || {};
       var fst   = sd.fetch_status || {};
+      var fir   = sd.tf_first     || {};
+      var las   = sd.tf_last      || {};
       var ferr  = sd.fetch_error  || '';
-      var covStr = Object.keys(cov).map(function(k){
-        return '<span style="color:#58a6ff">' + k + '</span>:' + cov[k];
-      }).join(' &nbsp; ');
-      var fetchStr = '';
-      if(ferr){
-        fetchStr = '<br><span style="font-size:10px;color:#f85149">' + ferr + '</span>';
-      } else if(Object.keys(fst).length){
-        fetchStr = '<br>' + Object.keys(fst).map(function(k){
-          var col = fst[k]==='ok' ? '#3fb950' : '#f85149';
-          return '<span style="font-size:10px;color:'+col+'">' + k + ':' + fst[k] + '</span>';
-        }).join(' ');
+      var allTfs = ['1D','4H','1H','15m'];
+      // Build coverage + status per TF
+      var covHtml = '';
+      if(ferr && Object.keys(cov).length === 0){
+        covHtml = '<span style="color:#f85149;font-weight:700">no data loaded</span>'
+                + '<br><span style="font-size:10px;color:#f85149">' + ferr + '</span>';
+      } else {
+        covHtml = allTfs.map(function(k){
+          if(!fst[k]) return '';
+          var col   = fst[k]==='ok' ? '#3fb950' : '#f85149';
+          var bars  = cov[k]  ? cov[k]+'b'  : '0b';
+          var range = (fir[k] && las[k]) ? (' <span style="color:#6e7681">'+fir[k]+' → '+las[k]+'</span>') : '';
+          return '<span style="color:'+col+'">'
+               + '<b>' + k + '</b>:' + bars + ' [' + fst[k] + ']'
+               + '</span>' + range;
+        }).filter(Boolean).join('<br>');
+        if(!covHtml) covHtml = '<span style="color:#f85149">no data loaded</span>';
       }
       var rej    = sd.rejected   || {};
       var rejStr = Object.keys(rej).map(function(k){ return k+'×'+rej[k]; }).join(', ')
@@ -1413,9 +1421,7 @@ function renderBtResults(d){
       var tcount = trades_by_sym[sym] || 0;
       dhtml += '<tr>';
       dhtml += '<td><b>' + sym + '</b></td>';
-      dhtml += '<td style="font-size:11px">'
-             + (covStr || '<span style="color:#f85149;font-weight:700">no data loaded</span>')
-             + fetchStr + '</td>';
+      dhtml += '<td style="font-size:11px;line-height:1.7">' + covHtml + '</td>';
       dhtml += '<td>' + cands + '</td>';
       dhtml += '<td style="font-size:11px;color:#d29922">' + rejStr + '</td>';
       dhtml += '<td><b>' + tcount + '</b></td>';
