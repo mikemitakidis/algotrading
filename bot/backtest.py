@@ -91,8 +91,13 @@ def _bt_cache_path(sym: str, interval: str) -> Path:
     return d / f'{sym}_{interval}.json'
 
 
-def _bt_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
-    """Load from backtest cache. 24h TTL for daily, 4h for intraday."""
+def _bt_cache_load(sym: str, interval: str,
+                   required_start: Optional[date] = None) -> Optional[pd.DataFrame]:
+    """
+    Load from backtest cache. 24h TTL for daily, 4h for intraday.
+    required_start: earliest date the data must cover (with warmup included).
+    Returns None if cache exists but doesn't reach back far enough.
+    """
     p = _bt_cache_path(sym, interval)
     if not p.exists():
         return None
@@ -104,7 +109,16 @@ def _bt_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
         df.index = pd.to_datetime(df.index, utc=True)
         df.columns = [c.lower() for c in df.columns]
-        return df if len(df) >= MIN_WARMUP_BARS else None
+        if len(df) < MIN_WARMUP_BARS:
+            return None
+        # Reject if data doesn't cover far enough back for this backtest range
+        if required_start is not None:
+            req_ts = pd.Timestamp(required_start, tz='UTC')
+            if df.index[0] > req_ts:
+                log.debug('[BT] %s %s: bt_cache too recent (%s, need %s)',
+                          sym, interval, df.index[0].date(), required_start)
+                return None
+        return df
     except Exception:
         return None
 
@@ -119,10 +133,13 @@ def _bt_cache_save(sym: str, interval: str, df: pd.DataFrame) -> None:
         pass
 
 
-def _live_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
+def _live_cache_load(sym: str, interval: str,
+                     required_start: Optional[date] = None) -> Optional[pd.DataFrame]:
     """
     Reuse the live bot's existing bar cache (data/bar_cache/).
-    The live bot already has AAPL/MSFT etc cached from running cycles.
+    The live bot stores SHORT windows (3mo daily, 1mo hourly, 5d 15m).
+    Accepts only if data covers required_start — otherwise falls through
+    to a full network fetch with the correct date range.
     """
     p = BASE_DIR / 'data' / 'bar_cache' / f'{sym}_{interval}.json'
     if not p.exists():
@@ -132,7 +149,15 @@ def _live_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
         df.index = pd.to_datetime(df.index, utc=True)
         df.columns = [c.lower() for c in df.columns]
-        return df if len(df) >= MIN_WARMUP_BARS else None
+        if len(df) < MIN_WARMUP_BARS:
+            return None
+        if required_start is not None:
+            req_ts = pd.Timestamp(required_start, tz='UTC')
+            if df.index[0] > req_ts:
+                log.debug('[BT] %s %s: live_cache too recent (%s, need %s) — will fetch full range',
+                          sym, interval, df.index[0].date(), required_start)
+                return None
+        return df
     except Exception:
         return None
 
@@ -148,30 +173,32 @@ def _fetch_yf_single(sym: str, start: date, end: date,
     """
     import yfinance as yf
 
-    # ── Tier 1: backtest cache ────────────────────────────────────────────
-    cached = _bt_cache_load(sym, interval)
+    # Compute how far back we need data (backtest start minus warmup bars)
+    warmup_days = 120 if interval == '1d' else 60
+    fetch_start = start - timedelta(days=warmup_days)
+
+    # ── Tier 1: backtest cache (only if it covers the full range) ─────────
+    cached = _bt_cache_load(sym, interval, required_start=fetch_start)
     if cached is not None:
         first = cached.index[0].strftime('%Y-%m-%d')
         last  = cached.index[-1].strftime('%Y-%m-%d')
         if progress_cb:
             progress_cb(f'{sym} {interval}: cache hit — {len(cached)} bars ({first}→{last})')
-        log.info('[BT] %s %s: bt_cache hit  %d bars', sym, interval, len(cached))
+        log.info('[BT] %s %s: bt_cache hit  %d bars  %s->%s', sym, interval, len(cached), first, last)
         return cached, 'ok_cached'
 
-    # ── Tier 2: live bot cache ────────────────────────────────────────────
-    live = _live_cache_load(sym, interval)
+    # ── Tier 2: live bot cache (only if it covers the full range) ─────────
+    live = _live_cache_load(sym, interval, required_start=fetch_start)
     if live is not None:
         _bt_cache_save(sym, interval, live)
         first = live.index[0].strftime('%Y-%m-%d')
         last  = live.index[-1].strftime('%Y-%m-%d')
         if progress_cb:
             progress_cb(f'{sym} {interval}: live cache — {len(live)} bars ({first}→{last})')
-        log.info('[BT] %s %s: live_cache  %d bars', sym, interval, len(live))
+        log.info('[BT] %s %s: live_cache  %d bars  %s->%s', sym, interval, len(live), first, last)
         return live, 'ok_live_cache'
 
-    # ── Tier 3: network fetch — max 2 retries, short waits ───────────────
-    warmup_days = 120 if interval == '1d' else 60
-    fetch_start = start - timedelta(days=warmup_days)
+    # ── Tier 3: network fetch — full date range, max 2 retries ───────────
     fetch_end   = end   + timedelta(days=2)
 
     for attempt in range(3):   # initial + 2 retries
