@@ -92,16 +92,13 @@ def _bt_cache_path(sym: str, interval: str) -> Path:
 
 
 def _bt_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
-    """
-    Load from backtest cache. TTL: 24h for daily, 4h for intraday.
-    Historical bars do not change — long TTL is safe.
-    """
+    """Load from backtest cache. 24h TTL for daily, 4h for intraday."""
     p = _bt_cache_path(sym, interval)
     if not p.exists():
         return None
     try:
-        d      = json.loads(p.read_text())
-        ttl    = 86400 if interval == '1d' else 14400
+        d   = json.loads(p.read_text())
+        ttl = 86400 if interval == '1d' else 14400
         if time.time() - d.get('ts', 0) > ttl:
             return None
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
@@ -124,9 +121,8 @@ def _bt_cache_save(sym: str, interval: str, df: pd.DataFrame) -> None:
 
 def _live_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
     """
-    Try to load from the live bot's bar cache (data/bar_cache/).
-    Falls back gracefully if absent — live cache uses period= fetches,
-    but the data itself is still usable for backtesting.
+    Reuse the live bot's existing bar cache (data/bar_cache/).
+    The live bot already has AAPL/MSFT etc cached from running cycles.
     """
     p = BASE_DIR / 'data' / 'bar_cache' / f'{sym}_{interval}.json'
     if not p.exists():
@@ -136,55 +132,60 @@ def _live_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
         df.index = pd.to_datetime(df.index, utc=True)
         df.columns = [c.lower() for c in df.columns]
-        if len(df) < MIN_WARMUP_BARS:
-            return None
-        log.info('[BT] %s %s: using live bot cache (%d bars)', sym, interval, len(df))
-        return df
+        return df if len(df) >= MIN_WARMUP_BARS else None
     except Exception:
         return None
 
 
-def _fetch_yf_paced(sym: str, start: date, end: date, interval: str) -> tuple:
+def _fetch_yf_single(sym: str, start: date, end: date,
+                     interval: str, progress_cb=None) -> tuple:
     """
-    Fetch with:
-      1. Backtest disk cache (24h TTL) — no network if warm
-      2. Live bot disk cache — reuse if available  
-      3. Network fetch via Ticker.history() with browser session
-         — identical HTTP path to live bot
-         — 8-12s pacing after each fetch (matches live bot delay)
-         — 3 retries with 30/60/120s backoff on rate limit
+    Fetch one interval for one symbol.
+    Order: bt_cache -> live bot cache -> network (paced, max 2 retries).
 
-    Returns (df, status_str)
+    progress_cb: optional callable(msg: str) to update UI during fetch.
+    Returns (df, status_str).
     """
     import yfinance as yf
 
-    # ── 1. Backtest disk cache ────────────────────────────────────────────
+    # ── Tier 1: backtest cache ────────────────────────────────────────────
     cached = _bt_cache_load(sym, interval)
     if cached is not None:
         first = cached.index[0].strftime('%Y-%m-%d')
         last  = cached.index[-1].strftime('%Y-%m-%d')
-        log.info('[BT] %s %s: bt_cache hit  %d bars  %s -> %s',
-                 sym, interval, len(cached), first, last)
+        if progress_cb:
+            progress_cb(f'{sym} {interval}: cache hit — {len(cached)} bars ({first}→{last})')
+        log.info('[BT] %s %s: bt_cache hit  %d bars', sym, interval, len(cached))
         return cached, 'ok_cached'
 
-    # ── 2. Live bot cache ─────────────────────────────────────────────────
+    # ── Tier 2: live bot cache ────────────────────────────────────────────
     live = _live_cache_load(sym, interval)
     if live is not None:
-        _bt_cache_save(sym, interval, live)   # promote to bt_cache
+        _bt_cache_save(sym, interval, live)
         first = live.index[0].strftime('%Y-%m-%d')
         last  = live.index[-1].strftime('%Y-%m-%d')
-        log.info('[BT] %s %s: live_cache hit  %d bars  %s -> %s',
-                 sym, interval, len(live), first, last)
+        if progress_cb:
+            progress_cb(f'{sym} {interval}: live cache — {len(live)} bars ({first}→{last})')
+        log.info('[BT] %s %s: live_cache  %d bars', sym, interval, len(live))
         return live, 'ok_live_cache'
 
-    # ── 3. Network fetch with pacing + retry ─────────────────────────────
+    # ── Tier 3: network fetch — max 2 retries, short waits ───────────────
     warmup_days = 120 if interval == '1d' else 60
     fetch_start = start - timedelta(days=warmup_days)
     fetch_end   = end   + timedelta(days=2)
 
-    retry_waits = [30, 60, 120]   # seconds between retries on rate limit
+    for attempt in range(3):   # initial + 2 retries
+        if attempt > 0:
+            wait = attempt * 8   # 8s, then 16s — short, not 30/60/120
+            if progress_cb:
+                progress_cb(f'{sym} {interval}: rate limited — waiting {wait}s (attempt {attempt+1}/3)...')
+            log.warning('[BT] %s %s: rate limited — waiting %ds (attempt %d/3)',
+                        sym, interval, wait, attempt + 1)
+            time.sleep(wait)
 
-    for attempt in range(4):   # 1 initial + 3 retries
+        if progress_cb:
+            progress_cb(f'{sym} {interval}: fetching from Yahoo ({attempt+1}/3)...')
+
         try:
             session = _browser_session()
             ticker  = yf.Ticker(sym, session=session)
@@ -198,10 +199,11 @@ def _fetch_yf_paced(sym: str, start: date, end: date, interval: str) -> tuple:
             )
 
             if df is None or df.empty:
-                log.warning('[BT] %s %s: empty_response (attempt %d)',
-                            sym, interval, attempt + 1)
-                # Pace even on empty — avoids hammering on bad state
-                _pace(interval)
+                if progress_cb:
+                    progress_cb(f'{sym} {interval}: empty response from Yahoo')
+                log.warning('[BT] %s %s: empty_response', sym, interval)
+                # Small pace on empty — do NOT do the full 8-12s sleep
+                time.sleep(2)
                 return None, 'empty_response'
 
             df.columns = [c.lower() for c in df.columns]
@@ -220,16 +222,21 @@ def _fetch_yf_paced(sym: str, start: date, end: date, interval: str) -> tuple:
 
             if len(df) < MIN_WARMUP_BARS:
                 log.warning('[BT] %s %s: only %d bars', sym, interval, len(df))
-                _pace(interval)
+                time.sleep(2)
                 return None, f'too_few_bars_{len(df)}'
 
             first = df.index[0].strftime('%Y-%m-%d')
             last  = df.index[-1].strftime('%Y-%m-%d')
-            log.info('[BT] %s %s: fetched %d bars  %s -> %s  (attempt %d)',
-                     sym, interval, len(df), first, last, attempt + 1)
+            if progress_cb:
+                progress_cb(f'{sym} {interval}: got {len(df)} bars ({first}→{last}) — pacing...')
+            log.info('[BT] %s %s: fetched %d bars  %s -> %s',
+                     sym, interval, len(df), first, last)
 
             _bt_cache_save(sym, interval, df)
-            _pace(interval)   # pace AFTER successful fetch
+
+            # Pace after successful network fetch — same as live bot
+            wait = 8.0 + random.random() * 4.0
+            time.sleep(wait)
             return df, 'ok'
 
         except Exception as e:
@@ -237,73 +244,59 @@ def _fetch_yf_paced(sym: str, start: date, end: date, interval: str) -> tuple:
             is_rl = any(k in err for k in
                         ('429', 'Too Many', 'rate', 'Rate', 'TooMany'))
             is_net = any(k in err for k in
-                         ('403', 'Forbidden', 'proxy', 'Proxy', 'tunnel', 'Tunnel'))
-
-            if is_rl and attempt < 3:
-                wait = retry_waits[attempt]
-                log.warning('[BT] %s %s: rate_limited (attempt %d) — waiting %ds',
-                            sym, interval, attempt + 1, wait)
-                time.sleep(wait)
-                continue
-            elif is_rl:
-                return None, 'rate_limited'
-            elif is_net:
+                         ('403', 'Forbidden', 'proxy', 'Proxy', 'tunnel'))
+            log.warning('[BT] %s %s attempt %d: %s', sym, interval, attempt+1, err[:80])
+            if is_net:
+                if progress_cb:
+                    progress_cb(f'{sym} {interval}: network error — {err[:60]}')
                 return None, 'network_error'
-            else:
-                status = f'error:{err[:120]}'
-                log.warning('[BT] %s %s: %s', sym, interval, status)
-                return None, status
+            if is_rl and attempt < 2:
+                continue   # retry with wait at top of loop
+            if is_rl:
+                if progress_cb:
+                    progress_cb(f'{sym} {interval}: rate limited after 3 attempts — skipping')
+                return None, 'rate_limited'
+            if progress_cb:
+                progress_cb(f'{sym} {interval}: error — {err[:60]}')
+            return None, f'error:{err[:80]}'
 
     return None, 'rate_limited'
 
 
-def _pace(interval: str) -> None:
-    """
-    Pause between Yahoo Finance requests — same rhythm as live bot.
-    8-12s for daily data. 10-15s for intraday (higher throttle risk).
-    """
-    if interval == '1d':
-        wait = 8.0  + random.random() * 4.0    # 8-12s
-    else:
-        wait = 10.0 + random.random() * 5.0    # 10-15s
-    log.debug('[BT] pacing %.1fs after %s fetch', wait, interval)
-    time.sleep(wait)
-
-
 def _fetch_all_tfs(sym: str, start: date, end: date,
-                   timeframes: list) -> tuple:
+                   timeframes: list, progress_cb=None) -> tuple:
     """
     Fetch all enabled timeframes for one symbol.
-    Deduplicates interval fetches: 4H and 1H share '1h' — one fetch,
-    4H resampled from the result.
-
-    Returns (result_dict, fetch_meta) where:
-      result_dict: tf_label -> DataFrame
-      fetch_meta:  tf_label -> {status, bars, first, last}
+    4H and 1H share interval '1h' — fetched ONCE, 4H resampled.
+    Returns (result_dict, fetch_meta).
     """
     result    = {}
     meta      = {}
-    raw_cache = {}   # interval -> (df, status) — avoids duplicate network calls
+    raw_cache = {}   # interval -> (df, status)
 
     for tf_label, period, interval, do_resample in timeframes:
         if interval not in raw_cache:
-            raw_cache[interval] = _fetch_yf_paced(sym, start, end, interval)
+            raw_cache[interval] = _fetch_yf_single(
+                sym, start, end, interval, progress_cb
+            )
         raw, status = raw_cache[interval]
 
         if raw is None:
-            meta[tf_label] = {'status': status, 'bars': 0, 'first': None, 'last': None}
+            meta[tf_label] = {'status': status, 'bars': 0,
+                              'first': None, 'last': None}
             continue
 
         df = resample_to_4h(raw) if do_resample else raw
         result[tf_label] = df
         meta[tf_label] = {
-            'status': status,   # 'ok' | 'ok_cached' | 'ok_live_cache'
+            'status': status,
             'bars':   len(df),
-            'first':  df.index[0].strftime('%Y-%m-%d')  if len(df) else None,
+            'first':  df.index[0].strftime('%Y-%m-%d') if len(df) else None,
             'last':   df.index[-1].strftime('%Y-%m-%d') if len(df) else None,
         }
 
     return result, meta
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -653,12 +646,32 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
         total_syms  = len(symbols)
 
         diag_per_sym = {}
+        HARD_TIMEOUT = 300   # 5 min max for entire run
+        run_started  = time.monotonic()
+
         for i, sym in enumerate(symbols):
+            if time.monotonic() - run_started > HARD_TIMEOUT:
+                log.warning('[BT] Hard timeout reached — stopping after %d/%d symbols', i, total_syms)
+                break
+
             pct = int((i / total_syms) * 90)
+
+            # Progress callback — called by _fetch_yf_single per-TF
+            def _progress(msg, _sym=sym, _i=i, _n=total_syms, _pct=pct):
+                _write_results({
+                    'status':       'running',
+                    'progress':     _pct,
+                    'progress_msg': f'[{_i+1}/{_n}] {msg}',
+                    'symbols':      symbols,
+                    'start_date':   start_str,
+                    'end_date':     end_str,
+                    'strategy_version': strategy.get('version', 1),
+                })
+
             _write_results({
                 'status':       'running',
                 'progress':     pct,
-                'progress_msg': f'Fetching {sym} ({i+1}/{total_syms}) — pacing requests to avoid rate limits...',
+                'progress_msg': f'[{i+1}/{total_syms}] {sym}: checking cache...',
                 'symbols':      symbols,
                 'start_date':   start_str,
                 'end_date':     end_str,
@@ -666,7 +679,7 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
             })
             log.info('[BT] Fetching %s (%d/%d)', sym, i+1, total_syms)
 
-            tf_data, fetch_statuses = _fetch_all_tfs(sym, start, end, timeframes)
+            tf_data, fetch_statuses = _fetch_all_tfs(sym, start, end, timeframes, _progress)
             if not tf_data:
                 reasons = ', '.join(
                     f'{k}:{v.get("status","?")}' for k,v in fetch_statuses.items()
@@ -747,6 +760,11 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
             'start_date': start_str,
             'end_date':   end_str,
         })
+
+
+def cancel_backtest() -> None:
+    """Write idle status to unblock a stuck run from the dashboard."""
+    _write_results({'status': 'idle', 'progress_msg': 'Cancelled by user.'})
 
 
 def start_backtest(symbols: list, start_str: str, end_str: str) -> None:

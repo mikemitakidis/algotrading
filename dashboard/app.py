@@ -357,6 +357,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn gs" id="btRunBtn" style="font-size:14px;padding:10px 28px" onclick="runBacktest()">&#x25B6; Run Backtest</button>
+      <button class="btn rs" id="btCancelBtn" style="font-size:13px;padding:8px 16px;display:none" onclick="cancelBacktest()">&#x23F9; Cancel</button>
       <span id="btRunMsg" style="font-size:13px;color:#8b949e"></span>
     </div>
     <div id="btDataStatus" style="font-size:12px;margin-top:10px;min-height:18px"></div>
@@ -1210,6 +1211,21 @@ function btDatePreset(days){
   if(el_s) el_s.value = start.toISOString().slice(0,10);
 }
 
+function cancelBacktest(){
+  var btn = document.getElementById('btRunBtn');
+  var cnc = document.getElementById('btCancelBtn');
+  var msg = document.getElementById('btRunMsg');
+  if(cnc) cnc.disabled = true;
+  if(msg){ msg.textContent = 'Cancelling...'; msg.style.color = '#d29922'; }
+  fetch('/api/backtest/cancel', {method:'POST'})
+  .then(function(){ setTimeout(function(){
+    if(btn) btn.disabled = false;
+    if(cnc){ cnc.disabled=false; cnc.style.display='none'; }
+    if(msg) msg.textContent = '';
+  }, 1000); })
+  .catch(function(){});
+}
+
 function runBacktest(){
   var rawSyms = (document.getElementById('btSymbols').value || '').trim();
   var start   = (document.getElementById('btStart').value  || '').trim();
@@ -1263,7 +1279,7 @@ function runBacktest(){
 
 function startBtPoll(){
   if(_btPollTimer) clearInterval(_btPollTimer);
-  _btPollTimer = setInterval(pollBtStatus, 2500);
+  _btPollTimer = setInterval(pollBtStatus, 1500);
 }
 
 function pollBtStatus(){
@@ -1275,7 +1291,9 @@ function pollBtStatus(){
     if(bar)  bar.style.width = (d.progress||0) + '%';
     if(pmsg) pmsg.textContent = d.progress_msg || '';
 
-    if(d.status === 'done' || d.status === 'error'){
+    var cancelBtn = document.getElementById('btCancelBtn');
+    if(cancelBtn) cancelBtn.style.display = (d.status==='running') ? 'inline-block' : 'none';
+    if(d.status === 'done' || d.status === 'error' || d.status === 'idle'){
       clearInterval(_btPollTimer);
       _btPollTimer = null;
       var btn = document.getElementById('btRunBtn');
@@ -1285,6 +1303,8 @@ function pollBtStatus(){
       if(prog) prog.style.display = 'none';
       if(d.status === 'error'){
         if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color='#f85149'; }
+      } else if(d.status === 'idle'){
+        if(msg){ msg.textContent = 'Cancelled.'; msg.style.color='#8b949e'; }
       } else {
         if(msg){ msg.textContent = ''; }
         renderBtResults(d);
@@ -1975,6 +1995,16 @@ def backtest_run():
     if cur.get('status') == 'running':
         return jsonify({'ok': False, 'error': 'A backtest is already running'}), 409
     start_backtest(symbols, start_date, end_date)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/backtest/cancel', methods=['POST'])
+@require_auth
+def backtest_cancel():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import cancel_backtest
+    cancel_backtest()
     return jsonify({'ok': True})
 
 
