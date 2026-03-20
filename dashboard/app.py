@@ -322,7 +322,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <div class="g2" style="margin-bottom:16px">
       <div>
         <div class="section-title" style="margin-bottom:6px">Symbols</div>
-        <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Comma-separated. Max 10. Must be in focus list or valid US tickers.</div>
+        <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Comma-separated. Max 10. Valid US tickers only &mdash; e.g. <b style="color:#58a6ff">AAPL</b> (not APPL), <b style="color:#58a6ff">MSFT</b>, <b style="color:#58a6ff">NVDA</b>.</div>
         <textarea id="btSymbols" rows="3"
           style="width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:13px;font-family:inherit;resize:vertical"
           placeholder="AAPL, MSFT, NVDA"></textarea>
@@ -1240,6 +1240,9 @@ function runBacktest(){
 
   var symbols = rawSyms.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
   if(symbols.length > 10){ if(msg){ msg.textContent='Max 10 symbols per run.'; msg.style.color='#f85149'; } return; }
+  // Basic ticker format check
+  var badSyms = symbols.filter(function(s){ return !/^[A-Z]{1,5}(-[A-Z])?$/.test(s); });
+  if(badSyms.length){ if(msg){ msg.textContent='Invalid ticker(s): '+badSyms.join(', ')+'. Use uppercase letters only (e.g. AAPL not APPL).'; msg.style.color='#f85149'; } return; }
 
   if(msg){ msg.textContent = 'Launching...'; msg.style.color = '#58a6ff'; }
   var btn = document.getElementById('btRunBtn');
