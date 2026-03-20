@@ -127,6 +127,7 @@ tr:hover td{background:#1c2128}
 .section-title{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:12px}
 input[type=password],input[type=text],input[type=number],select{outline:none}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -327,6 +328,12 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
           style="width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:8px 12px;border-radius:7px;font-size:13px;font-family:inherit;resize:vertical"
           placeholder="AAPL, MSFT, NVDA"></textarea>
         <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">
+          <span style="font-size:10px;color:#6e7681;margin-right:4px">Presets:</span>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btValidPreset('aapl1y')">AAPL 1yr</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btValidPreset('mega1y')">Mega-cap 5 1yr</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btValidPreset('mixed1y')">Mixed 10 1yr</button>
+          <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btValidPreset('90d15m')">90d (15m avail)</button>
+          <span style="font-size:10px;color:#6e7681;margin-left:8px;margin-right:4px">Custom:</span>
           <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('mega')">Mega-cap (5)</button>
           <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('tech')">Tech (8)</button>
           <button class="btn gy-btn" style="font-size:11px;padding:5px 10px" onclick="btPreset('mixed')">Mixed (10)</button>
@@ -397,6 +404,9 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
         <div class="stat-item"><span class="stat-label">Avg loss</span><span class="stat-value" id="bs_avg_los" style="color:#f85149">-</span></div>
         <div class="stat-item"><span class="stat-label">Final equity (100 start)</span><span class="stat-value" id="bs_eq">-</span></div>
         <div class="stat-item"><span class="stat-label">Wins / Losses / Timeouts</span><span class="stat-value" id="bs_wlt">-</span></div>
+        <div class="stat-item"><span class="stat-label">Annualised return</span><span class="stat-value" id="bs_ann_ret">-</span></div>
+        <div class="stat-item"><span class="stat-label">Avg hold (days)</span><span class="stat-value" id="bs_hold">-</span></div>
+        <div class="stat-item"><span class="stat-label">Max consec. wins / losses</span><span class="stat-value" id="bs_streak_w">-</span> / <span class="stat-value" id="bs_streak_l">-</span></div>
       </div>
       <div class="card">
         <div class="ct">By Confluence</div>
@@ -409,11 +419,39 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     </div>
   </div>
 
+  <!-- TF Availability Panel -->
+  <div id="btTFPanel" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">Timeframe Availability <span id="btTFNote" style="font-size:10px;color:#d29922;font-weight:400"></span></div>
+    <div id="btTFContent"></div>
+  </div>
+
+  <!-- Equity Curve -->
+  <div id="btEquitySection" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">Equity Curve <span style="font-size:10px;color:#6e7681;font-weight:400">starting equity = 100</span></div>
+    <canvas id="btEquityChart" style="width:100%;max-height:200px"></canvas>
+  </div>
+
+  <!-- Monthly Breakdown -->
+  <div id="btMonthlySection" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">Monthly Breakdown</div>
+    <div id="btMonthlyContent" style="overflow-x:auto"></div>
+  </div>
+
+  <!-- Per-Symbol Stats -->
+  <div id="btSymSection" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">Per-Symbol Performance</div>
+    <div id="btSymContent"></div>
+  </div>
+
+  <!-- Run Metadata Banner -->
+  <div id="btMetaBanner" style="font-size:11px;color:#6e7681;margin-bottom:8px;padding:6px 0;border-top:1px solid #21262d"></div>
+
   <!-- Trade List -->
   <div id="btTradesSection" style="display:none" class="card">
     <div class="ct">
       Trade List
       <span id="btTradeCount" style="color:#8b949e;font-size:11px;margin-left:4px"></span>
+      <button class="rfbtn" style="color:#58a6ff;margin-right:8px" onclick="exportSummaryJson()">&#x2B07; Summary JSON</button>
       <a id="btCsvLink" href="/api/backtest/csv" target="_blank"
         style="margin-left:auto;background:none;border:1px solid #30363d;color:#58a6ff;padding:4px 11px;border-radius:6px;cursor:pointer;font-size:12px;text-decoration:none">&#x2B07; CSV</a>
     </div>
@@ -427,6 +465,16 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
       Shows data coverage per timeframe, candidate signals before filtering, and rejection reasons.
     </div>
     <div id="btDiagContent"></div>
+  </div>
+
+  <!-- Run History -->
+  <div class="card" style="margin-top:18px">
+    <div class="ct">
+      Run History
+      <span style="font-size:10px;color:#6e7681;font-weight:400">last 20 runs</span>
+      <button class="rfbtn" onclick="loadHistory()">&#x21BB;</button>
+    </div>
+    <div id="btHistoryContent"><div class="empty-state">No runs recorded yet.</div></div>
   </div>
 
 </div><!-- /backtest -->
@@ -1257,6 +1305,9 @@ function runBacktest(){
   if(trad) trad.style.display = 'none';
   var diagHide = document.getElementById('btDiagSection');
   if(diagHide) diagHide.style.display = 'none';
+  ['btTFPanel','btEquitySection','btMonthlySection','btSymSection'].forEach(function(id){
+    var el = document.getElementById(id); if(el) el.style.display='none';
+  });
   var dsEl = document.getElementById('btDataStatus');
   if(dsEl) dsEl.innerHTML = '';
 
@@ -1322,6 +1373,14 @@ function renderBtResults(d){
   var trad = document.getElementById('btTradesSection');
   if(summ) summ.style.display = 'block';
   if(trad) trad.style.display = 'block';
+  // Call all enriched renderers
+  renderTFPanel(d);
+  renderEquityChart(d);
+  renderMonthly(d);
+  renderSymStats(d);
+  renderExtraStats(d);
+  renderMetaBanner(d);
+  loadHistory();
 
   // Data status banner
   var diagAll = d.diagnostics || {};
@@ -1353,6 +1412,10 @@ function renderBtResults(d){
   setText('bs_avg_los', (s.avg_loss_pct||0)   + '%');
   setText('bs_eq',      (s.final_equity||100));
   setText('bs_wlt',     (s.wins||0) + ' / ' + (s.losses||0) + ' / ' + (s.timeouts||0));
+  setText('bs_ann_ret', s.annualised_return_pct!=null ? (s.annualised_return_pct>=0?'+':'')+s.annualised_return_pct+'%' : 'n/a');
+  setText('bs_hold',    s.avg_hold_days!=null ? s.avg_hold_days+'d' : 'n/a');
+  setText('bs_streak_w', s.max_consec_wins  || 0);
+  setText('bs_streak_l', s.max_consec_losses || 0);
 
   // By confluence
   var cEl = document.getElementById('bs_by_conf');
@@ -1497,6 +1560,277 @@ function renderBtResults(d){
     }
   }
 }
+
+
+// ─── backtest: validation presets ───
+var BT_VALID_PRESETS = {
+  aapl1y:  { syms: 'AAPL',                               days: 365 },
+  mega1y:  { syms: 'AAPL, MSFT, NVDA, GOOGL, AMZN',     days: 365 },
+  mixed1y: { syms: 'AAPL, MSFT, NVDA, JPM, V, UNH, XOM, JNJ, WMT, NFLX', days: 365 },
+  '90d15m':{ syms: 'AAPL, MSFT, NVDA',                  days: 90  },
+};
+
+function btValidPreset(key){
+  var p = BT_VALID_PRESETS[key];
+  if(!p) return;
+  var el = document.getElementById('btSymbols');
+  if(el) el.value = p.syms;
+  btDatePreset(p.days);
+  var msg = document.getElementById('btRunMsg');
+  if(msg){
+    var note = key==='90d15m'
+      ? '90-day window: 15m data available for this range'
+      : '1-year validation preset loaded';
+    msg.textContent = note; msg.style.color = '#58a6ff';
+    setTimeout(function(){ if(msg) msg.textContent=''; }, 3000);
+  }
+}
+
+// ─── render TF availability panel ───
+function renderTFPanel(d){
+  var panel = document.getElementById('btTFPanel');
+  var cont  = document.getElementById('btTFContent');
+  var note  = document.getElementById('btTFNote');
+  if(!panel || !cont) return;
+
+  var meta = (d.meta || {});
+  var avail = meta.tf_availability || {};
+  var allTfs = ['1D','4H','1H','15m'];
+  var symsTotal = (d.symbols||[]).length;
+
+  if(!Object.keys(avail).length){ panel.style.display='none'; return; }
+  panel.style.display = 'block';
+
+  // 15m note
+  var has15m = avail['15m'] && avail['15m'].syms_ok > 0;
+  if(!has15m && note){
+    note.textContent = '15m unavailable — Yahoo Finance only provides 15m data for the last 60 days. Use a ≤60 day range for 15m coverage.';
+    note.style.color = '#d29922';
+  } else if(note) { note.textContent = ''; }
+
+  var html = '<table><tr><th>Timeframe</th><th>Symbols loaded</th><th>Max bars</th><th>Coverage</th><th>Limit note</th></tr>';
+  allTfs.forEach(function(tf){
+    var a = avail[tf] || {};
+    var ok    = a.syms_ok || 0;
+    var tot   = a.syms_total || symsTotal;
+    var bars  = a.max_bars || 0;
+    var col   = ok===tot && ok>0 ? '#3fb950' : ok>0 ? '#d29922' : '#f85149';
+    var limit = {
+      '1D':  'Up to 2 years',
+      '4H':  'Up to 730 days (resampled from 1H)',
+      '1H':  'Up to 730 days',
+      '15m': 'Last 60 days only',
+    }[tf] || '';
+    var bar_col = ok>0 ? '#e6edf3' : '#6e7681';
+    html += '<tr>';
+    html += '<td><b>' + tf + '</b></td>';
+    html += '<td style="color:'+col+'">' + ok + ' / ' + tot + '</td>';
+    html += '<td style="color:'+bar_col+'">' + (bars||'—') + '</td>';
+    var pct = tot>0 ? Math.round(ok/tot*100) : 0;
+    html += '<td><div style="background:#21262d;border-radius:3px;height:6px;width:120px;display:inline-block">'
+          + '<div style="background:'+col+';width:'+pct+'%;height:6px;border-radius:3px"></div></div>'
+          + ' <span style="font-size:11px;color:'+col+'">' + pct + '%</span></td>';
+    html += '<td style="font-size:11px;color:#6e7681">' + limit + '</td>';
+    html += '</tr>';
+  });
+  html += '</table>';
+  cont.innerHTML = html;
+}
+
+// ─── render equity curve chart ───
+var _btChart = null;
+function renderEquityChart(d){
+  var sec = document.getElementById('btEquitySection');
+  if(!sec) return;
+  var eq = (d.stats||{}).equity_with_dates || [];
+  if(!eq.length){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+
+  var labels = eq.map(function(p){ return p.d; });
+  var values = eq.map(function(p){ return p.e; });
+
+  var ctx = document.getElementById('btEquityChart');
+  if(!ctx) return;
+
+  if(_btChart){ try{ _btChart.destroy(); }catch(e){} _btChart=null; }
+
+  var startVal = 100;
+  var finalVal = values[values.length-1] || 100;
+  var lineCol  = finalVal >= startVal ? '#3fb950' : '#f85149';
+
+  _btChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: values,
+        borderColor: lineCol,
+        backgroundColor: lineCol + '22',
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#6e7681', maxTicksLimit: 8, font:{size:10} }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#6e7681', font:{size:10} }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+}
+
+// ─── monthly breakdown ───
+function renderMonthly(d){
+  var sec  = document.getElementById('btMonthlySection');
+  var cont = document.getElementById('btMonthlyContent');
+  if(!sec || !cont) return;
+  var bm = (d.stats||{}).by_month || {};
+  var months = Object.keys(bm).sort();
+  if(!months.length){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+  var html = '<table><tr><th>Month</th><th>Trades</th><th>Win Rate</th><th>Avg Return</th><th>Bar</th></tr>';
+  months.forEach(function(m){
+    var v   = bm[m];
+    var col = v.avg_ret >= 0 ? '#3fb950' : '#f85149';
+    var wrCol = v.win_rate >= 50 ? '#3fb950' : '#f85149';
+    var barW = Math.min(Math.abs(v.avg_ret) * 8, 80);
+    html += '<tr>';
+    html += '<td style="color:#8b949e">' + m + '</td>';
+    html += '<td>' + v.total + '</td>';
+    html += '<td style="color:'+wrCol+'">' + v.win_rate + '%</td>';
+    html += '<td style="color:'+col+'">' + (v.avg_ret>=0?'+':'') + v.avg_ret + '%</td>';
+    html += '<td><div style="width:'+barW+'px;height:8px;background:'+col+';border-radius:2px;display:inline-block"></div></td>';
+    html += '</tr>';
+  });
+  html += '</table>';
+  cont.innerHTML = html;
+}
+
+// ─── per-symbol stats ───
+function renderSymStats(d){
+  var sec  = document.getElementById('btSymSection');
+  var cont = document.getElementById('btSymContent');
+  if(!sec || !cont) return;
+  var bs = (d.stats||{}).by_symbol || {};
+  var syms = Object.keys(bs);
+  if(syms.length <= 1){ sec.style.display='none'; return; }  // only show for multi-symbol
+  sec.style.display = 'block';
+  var html = '<table><tr><th>Symbol</th><th>Trades</th><th>Win Rate</th><th>Avg Return</th></tr>';
+  syms.sort().forEach(function(sym){
+    var v = bs[sym];
+    var col = v.avg_ret >= 0 ? '#3fb950' : '#f85149';
+    html += '<tr><td><b>'+sym+'</b></td><td>'+v.total+'</td>';
+    html += '<td style="color:'+(v.win_rate>=50?'#3fb950':'#f85149')+'">'+v.win_rate+'%</td>';
+    html += '<td style="color:'+col+'">'+(v.avg_ret>=0?'+':'')+v.avg_ret+'%</td></tr>';
+  });
+  html += '</table>';
+  cont.innerHTML = html;
+}
+
+// ─── additional stats in returns card ───
+function renderExtraStats(d){
+  var s = d.stats || {};
+  // Append extra stats to the returns card
+  var map = {
+    'bs_ann_ret': { label: 'Annualised return', val: (s.annualised_return_pct!=null ? (s.annualised_return_pct>0?'+':'')+s.annualised_return_pct+'%' : 'n/a') },
+    'bs_hold':    { label: 'Avg hold (days)',   val: s.avg_hold_days != null ? s.avg_hold_days+'d' : 'n/a' },
+    'bs_streak_w':{ label: 'Max consec. wins',  val: s.max_consec_wins  || 0 },
+    'bs_streak_l':{ label: 'Max consec. losses',val: s.max_consec_losses || 0 },
+  };
+  Object.keys(map).forEach(function(id){
+    var el = document.getElementById(id);
+    if(el){
+      el.textContent = map[id].val;
+      if(id==='bs_ann_ret'){
+        el.style.color = (s.annualised_return_pct||0) >= 0 ? '#3fb950' : '#f85149';
+      }
+    }
+  });
+}
+
+// ─── run metadata banner ───
+function renderMetaBanner(d){
+  var el = document.getElementById('btMetaBanner');
+  if(!el) return;
+  var m = d.meta || {};
+  var parts = [];
+  if(m.strategy_version) parts.push('Strategy v' + m.strategy_version);
+  if(m.confluence_min)   parts.push('Confluence ≥' + m.confluence_min + '/4');
+  if(m.days_range)       parts.push(m.days_range + ' days');
+  if(m.symbols_count)    parts.push(m.symbols_count + ' symbol(s)');
+  if(m.run_timestamp)    parts.push('Run: ' + fmtTime(m.run_timestamp));
+  if(m.data_source)      parts.push(m.data_source);
+  el.textContent = parts.join('  ·  ');
+}
+
+// ─── summary JSON export ───
+function exportSummaryJson(){
+  fetch('/api/backtest/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(d.status !== 'done'){ alert('No completed run to export.'); return; }
+    var summary = {
+      meta:        d.meta || {},
+      stats:       d.stats || {},
+      diagnostics_summary: {},
+    };
+    // Compact diagnostics
+    (d.symbols||[]).forEach(function(sym){
+      var diag = (d.diagnostics||{})[sym] || {};
+      summary.diagnostics_summary[sym] = {
+        tf_coverage:  diag.tf_coverage  || {},
+        fetch_status: diag.fetch_status || {},
+        tf_first:     diag.tf_first     || {},
+        tf_last:      diag.tf_last      || {},
+        candidates:   diag.candidates   || 0,
+        rejected:     diag.rejected     || {},
+      };
+    });
+    var blob = new Blob([JSON.stringify(summary, null, 2)], {type:'application/json'});
+    var a    = document.createElement('a');
+    a.href   = URL.createObjectURL(blob);
+    a.download = 'backtest_summary_' + (d.start_date||'') + '_to_' + (d.end_date||'') + '.json';
+    a.click();
+  }).catch(function(e){ alert('Export failed: ' + e.message); });
+}
+
+// ─── run history ───
+function loadHistory(){
+  fetch('/api/backtest/history')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var cont = document.getElementById('btHistoryContent');
+    if(!cont) return;
+    var runs = d.runs || [];
+    if(!runs.length){ cont.innerHTML='<div class="empty-state">No runs recorded yet.</div>'; return; }
+    var html = '<table><tr><th>Date</th><th>Symbols</th><th>Range</th><th>Trades</th><th>WR</th><th>PF</th><th>Drawdown</th><th>Ann. Return</th><th>Strategy</th></tr>';
+    runs.forEach(function(r){
+      var pf  = r.profit_factor != null ? r.profit_factor : 'n/a';
+      var ar  = r.annualised_return_pct != null ? (r.annualised_return_pct>0?'+':'')+r.annualised_return_pct+'%' : 'n/a';
+      var arC = (r.annualised_return_pct||0) >= 0 ? '#3fb950' : '#f85149';
+      var wrC = (r.win_rate||0) >= 50 ? '#3fb950' : '#d29922';
+      html += '<tr>';
+      html += '<td style="color:#8b949e;font-size:11px">' + fmtTime(r.run_at) + '</td>';
+      html += '<td style="font-size:11px">' + (r.symbols||[]).join(', ') + '</td>';
+      html += '<td style="font-size:11px;color:#6e7681">' + (r.start_date||'') + ' / ' + (r.days_range||0) + 'd</td>';
+      html += '<td>' + (r.total_trades||0) + '</td>';
+      html += '<td style="color:'+wrC+'">' + (r.win_rate||0) + '%</td>';
+      html += '<td>' + pf + '</td>';
+      html += '<td style="color:#f85149">' + (r.max_drawdown_pct||0) + '%</td>';
+      html += '<td style="color:'+arC+'">' + ar + '</td>';
+      html += '<td style="font-size:11px;color:#58a6ff">v' + (r.strategy_version||1) + '</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+    cont.innerHTML = html;
+  }).catch(function(){});
+}
+
 
 // ─── strategy page ───
 var _stratData = {};
@@ -1999,6 +2333,15 @@ def backtest_run():
         return jsonify({'ok': False, 'error': 'A backtest is already running'}), 409
     start_backtest(symbols, start_date, end_date)
     return jsonify({'ok': True})
+
+
+@app.route('/api/backtest/history')
+@require_auth
+def backtest_history():
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import read_history
+    return jsonify({'runs': read_history()})
 
 
 @app.route('/api/backtest/cancel', methods=['POST'])

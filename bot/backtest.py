@@ -54,6 +54,8 @@ log = logging.getLogger(__name__)
 
 BASE_DIR        = Path(__file__).resolve().parent.parent
 RESULTS_PATH    = BASE_DIR / 'data' / 'backtest_results.json'
+HISTORY_PATH    = BASE_DIR / 'data' / 'backtest_history.json'
+MAX_HISTORY     = 20    # keep last N runs
 LOOKFORWARD_DAYS = 20     # max bars to look forward when evaluating outcome
 COOLDOWN_DAYS    = 3      # min days between signals on same symbol+direction
 MIN_WARMUP_BARS  = 60     # bars needed before computing indicators
@@ -78,6 +80,52 @@ def read_results() -> dict:
         return json.loads(RESULTS_PATH.read_text())
     except Exception:
         return {'status': 'idle'}
+
+
+def _append_history(result: dict) -> None:
+    """Append a completed run summary to backtest_history.json (last MAX_HISTORY runs)."""
+    try:
+        history = []
+        if HISTORY_PATH.exists():
+            try:
+                history = json.loads(HISTORY_PATH.read_text())
+            except Exception:
+                history = []
+        # Store compact summary only (not full trade list)
+        s = result.get('stats', {})
+        m = result.get('meta', {})
+        entry = {
+            'run_at':           result.get('completed_at', ''),
+            'symbols':          result.get('symbols', []),
+            'start_date':       result.get('start_date', ''),
+            'end_date':         result.get('end_date', ''),
+            'days_range':       m.get('days_range', 0),
+            'strategy_version': result.get('strategy_version', 1),
+            'confluence_min':   m.get('confluence_min', 3),
+            'total_trades':     s.get('total', 0),
+            'win_rate':         s.get('win_rate', 0),
+            'profit_factor':    s.get('profit_factor'),
+            'max_drawdown_pct': s.get('max_drawdown_pct', 0),
+            'final_equity':     s.get('final_equity', 100),
+            'annualised_return_pct': s.get('annualised_return_pct', 0),
+            'tf_availability':  m.get('tf_availability', {}),
+            'symbols_with_data': m.get('symbols_with_data', 0),
+        }
+        history.insert(0, entry)
+        history = history[:MAX_HISTORY]
+        HISTORY_PATH.write_text(json.dumps(history, default=str))
+    except Exception as e:
+        log.debug('[BT] History append failed: %s', e)
+
+
+def read_history() -> list:
+    """Return last MAX_HISTORY run summaries, newest first."""
+    try:
+        if HISTORY_PATH.exists():
+            return json.loads(HISTORY_PATH.read_text())
+    except Exception:
+        pass
+    return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -536,7 +584,7 @@ def _walk_symbol(sym: str, tf_data: dict, trading_days: list,
 # Statistics
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _compute_stats(trades: list) -> dict:
+def _compute_stats(trades: list, start_str: str = '', end_str: str = '') -> dict:
     if not trades:
         return {'total': 0}
 
@@ -614,22 +662,93 @@ def _compute_stats(trades: list) -> dict:
 
     final_equity = round(eq_curve[-1], 2) if eq_curve else 100.0
 
+    # ── Annualised return ─────────────────────────────────────────────────
+    try:
+        days_range = (date.fromisoformat(end_str) - date.fromisoformat(start_str)).days
+    except Exception:
+        days_range = 365
+    days_range = max(days_range, 1)
+    total_ret  = (final_equity / 100.0) - 1.0
+    ann_ret    = round(((1 + total_ret) ** (365.0 / days_range) - 1) * 100, 2)
+
+    # ── Average holding period ────────────────────────────────────────────
+    bars_held   = [t.get('bars_held', 0) for t in trades if t.get('bars_held')]
+    avg_hold    = round(float(np.mean(bars_held)), 1) if bars_held else 0
+    max_hold    = max(bars_held) if bars_held else 0
+
+    # ── Consecutive wins / losses ─────────────────────────────────────────
+    max_consec_win = max_consec_loss = cur_win = cur_loss = 0
+    for t in sorted(trades, key=lambda x: x['date']):
+        if t['outcome'] == 'WIN':
+            cur_win  += 1; cur_loss = 0
+            max_consec_win = max(max_consec_win, cur_win)
+        elif t['outcome'] == 'LOSS':
+            cur_loss += 1; cur_win  = 0
+            max_consec_loss = max(max_consec_loss, cur_loss)
+        else:
+            cur_win = cur_loss = 0
+
+    # ── Monthly breakdown ─────────────────────────────────────────────────
+    by_month = {}
+    for t in trades:
+        m = t['date'][:7]   # 'YYYY-MM'
+        by_month.setdefault(m, {'total': 0, 'wins': 0, 'rets': 0.0})
+        by_month[m]['total'] += 1
+        by_month[m]['rets']  += t['return_pct']
+        if t['outcome'] == 'WIN':
+            by_month[m]['wins'] += 1
+    for m in by_month:
+        n = by_month[m]['total']
+        by_month[m]['win_rate'] = round(by_month[m]['wins'] / n * 100, 1) if n else 0
+        by_month[m]['avg_ret']  = round(by_month[m]['rets'] / n, 3) if n else 0
+        del by_month[m]['rets']
+
+    # ── Per-symbol stats ──────────────────────────────────────────────────
+    by_sym = {}
+    for t in trades:
+        s = t['symbol']
+        by_sym.setdefault(s, {'total': 0, 'wins': 0, 'rets': []})
+        by_sym[s]['total'] += 1
+        by_sym[s]['rets'].append(t['return_pct'])
+        if t['outcome'] == 'WIN':
+            by_sym[s]['wins'] += 1
+    for s in by_sym:
+        n = by_sym[s]['total']
+        by_sym[s]['win_rate'] = round(by_sym[s]['wins'] / n * 100, 1) if n else 0
+        by_sym[s]['avg_ret']  = round(float(np.mean(by_sym[s]['rets'])), 3)
+        del by_sym[s]['rets']
+
+    # ── Equity curve with dates ───────────────────────────────────────────
+    eq_with_dates = []
+    running = 100.0
+    for t in sorted(trades, key=lambda x: x['date']):
+        running *= (1 + t['return_pct'] / 100)
+        eq_with_dates.append({'d': t['date'], 'e': round(running, 4)})
+
     return {
-        'total':          total,
-        'wins':           n_win,
-        'losses':         n_loss,
-        'timeouts':       n_to,
-        'win_rate':       win_rate,
-        'avg_return_pct': avg_ret,
-        'avg_win_pct':    avg_win,
-        'avg_loss_pct':   avg_los,
-        'profit_factor':  profit_factor,
+        'total':            total,
+        'wins':             n_win,
+        'losses':           n_loss,
+        'timeouts':         n_to,
+        'win_rate':         win_rate,
+        'avg_return_pct':   avg_ret,
+        'avg_win_pct':      avg_win,
+        'avg_loss_pct':     avg_los,
+        'profit_factor':    profit_factor,
         'max_drawdown_pct': round(drawdown, 2),
-        'final_equity':   final_equity,
-        'by_confluence':  by_conf,
-        'by_direction':   by_dir,
-        'by_route':       by_route,
-        'equity_curve':   eq_curve[-100:],   # last 100 points for chart
+        'final_equity':     final_equity,
+        'annualised_return_pct': ann_ret,
+        'avg_hold_days':    avg_hold,
+        'max_hold_days':    max_hold,
+        'max_consec_wins':  max_consec_win,
+        'max_consec_losses': max_consec_loss,
+        'by_confluence':    by_conf,
+        'by_direction':     by_dir,
+        'by_route':         by_route,
+        'by_month':         by_month,
+        'by_symbol':        by_sym,
+        'equity_curve':     eq_curve[-100:],
+        'equity_with_dates': eq_with_dates[-100:],
     }
 
 
@@ -757,15 +876,47 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
         # Sort by date
         all_trades.sort(key=lambda t: t['date'])
 
-        stats = _compute_stats(all_trades)
+        stats = _compute_stats(all_trades, start_str, end_str)
         log.info('[BT] Complete: %d trades | WR: %s%% | PF: %s',
                  stats.get('total', 0),
                  stats.get('win_rate', 0),
                  stats.get('profit_factor', 'n/a'))
 
-        _write_results({
+        run_ts  = datetime.now(timezone.utc).isoformat()
+        days_range = (end - start).days
+
+        # Collect TF availability summary across all symbols
+        tf_summary = {}
+        for sym_d in diag_per_sym.values():
+            for tf, bars in sym_d.get('tf_coverage', {}).items():
+                tf_summary.setdefault(tf, {'syms_ok': 0, 'syms_total': 0, 'max_bars': 0})
+                tf_summary[tf]['syms_total'] += 1
+                if bars > 0:
+                    tf_summary[tf]['syms_ok'] += 1
+                    tf_summary[tf]['max_bars'] = max(tf_summary[tf]['max_bars'], bars)
+
+        result = {
             'status':           'done',
-            'completed_at':     datetime.now(timezone.utc).isoformat(),
+            'completed_at':     run_ts,
+            # ── Run metadata ──────────────────────────────────────────────
+            'meta': {
+                'symbols':          symbols,
+                'start_date':       start_str,
+                'end_date':         end_str,
+                'days_range':       days_range,
+                'run_timestamp':    run_ts,
+                'data_source':      'yfinance (Yahoo Finance)',
+                'strategy_version': strategy.get('version', 1),
+                'strategy_updated': strategy.get('updated_at'),
+                'confluence_min':   strategy.get('confluence', {}).get('min_valid_tfs', 3),
+                'timeframes_configured': [tf[0] for tf in timeframes],
+                'tf_availability':  tf_summary,
+                'symbols_count':    len(symbols),
+                'symbols_with_data': sum(
+                    1 for d in diag_per_sym.values()
+                    if any(v > 0 for v in d.get('tf_coverage', {}).values())
+                ),
+            },
             'symbols':          symbols,
             'start_date':       start_str,
             'end_date':         end_str,
@@ -775,8 +926,10 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
             'stats':            stats,
             'diagnostics':      diag_per_sym,
             'progress':         100,
-            'progress_msg':     f'Done — {stats.get("total",0)} trades',
-        })
+            'progress_msg':     f'Done — {stats.get("total",0)} trades across {len(symbols)} symbol(s)',
+        }
+        _write_results(result)
+        _append_history(result)
 
     except Exception as e:
         log.error('[BT] Failed: %s', e, exc_info=True)
