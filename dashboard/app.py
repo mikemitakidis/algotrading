@@ -1502,6 +1502,61 @@ function renderBtResults(d){
     rEl.innerHTML = html || '<div style="color:#6e7681;font-size:12px">No data</div>';
   }
 
+  // By timeframe
+  var tfBreakEl = document.getElementById('bs_by_tf');
+  if(tfBreakEl){
+    var btf = s.by_timeframe || {};
+    var tfHtml = '';
+    ['1D','4H','1H','15m'].forEach(function(tf){
+      if(!btf[tf]) return;
+      var v = btf[tf];
+      var wc = v.win_rate >= 50 ? '#3fb950' : '#d29922';
+      var rc = v.avg_ret  >= 0  ? '#3fb950' : '#f85149';
+      tfHtml += '<div class="stat-item"><span class="stat-label">' + tf + '</span>';
+      tfHtml += '<span class="stat-value">' + v.trades + ' trades &nbsp; ';
+      tfHtml += '<span style="color:'+wc+'">' + v.win_rate + '% WR</span> &nbsp; ';
+      tfHtml += '<span style="color:'+rc+'">' + (v.avg_ret>=0?'+':'') + v.avg_ret + '%</span>';
+      tfHtml += '</span></div>';
+    });
+    tfBreakEl.innerHTML = tfHtml || '<div style="color:#6e7681;font-size:12px">No data</div>';
+  }
+
+  // By TF combination
+  var comboEl = document.getElementById('bs_by_tf_combo');
+  if(comboEl){
+    var bco = s.by_tf_combo || {};
+    var ckeys = Object.keys(bco).sort(function(a,b){ return bco[b].trades-bco[a].trades; });
+    var cHtml = '';
+    ckeys.forEach(function(k){
+      var v = bco[k];
+      var wc = v.win_rate >= 50 ? '#3fb950' : '#d29922';
+      var rc = v.avg_ret  >= 0  ? '#3fb950' : '#f85149';
+      cHtml += '<div class="stat-item"><span class="stat-label" style="font-size:11px">'+k+'</span>';
+      cHtml += '<span class="stat-value">'+v.total+' trades &nbsp; ';
+      cHtml += '<span style="color:'+wc+'">'+v.win_rate+'% WR</span> &nbsp; ';
+      cHtml += '<span style="color:'+rc+'">'+(v.avg_ret>=0?'+':'')+v.avg_ret+'%</span>';
+      cHtml += '</span></div>';
+    });
+    comboEl.innerHTML = cHtml || '<div style="color:#6e7681;font-size:12px">No data</div>';
+  }
+
+  // Partial/cancelled/timeout warning
+  var warnEl = document.getElementById('btPartialWarn');
+  if(warnEl){
+    var runSt = d.status || 'done';
+    if(runSt === 'partial' || runSt === 'cancelled' || runSt === 'timeout'){
+      var symsComp = (d.meta && d.meta.symbols_completed) || 0;
+      var symsAll  = (d.meta && d.meta.symbols_count) || (d.symbols||[]).length || 0;
+      var rsn  = d.stop_reason ? (' Reason: ' + d.stop_reason + '.') : '';
+      warnEl.innerHTML = '\u26A0 <b>' + runSt.toUpperCase() + '</b> run \u2014 '
+        + symsComp + '/' + symsAll + ' symbols completed.' + rsn
+        + ' Results below are partial only.';
+      warnEl.style.display = 'block';
+    } else {
+      warnEl.style.display = 'none';
+    }
+  }
+
   // Trade table
   var trades = d.trades || [];
   // Diagnostics panel — always visible after a completed run
