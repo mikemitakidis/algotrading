@@ -756,6 +756,83 @@ def _compute_stats(trades: list, start_str: str = '', end_str: str = '') -> dict
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _fetch_benchmark(start_str: str, end_str: str,
+                    symbols: list) -> dict:
+    """
+    Fetch buy-and-hold benchmark over the backtest period.
+    - Single symbol: use that symbol itself as benchmark
+    - Multi-symbol:  use SPY as market benchmark
+
+    Returns dict with: symbol, start_price, end_price,
+    return_pct, annualised_pct, max_drawdown_pct, equity_with_dates
+    Returns {} on any fetch failure (benchmark is optional).
+    """
+    import yfinance as yf
+    bm_sym = symbols[0] if len(symbols) == 1 else 'SPY'
+    try:
+        start = date.fromisoformat(start_str)
+        end   = date.fromisoformat(end_str)
+        session = _browser_session()
+        ticker  = yf.Ticker(bm_sym, session=session)
+        df = ticker.history(
+            start       = start.strftime('%Y-%m-%d'),
+            end         = (end + timedelta(days=2)).strftime('%Y-%m-%d'),
+            interval    = '1d',
+            auto_adjust = True,
+            actions     = False,
+            raise_errors = False,
+        )
+        if df is None or df.empty:
+            return {}
+
+        df.columns = [c.lower() for c in df.columns]
+        if 'close' not in df.columns:
+            return {}
+
+        closes = df['close'].dropna()
+        if len(closes) < 2:
+            return {}
+
+        # Align to backtest trading days only
+        closes.index = pd.to_datetime(closes.index, utc=True)             if closes.index.tz is None else closes.index.tz_convert('UTC')
+        closes = closes[(closes.index.date >= start) & (closes.index.date <= end)]
+        if len(closes) < 2:
+            return {}
+
+        start_price = float(closes.iloc[0])
+        end_price   = float(closes.iloc[-1])
+        total_ret   = (end_price / start_price - 1.0) * 100
+        days_range  = max((end - start).days, 1)
+        ann_ret     = round(((1 + total_ret / 100) ** (365.0 / days_range) - 1) * 100, 2)
+
+        # Equity curve (normalised to 100)
+        eq_curve = []
+        peak_eq  = 100.0
+        max_dd   = 0.0
+        for dt, price in closes.items():
+            eq = round(float(price) / start_price * 100, 4)
+            eq_curve.append({'d': dt.strftime('%Y-%m-%d'), 'e': eq})
+            peak_eq = max(peak_eq, eq)
+            max_dd  = max(max_dd, (peak_eq - eq) / peak_eq * 100)
+
+        log.info('[BT] Benchmark %s: %.2f%% total, %.2f%% ann',
+                 bm_sym, total_ret, ann_ret)
+        return {
+            'symbol':               bm_sym,
+            'label':                bm_sym + ' buy-and-hold',
+            'start_price':          round(start_price, 4),
+            'end_price':            round(end_price, 4),
+            'return_pct':           round(total_ret, 3),
+            'annualised_pct':       ann_ret,
+            'max_drawdown_pct':     round(max_dd, 2),
+            'final_equity':         round(eq_curve[-1]['e'], 2) if eq_curve else 100.0,
+            'equity_with_dates':    eq_curve,
+        }
+    except Exception as e:
+        log.debug('[BT] Benchmark fetch failed: %s', e)
+        return {}
+
+
 def run_backtest(symbols: list, start_str: str, end_str: str,
                  strategy: Optional[dict] = None) -> None:
     """
@@ -929,6 +1006,21 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
             'progress_msg':     f'Done — {stats.get("total",0)} trades across {len(symbols)} symbol(s)',
         }
         _write_results(result)
+        # Fetch benchmark (best-effort — never blocks or fails the run)
+        try:
+            benchmark = _fetch_benchmark(start_str, end_str, symbols)
+        except Exception:
+            benchmark = {}
+
+        result['benchmark'] = benchmark
+        if benchmark:
+            strat_ret = stats.get('annualised_return_pct', 0) or 0
+            bm_ret    = benchmark.get('annualised_pct', 0) or 0
+            result['outperformance_pct'] = round(strat_ret - bm_ret, 2)
+            log.info('[BT] vs %s: strategy %.2f%% vs benchmark %.2f%% ann (diff %.2f%%)',
+                     benchmark.get('symbol','?'), strat_ret, bm_ret,
+                     result['outperformance_pct'])
+
         _append_history(result)
 
     except Exception as e:

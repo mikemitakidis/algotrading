@@ -431,6 +431,49 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <canvas id="btEquityChart" style="width:100%;max-height:200px"></canvas>
   </div>
 
+  <!-- Benchmark Comparison -->
+  <div id="btBenchmarkSection" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">
+      Strategy vs Benchmark
+      <span id="btBmLabel" style="font-size:10px;color:#6e7681;font-weight:400"></span>
+    </div>
+    <div class="g2" style="margin-bottom:0">
+      <div>
+        <div class="section-title" style="margin-bottom:10px;color:#58a6ff">Your Strategy</div>
+        <div class="stat-item"><span class="stat-label">Final equity</span><span class="stat-value" id="bm_strat_eq">-</span></div>
+        <div class="stat-item"><span class="stat-label">Total return</span><span class="stat-value" id="bm_strat_ret">-</span></div>
+        <div class="stat-item"><span class="stat-label">Annualised return</span><span class="stat-value" id="bm_strat_ann">-</span></div>
+        <div class="stat-item"><span class="stat-label">Max drawdown</span><span class="stat-value" id="bm_strat_dd">-</span></div>
+      </div>
+      <div>
+        <div class="section-title" style="margin-bottom:10px;color:#8b949e" id="bm_sym_label">Benchmark</div>
+        <div class="stat-item"><span class="stat-label">Final equity</span><span class="stat-value" id="bm_bm_eq">-</span></div>
+        <div class="stat-item"><span class="stat-label">Total return</span><span class="stat-value" id="bm_bm_ret">-</span></div>
+        <div class="stat-item"><span class="stat-label">Annualised return</span><span class="stat-value" id="bm_bm_ann">-</span></div>
+        <div class="stat-item"><span class="stat-label">Max drawdown</span><span class="stat-value" id="bm_bm_dd">-</span></div>
+      </div>
+    </div>
+    <div style="margin-top:16px;padding:12px;border-radius:8px;text-align:center" id="bm_verdict_box">
+      <span id="bm_verdict" style="font-size:16px;font-weight:700"></span>
+    </div>
+    <canvas id="btBenchmarkChart" style="width:100%;max-height:220px;margin-top:16px"></canvas>
+  </div>
+
+  <!-- Trade Scatter Plot -->
+  <div id="btScatterSection" style="display:none;margin-bottom:18px" class="card">
+    <div class="ct">
+      Trade Scatter
+      <span style="font-size:10px;color:#6e7681;font-weight:400">RSI at entry vs return%</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn gy-btn" style="font-size:11px;padding:4px 10px" onclick="setScatterX('rsi')">RSI</button>
+      <button class="btn gy-btn" style="font-size:11px;padding:4px 10px" onclick="setScatterX('atr')">ATR</button>
+      <button class="btn gy-btn" style="font-size:11px;padding:4px 10px" onclick="setScatterX('confluence')">Confluence</button>
+    </div>
+    <canvas id="btScatterChart" style="width:100%;max-height:240px"></canvas>
+    <div id="btScatterNote" style="font-size:11px;color:#6e7681;margin-top:8px;text-align:center"></div>
+  </div>
+
   <!-- Monthly Breakdown -->
   <div id="btMonthlySection" style="display:none;margin-bottom:18px" class="card">
     <div class="ct">Monthly Breakdown</div>
@@ -1305,7 +1348,7 @@ function runBacktest(){
   if(trad) trad.style.display = 'none';
   var diagHide = document.getElementById('btDiagSection');
   if(diagHide) diagHide.style.display = 'none';
-  ['btTFPanel','btEquitySection','btMonthlySection','btSymSection'].forEach(function(id){
+  ['btTFPanel','btEquitySection','btBenchmarkSection','btScatterSection','btMonthlySection','btSymSection'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.style.display='none';
   });
   var dsEl = document.getElementById('btDataStatus');
@@ -1375,7 +1418,9 @@ function renderBtResults(d){
   if(trad) trad.style.display = 'block';
   // Call all enriched renderers
   renderTFPanel(d);
-  renderEquityChart(d);
+  renderEquityWithBenchmark(d);
+  renderBenchmark(d);
+  renderScatter(d);
   renderMonthly(d);
   renderSymStats(d);
   renderExtraStats(d);
@@ -1830,6 +1875,242 @@ function loadHistory(){
     cont.innerHTML = html;
   }).catch(function(){});
 }
+
+
+
+// ─── benchmark + scatter chart globals ───
+var _btBmChart     = null;
+var _btScatChart   = null;
+var _scatterX      = 'rsi';   // current scatter x-axis
+var _lastTrades    = [];       // cached for scatter re-render
+
+// ─── update equity chart to show benchmark overlay ───
+function renderEquityWithBenchmark(d){
+  var sec = document.getElementById('btEquitySection');
+  if(!sec) return;
+  var eq = (d.stats||{}).equity_with_dates || [];
+  if(!eq.length){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+
+  var ctx = document.getElementById('btEquityChart');
+  if(!ctx) return;
+  if(_btChart){ try{ _btChart.destroy(); }catch(e){} _btChart=null; }
+
+  var labels = eq.map(function(p){ return p.d; });
+  var strat  = eq.map(function(p){ return p.e; });
+  var finalVal = strat[strat.length-1] || 100;
+  var lineCol  = finalVal >= 100 ? '#3fb950' : '#f85149';
+
+  var datasets = [{
+    label: 'Strategy',
+    data:  strat,
+    borderColor: lineCol,
+    backgroundColor: lineCol + '22',
+    borderWidth: 2,
+    pointRadius: 0,
+    fill: true,
+    tension: 0.3,
+  }];
+
+  // Add benchmark overlay if available
+  var bm = d.benchmark || {};
+  var bmEq = bm.equity_with_dates || [];
+  if(bmEq.length){
+    // Align benchmark to strategy labels
+    var bmMap = {};
+    bmEq.forEach(function(p){ bmMap[p.d] = p.e; });
+    var bmData = labels.map(function(dt){
+      // Find nearest benchmark date
+      return bmMap[dt] || null;
+    });
+    datasets.push({
+      label: bm.label || 'Benchmark',
+      data: bmData,
+      borderColor: '#8b949e',
+      borderDash: [4,3],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: false,
+      tension: 0.3,
+      spanGaps: true,
+    });
+  }
+
+  _btChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: labels, datasets: datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: datasets.length > 1,
+          labels: { color: '#8b949e', font: { size: 11 } }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#6e7681', maxTicksLimit: 8, font:{size:10} }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#6e7681', font:{size:10} }, grid: { color: '#21262d' } }
+      }
+    }
+  });
+}
+
+// ─── benchmark comparison panel ───
+function renderBenchmark(d){
+  var sec = document.getElementById('btBenchmarkSection');
+  if(!sec) return;
+  var bm  = d.benchmark || {};
+  var s   = d.stats     || {};
+
+  if(!bm.symbol){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+
+  // Label
+  var lbl = document.getElementById('btBmLabel');
+  var symLbl = document.getElementById('bm_sym_label');
+  if(lbl) lbl.textContent = '— ' + (bm.label || bm.symbol);
+  if(symLbl) symLbl.textContent = bm.label || bm.symbol;
+
+  // Strategy column
+  var stratRet = s.annualised_return_pct != null ? s.annualised_return_pct : 0;
+  var stratTotal = s.final_equity != null ? round2(s.final_equity - 100) : 0;
+  setText('bm_strat_eq',  (s.final_equity||100).toFixed(2));
+  setColText('bm_strat_ret', (stratTotal>=0?'+':'')+stratTotal.toFixed(2)+'%', stratTotal>=0);
+  setColText('bm_strat_ann', (stratRet>=0?'+':'')+stratRet+'%', stratRet>=0);
+  setText('bm_strat_dd',  (s.max_drawdown_pct||0)+'%');
+
+  // Benchmark column
+  var bmRet = bm.annualised_pct != null ? bm.annualised_pct : 0;
+  var bmTotal = bm.return_pct != null ? bm.return_pct : 0;
+  setText('bm_bm_eq',  (bm.final_equity||100).toFixed(2));
+  setColText('bm_bm_ret', (bmTotal>=0?'+':'')+bmTotal.toFixed(2)+'%', bmTotal>=0);
+  setColText('bm_bm_ann', (bmRet>=0?'+':'')+bmRet+'%', bmRet>=0);
+  setText('bm_bm_dd', (bm.max_drawdown_pct||0)+'%');
+
+  // Verdict
+  var diff    = (d.outperformance_pct != null) ? d.outperformance_pct : (stratRet - bmRet);
+  var vBox    = document.getElementById('bm_verdict_box');
+  var vEl     = document.getElementById('bm_verdict');
+  var beat    = diff >= 0;
+  if(vBox) vBox.style.background = beat ? '#0d4a1a' : '#4a0d0d';
+  if(vEl){
+    var sign  = diff >= 0 ? '+' : '';
+    var label = beat ? '&#x25B2; Outperforms benchmark' : '&#x25BC; Underperforms benchmark';
+    vEl.innerHTML = label + ' by <span style="color:'+(beat?'#3fb950':'#f85149')+'">' + sign + diff.toFixed(2) + '% ann.</span>';
+    vEl.style.color = beat ? '#3fb950' : '#f85149';
+  }
+}
+
+// ─── scatter plot ───
+function setScatterX(axis){
+  _scatterX = axis;
+  if(_lastTrades.length) renderScatterFromTrades(_lastTrades);
+}
+
+function renderScatter(d){
+  _lastTrades = d.trades || [];
+  renderScatterFromTrades(_lastTrades);
+}
+
+function renderScatterFromTrades(trades){
+  var sec = document.getElementById('btScatterSection');
+  if(!sec) return;
+  if(!trades.length){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+
+  var ctx = document.getElementById('btScatterChart');
+  if(!ctx) return;
+  if(_btScatChart){ try{ _btScatChart.destroy(); }catch(e){} _btScatChart=null; }
+
+  var axisX = _scatterX;
+  var xLabel = axisX==='rsi' ? 'RSI at Entry' : axisX==='atr' ? 'ATR at Entry' : 'Confluence (TFs)';
+
+  var wins  = [];
+  var losses= [];
+  var tos   = [];
+  trades.forEach(function(t){
+    var xVal = axisX==='rsi' ? t.rsi : axisX==='atr' ? t.atr : t.valid_count;
+    if(xVal==null || t.return_pct==null) return;
+    var pt = { x: xVal, y: t.return_pct };
+    if(t.outcome==='WIN')         wins.push(pt);
+    else if(t.outcome==='LOSS')   losses.push(pt);
+    else                          tos.push(pt);
+  });
+
+  // Note text
+  var noteEl = document.getElementById('btScatterNote');
+  if(noteEl){
+    var corr = _pearson(trades.map(function(t){
+      return axisX==='rsi'?t.rsi : axisX==='atr'?t.atr : t.valid_count;
+    }), trades.map(function(t){ return t.return_pct; }));
+    noteEl.textContent = xLabel + ' vs Return  |  Pearson r = ' + (corr||'n/a');
+  }
+
+  _btScatChart = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        { label:'WIN',     data: wins,   backgroundColor:'#3fb95088', pointRadius:5 },
+        { label:'LOSS',    data: losses, backgroundColor:'#f8514988', pointRadius:5 },
+        { label:'TIMEOUT', data: tos,    backgroundColor:'#d2992288', pointRadius:5 },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color:'#8b949e', font:{size:11} } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx){
+              return ctx.dataset.label+': x='+ctx.parsed.x.toFixed(2)+' ret='+ctx.parsed.y.toFixed(2)+'%';
+            }
+          }
+        }
+      },
+      scales: {
+        x: { title: { display:true, text:xLabel, color:'#8b949e', font:{size:11} },
+             ticks:{ color:'#6e7681', font:{size:10} }, grid:{color:'#21262d'} },
+        y: { title: { display:true, text:'Return %', color:'#8b949e', font:{size:11} },
+             ticks:{ color:'#6e7681', font:{size:10} }, grid:{color:'#21262d'},
+             afterDataLimits: function(scale){
+               scale.min = Math.min(scale.min, -1);
+               scale.max = Math.max(scale.max, 1);
+             }
+           }
+      }
+    }
+  });
+}
+
+function _pearson(xs, ys){
+  var n = xs.length;
+  if(n<2) return null;
+  xs = xs.filter(function(x){ return x!=null; });
+  ys = ys.filter(function(y){ return y!=null; });
+  n = Math.min(xs.length, ys.length);
+  if(n<2) return null;
+  var mx=0,my=0;
+  for(var i=0;i<n;i++){ mx+=xs[i]; my+=ys[i]; }
+  mx/=n; my/=n;
+  var num=0,dx2=0,dy2=0;
+  for(var i=0;i<n;i++){
+    var dx=xs[i]-mx, dy=ys[i]-my;
+    num+=dx*dy; dx2+=dx*dx; dy2+=dy*dy;
+  }
+  var denom=Math.sqrt(dx2*dy2);
+  return denom===0 ? null : (num/denom).toFixed(3);
+}
+
+function setColText(id, val, positive){
+  var el=document.getElementById(id);
+  if(!el) return;
+  el.textContent = val;
+  el.style.color = positive ? '#3fb950' : '#f85149';
+}
+
+function round2(v){ return Math.round(v*100)/100; }
 
 
 // ─── strategy page ───
