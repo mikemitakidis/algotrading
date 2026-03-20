@@ -69,7 +69,7 @@ def run(symbols, start_str, end_str, verbose=False, no_benchmark=False):
         logging.getLogger().setLevel(logging.INFO)
 
     sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import run_backtest, read_results, _fetch_benchmark
+    from bot.backtest import run_backtest, read_results
     from bot.strategy import load as load_strategy
 
     strategy = load_strategy()
@@ -91,7 +91,8 @@ def run(symbols, start_str, end_str, verbose=False, no_benchmark=False):
         token = _new_token()
         _RUN_TOKEN['value'] = token
 
-    run_backtest(symbols, start_str, end_str, strategy, token)
+    run_backtest(symbols, start_str, end_str, strategy, token,
+                 skip_benchmark=no_benchmark)
     result = read_results()
 
     status = result.get('status', 'error')
@@ -171,7 +172,7 @@ def main():
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Show detailed fetch logs')
     parser.add_argument('--no-benchmark', action='store_true',
-                        help='Skip benchmark comparison fetch')
+                        help='Skip benchmark fetch entirely (saves ~10s, no SPY/symbol comparison)')
     args = parser.parse_args()
 
     if args.preset:

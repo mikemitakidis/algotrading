@@ -379,6 +379,9 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <div id="btProgressMsg" style="font-size:12px;color:#8b949e">Initialising...</div>
   </div>
 
+  <!-- Partial/cancelled/timeout warning banner -->
+  <div id="btPartialWarn" style="display:none;background:#2d1f00;color:#d29922;border:1px solid #d29922;border-radius:8px;padding:10px 16px;font-size:13px;margin-bottom:12px"></div>
+
   <!-- Summary Stats -->
   <div id="btSummarySection" style="display:none">
     <div class="g4" style="margin-bottom:18px">
@@ -415,6 +418,10 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
         <div id="bs_by_dir"></div>
         <div class="ct" style="margin-top:16px">By Route</div>
         <div id="bs_by_route"></div>
+        <div class="ct" style="margin-top:16px">By Timeframe</div>
+        <div id="bs_by_tf"></div>
+        <div class="ct" style="margin-top:16px">By TF Combination</div>
+        <div id="bs_by_tf_combo"></div>
       </div>
     </div>
   </div>
@@ -1390,7 +1397,8 @@ function pollBtStatus(){
 
     var cancelBtn = document.getElementById('btCancelBtn');
     if(cancelBtn) cancelBtn.style.display = (d.status==='running') ? 'inline-block' : 'none';
-    if(d.status === 'done' || d.status === 'error' || d.status === 'idle'){
+    var TERMINAL = ['done','partial','cancelled','timeout','error','idle'];
+    if(TERMINAL.indexOf(d.status) !== -1){
       clearInterval(_btPollTimer);
       _btPollTimer = null;
       var btn = document.getElementById('btRunBtn');
@@ -1400,8 +1408,14 @@ function pollBtStatus(){
       if(prog) prog.style.display = 'none';
       if(d.status === 'error'){
         if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color='#f85149'; }
-      } else if(d.status === 'idle'){
+      } else if(d.status === 'idle' || d.status === 'cancelled'){
         if(msg){ msg.textContent = 'Cancelled.'; msg.style.color='#8b949e'; }
+      } else if(d.status === 'timeout'){
+        if(msg){ msg.textContent = 'Timed out — partial results shown.'; msg.style.color='#d29922'; }
+        renderBtResults(d);
+      } else if(d.status === 'partial'){
+        if(msg){ msg.textContent = 'Partial run — not all symbols completed.'; msg.style.color='#d29922'; }
+        renderBtResults(d);
       } else {
         if(msg){ msg.textContent = ''; }
         renderBtResults(d);
@@ -1873,7 +1887,10 @@ function exportSummaryJson(){
   fetch('/api/backtest/status')
   .then(function(r){ return r.json(); })
   .then(function(d){
-    if(d.status !== 'done'){ alert('No completed run to export.'); return; }
+    var exportable = ['done','partial','timeout'];
+    if(exportable.indexOf(d.status) === -1){
+      alert('No exportable results. Run a backtest first.'); return;
+    }
     var summary = {
       meta:        d.meta || {},
       stats:       d.stats || {},

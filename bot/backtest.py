@@ -866,7 +866,8 @@ def _export_report(result: dict) -> Optional[Path]:
 
 def run_backtest(symbols: list, start_str: str, end_str: str,
                  strategy: Optional[dict] = None,
-                 my_token: Optional[str] = None) -> None:
+                 my_token: Optional[str] = None,
+                 skip_benchmark: bool = False) -> None:
     """
     Walk-forward backtest. Writes progress to backtest_results.json.
     my_token: run identifier — stale threads skip writes if superseded.
@@ -1054,7 +1055,7 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
         }
         _write_results(result, my_token)
 
-        if not _is_cancelled(my_token):
+        if not _is_cancelled(my_token) and not skip_benchmark:
             try:
                 benchmark = _fetch_benchmark(start_str, end_str, symbols)
                 result['benchmark'] = benchmark
@@ -1095,7 +1096,8 @@ def cancel_backtest() -> None:
     log.info('[BT] Cancel requested')
 
 
-def start_backtest(symbols: list, start_str: str, end_str: str) -> None:
+def start_backtest(symbols: list, start_str: str, end_str: str,
+                   skip_benchmark: bool = False) -> None:
     """Launch backtest in a background daemon thread."""
     with _RUN_LOCK:
         _CANCEL_EVENT.clear()
@@ -1105,7 +1107,7 @@ def start_backtest(symbols: list, start_str: str, end_str: str) -> None:
     strategy = load_strategy()
     t = threading.Thread(
         target=run_backtest,
-        args=(symbols, start_str, end_str, strategy, token),
+        args=(symbols, start_str, end_str, strategy, token, skip_benchmark),
         daemon=True,
     )
     t.start()
