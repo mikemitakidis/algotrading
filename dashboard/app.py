@@ -1425,7 +1425,7 @@ function pollBtStatus(){
 
     var cancelBtn = document.getElementById('btCancelBtn');
     if(cancelBtn) cancelBtn.style.display = (d.status==='running') ? 'inline-block' : 'none';
-    var TERMINAL = ['done','partial','cancelled','timeout','error','idle'];
+    var TERMINAL = ['done','cancelled','error','idle'];
     if(TERMINAL.indexOf(d.status) !== -1){
       clearInterval(_btPollTimer);
       _btPollTimer = null;
@@ -1915,7 +1915,7 @@ function exportSummaryJson(){
   fetch('/api/backtest/status')
   .then(function(r){ return r.json(); })
   .then(function(d){
-    var exportable = ['done','partial','timeout'];
+    var exportable = ['done','cancelled'];
     if(exportable.indexOf(d.status) === -1){
       alert('No exportable results. Run a backtest first.'); return;
     }
@@ -2692,14 +2692,29 @@ def save_password():
 
 
 
-# ── Backtest ──────────────────────────────────────────────────────────────────
+@app.route('/api/backtest/reset', methods=['POST'])
+@require_auth
+def backtest_reset():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest_job import reset_job
+    reset_job()
+    return jsonify({'ok': True, 'message': 'Backtest state reset'})
+
+
+@app.route('/api/backtest/cancel', methods=['POST'])
+@require_auth
+def backtest_cancel():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest_job import cancel_job
+    cancel_job()
+    return jsonify({'ok': True})
+
 
 @app.route('/api/backtest/run', methods=['POST'])
 @require_auth
 def backtest_run():
-    import sys
-    sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import start_backtest, is_backtest_running, recover_stale_state
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest_job import start_job, is_running
     data = request.get_json(silent=True) or {}
     symbols    = data.get('symbols', [])
     start_date = data.get('start_date', '')
@@ -2708,56 +2723,35 @@ def backtest_run():
         return jsonify({'ok': False, 'error': 'symbols, start_date and end_date required'}), 400
     if len(symbols) > 10:
         return jsonify({'ok': False, 'error': 'Max 10 symbols per run'}), 400
-    # Recover stale state before checking — handles crashed/restarted runs
-    recover_stale_state()
-    # Block only if a thread is genuinely alive, not just from a stale JSON file
-    if is_backtest_running():
+    if is_running():
         return jsonify({'ok': False, 'error': 'A backtest is already running'}), 409
-    start_backtest(symbols, start_date, end_date)
-    return jsonify({'ok': True})
-
-
-@app.route('/api/backtest/history')
-@require_auth
-def backtest_history():
-    import sys
-    sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import read_history
-    return jsonify({'runs': read_history()})
-
-
-@app.route('/api/backtest/reset', methods=['POST'])
-@require_auth
-def backtest_reset():
-    """Force-clear any stale running state. Safe to call any time."""
-    import sys
-    sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import cancel_backtest, recover_stale_state, is_backtest_running
-    if is_backtest_running():
-        cancel_backtest()   # stop real thread first
-    else:
-        recover_stale_state()  # just fix the file
-    return jsonify({'ok': True, 'message': 'Backtest state reset'})
-
-
-@app.route('/api/backtest/cancel', methods=['POST'])
-@require_auth
-def backtest_cancel():
-    import sys
-    sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import cancel_backtest
-    cancel_backtest()
+    try:
+        start_job(symbols, start_date, end_date)
+    except RuntimeError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 409
     return jsonify({'ok': True})
 
 
 @app.route('/api/backtest/status')
 @require_auth
 def backtest_status():
-    import sys
-    sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import read_results, recover_stale_state
-    recover_stale_state()   # heal stale 'running' on every poll
-    return jsonify(read_results())
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest_job import get_status
+    return jsonify(get_status())
+
+
+@app.route('/api/backtest/history')
+@require_auth
+def backtest_history():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest_v2 import REPORTS_DIR
+    import json
+    history_path = BASE_DIR / 'data' / 'backtest_history.json'
+    try:
+        runs = json.loads(history_path.read_text()) if history_path.exists() else []
+    except Exception:
+        runs = []
+    return jsonify({'runs': runs})
 
 
 @app.route('/api/backtest/csv')
@@ -2765,9 +2759,9 @@ def backtest_status():
 def backtest_csv():
     import sys, io, csv as _csv
     sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import read_results
+    from bot.backtest_job import get_status
     from flask import Response
-    data   = read_results()
+    data   = get_status()
     trades = data.get('trades', [])
     if not trades:
         return Response('No results', mimetype='text/plain')
