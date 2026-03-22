@@ -464,12 +464,12 @@ def _stats(trades: list, start_str: str, end_str: str) -> dict:
     by_combo = {}
     for t in trades:
         k = '+'.join(sorted(t.get('tfs_triggered', [])))
-        by_combo.setdefault(k, {'trades': 0, 'wins': 0, 'rets': []})
-        by_combo[k]['trades'] += 1
+        by_combo.setdefault(k, {'total': 0, 'wins': 0, 'rets': []})
+        by_combo[k]['total'] += 1
         by_combo[k]['rets'].append(t['return_pct'])
         if t['outcome'] == 'WIN': by_combo[k]['wins'] += 1
     for k in by_combo:
-        n = by_combo[k]['trades']
+        n = by_combo[k]['total']
         by_combo[k]['win_rate'] = round(by_combo[k]['wins'] / n * 100, 1)
         by_combo[k]['avg_ret']  = round(float(np.mean(by_combo[k]['rets'])), 3)
         del by_combo[k]['rets']
@@ -478,23 +478,23 @@ def _stats(trades: list, start_str: str, end_str: str) -> dict:
     by_conf = {}
     for t in trades:
         k = f"{t['valid_count']}/4"
-        by_conf.setdefault(k, {'trades': 0, 'wins': 0})
-        by_conf[k]['trades'] += 1
+        by_conf.setdefault(k, {'total': 0, 'wins': 0})
+        by_conf[k]['total'] += 1
         if t['outcome'] == 'WIN': by_conf[k]['wins'] += 1
     for k in by_conf:
-        n = by_conf[k]['trades']
+        n = by_conf[k]['total']
         by_conf[k]['win_rate'] = round(by_conf[k]['wins'] / n * 100, 1)
 
     # By direction
     by_dir = {}
     for t in trades:
         d = t['direction']
-        by_dir.setdefault(d, {'trades': 0, 'wins': 0, 'rets': []})
-        by_dir[d]['trades'] += 1
+        by_dir.setdefault(d, {'total': 0, 'wins': 0, 'rets': []})
+        by_dir[d]['total'] += 1
         by_dir[d]['rets'].append(t['return_pct'])
         if t['outcome'] == 'WIN': by_dir[d]['wins'] += 1
     for d in by_dir:
-        n = by_dir[d]['trades']
+        n = by_dir[d]['total']
         by_dir[d]['win_rate'] = round(by_dir[d]['wins'] / n * 100, 1)
         by_dir[d]['avg_ret']  = round(float(np.mean(by_dir[d]['rets'])), 3)
         del by_dir[d]['rets']
@@ -602,13 +602,19 @@ def _export(result: dict) -> Path:
         for sym, d in diags.items():
             lines.append(f'── {sym} DIAGNOSTICS ──────────────────────────────────────')
             lines.append(f"  TF coverage:")
-            for lbl, info in d.get('fetch_report', {}).items():
-                lines.append(f"    {lbl}: {info['bars']} bars  status={info['status']}"
-                             + (f"  {info['first']}→{info['last']}" if info.get('first') else ''))
-            w = d.get('walk', {})
-            lines.append(f"  Candidates : {w.get('candidates', 0)}")
-            lines.append(f"  Rejected   : {w.get('rejected', {})}")
-            lines.append(f"  Min valid  : {w.get('min_valid', '?')} TFs required")
+            fst = d.get('fetch_status', {})
+            cov = d.get('tf_coverage', {})
+            fir = d.get('tf_first', {})
+            fla = d.get('tf_last', {})
+            for lbl in ['1D','4H','1H','15m']:
+                if lbl not in fst: continue
+                rng = f'  {fir[lbl]}→{fla[lbl]}' if fir.get(lbl) else ''
+                lines.append(f'    {lbl}: {cov.get(lbl,0)} bars  [{fst[lbl]}]{rng}')
+            if d.get('fetch_error'):
+                lines.append(f"  Fetch error: {d['fetch_error']}")
+            lines.append(f"  Candidates : {d.get('candidates', 0)}")
+            rej = d.get('rejected', {})
+            if rej: lines.append(f"  Rejected   : {rej}")
     else:
         lines += [
             '── PERFORMANCE ──────────────────────────────────────────────',
@@ -692,6 +698,7 @@ def _export(result: dict) -> Path:
             w.writerow(row)
         (folder / 'trades.csv').write_text(buf.getvalue())
 
+    _append_history(result)
     log.info('[BT2] Report saved: %s', folder)
     return folder
 
@@ -699,6 +706,44 @@ def _export(result: dict) -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _append_history(result: dict) -> None:
+    """Append compact run summary to data/backtest_history.json (last 20 runs)."""
+    HISTORY_PATH = BASE_DIR / 'data' / 'backtest_history.json'
+    MAX_HISTORY  = 20
+    try:
+        history = []
+        if HISTORY_PATH.exists():
+            try:
+                history = json.loads(HISTORY_PATH.read_text())
+            except Exception:
+                history = []
+        s = result.get('stats', {})
+        m = result.get('meta', {})
+        entry = {
+            'run_at':                result.get('run_at', ''),
+            'status':                result.get('status', 'ok'),
+            'symbols':               result.get('symbols', []),
+            'start_date':            result.get('start_date', ''),
+            'end_date':              result.get('end_date', ''),
+            'days_range':            m.get('days_range', 0),
+            'strategy_version':      result.get('strategy_version', 1),
+            'confluence_min':        m.get('confluence_min', 3),
+            'total_trades':          s.get('total', 0),
+            'win_rate':              s.get('win_rate', 0),
+            'profit_factor':         s.get('profit_factor'),
+            'max_drawdown_pct':      s.get('max_drawdown_pct', 0),
+            'final_equity':          s.get('final_equity', 100),
+            'annualised_return_pct': s.get('annualised_return_pct', 0),
+            'tf_availability':       m.get('tf_availability', {}),
+        }
+        history.insert(0, entry)
+        history = history[:MAX_HISTORY]
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        HISTORY_PATH.write_text(json.dumps(history, default=str))
+    except Exception as e:
+        log.debug('[BT2] History append failed: %s', e)
+
 
 def _flatten_diag(fetch_report: dict, walk_diag, error: str = '') -> dict:
     """
@@ -815,12 +860,14 @@ def run(symbols: list, start_str: str, end_str: str,
     # TF availability summary
     tf_summary = {}
     for sym_d in diagnostics.values():
-        for lbl, info in sym_d.get('fetch_report', {}).items():
+        # diagnostics[sym] is now flat (_flatten_diag): use tf_coverage directly
+        cov = sym_d.get('tf_coverage', {})
+        for lbl, bars in cov.items():
             tf_summary.setdefault(lbl, {'syms_ok': 0, 'syms_total': 0, 'max_bars': 0})
             tf_summary[lbl]['syms_total'] += 1
-            if info['bars'] > 0:
+            if bars > 0:
                 tf_summary[lbl]['syms_ok'] += 1
-                tf_summary[lbl]['max_bars'] = max(tf_summary[lbl]['max_bars'], info['bars'])
+                tf_summary[lbl]['max_bars'] = max(tf_summary[lbl]['max_bars'], bars)
 
     result = {
         'status':              'ok',

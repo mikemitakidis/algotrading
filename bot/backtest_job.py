@@ -124,13 +124,15 @@ class BacktestJob:
             'end_date':   self.end_str,
         }
         if self.status in ('done', 'cancelled') and self.result:
-            base['stats']       = self.result.get('stats', {})
-            base['trades']      = self.result.get('trades', [])
-            base['diagnostics'] = self.result.get('diagnostics', {})
-            base['meta']        = self.result.get('meta', {})
-            base['benchmark']   = self.result.get('benchmark', {})
-            base['outperformance_pct'] = self.result.get('outperformance_pct')
-            base['report_folder'] = self.result.get('report_folder')
+            base['stats']               = self.result.get('stats', {})
+            base['trades']              = self.result.get('trades', [])
+            base['diagnostics']         = self.result.get('diagnostics', {})
+            base['meta']                = self.result.get('meta', {})
+            base['strategy_version']    = self.result.get('strategy_version', 1)
+            base['strategy_confluence'] = self.result.get('strategy_confluence', {})
+            base['benchmark']           = self.result.get('benchmark', {})
+            base['outperformance_pct']  = self.result.get('outperformance_pct')
+            base['report_folder']       = self.result.get('report_folder')
         if self.error:
             base['error'] = self.error
         return base
