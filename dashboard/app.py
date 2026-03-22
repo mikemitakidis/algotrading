@@ -365,6 +365,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn gs" id="btRunBtn" style="font-size:14px;padding:10px 28px" onclick="runBacktest()">&#x25B6; Run Backtest</button>
       <button class="btn rs" id="btCancelBtn" style="font-size:13px;padding:8px 16px;display:none" onclick="cancelBacktest()">&#x23F9; Cancel</button>
+      <button class="btn gy-btn" id="btResetBtn" style="font-size:12px;padding:6px 12px" onclick="resetBacktest()" title="Force-clear stuck/stale running state">&#x21BA; Reset</button>
       <span id="btRunMsg" style="font-size:13px;color:#8b949e"></span>
     </div>
     <div id="btDataStatus" style="font-size:12px;margin-top:10px;min-height:18px"></div>
@@ -1309,6 +1310,31 @@ function btDatePreset(days){
   var el_s = document.getElementById('btStart');
   if(el_e) el_e.value = today.toISOString().slice(0,10);
   if(el_s) el_s.value = start.toISOString().slice(0,10);
+}
+
+function resetBacktest(){
+  var btn = document.getElementById('btResetBtn');
+  var msg = document.getElementById('btRunMsg');
+  if(btn) btn.disabled = true;
+  if(msg){ msg.textContent = 'Resetting...'; msg.style.color = '#d29922'; }
+  fetch('/api/backtest/reset', {method:'POST'})
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(btn) btn.disabled = false;
+    if(msg){ msg.textContent = 'Reset. Ready for new run.'; msg.style.color = '#3fb950'; }
+    setTimeout(function(){ if(msg) msg.textContent=''; }, 3000);
+    // Clear any stale progress display
+    var prog = document.getElementById('btProgress');
+    if(prog) prog.style.display = 'none';
+    var runBtn = document.getElementById('btRunBtn');
+    if(runBtn) runBtn.disabled = false;
+    var cancelBtn = document.getElementById('btCancelBtn');
+    if(cancelBtn) cancelBtn.style.display = 'none';
+    if(_btPollTimer){ clearInterval(_btPollTimer); _btPollTimer = null; }
+  }).catch(function(e){
+    if(btn) btn.disabled = false;
+    if(msg){ msg.textContent = 'Reset failed: '+e.message; msg.style.color='#f85149'; }
+  });
 }
 
 function cancelBacktest(){
@@ -2673,7 +2699,7 @@ def save_password():
 def backtest_run():
     import sys
     sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import start_backtest, read_results
+    from bot.backtest import start_backtest, is_backtest_running, recover_stale_state
     data = request.get_json(silent=True) or {}
     symbols    = data.get('symbols', [])
     start_date = data.get('start_date', '')
@@ -2682,9 +2708,10 @@ def backtest_run():
         return jsonify({'ok': False, 'error': 'symbols, start_date and end_date required'}), 400
     if len(symbols) > 10:
         return jsonify({'ok': False, 'error': 'Max 10 symbols per run'}), 400
-    # Check not already running
-    cur = read_results()
-    if cur.get('status') == 'running':
+    # Recover stale state before checking — handles crashed/restarted runs
+    recover_stale_state()
+    # Block only if a thread is genuinely alive, not just from a stale JSON file
+    if is_backtest_running():
         return jsonify({'ok': False, 'error': 'A backtest is already running'}), 409
     start_backtest(symbols, start_date, end_date)
     return jsonify({'ok': True})
@@ -2697,6 +2724,20 @@ def backtest_history():
     sys.path.insert(0, str(BASE_DIR))
     from bot.backtest import read_history
     return jsonify({'runs': read_history()})
+
+
+@app.route('/api/backtest/reset', methods=['POST'])
+@require_auth
+def backtest_reset():
+    """Force-clear any stale running state. Safe to call any time."""
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.backtest import cancel_backtest, recover_stale_state, is_backtest_running
+    if is_backtest_running():
+        cancel_backtest()   # stop real thread first
+    else:
+        recover_stale_state()  # just fix the file
+    return jsonify({'ok': True, 'message': 'Backtest state reset'})
 
 
 @app.route('/api/backtest/cancel', methods=['POST'])
@@ -2714,7 +2755,8 @@ def backtest_cancel():
 def backtest_status():
     import sys
     sys.path.insert(0, str(BASE_DIR))
-    from bot.backtest import read_results
+    from bot.backtest import read_results, recover_stale_state
+    recover_stale_state()   # heal stale 'running' on every poll
     return jsonify(read_results())
 
 

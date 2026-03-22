@@ -42,10 +42,11 @@ COOLDOWN_DAYS    = 3
 MIN_WARMUP_BARS  = 60
 HARD_TIMEOUT     = 300   # 5 minutes max per run
 
-# ── Cancel / run-token mechanism ─────────────────────────────────────────────
-_CANCEL_EVENT = threading.Event()          # set to request cancellation
-_RUN_TOKEN    = {'value': None}            # UUID of current run; stale threads check this
-_RUN_LOCK     = threading.Lock()           # guards start/cancel
+# ── Cancel / run-token / liveness tracking ───────────────────────────────────
+_CANCEL_EVENT  = threading.Event()   # set to request cancellation
+_RUN_TOKEN     = {'value': None}     # UUID of current run; stale threads check this
+_RUN_LOCK      = threading.Lock()    # guards start/cancel/liveness
+_CURRENT_THREAD: Optional[threading.Thread] = None  # handle for liveness check
 
 
 def _new_token() -> str:
@@ -56,6 +57,41 @@ def _new_token() -> str:
 def _is_cancelled(my_token: str) -> bool:
     """Return True if this run should stop (cancelled or superseded)."""
     return _CANCEL_EVENT.is_set() or _RUN_TOKEN['value'] != my_token
+
+
+def is_backtest_running() -> bool:
+    """
+    Return True only when a background thread is genuinely alive.
+    A stale results file with status='running' does not count.
+    """
+    with _RUN_LOCK:
+        return _CURRENT_THREAD is not None and _CURRENT_THREAD.is_alive()
+
+
+def recover_stale_state() -> bool:
+    """
+    If backtest_results.json says 'running' but no thread is alive,
+    rewrite it to 'error' so new runs are not permanently blocked.
+    Returns True if recovery was performed.
+    """
+    if is_backtest_running():
+        return False   # genuinely running — do not touch
+    try:
+        cur = read_results()
+        if cur.get('status') == 'running':
+            log.warning('[BT] Stale running state detected — recovering')
+            _write_results({
+                'status':       'error',
+                'error':        'stale_running_state_recovered',
+                'progress_msg': 'Previous run did not complete cleanly. Ready for new run.',
+                'symbols':      cur.get('symbols', []),
+                'start_date':   cur.get('start_date', ''),
+                'end_date':     cur.get('end_date', ''),
+            })
+            return True
+    except Exception as e:
+        log.debug('[BT] recover_stale_state: %s', e)
+    return False
 
 
 # ── State file helpers ────────────────────────────────────────────────────────
@@ -1092,10 +1128,11 @@ def run_backtest(symbols: list, start_str: str, end_str: str,
 
 def cancel_backtest() -> None:
     """Signal the running backtest to stop cleanly."""
+    global _CURRENT_THREAD
     with _RUN_LOCK:
         _CANCEL_EVENT.set()
-        # Invalidate the current run token so stale threads stop writing
         _RUN_TOKEN['value'] = None
+        _CURRENT_THREAD = None
     # Write cancelled state immediately so dashboard updates
     _write_results({'status': 'cancelled', 'progress': 0,
                     'progress_msg': 'Cancelled by user.'})
@@ -1105,6 +1142,7 @@ def cancel_backtest() -> None:
 def start_backtest(symbols: list, start_str: str, end_str: str,
                    skip_benchmark: bool = False) -> None:
     """Launch backtest in a background daemon thread."""
+    global _CURRENT_THREAD
     with _RUN_LOCK:
         _CANCEL_EVENT.clear()
         token = _new_token()
@@ -1117,3 +1155,6 @@ def start_backtest(symbols: list, start_str: str, end_str: str,
         daemon=True,
     )
     t.start()
+    with _RUN_LOCK:
+        _CURRENT_THREAD = t
+    log.info('[BT] Thread started: %s', t.name)
