@@ -92,7 +92,12 @@ class BacktestJob:
             if self._cancel.is_set():
                 self.status = 'cancelled'
                 self.msg    = 'Cancelled.'
-                self.result = result   # keep partial result
+                self.result = result
+            elif result.get('status') == 'error':
+                self.status = 'error'
+                self.error  = result.get('error', 'Unknown engine error')
+                self.msg    = f'Error: {self.error[:120]}'
+                self.result = result
             else:
                 self.status   = 'done'
                 self.progress = 100

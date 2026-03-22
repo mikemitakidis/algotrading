@@ -513,6 +513,31 @@ def _stats(trades: list, start_str: str, end_str: str) -> dict:
         by_month[m]['avg_ret']  = round(float(np.mean(by_month[m]['rets'])), 3)
         del by_month[m]['rets']
 
+    # By route
+    by_route = {}
+    for t in trades:
+        r = t['route']
+        by_route.setdefault(r, {'total': 0, 'wins': 0})
+        by_route[r]['total'] += 1
+        if t['outcome'] == 'WIN': by_route[r]['wins'] += 1
+    for r in by_route:
+        n = by_route[r]['total']
+        by_route[r]['win_rate'] = round(by_route[r]['wins'] / n * 100, 1) if n else 0
+
+    # By symbol
+    by_sym = {}
+    for t in trades:
+        sym = t['symbol']
+        by_sym.setdefault(sym, {'total': 0, 'wins': 0, 'rets': []})
+        by_sym[sym]['total'] += 1
+        by_sym[sym]['rets'].append(t['return_pct'])
+        if t['outcome'] == 'WIN': by_sym[sym]['wins'] += 1
+    for sym in by_sym:
+        n = by_sym[sym]['total']
+        by_sym[sym]['win_rate'] = round(by_sym[sym]['wins'] / n * 100, 1) if n else 0
+        by_sym[sym]['avg_ret']  = round(float(np.mean(by_sym[sym]['rets'])), 3)
+        del by_sym[sym]['rets']
+
     return {
         'total':                 total,
         'wins':                  len(wins),
@@ -536,6 +561,8 @@ def _stats(trades: list, start_str: str, end_str: str) -> dict:
         'by_month':              by_month,
         'equity_curve':          eq_curve[-100:],
         'equity_with_dates':     eq_dates[-100:],
+        'by_route':              by_route,
+        'by_symbol':             by_sym,
     }
 
 
@@ -673,6 +700,42 @@ def _export(result: dict) -> Path:
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _flatten_diag(fetch_report: dict, walk_diag, error: str = '') -> dict:
+    """
+    Convert v2 internal diagnostics to the flat schema the dashboard expects:
+      tf_coverage:  {label: bars}
+      fetch_status: {label: status_str}
+      tf_first:     {label: first_date}
+      tf_last:      {label: last_date}
+      fetch_error:  str (non-empty when all fetches failed)
+      candidates:   int
+      rejected:     {reason: count}
+    """
+    tf_cov    = {}
+    tf_status = {}
+    tf_first  = {}
+    tf_last   = {}
+    all_failed = True
+    for lbl, info in fetch_report.items():
+        tf_cov[lbl]    = info.get('bars', 0)
+        tf_status[lbl] = info.get('status', 'unknown')
+        if info.get('first'): tf_first[lbl] = info['first']
+        if info.get('last'):  tf_last[lbl]  = info['last']
+        if info.get('bars', 0) > 0: all_failed = False
+    fetch_error = error or (
+        ', '.join(f'{k}:{v}' for k, v in tf_status.items()) if all_failed else ''
+    )
+    return {
+        'tf_coverage':  tf_cov,
+        'fetch_status': tf_status,
+        'tf_first':     tf_first,
+        'tf_last':      tf_last,
+        'fetch_error':  fetch_error,
+        'candidates':   walk_diag.get('candidates', 0) if walk_diag else 0,
+        'rejected':     walk_diag.get('rejected', {})  if walk_diag else {},
+    }
+
+
 def run(symbols: list, start_str: str, end_str: str,
         strategy: Optional[dict] = None,
         export: bool = True) -> dict:
@@ -721,15 +784,13 @@ def run(symbols: list, start_str: str, end_str: str,
         if not tf_data:
             reasons = {k: v['status'] for k, v in fetch_report.items()}
             log.warning('[BT2] %s: no data loaded — %s', sym, reasons)
-            diagnostics[sym] = {'fetch_report': fetch_report, 'walk': None,
-                                 'error': 'no_data'}
+            diagnostics[sym] = _flatten_diag(fetch_report, None, error='no_data')
             continue
 
         # Trading days from 1D bars
         daily = tf_data.get('1D')
         if daily is None:
-            diagnostics[sym] = {'fetch_report': fetch_report, 'walk': None,
-                                 'error': 'no_1D_data'}
+            diagnostics[sym] = _flatten_diag(fetch_report, None, error='no_1D_data')
             continue
 
         trading_days = daily[
@@ -738,7 +799,7 @@ def run(symbols: list, start_str: str, end_str: str,
 
         trades, walk_diag = _walk_symbol(sym, tf_data, trading_days, strategy)
         all_trades.extend(trades)
-        diagnostics[sym] = {'fetch_report': fetch_report, 'walk': walk_diag}
+        diagnostics[sym] = _flatten_diag(fetch_report, walk_diag)
 
         log.info('[BT2] %s: %d trades | candidates=%d | rejected=%s',
                  sym, len(trades),
@@ -755,19 +816,22 @@ def run(symbols: list, start_str: str, end_str: str,
     tf_summary = {}
     for sym_d in diagnostics.values():
         for lbl, info in sym_d.get('fetch_report', {}).items():
-            tf_summary.setdefault(lbl, {'ok': 0, 'total': 0, 'max_bars': 0})
-            tf_summary[lbl]['total'] += 1
+            tf_summary.setdefault(lbl, {'syms_ok': 0, 'syms_total': 0, 'max_bars': 0})
+            tf_summary[lbl]['syms_total'] += 1
             if info['bars'] > 0:
-                tf_summary[lbl]['ok'] += 1
+                tf_summary[lbl]['syms_ok'] += 1
                 tf_summary[lbl]['max_bars'] = max(tf_summary[lbl]['max_bars'], info['bars'])
 
     result = {
-        'status':     'ok',
-        'run_at':     run_ts,
-        'elapsed_s':  elapsed,
-        'symbols':    symbols,
-        'start_date': start_str,
-        'end_date':   end_str,
+        'status':              'ok',
+        'run_at':              run_ts,
+        'elapsed_s':           elapsed,
+        'symbols':             symbols,
+        'start_date':          start_str,
+        'end_date':            end_str,
+        # Top-level fields matched to dashboard expectations
+        'strategy_version':    strategy.get('version', 1),
+        'strategy_confluence': strategy.get('confluence', {}),
         'meta': {
             'strategy_version':      strategy.get('version', 1),
             'confluence_min':        strategy.get('confluence', {}).get('min_valid_tfs', 3),
