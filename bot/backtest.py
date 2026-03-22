@@ -150,8 +150,11 @@ def _bt_cache_load(sym: str, interval: str,
         if len(df) < MIN_WARMUP_BARS:
             return None
         if required_start is not None:
-            req_ts = pd.Timestamp(required_start, tz='UTC')
-            if df.index[0] > req_ts:
+            req_ts    = pd.Timestamp(required_start, tz='UTC')
+            # Allow 5-day tolerance: Yahoo's earliest available intraday
+            # data may be a few days later than computed fetch_start
+            # due to market-open offsets and weekends.
+            if df.index[0] > req_ts + pd.Timedelta(days=5):
                 return None
         return df
     except Exception:
@@ -181,8 +184,11 @@ def _live_cache_load(sym: str, interval: str,
         if len(df) < MIN_WARMUP_BARS:
             return None
         if required_start is not None:
-            req_ts = pd.Timestamp(required_start, tz='UTC')
-            if df.index[0] > req_ts:
+            req_ts    = pd.Timestamp(required_start, tz='UTC')
+            # Allow 5-day tolerance: Yahoo's earliest available intraday
+            # data may be a few days later than computed fetch_start
+            # due to market-open offsets and weekends.
+            if df.index[0] > req_ts + pd.Timedelta(days=5):
                 return None
         return df
     except Exception:

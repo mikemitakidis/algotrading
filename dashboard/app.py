@@ -1290,8 +1290,10 @@ function initBacktest(){
   fetch('/api/backtest/status')
   .then(function(r){ return r.json(); })
   .then(function(d){
-    if(d.status === 'done') renderBtResults(d);
+    if(d.status === 'done' || d.status === 'partial' || d.status === 'timeout')
+      renderBtResults(d);
     else if(d.status === 'running') startBtPoll();
+    // cancelled/idle/error: show nothing, ready for new run
   }).catch(function(){});
 }
 
