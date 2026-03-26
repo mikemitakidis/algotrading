@@ -98,6 +98,11 @@ class BacktestJob:
                 self.error  = result.get('error', 'Unknown engine error')
                 self.msg    = f'Error: {self.error[:120]}'
                 self.result = result
+            elif result.get('status') == 'no_data':
+                self.status = 'no_data'
+                self.error  = 'No data loaded — Yahoo Finance may be rate limiting this IP'
+                self.msg    = 'No data loaded — check Diagnostics for fetch status'
+                self.result = result
             else:
                 self.status   = 'done'
                 self.progress = 100
@@ -123,7 +128,7 @@ class BacktestJob:
             'start_date': self.start_str,
             'end_date':   self.end_str,
         }
-        if self.status in ('done', 'cancelled') and self.result:
+        if self.status in ('done', 'cancelled', 'no_data') and self.result:
             base['stats']               = self.result.get('stats', {})
             base['trades']              = self.result.get('trades', [])
             base['diagnostics']         = self.result.get('diagnostics', {})

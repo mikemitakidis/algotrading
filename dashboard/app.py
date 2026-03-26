@@ -1291,7 +1291,8 @@ function initBacktest(){
   fetch('/api/backtest/status')
   .then(function(r){ return r.json(); })
   .then(function(d){
-    if(d.status === 'done' || d.status === 'partial' || d.status === 'timeout')
+    if(d.status === 'done' || d.status === 'partial' ||
+       d.status === 'timeout' || d.status === 'no_data')
       renderBtResults(d);
     else if(d.status === 'running') startBtPoll();
     // cancelled/idle/error: show nothing, ready for new run
@@ -1425,7 +1426,7 @@ function pollBtStatus(){
 
     var cancelBtn = document.getElementById('btCancelBtn');
     if(cancelBtn) cancelBtn.style.display = (d.status==='running') ? 'inline-block' : 'none';
-    var TERMINAL = ['done','cancelled','error','idle'];
+    var TERMINAL = ['done','cancelled','no_data','error','idle'];
     if(TERMINAL.indexOf(d.status) !== -1){
       clearInterval(_btPollTimer);
       _btPollTimer = null;
@@ -1436,6 +1437,9 @@ function pollBtStatus(){
       if(prog) prog.style.display = 'none';
       if(d.status === 'error'){
         if(msg){ msg.textContent = 'Error: ' + (d.error||'failed'); msg.style.color='#f85149'; }
+      } else if(d.status === 'no_data'){
+        if(msg){ msg.textContent = 'No data loaded — Yahoo may be rate limiting. Check Diagnostics.'; msg.style.color='#f85149'; }
+        renderBtResults(d);
       } else if(d.status === 'idle' || d.status === 'cancelled'){
         if(msg){ msg.textContent = 'Cancelled.'; msg.style.color='#8b949e'; }
       } else if(d.status === 'timeout'){
@@ -1474,7 +1478,10 @@ function renderBtResults(d){
   var allSyms = d.symbols || [];
   var noDataSyms = allSyms.filter(function(s){
     var st = diagAll[s]; if(!st) return true;
-    return Object.keys(st.tf_coverage||{}).length === 0;
+    var cov = st.tf_coverage || {};
+    // Symbol has no data if tf_coverage is empty OR all values are 0
+    return Object.keys(cov).length === 0 ||
+           !Object.keys(cov).some(function(k){ return cov[k] > 0; });
   });
   var dataMsg = document.getElementById('btDataStatus');
   if(dataMsg){

@@ -104,9 +104,8 @@ def _fetch(sym: str, interval: str,
            backtest_start: date, backtest_end: date) -> tuple:
     """
     Fetch OHLCV bars for one symbol/interval, cache-first.
-
-    Warmup: 120 days for daily, 60 days for intraday (same as live bot).
-    Returns (df_or_None, status_str, bars_int, first_date_str, last_date_str).
+    Up to 3 attempts with backoff on rate limiting.
+    Returns (df_or_None, status_str, bars_int, first_date, last_date).
     """
     warmup      = 120 if interval == '1d' else 60
     fetch_start = backtest_start - timedelta(days=warmup)
@@ -120,56 +119,68 @@ def _fetch(sym: str, interval: str,
         log.info('[BT2] %s %s: cache %d bars (%s→%s)', sym, interval, len(cached), first, last)
         return cached, 'ok_cached', len(cached), first, last
 
-    # Network fetch — one attempt, short pace after
-    try:
-        ses = _session()
-        df  = yf.Ticker(sym, session=ses).history(
-            start        = fetch_start.strftime('%Y-%m-%d'),
-            end          = fetch_end.strftime('%Y-%m-%d'),
-            interval     = interval,
-            auto_adjust  = True,
-            actions      = False,
-            raise_errors = False,
-        )
+    # Network fetch — 3 attempts with backoff on rate limit
+    for attempt in range(3):
+        if attempt > 0:
+            wait = attempt * 12   # 12s then 24s
+            log.warning('[BT2] %s %s: rate limited — waiting %ds (attempt %d/3)',
+                        sym, interval, wait, attempt + 1)
+            time.sleep(wait)
 
-        if df is None or df.empty:
-            log.warning('[BT2] %s %s: empty response from Yahoo', sym, interval)
-            return None, 'empty_response', 0, None, None
+        try:
+            ses = _session()
+            df  = yf.Ticker(sym, session=ses).history(
+                start        = fetch_start.strftime('%Y-%m-%d'),
+                end          = fetch_end.strftime('%Y-%m-%d'),
+                interval     = interval,
+                auto_adjust  = True,
+                actions      = False,
+                raise_errors = False,
+            )
 
-        df.columns = [c.lower() for c in df.columns]
-        keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
-        if not keep:
-            return None, 'missing_columns', 0, None, None
+            if df is None or df.empty:
+                log.warning('[BT2] %s %s: empty response from Yahoo', sym, interval)
+                return None, 'empty_response', 0, None, None
 
-        df = df[keep].dropna()
+            df.columns = [c.lower() for c in df.columns]
+            keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
+            if not keep:
+                return None, 'missing_columns', 0, None, None
 
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index, utc=True)
-        elif df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
-        else:
-            df.index = df.index.tz_convert('UTC')
+            df = df[keep].dropna()
 
-        if len(df) < MIN_BARS:
-            log.warning('[BT2] %s %s: only %d bars (need %d)', sym, interval, len(df), MIN_BARS)
-            return None, f'too_few_bars_{len(df)}', len(df), None, None
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index, utc=True)
+            elif df.index.tz is None:
+                df.index = df.index.tz_localize('UTC')
+            else:
+                df.index = df.index.tz_convert('UTC')
 
-        first = df.index[0].strftime('%Y-%m-%d')
-        last  = df.index[-1].strftime('%Y-%m-%d')
-        log.info('[BT2] %s %s: fetched %d bars (%s→%s)', sym, interval, len(df), first, last)
+            if len(df) < MIN_BARS:
+                log.warning('[BT2] %s %s: only %d bars (need %d)', sym, interval, len(df), MIN_BARS)
+                return None, f'too_few_bars_{len(df)}', len(df), None, None
 
-        _cache_save(sym, interval, fetch_start, fetch_end, df)
-        time.sleep(1.5)   # minimal pace — no 8-12s walls
-        return df, 'ok', len(df), first, last
+            first = df.index[0].strftime('%Y-%m-%d')
+            last  = df.index[-1].strftime('%Y-%m-%d')
+            log.info('[BT2] %s %s: fetched %d bars (%s→%s)', sym, interval, len(df), first, last)
 
-    except Exception as e:
-        err = str(e)
-        if any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany')):
-            return None, 'rate_limited', 0, None, None
-        if any(k in err for k in ('403', 'Forbidden', 'proxy', 'tunnel')):
-            return None, 'network_error', 0, None, None
-        log.warning('[BT2] %s %s fetch error: %s', sym, interval, err[:80])
-        return None, f'error:{err[:80]}', 0, None, None
+            _cache_save(sym, interval, fetch_start, fetch_end, df)
+            time.sleep(1.5)
+            return df, 'ok', len(df), first, last
+
+        except Exception as e:
+            err = str(e)
+            is_rl = any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany'))
+            if is_rl and attempt < 2:
+                continue   # retry with backoff
+            if is_rl:
+                return None, 'rate_limited', 0, None, None
+            if any(k in err for k in ('403', 'Forbidden', 'proxy', 'tunnel')):
+                return None, 'network_error', 0, None, None
+            log.warning('[BT2] %s %s fetch error: %s', sym, interval, err[:80])
+            return None, f'error:{err[:80]}', 0, None, None
+
+    return None, 'rate_limited', 0, None, None   # exhausted retries
 
 
 def _fetch_symbol_data(sym: str,
@@ -870,7 +881,12 @@ def run(symbols: list, start_str: str, end_str: str,
                 tf_summary[lbl]['max_bars'] = max(tf_summary[lbl]['max_bars'], bars)
 
     result = {
-        'status':              'ok',
+        'status':              (
+            'no_data' if not any(
+                any(v > 0 for v in d.get('tf_coverage', {}).values())
+                for d in diagnostics.values()
+            ) else 'ok'
+        ),
         'run_at':              run_ts,
         'elapsed_s':           elapsed,
         'symbols':             symbols,
