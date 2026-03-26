@@ -251,6 +251,10 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
         <span class="stat-label">Scan interval</span>
         <span class="stat-value" id="sysInterval">&mdash;</span>
       </div>
+      <div class="stat-item">
+        <span class="stat-label">Data provider</span>
+        <span class="stat-value" id="sysProviderName" style="color:#58a6ff">&mdash;</span>
+      </div>
     </div>
 
   </div>
@@ -1917,6 +1921,13 @@ function renderMetaBanner(d){
   // Also show in backtest meta line if present
   var provEl = document.getElementById('sysProviderName');
   if(provEl && m.data_source) provEl.textContent = m.data_source;
+  // Fetch provider info once if element not yet populated
+  if(provEl && (!provEl.textContent || provEl.textContent === '—')){
+    fetch('/api/provider')
+    .then(function(r){ return r.json(); })
+    .then(function(p){ if(provEl) provEl.textContent = p.name || '—'; })
+    .catch(function(){});
+  }
   el.textContent = parts.join('  ·  ');
 }
 

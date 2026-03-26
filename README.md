@@ -1,7 +1,7 @@
 # Algo Trader v1
 
 Multi-timeframe trading signal scanner running in shadow mode (no live execution).
-Milestones 1–5 complete. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
+Milestones 1–6 complete. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
 
 ## Current Status
 
@@ -12,7 +12,7 @@ Milestones 1–5 complete. See [ROADMAP.md](ROADMAP.md) for the full 15-mileston
 | 3 | Dashboard Observability | ✅ Complete |
 | 4 | Strategy Engine | ✅ Complete |
 | 5 | Backtesting | ✅ Complete |
-| 6 | Modular Data-Provider Architecture | ⬜ Next |
+| 6 | Modular Data-Provider Architecture | ✅ Complete |
 | 7–15 | See ROADMAP.md | ⬜ Planned |
 
 ## What the Bot Does
@@ -61,6 +61,9 @@ DASHBOARD_PASSWORD=your_chosen_password
 TELEGRAM_BOT_TOKEN=your_token_from_botfather
 TELEGRAM_CHAT_ID=your_numeric_chat_id
 TELEGRAM_ENABLED=true
+
+# Data provider (default: yfinance — no API key needed)
+DATA_PROVIDER=yfinance
 ```
 
 Telegram is optional — leave blank to disable alerts.
@@ -77,19 +80,7 @@ bash ~/algotrading/sync.sh
 
 ## Dashboard
 
-URL: `http://<your-server-ip>:8080`  
-Password: set in `.env`
-
-### Tabs
-
-| Tab | What it shows |
-|-----|---------------|
-| **Overview** | Bot phase (scanning/cooldown), live countdown, last cycle summary, system stats |
-| **Signals** | All generated signals with filters by symbol/direction/route |
-| **Logs** | Live log with colour coding, filter by type |
-| **Backtest** | Walk-forward backtest with full analytics |
-| **Strategy** | Edit all signal thresholds, confluence rules, ATR risk params |
-| **Settings** | Telegram config, dashboard password |
+URL: `http://<your-server-ip>:8080`
 
 ---
 
@@ -97,15 +88,9 @@ Password: set in `.env`
 
 ### From the Dashboard
 
-Open the **Backtest** tab. Use a preset or enter symbols manually.
-
-Preset buttons: **AAPL 1yr**, **Mega-cap 5 1yr**, **Mixed 10 1yr**, **90d (15m avail)**
-
-Results include:
-- Win rate, profit factor, max drawdown, annualised return
-- Equity curve chart with benchmark overlay (SPY for multi-symbol, self for single)
+Open the **Backtest** tab. Select symbols and date range or use a preset. Results include:
+- Trades table, equity curve, trade scatter plot
 - Monthly breakdown, per-symbol stats, by-timeframe stats
-- Trade scatter plot (RSI / ATR / confluence vs return)
 - TF availability panel with 15m limit explanation
 - Run history table (last 20 runs)
 - CSV and JSON export
@@ -117,22 +102,19 @@ cd /opt/algo-trader
 source venv/bin/activate
 
 # Single symbol
-python backtest_cli.py --symbols AAPL --start 2025-01-01 --end 2025-12-31
+python backtest_cli_v2.py --symbols AAPL --start 2025-01-01 --end 2025-12-31
 
 # Multiple symbols
-python backtest_cli.py --symbols AAPL,MSFT,NVDA --start 2025-06-01 --end 2026-03-01
+python backtest_cli_v2.py --symbols AAPL,MSFT,NVDA --start 2025-06-01 --end 2026-03-01
 
 # Named preset (dates auto-set)
-python backtest_cli.py --preset aapl1y
-python backtest_cli.py --preset mega1y
-python backtest_cli.py --preset mixed1y
-python backtest_cli.py --preset 90d15m
+python backtest_cli_v2.py --preset aapl1y
+python backtest_cli_v2.py --preset mega1y
+python backtest_cli_v2.py --preset mixed1y
+python backtest_cli_v2.py --preset 90d15m
 
 # Verbose fetch logs
-python backtest_cli.py --symbols AAPL --start 2025-01-01 --end 2025-12-31 --verbose
-
-# Skip benchmark comparison
-python backtest_cli.py --symbols AAPL --start 2025-01-01 --end 2025-12-31 --no-benchmark
+python backtest_cli_v2.py --symbols AAPL --start 2025-01-01 --end 2025-12-31 --verbose
 ```
 
 **Output:** Console summary + files saved to `data/reports/<timestamp>/`:
@@ -141,12 +123,55 @@ python backtest_cli.py --symbols AAPL --start 2025-01-01 --end 2025-12-31 --no-b
 - `results.json` — full JSON results
 
 **Notes:**
-- Daily data (1D): up to 2 years history
+- Daily data (1D): up to 730 days history
 - Hourly data (1H/4H): up to 730 days
 - 15m data: last 60 days only (Yahoo Finance limit)
-- First run fetches from Yahoo (30–120s). Subsequent runs use disk cache (instant).
+- First run fetches from Yahoo or the live bot's bar cache. Subsequent runs use disk cache.
 - Cancel mid-run with Ctrl+C (CLI) or Cancel button (dashboard)
-- Partial/cancelled/timeout runs are clearly labelled in results
+
+---
+
+## Data Provider Architecture (Milestone 6)
+
+All market data flows through a provider abstraction layer. The active provider
+is selected by `DATA_PROVIDER` in `.env` (default: `yfinance`).
+
+```
+scanner / backtest
+       │
+       ▼
+ bot/data.py          ← thin delegation shim (public API unchanged)
+       │
+       ▼
+bot/providers/
+  ├── __init__.py           factory: get_provider(), get_provider_name()
+  ├── base.py               abstract DataProvider interface
+  ├── yfinance_provider.py  active default — Yahoo Finance via yfinance
+  └── alpaca_provider.py    placeholder — Milestone 11, not yet implemented
+```
+
+### Switching providers
+
+```bash
+# In .env:
+DATA_PROVIDER=yfinance   # default, always works
+DATA_PROVIDER=alpaca     # placeholder — returns 'not_implemented' until M11
+```
+
+No strategy, scanner, or backtest code needs editing when the provider changes.
+
+### Provider capabilities
+
+Each provider exposes a `capabilities` dict (visible via `/api/provider`):
+
+| Field | yfinance |
+|---|---|
+| Supported timeframes | 1d, 1h, 15m |
+| Max history (1d/1h) | 730 days |
+| Max history (15m) | 60 days |
+| Intraday | ✅ |
+| Benchmark | ✅ |
+| Real-time | ❌ |
 
 ---
 
@@ -169,32 +194,36 @@ All changes are versioned with an audit trail. The bot restarts automatically af
 
 ```
 /opt/algo-trader/
-├── main.py                  — bot entry point
-├── backtest_cli.py          — CLI backtest runner
+├── main.py                      — bot entry point
+├── backtest_cli_v2.py           — CLI backtest runner (active)
 ├── bot/
-│   ├── strategy.py          — ALL signal thresholds (single source of truth)
-│   ├── scanner.py           — walk-forward scoring engine
-│   ├── backtest.py          — backtesting engine (reuses live strategy)
-│   ├── indicators.py        — RSI, MACD, EMA, BB, VWAP, OBV, ATR
-│   ├── data.py              — yfinance fetcher with browser session + cache
-│   └── database.py          — SQLite with auto-migration
-├── dashboard/app.py         — Flask dashboard
+│   ├── strategy.py              — ALL signal thresholds (single source of truth)
+│   ├── scanner.py               — live scan cycle (uses bot.data → provider)
+│   ├── indicators.py            — RSI, MACD, EMA, BB, VWAP, OBV, ATR
+│   ├── data.py                  — market data shim (delegates to provider layer)
+│   ├── backtest_v2.py           — walk-forward backtest engine (uses provider)
+│   ├── backtest_job.py          — backtest thread wrapper for dashboard
+│   ├── database.py              — SQLite with auto-migration
+│   └── providers/
+│       ├── __init__.py          — get_provider() factory
+│       ├── base.py              — abstract DataProvider interface
+│       ├── yfinance_provider.py — Yahoo Finance (active default)
+│       └── alpaca_provider.py   — Alpaca placeholder (Milestone 11)
+├── dashboard/app.py             — Flask dashboard (all tabs)
 ├── data/
-│   ├── signals.db           — signal database
-│   ├── strategy.json        — active strategy settings
-│   ├── strategy_audit.jsonl — strategy change log
-│   ├── bot_state.json       — live bot phase / cycle info
-│   ├── backtest_results.json — latest backtest run
-│   ├── backtest_history.json — last 20 run summaries
-│   ├── bt_cache/            — backtest data cache
-│   ├── bar_cache/           — live bot bar cache
-│   └── reports/             — timestamped backtest reports
+│   ├── signals.db               — signal database
+│   ├── strategy.json            — active strategy settings
+│   ├── strategy_audit.jsonl     — strategy change log
+│   ├── bar_cache/               — live scanner bar cache (sym_interval.json)
+│   ├── bt_v2_cache/             — backtest data cache (date-range keyed)
+│   ├── backtest_history.json    — last 20 run summaries
+│   └── reports/                 — timestamped backtest report folders
 ├── logs/
 │   ├── bot.log
 │   └── dashboard.log
-├── deploy.sh                — first-time setup
-├── sync.sh                  — GitHub auto-sync daemon
-└── .env                     — credentials (never committed)
+├── deploy.sh                    — first-time setup
+├── sync.sh                      — GitHub auto-sync daemon
+└── .env                         — credentials (never committed)
 ```
 
 ---
@@ -214,6 +243,7 @@ Key log prefixes:
 | `[CYCLE]` | Scan cycle progress |
 | `[SIGNAL]` | Signal generated |
 | `[DB]` | Database insert |
-| `[BT]` | Backtest activity |
+| `[BT2]` | Backtest v2 activity |
+| `[PROV]` | Provider fetch activity |
 | `[STRATEGY]` | Strategy load/save |
 | `[DATA]` | Data fetch / cache |
