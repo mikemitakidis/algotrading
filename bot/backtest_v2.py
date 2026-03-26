@@ -28,7 +28,7 @@ import pandas as pd
 
 # ── Live components (unchanged) ───────────────────────────────────────────────
 from bot.strategy   import load as load_strategy
-from bot.indicators import compute
+from bot.feature_engine import compute
 from bot.scanner    import score_timeframe, _build_timeframes
 from bot.data       import resample_to_4h
 

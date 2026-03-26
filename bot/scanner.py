@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 
 from bot.data       import fetch_bars, resample_to_4h
-from bot.indicators import compute
+from bot.feature_engine import compute, compute_features
 from bot.strategy   import load as load_strategy
 
 log = logging.getLogger(__name__)
@@ -110,6 +110,7 @@ def scan_cycle(focus: list, config: dict):
              len(focus), strat_ver, len(timeframes))
 
     cached_inds   = {}   # sym -> {tf_label -> ind}
+    cached_ml_features = {}   # sym -> ml feature dict (from first valid TF)
     cached_scores = {}   # sym -> {direction -> {tf_label -> 1}}
     tfs_with_data = []
 
@@ -127,11 +128,15 @@ def scan_cycle(focus: list, config: dict):
         for sym, df in bars.items():
             if do_resample:
                 df = resample_to_4h(df)
-            ind = compute(df)
-            if ind is None:
+            fs = compute_features(df)
+            if fs is None:
                 continue
+            ind = fs.decision
 
             cached_inds.setdefault(sym, {})[tf_label] = ind
+            # Store ML features from best TF (first valid TF wins)
+            if sym not in cached_ml_features:
+                cached_ml_features[sym] = fs.ml
 
             for direction in ('long', 'short'):
                 if score_timeframe(ind, direction, strategy):
@@ -209,6 +214,8 @@ def scan_cycle(focus: list, config: dict):
                 'target_price':     target_price,
                 'strategy_version': strat_ver,
                 **best_ind,
+                # ML features attached for DB logging (not used in decisions)
+                '_ml_features':     cached_ml_features.get(sym, {}),
             }
             signals.append(signal)
             log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f SL:$%.2f TP:$%.2f | TFs:%s',

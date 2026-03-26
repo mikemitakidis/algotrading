@@ -32,7 +32,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
-from bot.database import init_db, insert_signal
+from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
 from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
                           alert_crash, alert_cycle_summary, alert_signal)
@@ -84,6 +84,7 @@ def main():
 
     (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
     conn = init_db(config['db_path'])
+    init_features_table(conn)
 
     focus = FOCUS_SYMBOLS[:config['focus_size']]
     log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
@@ -147,9 +148,11 @@ def main():
 
             inserted = 0
             for signal in signals:
+                ml_feats = signal.pop('_ml_features', {})
                 row_id = insert_signal(conn, signal)
                 if row_id:
                     inserted += 1
+                    insert_signal_features(conn, row_id, signal, ml_feats)
                     alert_signal(config, signal)
 
             if inserted:

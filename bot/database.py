@@ -206,3 +206,93 @@ def signal_counts(conn: sqlite3.Connection) -> dict:
         return {'total': total, 'ibkr': ibkr, 'etoro': etoro}
     except Exception:
         return {'total': 0, 'ibkr': 0, 'etoro': 0}
+
+
+# ── signal_features table (Milestone 7) ──────────────────────────────────────
+# One row per signal event. Linked to signals via signal_id.
+# Stores ML-only features separately from the main signals table so:
+#   - main signals table stays clean and backward-compatible
+#   - ML features are queryable as structured columns
+#   - old signal rows without feature data remain intact
+
+FEATURES_SCHEMA = [
+    ('id',               'INTEGER PRIMARY KEY AUTOINCREMENT'),
+    ('signal_id',        'INTEGER NOT NULL DEFAULT 0'),   # FK to signals.id
+    ('symbol',           'TEXT NOT NULL DEFAULT ""'),
+    ('timestamp',        'TEXT NOT NULL DEFAULT ""'),
+    ('direction',        'TEXT NOT NULL DEFAULT ""'),
+    ('strategy_version', 'INTEGER DEFAULT 1'),
+    # ML-only features (not used in live decisions)
+    ('bb_pos',      'REAL'), ('bb_width',   'REAL'), ('obv_slope',  'REAL'),
+    ('pchg_20',     'REAL'), ('pchg_1',     'REAL'), ('pchg_3',     'REAL'),
+    ('pchg_5',      'REAL'), ('adx',        'REAL'), ('di_plus',    'REAL'),
+    ('di_minus',    'REAL'), ('stoch_k',    'REAL'), ('stoch_d',    'REAL'),
+    ('roc_10',      'REAL'), ('cci_20',     'REAL'), ('mfi_14',     'REAL'),
+    ('atr_pct',     'REAL'), ('ema20_dist', 'REAL'), ('ema50_dist', 'REAL'),
+    ('vol_zscore',  'REAL'), ('body_pct',   'REAL'), ('upper_wick', 'REAL'),
+    ('lower_wick',  'REAL'),
+]
+
+
+def init_features_table(conn: sqlite3.Connection) -> None:
+    """Create signal_features table if it does not exist. Safe to call repeatedly."""
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='signal_features'"
+    ).fetchone()
+    if not exists:
+        cols_sql = ',\n    '.join(f'{col} {typ}' for col, typ in FEATURES_SCHEMA)
+        conn.execute(f'CREATE TABLE signal_features (\n    {cols_sql}\n)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_sf_signal_id ON signal_features(signal_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_sf_symbol ON signal_features(symbol)')
+        conn.commit()
+        log.info('[DB] Created signal_features table with %d columns', len(FEATURES_SCHEMA))
+    else:
+        # Additive migration only
+        existing = {r[1] for r in conn.execute('PRAGMA table_info(signal_features)').fetchall()}
+        added = []
+        for col, col_type in FEATURES_SCHEMA:
+            if col == 'id' or col in existing:
+                continue
+            safe = col_type.replace('NOT NULL', '').strip()
+            try:
+                conn.execute(f'ALTER TABLE signal_features ADD COLUMN {col} {safe}')
+                added.append(col)
+            except Exception as e:
+                log.warning('[DB] signal_features: could not add %s: %s', col, e)
+        if added:
+            conn.commit()
+            log.info('[DB] signal_features migration: added %s', added)
+
+
+def insert_signal_features(
+    conn: sqlite3.Connection,
+    signal_id: int,
+    signal: dict,
+    ml_features: dict,
+) -> None:
+    """
+    Insert one row into signal_features for a given signal_id.
+    ml_features: the .ml dict from FeatureSet.
+    Silently skips if no ml_features provided.
+    """
+    if not ml_features or not signal_id:
+        return
+    try:
+        cols = [col for col, _ in FEATURES_SCHEMA if col not in ('id', 'signal_id',
+                'symbol', 'timestamp', 'direction', 'strategy_version')]
+        placeholders = ','.join(['?'] * (5 + len(cols)))
+        col_names    = 'signal_id, symbol, timestamp, direction, strategy_version, ' + ', '.join(cols)
+        values = [
+            signal_id,
+            signal.get('symbol', ''),
+            signal.get('timestamp', ''),
+            signal.get('direction', ''),
+            signal.get('strategy_version', 1),
+        ] + [ml_features.get(c) for c in cols]
+        conn.execute(
+            f'INSERT INTO signal_features ({col_names}) VALUES ({placeholders})',
+            values
+        )
+        conn.commit()
+    except Exception as e:
+        log.warning('[DB] insert_signal_features failed for signal %d: %s', signal_id, e)
