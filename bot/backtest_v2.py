@@ -36,8 +36,9 @@ from bot.data       import resample_to_4h
 
 log = logging.getLogger(__name__)
 
-BASE_DIR      = Path(__file__).resolve().parent.parent
-CACHE_DIR     = BASE_DIR / 'data' / 'bt_v2_cache'
+BASE_DIR        = Path(__file__).resolve().parent.parent
+CACHE_DIR       = BASE_DIR / 'data' / 'bt_v2_cache'
+LIVE_CACHE_DIR  = BASE_DIR / 'data' / 'bar_cache'   # written by live scanner
 REPORTS_DIR   = BASE_DIR / 'data' / 'reports'
 MIN_BARS      = 60      # minimum bars needed before computing indicators
 LOOKFWD_DAYS  = 20      # trading days to evaluate outcome
