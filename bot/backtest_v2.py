@@ -514,12 +514,12 @@ def _stats(trades: list, start_str: str, end_str: str) -> dict:
     by_month = {}
     for t in trades:
         m = t['date'][:7]
-        by_month.setdefault(m, {'trades': 0, 'wins': 0, 'rets': []})
-        by_month[m]['trades'] += 1
+        by_month.setdefault(m, {'total': 0, 'wins': 0, 'rets': []})
+        by_month[m]['total'] += 1
         by_month[m]['rets'].append(t['return_pct'])
         if t['outcome'] == 'WIN': by_month[m]['wins'] += 1
     for m in by_month:
-        n = by_month[m]['trades']
+        n = by_month[m]['total']
         by_month[m]['win_rate'] = round(by_month[m]['wins'] / n * 100, 1)
         by_month[m]['avg_ret']  = round(float(np.mean(by_month[m]['rets'])), 3)
         del by_month[m]['rets']
