@@ -737,7 +737,11 @@ def _append_history(result: dict) -> None:
             'symbols':               result.get('symbols', []),
             'start_date':            result.get('start_date', ''),
             'end_date':              result.get('end_date', ''),
-            'days_range':            m.get('days_range', 0),
+            'days_range':            (
+                (date.fromisoformat(result.get('end_date','')) -
+                 date.fromisoformat(result.get('start_date',''))).days
+                if result.get('start_date') and result.get('end_date') else 0
+            ),
             'strategy_version':      result.get('strategy_version', 1),
             'confluence_min':        m.get('confluence_min', 3),
             'total_trades':          s.get('total', 0),

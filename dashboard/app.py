@@ -1574,7 +1574,7 @@ function renderBtResults(d){
   var comboEl = document.getElementById('bs_by_tf_combo');
   if(comboEl){
     var bco = s.by_tf_combo || {};
-    var ckeys = Object.keys(bco).sort(function(a,b){ return bco[b].trades-bco[a].trades; });
+    var ckeys = Object.keys(bco).sort(function(a,b){ return bco[b].total-bco[a].total; });
     var cHtml = '';
     ckeys.forEach(function(k){
       var v = bco[k];
@@ -1922,7 +1922,7 @@ function exportSummaryJson(){
   fetch('/api/backtest/status')
   .then(function(r){ return r.json(); })
   .then(function(d){
-    var exportable = ['done','cancelled'];
+    var exportable = ['done','cancelled','no_data'];
     if(exportable.indexOf(d.status) === -1){
       alert('No exportable results. Run a backtest first.'); return;
     }
