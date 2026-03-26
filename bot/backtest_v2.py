@@ -25,8 +25,6 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import requests
-import yfinance as yf
 
 # ── Live components (unchanged) ───────────────────────────────────────────────
 from bot.strategy   import load as load_strategy
@@ -48,21 +46,6 @@ COOLDOWN_DAYS = 3       # min days between same symbol+direction signals
 # ─────────────────────────────────────────────────────────────────────────────
 # Data fetching
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/122.0.0.0 Safari/537.36'
-        ),
-        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-    })
-    return s
-
 
 def _cache_file(sym: str, interval: str, fetch_start: date, fetch_end: date) -> Path:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -151,68 +134,18 @@ def _fetch(sym: str, interval: str,
         log.info('[BT2] %s %s: live_cache %d bars (%s→%s)', sym, interval, len(live), first, last)
         return live, 'ok_live_cache', len(live), first, last
 
-    # Tier 3: network fetch — 3 attempts with backoff on rate limit
-    for attempt in range(3):
-        if attempt > 0:
-            wait = attempt * 12   # 12s then 24s
-            log.warning('[BT2] %s %s: rate limited — waiting %ds (attempt %d/3)',
-                        sym, interval, wait, attempt + 1)
-            time.sleep(wait)
-
-        try:
-            ses = _session()
-            df  = yf.Ticker(sym, session=ses).history(
-                start        = fetch_start.strftime('%Y-%m-%d'),
-                end          = fetch_end.strftime('%Y-%m-%d'),
-                interval     = interval,
-                auto_adjust  = True,
-                actions      = False,
-                raise_errors = False,
-            )
-
-            if df is None or df.empty:
-                log.warning('[BT2] %s %s: empty response from Yahoo', sym, interval)
-                return None, 'empty_response', 0, None, None
-
-            df.columns = [c.lower() for c in df.columns]
-            keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
-            if not keep:
-                return None, 'missing_columns', 0, None, None
-
-            df = df[keep].dropna()
-
-            if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index, utc=True)
-            elif df.index.tz is None:
-                df.index = df.index.tz_localize('UTC')
-            else:
-                df.index = df.index.tz_convert('UTC')
-
-            if len(df) < MIN_BARS:
-                log.warning('[BT2] %s %s: only %d bars (need %d)', sym, interval, len(df), MIN_BARS)
-                return None, f'too_few_bars_{len(df)}', len(df), None, None
-
-            first = df.index[0].strftime('%Y-%m-%d')
-            last  = df.index[-1].strftime('%Y-%m-%d')
-            log.info('[BT2] %s %s: fetched %d bars (%s→%s)', sym, interval, len(df), first, last)
-
-            _cache_save(sym, interval, fetch_start, fetch_end, df)
-            time.sleep(1.5)
-            return df, 'ok', len(df), first, last
-
-        except Exception as e:
-            err = str(e)
-            is_rl = any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany'))
-            if is_rl and attempt < 2:
-                continue   # retry with backoff
-            if is_rl:
-                return None, 'rate_limited', 0, None, None
-            if any(k in err for k in ('403', 'Forbidden', 'proxy', 'tunnel')):
-                return None, 'network_error', 0, None, None
-            log.warning('[BT2] %s %s fetch error: %s', sym, interval, err[:80])
-            return None, f'error:{err[:80]}', 0, None, None
-
-    return None, 'rate_limited', 0, None, None   # exhausted retries
+    # Tier 3: provider fetch (retry + backoff handled inside provider)
+    from bot.providers import get_provider
+    df, status = get_provider().fetch_bars_range(sym, interval, fetch_start, fetch_end)
+    if df is not None:
+        if len(df) < MIN_BARS:
+            return None, f'too_few_bars_{len(df)}', len(df), None, None
+        first = df.index[0].strftime('%Y-%m-%d')
+        last  = df.index[-1].strftime('%Y-%m-%d')
+        log.info('[BT2] %s %s: fetched %d bars (%s→%s)', sym, interval, len(df), first, last)
+        _cache_save(sym, interval, fetch_start, fetch_end, df)
+        return df, 'ok', len(df), first, last
+    return None, status, 0, None, None
 
 
 def _fetch_symbol_data(sym: str,
@@ -938,7 +871,10 @@ def run(symbols: list, start_str: str, end_str: str,
             'tf_availability':       tf_summary,
             'symbols_count':         len(symbols),
             'elapsed_seconds':       elapsed,
-            'data_source':           'yfinance (Yahoo Finance)',
+            'data_source':           (
+                __import__('bot.providers', fromlist=['get_provider_name'])
+                .get_provider_name()
+            ),
         },
         'trades':      all_trades,
         'stats':       stats,

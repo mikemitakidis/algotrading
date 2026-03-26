@@ -51,7 +51,7 @@ This is the agreed 15-milestone roadmap. Do not reorder or compress milestones.
 - CLI: `python backtest_cli.py --symbols AAPL --start 2025-01-01 --end 2025-12-31`
 - Timestamped reports in `data/reports/` (report.txt + trades.csv + results.json)
 
-## Milestone 6 — Modular Data-Provider Architecture
+## Milestone 6 — Modular Data-Provider Architecture ✅ COMPLETE
 **Goal:** Clean provider abstraction so yfinance can be swapped without touching strategy or backtest code.
 
 - `bot/providers/base.py` — abstract DataProvider class

@@ -1914,6 +1914,9 @@ function renderMetaBanner(d){
   if(m.symbols_count)    parts.push(m.symbols_count + ' symbol(s)');
   if(m.run_timestamp)    parts.push('Run: ' + fmtTime(m.run_timestamp));
   if(m.data_source)      parts.push(m.data_source);
+  // Also show in backtest meta line if present
+  var provEl = document.getElementById('sysProviderName');
+  if(provEl && m.data_source) provEl.textContent = m.data_source;
   el.textContent = parts.join('  ·  ');
 }
 
@@ -2790,6 +2793,24 @@ def backtest_csv():
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename={filename}'}
     )
+
+
+# ── Provider ─────────────────────────────────────────────────────────────────
+
+@app.route('/api/provider')
+@require_auth
+def provider_info():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.providers import get_provider_name
+    from bot.providers import get_provider
+    try:
+        p = get_provider()
+        return jsonify({
+            'name':         p.name,
+            'capabilities': p.capabilities,
+        })
+    except Exception as e:
+        return jsonify({'name': get_provider_name(), 'error': str(e)})
 
 
 # ── Strategy ─────────────────────────────────────────────────────────────────
