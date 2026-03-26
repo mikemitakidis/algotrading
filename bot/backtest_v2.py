@@ -100,6 +100,28 @@ def _cache_save(sym: str, interval: str,
         pass
 
 
+def _live_cache_load(sym: str, interval: str) -> Optional[pd.DataFrame]:
+    """
+    Tier-2 fallback: read the live bot's bar_cache (data/bar_cache/sym_interval.json).
+    The live scanner populates this regularly for all tracked symbols.
+    No TTL check — stale live data is better than rate_limited for backtesting.
+    """
+    p = LIVE_CACHE_DIR / f'{sym}_{interval}.json'
+    if not p.exists():
+        return None
+    try:
+        d  = json.loads(p.read_text())
+        df = pd.DataFrame.from_dict(d['rows'], orient='index')
+        df.index = pd.to_datetime(df.index, utc=True)
+        df.columns = [c.lower() for c in df.columns]
+        keep = [c for c in ('open','high','low','close','volume') if c in df.columns]
+        if not keep or len(df) < MIN_BARS:
+            return None
+        return df[keep]
+    except Exception:
+        return None
+
+
 def _fetch(sym: str, interval: str,
            backtest_start: date, backtest_end: date) -> tuple:
     """
@@ -119,7 +141,16 @@ def _fetch(sym: str, interval: str,
         log.info('[BT2] %s %s: cache %d bars (%s→%s)', sym, interval, len(cached), first, last)
         return cached, 'ok_cached', len(cached), first, last
 
-    # Network fetch — 3 attempts with backoff on rate limit
+    # Tier 2: live bot cache (data/bar_cache/) — no TTL, stale OK
+    live = _live_cache_load(sym, interval)
+    if live is not None:
+        _cache_save(sym, interval, fetch_start, fetch_end, live)
+        first = live.index[0].strftime('%Y-%m-%d')
+        last  = live.index[-1].strftime('%Y-%m-%d')
+        log.info('[BT2] %s %s: live_cache %d bars (%s→%s)', sym, interval, len(live), first, last)
+        return live, 'ok_live_cache', len(live), first, last
+
+    # Tier 3: network fetch — 3 attempts with backoff on rate limit
     for attempt in range(3):
         if attempt > 0:
             wait = attempt * 12   # 12s then 24s
