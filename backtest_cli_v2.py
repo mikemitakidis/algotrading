@@ -187,9 +187,9 @@ def main():
         by_combo = s.get('by_tf_combo', {})
         if by_combo:
             print(f"\n  BY TF COMBINATION")
-            for combo, v in sorted(by_combo.items(), key=lambda x: -x[1]['trades']):
+            for combo, v in sorted(by_combo.items(), key=lambda x: -x[1]['total']):
                 wc = 'green' if v['win_rate'] >= 50 else 'yellow'
-                print(f"    {combo:<22}: {v['trades']:>3} trades  "
+                print(f"    {combo:<22}: {v['total']:>3} trades  "
                       f"WR:{_col(str(v['win_rate'])+'%', wc):>12}  "
                       f"AvgRet:{v['avg_ret']:>+7.3f}%")
 

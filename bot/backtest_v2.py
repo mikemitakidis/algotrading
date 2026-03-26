@@ -655,8 +655,8 @@ def _export(result: dict) -> Path:
         by_combo = s.get('by_tf_combo', {})
         if by_combo:
             lines.append('── BY TF COMBINATION ────────────────────────────────────────')
-            for combo, v in sorted(by_combo.items(), key=lambda x: -x[1]['trades']):
-                lines.append(f"  {combo:<22}: {v['trades']:>3} trades  "
+            for combo, v in sorted(by_combo.items(), key=lambda x: -x[1]['total']):
+                lines.append(f"  {combo:<22}: {v['total']:>3} trades  "
                              f"WR:{v['win_rate']:>5.1f}%  "
                              f"AvgRet:{v['avg_ret']:>+7.3f}%")
             lines.append('')
@@ -666,7 +666,7 @@ def _export(result: dict) -> Path:
             lines.append('── MONTHLY BREAKDOWN ────────────────────────────────────────')
             for month in sorted(by_month):
                 v = by_month[month]
-                lines.append(f"  {month}: {v['trades']:>3} trades  "
+                lines.append(f"  {month}: {v['total']:>3} trades  "
                              f"WR:{v['win_rate']:>5.1f}%  "
                              f"AvgRet:{v['avg_ret']:>+7.3f}%")
             lines.append('')
