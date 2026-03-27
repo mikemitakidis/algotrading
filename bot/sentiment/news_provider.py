@@ -61,18 +61,20 @@ def _cache_path(sym: str, source: str) -> Path:
     return _CACHE_DIR / f'{sym}_{source}.json'
 
 
-def _cache_load(sym: str, source: str) -> Optional[dict]:
+def _cache_load(sym: str, source: str, force_live: bool = False) -> Optional[dict]:
+    if force_live:
+        return None
     p = _cache_path(sym, source)
     if not p.exists():
         return None
     try:
         d = json.loads(p.read_text())
         if time.time() - d.get('ts', 0) < _CACHE_TTL:
+            d['_cache_used'] = True
             return d
     except Exception:
         pass
     return None
-
 
 def _cache_save(sym: str, source: str, data: dict) -> None:
     try:
@@ -163,17 +165,22 @@ class YFinanceNewsProvider(SentimentProvider):
     def name(self) -> str:
         return 'yfinance_news'
 
-    def get_sentiment(self, symbol: str) -> SentimentResult:
-        cached = _cache_load(symbol, 'yf_news')
+    def get_sentiment(self, symbol: str, force_live: bool = False) -> SentimentResult:
+        cached = _cache_load(symbol, 'yf_news', force_live=force_live)
         if cached:
+            r = cached.get('raw', {})
+            r['cache_used'] = True
+            r['force_live'] = False
             return SentimentResult(
                 score=cached['score'], label=cached['label'],
-                source=self.name, status='ok', raw=cached.get('raw', {}),
+                source=self.name, status='ok', raw=r,
             )
 
         raw = {
             'fetch_attempted': True,
             'fetch_success':   False,
+            'cache_used':      False,
+            'force_live':      force_live,
             'article_count':   0,
             'headlines':       [],
             'error':           None,
@@ -189,24 +196,48 @@ class YFinanceNewsProvider(SentimentProvider):
             raw['article_count'] = len(news)
 
             if not news:
-                raw['error'] = 'Yahoo returned 0 articles'
+                raw['error']       = 'Yahoo returned 0 articles'
                 raw['error_class'] = 'no_articles'
                 return SentimentResult(
                     score=None, label='unavailable',
                     source=self.name, status='unavailable', raw=raw,
                 )
 
+            # yfinance news item keys vary by version:
+            # newer: item['content']['title'] or item['title']
+            # older: item['title']
             headlines = []
             for item in news[:20]:
-                title = item.get('title', '') or ''
+                title = ''
+                if isinstance(item.get('content'), dict):
+                    title = item['content'].get('title', '') or ''
+                if not title:
+                    title = item.get('title', '') or ''
+                if not title:
+                    # Try any string value in the dict
+                    for v in item.values():
+                        if isinstance(v, str) and len(v) > 10:
+                            title = v; break
                 if title:
                     headlines.append(title[:120])
+
+            if not headlines:
+                # Articles fetched but couldn't extract titles — still score as neutral
+                raw['fetch_success'] = True
+                raw['error']         = f'Fetched {len(news)} articles but no extractable titles (yfinance schema may have changed)'
+                raw['error_class']   = 'no_extractable_titles'
+                raw['item_keys']     = list(news[0].keys()) if news else []
+                _cache_save(symbol, 'yf_news', {'score': 0.0, 'label': 'neutral', 'raw': raw})
+                return SentimentResult(
+                    score=0.0, label='neutral',
+                    source=self.name, status='ok', raw=raw,
+                )
 
             score, _ = _score_headlines(headlines)
             label = _score_to_label(score)
 
             raw['fetch_success'] = True
-            raw['headlines']     = headlines[:3]
+            raw['headlines']     = headlines[:5]
 
             _cache_save(symbol, 'yf_news', {'score': score, 'label': label, 'raw': raw})
             return SentimentResult(
@@ -222,9 +253,7 @@ class YFinanceNewsProvider(SentimentProvider):
             log.warning('[SENT] YFNews %s: %s — %s', symbol, err_cls, err_str[:80])
             return SentimentResult(
                 score=None, label='unavailable',
-                source=self.name,
-                status=err_cls,
-                raw=raw,
+                source=self.name, status=err_cls, raw=raw,
             )
 
 
@@ -243,17 +272,17 @@ class GoogleNewsProvider(SentimentProvider):
     def name(self) -> str:
         return 'google_news'
 
-    def get_sentiment(self, symbol: str) -> SentimentResult:
-        cached = _cache_load(symbol, 'google_news')
+    def get_sentiment(self, symbol: str, force_live: bool = False) -> SentimentResult:
+        cached = _cache_load(symbol, 'google_news', force_live=force_live)
         if cached:
-            return SentimentResult(
-                score=cached['score'], label=cached['label'],
-                source=self.name, status='ok', raw=cached.get('raw', {}),
-            )
+            r = cached.get('raw', {}); r['cache_used'] = True; r['force_live'] = False
+            return SentimentResult(score=cached['score'], label=cached['label'], source=self.name, status='ok', raw=r,)
 
         raw = {
             'fetch_attempted': True,
             'fetch_success':   False,
+            'cache_used':      False,
+            'force_live':      force_live,
             'article_count':   0,
             'headlines':       [],
             'error':           None,

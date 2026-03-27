@@ -2014,6 +2014,8 @@ function runSentimentTest(){
       ['Source used',     d.source_used],
       ['Mode configured', d.mode_configured],
       ['Threshold',       '±' + d.threshold],
+      ['Cache used',      '<span style="color:'+(d.cache_used?'#d29922':'#3fb950')+';font-weight:700">' + (d.cache_used?'YES (cached result)':'NO (live fetch)') + '</span>'],
+      ['Force live',      d.force_live ? '<span style="color:#58a6ff">YES</span>' : 'No'],
       ['Fetch attempted', d.fetch_attempted ? 'Yes' : 'No'],
       ['Fetch success',   '<span style="color:'+scol+';font-weight:700">' + (ok?'YES':'NO') + '</span>'],
       ['Article count',   d.article_count||0],
@@ -2022,12 +2024,13 @@ function runSentimentTest(){
       ['Status',          '<code>' + (d.status||'?') + '</code>'],
       ['Error class',     d.error_class ? '<span style="color:#f85149">' + d.error_class + '</span>' : '<span style="color:#3fb950">none</span>'],
       ['Error detail',    d.error ? '<span style="color:#f85149;font-size:11px">' + d.error.slice(0,200) + '</span>' : '—'],
+      ['Item keys (debug)', d.item_keys_debug ? '<code style="font-size:11px">' + JSON.stringify(d.item_keys_debug) + '</code>' : null],
       ['Headlines',       d.headlines&&d.headlines.length ? '<ul style="margin:0;padding-left:16px;font-size:11px;color:#8b949e">' + d.headlines.map(function(h){return '<li>'+h+'</li>';}).join('')+'</ul>' : '—'],
       ['Elapsed',         (d.elapsed_s||0) + 's'],
       ['Tested at',       d.tested_at||'—'],
     ];
     body.innerHTML = '<table style="width:100%;font-size:13px;border-collapse:collapse">' +
-      rows.map(function(r){
+      rows.filter(function(r){ return r[1] !== null && r[1] !== undefined; }).map(function(r){
         return '<tr><td style="color:#8b949e;padding:4px 8px 4px 0;vertical-align:top;white-space:nowrap;min-width:160px">'+r[0]+'</td><td style="padding:4px 0">'+r[1]+'</td></tr>';
       }).join('') + '</table>';
   }).catch(function(e){
@@ -2964,11 +2967,11 @@ def sentiment_test():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.sentiment import get_sentiment_mode, get_sentiment_threshold
     import os
-    symbol = request.args.get('symbol', 'AAPL').upper().strip()
-    source = request.args.get('source', 'yfinance_news').lower().strip()
-    mode   = get_sentiment_mode()
-    thresh = get_sentiment_threshold()
-    # Instantiate the requested source directly
+    symbol     = request.args.get('symbol', 'AAPL').upper().strip()
+    source     = request.args.get('source', 'yfinance_news').lower().strip()
+    force_live = request.args.get('force_live', '0') in ('1', 'true', 'yes')
+    mode       = get_sentiment_mode()
+    thresh     = get_sentiment_threshold()
     try:
         if source == 'yfinance_news':
             from bot.sentiment.news_provider import YFinanceNewsProvider
@@ -2990,8 +2993,8 @@ def sentiment_test():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     import time as _time
-    t0 = _time.monotonic()
-    result = provider.get_sentiment(symbol)
+    t0     = _time.monotonic()
+    result = provider.get_sentiment(symbol, force_live=force_live)
     elapsed = round(_time.monotonic() - t0, 2)
     raw = result.raw or {}
     return jsonify({
@@ -3000,9 +3003,12 @@ def sentiment_test():
         'source_used':      result.source,
         'mode_configured':  mode,
         'threshold':        thresh,
+        'force_live':       force_live,
+        'cache_used':       raw.get('cache_used', False),
         'fetch_attempted':  raw.get('fetch_attempted', True),
         'fetch_success':    raw.get('fetch_success', result.status == 'ok'),
         'article_count':    raw.get('article_count', 0),
+        'item_keys_debug':  raw.get('item_keys', None),
         'score':            result.score,
         'label':            result.label,
         'status':           result.status,
