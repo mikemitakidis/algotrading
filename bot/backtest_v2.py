@@ -55,7 +55,7 @@ def _cache_file(sym: str, interval: str, fetch_start: date, fetch_end: date) -> 
 
 def _cache_load(sym: str, interval: str,
                 fetch_start: date, fetch_end: date) -> Optional[pd.DataFrame]:
-    """Load cached bars if file exists and is < 24h old."""
+    """Load cached bars if file exists, is < 24h old, and covers fetch_start."""
     p = _cache_file(sym, interval, fetch_start, fetch_end)
     if not p.exists():
         return None
@@ -67,7 +67,19 @@ def _cache_load(sym: str, interval: str,
         df = pd.DataFrame.from_dict(d['rows'], orient='index')
         df.index = pd.to_datetime(df.index, utc=True)
         df.columns = [c.lower() for c in df.columns]
-        return df if len(df) >= MIN_BARS else None
+        if len(df) < MIN_BARS:
+            return None
+        # Reject cache if it doesn't reach back to fetch_start.
+        # This catches the case where live bar_cache (recent data only)
+        # was promoted into bt_v2_cache under a longer date-range key.
+        earliest = df.index[0].date()
+        tolerance = timedelta(days=10)   # allow minor gaps at start
+        if earliest > fetch_start + tolerance:
+            log.info('[BT2] %s %s: cache starts %s but need %s — discarding',
+                     sym, interval, earliest, fetch_start)
+            p.unlink(missing_ok=True)   # delete stale cache file
+            return None
+        return df
     except Exception:
         return None
 
