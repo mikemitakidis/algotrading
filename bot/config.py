@@ -57,6 +57,11 @@ def load() -> dict:
         'rank_interval_secs':    int(os.getenv('RANK_INTERVAL_SECS', '21600')),
         'focus_size':            int(os.getenv('FOCUS_SIZE', '150')),
 
+        # Sentiment (M8) — all optional, default off
+        'sentiment_mode':      os.getenv('SENTIMENT_MODE',     'off'),
+        'sentiment_provider':  os.getenv('SENTIMENT_PROVIDER', 'disabled'),
+        'sentiment_threshold': float(os.getenv('SENTIMENT_THRESHOLD', '0.1')),
+
         # Paths
         'db_path':   str(BASE_DIR / 'data' / 'signals.db'),
         'log_path':  str(BASE_DIR / 'logs' / 'bot.log'),

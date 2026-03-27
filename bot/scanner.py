@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from bot.data       import fetch_bars, resample_to_4h
 from bot.feature_engine import compute, compute_features
+from bot.sentiment import get_sentiment_mode, get_sentiment_provider, apply_sentiment
 from bot.strategy   import load as load_strategy
 
 log = logging.getLogger(__name__)
@@ -97,6 +98,10 @@ def scan_cycle(focus: list, config: dict):
     strategy   = load_strategy()
     timeframes = _build_timeframes(strategy)
     confluence = strategy.get('confluence', {})
+    # Sentiment setup — provider instantiated once per cycle
+    sent_mode     = get_sentiment_mode()
+    sent_provider = get_sentiment_provider()
+    log.info('[CYCLE] Sentiment mode: %s | provider: %s', sent_mode, sent_provider.name)
     risk_cfg   = strategy.get('risk', {})
     routing    = strategy.get('routing', {})
 
@@ -217,11 +222,23 @@ def scan_cycle(focus: list, config: dict):
                 # ML features attached for DB logging (not used in decisions)
                 '_ml_features':     cached_ml_features.get(sym, {}),
             }
+            # Sentiment check
+            try:
+                sent_result = sent_provider.get_sentiment(sym)
+            except Exception as _se:
+                from bot.sentiment.base import SentimentResult
+                sent_result = SentimentResult.unavailable(sent_provider.name, str(_se))
+            signal, emit = apply_sentiment(signal, sent_result, sent_mode)
+            if not emit:
+                log.info('[SIGNAL] %s %s BLOCKED by sentiment (%s score=%.2f)',
+                         sym, direction.upper(), sent_result.label,
+                         sent_result.score or 0)
+                continue
             signals.append(signal)
-            log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f SL:$%.2f TP:$%.2f | TFs:%s',
+            log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f SL:$%.2f TP:$%.2f | TFs:%s | Sent:%s(%s)',
                      route, sym, direction.upper(), count, available_tfs,
                      best_ind['rsi'], entry, stop_loss, target_price,
-                     list(tfs.keys()))
+                     list(tfs.keys()), sent_result.label, sent_mode)
 
     log.info('[CYCLE] Complete. %d signals from %d/%d TFs.',
              len(signals), available_tfs, len(timeframes))

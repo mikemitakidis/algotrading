@@ -49,6 +49,13 @@ SCHEMA = [
     ('target_price',    'REAL'),
     # Strategy version at time of signal (for ML/backtesting)
     ('strategy_version','INTEGER DEFAULT 1'),
+    # Sentiment fields (Milestone 8) — nullable, default NULL
+    ('sentiment_enabled', 'INTEGER DEFAULT 0'),
+    ('sentiment_mode',    'TEXT DEFAULT "off"'),
+    ('sentiment_score',   'REAL'),
+    ('sentiment_label',   'TEXT DEFAULT "unavailable"'),
+    ('sentiment_source',  'TEXT DEFAULT "disabled"'),
+    ('sentiment_status',  'TEXT DEFAULT "disabled"'),
 ]
 
 # Columns that must exist for inserts to work
@@ -144,8 +151,10 @@ def insert_signal(conn: sqlite3.Connection, signal: dict) -> int | None:
                 rsi, macd_hist, ema20, ema50,
                 bb_pos, bb_width, vwap_dev, obv_slope,
                 atr, vol_ratio, price, pchg,
-                entry_price, stop_loss, target_price, strategy_version)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                entry_price, stop_loss, target_price, strategy_version,
+                sentiment_enabled, sentiment_mode, sentiment_score,
+                sentiment_label, sentiment_source, sentiment_status)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 signal.get('timestamp', ''),
                 signal.get('symbol', ''),
@@ -172,6 +181,12 @@ def insert_signal(conn: sqlite3.Connection, signal: dict) -> int | None:
                 signal.get('stop_loss'),
                 signal.get('target_price'),
                 signal.get('strategy_version', 1),
+                signal.get('sentiment_enabled', 0),
+                signal.get('sentiment_mode',    'off'),
+                signal.get('sentiment_score'),
+                signal.get('sentiment_label',   'unavailable'),
+                signal.get('sentiment_source',  'disabled'),
+                signal.get('sentiment_status',  'disabled'),
             )
         )
         conn.commit()
