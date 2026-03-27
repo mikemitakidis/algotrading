@@ -2824,6 +2824,22 @@ def provider_info():
         return jsonify({'name': get_provider_name(), 'error': str(e)})
 
 
+# ── Sentiment ────────────────────────────────────────────────────────────────
+
+@app.route('/api/sentiment/status')
+@require_auth
+def sentiment_status():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.sentiment import get_sentiment_mode, get_sentiment_provider
+    mode = get_sentiment_mode()
+    prov = get_sentiment_provider()
+    return jsonify({
+        'mode':     mode,
+        'provider': prov.name,
+        'enabled':  mode != 'off',
+    })
+
+
 # ── Strategy ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/strategy')
