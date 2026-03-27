@@ -137,14 +137,23 @@ def _fetch(sym: str, interval: str,
         log.info('[BT2] %s %s: cache %d bars (%s→%s)', sym, interval, len(cached), first, last)
         return cached, 'ok_cached', len(cached), first, last
 
-    # Tier 2: live bot cache (data/bar_cache/) — no TTL, stale OK
+    # Tier 2: live bot cache (data/bar_cache/) — only if it covers fetch_start.
+    # The live bot stores only recent bars (~60 days). Promoting it under a
+    # long date-range key would pollute bt_v2_cache with truncated data.
     live = _live_cache_load(sym, interval)
     if live is not None:
-        _cache_save(sym, interval, fetch_start, fetch_end, live)
-        first = live.index[0].strftime('%Y-%m-%d')
-        last  = live.index[-1].strftime('%Y-%m-%d')
-        log.info('[BT2] %s %s: live_cache %d bars (%s→%s)', sym, interval, len(live), first, last)
-        return live, 'ok_live_cache', len(live), first, last
+        live_earliest = live.index[0].date()
+        tolerance     = timedelta(days=10)
+        if live_earliest > fetch_start + tolerance:
+            log.info('[BT2] %s %s: live_cache starts %s, need %s — skipping (insufficient history)',
+                     sym, interval, live_earliest, fetch_start)
+            # Do NOT promote — fall through to tier 3 for real history
+        else:
+            _cache_save(sym, interval, fetch_start, fetch_end, live)
+            first = live.index[0].strftime('%Y-%m-%d')
+            last  = live.index[-1].strftime('%Y-%m-%d')
+            log.info('[BT2] %s %s: live_cache %d bars (%s→%s)', sym, interval, len(live), first, last)
+            return live, 'ok_live_cache', len(live), first, last
 
     # Tier 3: provider fetch (retry + backoff handled inside provider)
     from bot.providers import get_provider
