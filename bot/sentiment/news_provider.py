@@ -361,17 +361,17 @@ class AlphaVantageNewsProvider(SentimentProvider):
     def name(self) -> str:
         return 'alphavantage_news'
 
-    def get_sentiment(self, symbol: str) -> SentimentResult:
-        cached = _cache_load(symbol, 'av')
+    def get_sentiment(self, symbol: str, force_live: bool = False) -> SentimentResult:
+        cached = _cache_load(symbol, 'av', force_live=force_live)
         if cached:
-            return SentimentResult(
-                score=cached['score'], label=cached['label'],
-                source=self.name, status='ok', raw=cached.get('raw', {}),
-            )
+            r = cached.get('raw', {}); r['cache_used'] = True; r['force_live'] = False
+            return SentimentResult(score=cached['score'], label=cached['label'], source=self.name, status='ok', raw=r,)
 
         raw = {
             'fetch_attempted': True,
             'fetch_success':   False,
+            'cache_used':      False,
+            'force_live':      force_live,
             'article_count':   0,
             'headlines':       [],
             'error':           None,

@@ -1993,7 +1993,8 @@ function runSentimentTest(){
   if(btn) btn.disabled = true;
   if(msg){ msg.textContent='Fetching from ' + src + '...'; msg.style.color='#d29922'; }
   if(card) card.style.display='none';
-  fetch('/api/sentiment/test?symbol=' + encodeURIComponent(sym) + '&source=' + encodeURIComponent(src))
+  var fl   = document.getElementById('sentForceLive') && document.getElementById('sentForceLive').checked ? '&force_live=1' : '';
+  fetch('/api/sentiment/test?symbol=' + encodeURIComponent(sym) + '&source=' + encodeURIComponent(src) + fl)
   .then(function(r){ return r.json(); })
   .then(function(d){
     if(btn) btn.disabled = false;
@@ -2530,8 +2531,14 @@ document.addEventListener('DOMContentLoaded', function(){
           <option value="alphavantage_news">alphavantage_news (needs ALPHAVANTAGE_KEY)</option>
         </select>
       </div>
-      <button class="btn gn" onclick="runSentimentTest()" id="sentRunBtn"
-        style="padding:8px 18px;font-size:13px">&#x25BA; Run Test</button>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn gn" onclick="runSentimentTest()" id="sentRunBtn"
+          style="padding:8px 18px;font-size:13px">&#x25BA; Run Test</button>
+        <label style="font-size:12px;color:#8b949e;display:flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="sentForceLive" style="cursor:pointer">
+          Force live (bypass cache)
+        </label>
+      </div>
     </div>
     <div id="sentMsg" style="font-size:12px;min-height:16px"></div>
   </div>
