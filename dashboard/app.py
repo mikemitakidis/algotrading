@@ -152,6 +152,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('logs')"      id="n-logs">Logs</a>
     <a onclick="go('backtest')"  id="n-backtest">Backtest</a>
     <a onclick="go('strategy')"  id="n-strategy">Strategy</a>
+    <a onclick="go('sentiment')" id="n-sentiment">Sentiment</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
@@ -853,6 +854,7 @@ function go(p){
   if(p === 'settings') loadTgSettings();
   if(p === 'strategy')  loadStrategy();
   if(p === 'backtest')  initBacktest();
+  if(p === 'sentiment') loadSentimentConfig();
 }
 
 // ─── boot ───
@@ -1965,6 +1967,75 @@ function exportSummaryJson(){
   }).catch(function(e){ alert('Export failed: ' + e.message); });
 }
 
+// ─── sentiment test ───
+function loadSentimentConfig(){
+  fetch('/api/sentiment/status')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    var el = document.getElementById('sentConfigBody');
+    if(!el) return;
+    el.innerHTML =
+      '<div class="stat-item"><span class="stat-label">Mode</span><span class="stat-value" style="color:#58a6ff">' + (d.mode||'off') + '</span></div>' +
+      '<div class="stat-item"><span class="stat-label">Active provider</span><span class="stat-value">' + (d.provider||'disabled') + '</span></div>' +
+      '<div class="stat-item"><span class="stat-label">Enabled</span><span class="stat-value" style="color:' + (d.enabled?'#3fb950':'#f85149') + '">' + (d.enabled?'Yes':'No (mode=off)') + '</span></div>' +
+      '<div class="stat-item"><span class="stat-label">Threshold</span><span class="stat-value">±' + (d.threshold||0.15) + '</span></div>';
+  }).catch(function(){});
+}
+
+function runSentimentTest(){
+  var sym  = (document.getElementById('sentSymbol').value||'AAPL').trim().toUpperCase();
+  var src  = document.getElementById('sentSource').value;
+  var btn  = document.getElementById('sentRunBtn');
+  var msg  = document.getElementById('sentMsg');
+  var card = document.getElementById('sentResultCard');
+  var body = document.getElementById('sentResultBody');
+  if(!sym){ if(msg) msg.textContent='Enter a symbol.'; return; }
+  if(btn) btn.disabled = true;
+  if(msg){ msg.textContent='Fetching from ' + src + '...'; msg.style.color='#d29922'; }
+  if(card) card.style.display='none';
+  fetch('/api/sentiment/test?symbol=' + encodeURIComponent(sym) + '&source=' + encodeURIComponent(src))
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(btn) btn.disabled = false;
+    if(card) card.style.display='block';
+    var ok   = d.fetch_success === true;
+    var scol = ok ? '#3fb950' : '#f85149';
+    var lbl  = d.label||'unavailable';
+    var lcol = lbl==='bullish'?'#3fb950': lbl==='bearish'?'#f85149':'#d29922';
+    if(msg){
+      msg.textContent = ok
+        ? ('Done — ' + d.article_count + ' articles, score=' + (d.score!=null?d.score:'n/a') + ', label=' + lbl)
+        : ('Fetch failed: ' + (d.error_class||d.status||'unknown'));
+      msg.style.color = ok ? '#3fb950' : '#f85149';
+    }
+    var rows = [
+      ['Symbol',          '<b>' + d.symbol + '</b>'],
+      ['Source requested',d.source_requested],
+      ['Source used',     d.source_used],
+      ['Mode configured', d.mode_configured],
+      ['Threshold',       '±' + d.threshold],
+      ['Fetch attempted', d.fetch_attempted ? 'Yes' : 'No'],
+      ['Fetch success',   '<span style="color:'+scol+';font-weight:700">' + (ok?'YES':'NO') + '</span>'],
+      ['Article count',   d.article_count||0],
+      ['Score',           d.score!=null ? '<b style="color:'+lcol+'">' + d.score + '</b>' : '<span style="color:#6e7681">null</span>'],
+      ['Label',           '<span style="color:'+lcol+';font-weight:700">' + lbl + '</span>'],
+      ['Status',          '<code>' + (d.status||'?') + '</code>'],
+      ['Error class',     d.error_class ? '<span style="color:#f85149">' + d.error_class + '</span>' : '<span style="color:#3fb950">none</span>'],
+      ['Error detail',    d.error ? '<span style="color:#f85149;font-size:11px">' + d.error.slice(0,200) + '</span>' : '—'],
+      ['Headlines',       d.headlines&&d.headlines.length ? '<ul style="margin:0;padding-left:16px;font-size:11px;color:#8b949e">' + d.headlines.map(function(h){return '<li>'+h+'</li>';}).join('')+'</ul>' : '—'],
+      ['Elapsed',         (d.elapsed_s||0) + 's'],
+      ['Tested at',       d.tested_at||'—'],
+    ];
+    body.innerHTML = '<table style="width:100%;font-size:13px;border-collapse:collapse">' +
+      rows.map(function(r){
+        return '<tr><td style="color:#8b949e;padding:4px 8px 4px 0;vertical-align:top;white-space:nowrap;min-width:160px">'+r[0]+'</td><td style="padding:4px 0">'+r[1]+'</td></tr>';
+      }).join('') + '</table>';
+  }).catch(function(e){
+    if(btn) btn.disabled = false;
+    if(msg){ msg.textContent='Request failed: '+e.message; msg.style.color='#f85149'; }
+  });
+}
+
 // ─── run history ───
 function loadHistory(){
   fetch('/api/backtest/history')
@@ -2431,6 +2502,49 @@ document.addEventListener('DOMContentLoaded', function(){
   setLF('all');
 });
 </script>
+
+<!-- ════════════════ SENTIMENT ════════════════ -->
+<div id="sentiment" class="page">
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="ct">Sentiment Test — On-Demand Source Verification</div>
+    <div style="font-size:12px;color:#8b949e;margin-bottom:14px">
+      Test any sentiment source directly. Shows real fetch result — success or exact failure reason.
+      Does not wait for a scan cycle.
+    </div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px">
+      <div>
+        <label style="font-size:12px;color:#8b949e;display:block;margin-bottom:4px">Symbol</label>
+        <input id="sentSymbol" type="text" value="AAPL" maxlength="10"
+          style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 10px;border-radius:6px;font-size:13px;width:100px;text-transform:uppercase">
+      </div>
+      <div>
+        <label style="font-size:12px;color:#8b949e;display:block;margin-bottom:4px">Source</label>
+        <select id="sentSource"
+          style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:7px 10px;border-radius:6px;font-size:13px">
+          <option value="yfinance_news">yfinance_news</option>
+          <option value="google_news">google_news</option>
+          <option value="alphavantage_news">alphavantage_news (needs ALPHAVANTAGE_KEY)</option>
+        </select>
+      </div>
+      <button class="btn gn" onclick="runSentimentTest()" id="sentRunBtn"
+        style="padding:8px 18px;font-size:13px">&#x25BA; Run Test</button>
+    </div>
+    <div id="sentMsg" style="font-size:12px;min-height:16px"></div>
+  </div>
+
+  <div id="sentResultCard" class="card" style="display:none;margin-bottom:18px">
+    <div class="ct">Result</div>
+    <div id="sentResultBody"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Active Configuration</div>
+    <div id="sentConfigBody" style="font-size:13px;color:#8b949e">Loading...</div>
+  </div>
+
+</div>
+<!-- END SENTIMENT PAGE -->
 </body>
 </html>"""
 
@@ -2830,13 +2944,73 @@ def provider_info():
 @require_auth
 def sentiment_status():
     import sys; sys.path.insert(0, str(BASE_DIR))
-    from bot.sentiment import get_sentiment_mode, get_sentiment_provider
+    from bot.sentiment import get_sentiment_mode, get_sentiment_provider, get_sentiment_threshold
     mode = get_sentiment_mode()
     prov = get_sentiment_provider()
     return jsonify({
-        'mode':     mode,
-        'provider': prov.name,
-        'enabled':  mode != 'off',
+        'mode':      mode,
+        'provider':  prov.name,
+        'enabled':   mode != 'off',
+        'threshold': get_sentiment_threshold(),
+    })
+
+
+@app.route('/api/sentiment/test')
+@require_auth
+def sentiment_test():
+    """On-demand sentiment test for a single symbol and source.
+    GET /api/sentiment/test?symbol=AAPL&source=yfinance_news
+    """
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.sentiment import get_sentiment_mode, get_sentiment_threshold
+    import os
+    symbol = request.args.get('symbol', 'AAPL').upper().strip()
+    source = request.args.get('source', 'yfinance_news').lower().strip()
+    mode   = get_sentiment_mode()
+    thresh = get_sentiment_threshold()
+    # Instantiate the requested source directly
+    try:
+        if source == 'yfinance_news':
+            from bot.sentiment.news_provider import YFinanceNewsProvider
+            provider = YFinanceNewsProvider()
+        elif source == 'google_news':
+            from bot.sentiment.news_provider import GoogleNewsProvider
+            provider = GoogleNewsProvider()
+        elif source == 'alphavantage_news':
+            av_key = os.getenv('ALPHAVANTAGE_KEY', '').strip()
+            if not av_key:
+                return jsonify({'error': 'ALPHAVANTAGE_KEY not set in .env'}), 400
+            from bot.sentiment.news_provider import AlphaVantageNewsProvider
+            provider = AlphaVantageNewsProvider(av_key)
+        elif source == 'disabled':
+            from bot.sentiment.disabled_provider import DisabledProvider
+            provider = DisabledProvider()
+        else:
+            return jsonify({'error': f'Unknown source: {source}. Use: yfinance_news, google_news, alphavantage_news'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    import time as _time
+    t0 = _time.monotonic()
+    result = provider.get_sentiment(symbol)
+    elapsed = round(_time.monotonic() - t0, 2)
+    raw = result.raw or {}
+    return jsonify({
+        'symbol':           symbol,
+        'source_requested': source,
+        'source_used':      result.source,
+        'mode_configured':  mode,
+        'threshold':        thresh,
+        'fetch_attempted':  raw.get('fetch_attempted', True),
+        'fetch_success':    raw.get('fetch_success', result.status == 'ok'),
+        'article_count':    raw.get('article_count', 0),
+        'score':            result.score,
+        'label':            result.label,
+        'status':           result.status,
+        'error':            raw.get('error'),
+        'error_class':      raw.get('error_class'),
+        'headlines':        raw.get('headlines', []),
+        'elapsed_s':        elapsed,
+        'tested_at':        raw.get('fetched_at', ''),
     })
 
 

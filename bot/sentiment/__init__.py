@@ -90,6 +90,9 @@ def get_sentiment_provider() -> SentimentProvider:
             return AlphaVantageNewsProvider(av_key)
 
     # yfinance_news or auto fallback
+    if prov_name == 'google_news':
+        from bot.sentiment.news_provider import GoogleNewsProvider
+        return GoogleNewsProvider()
     from bot.sentiment.news_provider import YFinanceNewsProvider
     return YFinanceNewsProvider()
 
