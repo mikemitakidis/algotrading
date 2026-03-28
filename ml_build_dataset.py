@@ -41,6 +41,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Load .env before importing any bot modules so DATA_PROVIDER etc. are set
+from pathlib import Path as _Path
+_env = _Path(__file__).resolve().parent / '.env'
+if _env.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env)
+    except ImportError:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',

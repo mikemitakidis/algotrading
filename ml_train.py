@@ -47,6 +47,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Load .env so DATA_PROVIDER and other env vars are available
+from pathlib import Path as _Path
+_env = _Path(__file__).resolve().parent / '.env'
+if _env.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env)
+    except ImportError:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s %(levelname)s %(message)s',
