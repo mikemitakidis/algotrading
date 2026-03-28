@@ -315,11 +315,13 @@ def main():
         except Exception as e:
             log.warning('Could not load existing dataset: %s', e)
 
-    all_rows    = list(existing_rows)
-    n_runs      = 0
-    n_skipped   = 0
-    n_new_trades= 0
-    t_start     = time.monotonic()
+    all_rows       = list(existing_rows)
+    n_runs         = 0
+    n_skipped      = 0
+    n_new_trades   = 0
+    n_zero_trade   = 0
+    run_log        = []   # per-run summary for coverage report
+    t_start        = time.monotonic()
 
     for i, (group_label, symbols, window_label, start, end) in enumerate(plan, 1):
         run_id = _run_id(symbols, start, end)
@@ -335,6 +337,16 @@ def main():
         all_rows.extend(rows)
         n_new_trades += len(rows)
         n_runs += 1
+        if not rows:
+            n_zero_trade += 1
+        wins = sum(1 for r in rows if r.get('outcome') == 'WIN')
+        losses = sum(1 for r in rows if r.get('outcome') == 'LOSS')
+        run_log.append({
+            'run_id': _run_id(symbols, start, end),
+            'group': group_label, 'window': window_label,
+            'start': start, 'end': end,
+            'trades': len(rows), 'wins': wins, 'losses': losses,
+        })
 
         # Save incrementally every 3 runs so progress isn't lost
         if n_runs % 3 == 0 and all_rows:
@@ -359,6 +371,20 @@ def main():
     out_summary.write_text(json.dumps(summary, indent=2, default=str))
 
     elapsed = round(time.monotonic() - t_start)
+
+    # Per-run coverage report
+    if run_log:
+        print(f'\n{"─"*65}')
+        print('PER-RUN COVERAGE REPORT')
+        print('─'*65)
+        print(f'  {"Group":<20} {"Window":<28} {"Trades":>7} {"W":>5} {"L":>5}')
+        print('  ' + '─'*60)
+        for r in run_log:
+            flag = '  ← 0 trades' if r['trades'] == 0 else ''
+            print(f'  {r["group"]:<20} {r["window"]:<28} '
+                  f'{r["trades"]:>7} {r["wins"]:>5} {r["losses"]:>5}{flag}')
+        print(f'  Zero-trade runs: {n_zero_trade}/{n_runs}')
+
     print(f'\n{"="*65}')
     print(f'DATASET COMPLETE')
     print(f'{"="*65}')

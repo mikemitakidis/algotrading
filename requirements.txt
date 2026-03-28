@@ -6,3 +6,4 @@ python-dotenv==1.0.1
 requests==2.32.3
 xgboost>=2.0
 alpaca-py>=0.8
+pyarrow
