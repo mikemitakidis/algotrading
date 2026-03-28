@@ -86,7 +86,7 @@ def _build_timeframes(strategy: dict) -> list:
     return result
 
 
-def scan_cycle(focus: list, config: dict):
+def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
     """
     Run scan on focus symbols across all enabled timeframes.
     Strategy thresholds are loaded fresh from data/strategy.json on every call.
@@ -171,6 +171,28 @@ def scan_cycle(focus: list, config: dict):
     signals  = []
     now_utc  = datetime.now(timezone.utc).isoformat()
 
+    # Emit partial_confluence candidates for symbols that had scores but didn't reach threshold
+    if conn is not None:
+        from bot.flywheel import log_candidate
+        for sym, dirs in cached_scores.items():
+            for direction, tfs in dirs.items():
+                count = sum(tfs.values())
+                if count < min_valid:
+                    best_ind = next(
+                        (cached_inds[sym][t] for t in ('1D','4H','1H','15m')
+                         if sym in cached_inds and t in cached_inds[sym]), None)
+                    log_candidate(
+                        conn, cycle_id, sym, direction,
+                        stage='partial_confluence',
+                        valid_count=count,
+                        tfs_passing=list(tfs.keys()),
+                        available_tfs=available_tfs,
+                        min_valid=min_valid,
+                        rejection_reason=f'only_{count}_of_{min_valid}_tfs',
+                        strategy_version=strat_ver,
+                        ind=best_ind,
+                    )
+
     for sym, dirs in cached_scores.items():
         for direction, tfs in dirs.items():
             count = sum(tfs.values())
@@ -235,6 +257,10 @@ def scan_cycle(focus: list, config: dict):
                          sent_result.score or 0)
                 continue
             signals.append(signal)
+            # Log final_signal stage to flywheel (signal_id linked in main.py after DB insert)
+            if conn is not None:
+                from bot.flywheel import log_candidate
+                signal['_candidate_stage'] = 'final_signal'
             log.info('[SIGNAL] %s %s %s %d/%d TF | RSI:%.1f Price:$%.2f SL:$%.2f TP:$%.2f | TFs:%s | Sent:%s(%s)',
                      route, sym, direction.upper(), count, available_tfs,
                      best_ind['rsi'], entry, stop_loss, target_price,

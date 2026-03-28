@@ -58,6 +58,11 @@ def load() -> dict:
         'focus_size':            int(os.getenv('FOCUS_SIZE', '150')),
 
         # Sentiment (M8) — all optional, default off
+        # Broker / execution (M10)
+        'broker':              os.getenv('BROKER', 'paper'),
+        'risk_max_pos_pct':    float(os.getenv('RISK_MAX_POSITION_PCT', '2.0')),
+        'risk_max_open':       int(os.getenv('RISK_MAX_OPEN_POSITIONS', '10')),
+        'risk_portfolio_size': float(os.getenv('RISK_PORTFOLIO_SIZE', '100000')),
         'alpaca_key':          os.getenv('ALPACA_KEY', '').strip(),
         'alpaca_secret':       os.getenv('ALPACA_SECRET', '').strip(),
         'alphavantage_key':    os.getenv('ALPHAVANTAGE_KEY', '').strip(),

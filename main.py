@@ -33,6 +33,10 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
 from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
+from bot.flywheel  import init_flywheel_tables, log_candidate, log_intent, recent_intents
+from bot.brokers   import get_broker, get_broker_name
+from bot.brokers.base import OrderIntent
+from bot.risk       import RiskManager
 from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
                           alert_crash, alert_cycle_summary, alert_signal)
@@ -85,6 +89,11 @@ def main():
     (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
     conn = init_db(config['db_path'])
     init_features_table(conn)
+    init_flywheel_tables(conn)
+    risk_mgr = RiskManager()
+    broker   = get_broker()
+    log.info('[STARTUP] Broker: %s | Risk: max_pos=%s max_open=%d portfolio=$%.0f',
+             broker.name, risk_mgr.max_position_pct, risk_mgr.max_open, risk_mgr.portfolio_size)
 
     focus = FOCUS_SYMBOLS[:config['focus_size']]
     log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
@@ -143,16 +152,68 @@ def main():
             })
 
             cycle_start = time.monotonic()
-            signals, meta = scan_cycle(focus, config)
+            signals, meta = scan_cycle(focus, config, conn=conn, cycle_id=cycle)
             cycle_duration = round(time.monotonic() - cycle_start)
 
             inserted = 0
             for signal in signals:
                 ml_feats = signal.pop('_ml_features', {})
+                signal.pop('_candidate_stage', None)  # strip scanner tag
                 row_id = insert_signal(conn, signal)
                 if row_id:
                     inserted += 1
                     insert_signal_features(conn, row_id, signal, ml_feats)
+                    # Log final_signal to flywheel
+                    log_candidate(
+                        conn, cycle, signal.get('symbol',''), signal.get('direction',''),
+                        stage='final_signal',
+                        valid_count=signal.get('valid_count', 0),
+                        tfs_passing=[k for k in ('1D','4H','1H','15m')
+                                     if signal.get(f'tf_{k.lower().replace("h","h")}', 0)],
+                        available_tfs=meta.get('tfs_available', 0),
+                        min_valid=0,
+                        route=signal.get('route',''),
+                        strategy_version=signal.get('strategy_version', 1),
+                        signal_id=row_id,
+                        ind={k: signal.get(k) for k in ('rsi','macd_hist','atr','bb_pos','vwap_dev','vol_ratio')},
+                    )
+                    # Risk check + execution intent
+                    intent = OrderIntent(
+                        signal_id=row_id,
+                        symbol=signal.get('symbol',''),
+                        direction=signal.get('direction',''),
+                        route=signal.get('route',''),
+                        entry_price=signal.get('entry_price', 0.0),
+                        stop_loss=signal.get('stop_loss', 0.0),
+                        target_price=signal.get('target_price', 0.0),
+                        valid_count=signal.get('valid_count', 0),
+                        strategy_version=signal.get('strategy_version', 1),
+                    )
+                    risk_passed, risk_checks, risk_reason = risk_mgr.evaluate(intent)
+                    intent.risk_checks = risk_checks
+                    if risk_passed:
+                        result = broker.submit(intent)
+                        log_intent(conn, row_id,
+                            signal.get('symbol',''), signal.get('direction',''),
+                            signal.get('route',''),
+                            signal.get('entry_price',0), signal.get('stop_loss',0),
+                            signal.get('target_price',0),
+                            intent.position_size, intent.risk_usd,
+                            signal.get('valid_count',0), signal.get('strategy_version',1),
+                            broker.name, result.status,
+                            broker_order_id=result.broker_order_id,
+                            risk_checks=risk_checks)
+                    else:
+                        log_intent(conn, row_id,
+                            signal.get('symbol',''), signal.get('direction',''),
+                            signal.get('route',''),
+                            signal.get('entry_price',0), signal.get('stop_loss',0),
+                            signal.get('target_price',0),
+                            intent.position_size, intent.risk_usd,
+                            signal.get('valid_count',0), signal.get('strategy_version',1),
+                            broker.name, 'risk_rejected',
+                            rejection_reason=risk_reason,
+                            risk_checks=risk_checks)
                     alert_signal(config, signal)
 
             if inserted:

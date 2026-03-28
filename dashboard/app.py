@@ -3027,6 +3027,48 @@ def sentiment_test():
     })
 
 
+# ── Execution / Flywheel ────────────────────────────────────────────────────────
+
+@app.route('/api/execution/intents')
+@require_auth
+def execution_intents():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.flywheel import recent_intents
+    limit = int(request.args.get('limit', 20))
+    import sqlite3
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = recent_intents(conn, limit)
+    return jsonify(rows)
+
+
+@app.route('/api/execution/candidates')
+@require_auth
+def execution_candidates():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.flywheel import recent_candidates
+    limit = int(request.args.get('limit', 100))
+    import sqlite3
+    conn = sqlite3.connect(str(DB_PATH))
+    rows = recent_candidates(conn, limit)
+    return jsonify(rows)
+
+
+@app.route('/api/execution/status')
+@require_auth
+def execution_status():
+    import sys, os; sys.path.insert(0, str(BASE_DIR))
+    from bot.brokers import get_broker_name
+    from bot.risk import RiskManager
+    rm = RiskManager()
+    return jsonify({
+        'broker':          get_broker_name(),
+        'max_position_pct':rm.max_position_pct,
+        'max_open':        rm.max_open,
+        'portfolio_size':  rm.portfolio_size,
+        'allow_duplicates':rm.allow_duplicates,
+    })
+
+
 # ── Strategy ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/strategy')
