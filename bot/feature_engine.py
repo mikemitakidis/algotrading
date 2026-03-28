@@ -27,6 +27,8 @@ Decision features (used in live strategy):
   vol_ratio   current_vol / 20-bar avg vol. Long/Short: >0.6.
   atr         ATR-14. Used for stop/target sizing.
   price       Last close. Used for entry/stop/target calc.
+  bb_pos      Position within Bollinger Bands (0=lower, 1=upper).
+              Used by backtest_v2 trade record and scanner signal dict.
 
 ML-only features (logged, not used in decisions):
   bb_pos      Position within Bollinger Bands (0=lower, 1=upper).
@@ -162,6 +164,19 @@ def compute_features(df: pd.DataFrame) -> Optional[FeatureSet]:
         # Price (last close)
         price = _safe(c.iloc[-1])
 
+        # Bollinger Band position — needed by backtest_v2 trade record
+        # and by scanner signal dict (**best_ind unpacking).
+        # Computed here so it is available in the decision group.
+        sma20_d = c.rolling(20).mean()
+        std20_d = c.rolling(20).std()
+        bb_up_d = sma20_d + 2 * std20_d
+        bb_lo_d = sma20_d - 2 * std20_d
+        bb_rng_d = _safe(bb_up_d.iloc[-1] - bb_lo_d.iloc[-1])
+        bb_pos_d = _safe(
+            (c.iloc[-1] - bb_lo_d.iloc[-1]) / (bb_rng_d + 1e-9)
+            if bb_rng_d and bb_rng_d > 0 else 0.5
+        )
+
         decision = {
             'rsi':       rsi,
             'macd_hist': macd_hist,
@@ -171,6 +186,7 @@ def compute_features(df: pd.DataFrame) -> Optional[FeatureSet]:
             'vol_ratio': vol_ratio,
             'atr':       atr,
             'price':     price,
+            'bb_pos':    bb_pos_d,   # used by backtest_v2 trade record
         }
 
         # Reject if any decision feature is bad — can't make a live decision
