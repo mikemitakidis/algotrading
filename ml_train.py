@@ -217,7 +217,17 @@ def train(args) -> dict:
     print('='*65)
 
     # ── Load ──────────────────────────────────────────────────────────────────
-    df_all = load_all_trades()
+    dataset_path = getattr(args, 'dataset', None)
+    if dataset_path and Path(dataset_path).exists():
+        log.info('Loading from dataset: %s', dataset_path)
+        df_all = pd.read_parquet(dataset_path)
+        df_all['date'] = pd.to_datetime(df_all['date'], errors='coerce')
+        df_all = df_all.dropna(subset=['date']).sort_values('date').reset_index(drop=True)
+        log.info('Loaded %d rows from parquet', len(df_all))
+    else:
+        if dataset_path:
+            log.warning('Dataset not found at %s — falling back to reports/', dataset_path)
+        df_all = load_all_trades()
 
     # Outcome distribution before filtering
     outcome_counts = df_all['outcome'].value_counts()
@@ -404,6 +414,9 @@ def main():
                         help='Minimum WIN+LOSS trades required (default: 30)')
     parser.add_argument('--verbose', action='store_true',
                         help='Show extra debug output')
+    parser.add_argument('--dataset', type=str, default=None,
+                        help='Path to training_dataset.parquet (from ml_build_dataset.py). '
+                             'Falls back to scanning data/reports/ if not set.')
     args = parser.parse_args()
     train(args)
 
