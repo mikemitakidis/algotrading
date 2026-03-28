@@ -36,7 +36,7 @@ def get_provider_name() -> str:
     if name == 'yfinance':
         return 'yfinance (Yahoo Finance)'
     if name == 'alpaca':
-        return 'Alpaca Markets (not implemented)'
+        return 'Alpaca Markets (historical data)'
     return f'unknown:{name}'
 
 

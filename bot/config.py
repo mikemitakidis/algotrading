@@ -58,6 +58,8 @@ def load() -> dict:
         'focus_size':            int(os.getenv('FOCUS_SIZE', '150')),
 
         # Sentiment (M8) — all optional, default off
+        'alpaca_key':          os.getenv('ALPACA_KEY', '').strip(),
+        'alpaca_secret':       os.getenv('ALPACA_SECRET', '').strip(),
         'alphavantage_key':    os.getenv('ALPHAVANTAGE_KEY', '').strip(),
         'sentiment_mode':      os.getenv('SENTIMENT_MODE',     'off'),
         'sentiment_provider':  os.getenv('SENTIMENT_PROVIDER', 'disabled'),
