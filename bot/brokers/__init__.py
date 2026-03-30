@@ -18,7 +18,7 @@ def get_broker() -> BrokerAdapter:
     if name == 'paper':
         from bot.brokers.paper_broker import PaperBroker
         return PaperBroker()
-    if name == 'ibkr':
+    if name in ('ibkr', 'ibkr_paper'):
         from bot.brokers.ibkr_broker import IBKRBroker
         return IBKRBroker()
     log.warning('[BROKER] Unknown BROKER=%r — defaulting to paper', name)
@@ -27,7 +27,8 @@ def get_broker() -> BrokerAdapter:
 
 
 def get_broker_name() -> str:
-    return os.getenv('BROKER', 'paper').lower().strip()
+    name = os.getenv('BROKER', 'paper').lower().strip()
+    return 'ibkr_paper' if name in ('ibkr', 'ibkr_paper') else name
 
 
 __all__ = ['BrokerAdapter', 'OrderIntent', 'OrderResult', 'get_broker', 'get_broker_name']

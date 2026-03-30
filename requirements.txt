@@ -7,3 +7,4 @@ requests==2.32.3
 xgboost>=2.0
 alpaca-py>=0.8
 pyarrow
+ib_insync>=0.9

@@ -60,6 +60,9 @@ def load() -> dict:
         # Sentiment (M8) — all optional, default off
         # Broker / execution (M10)
         'broker':              os.getenv('BROKER', 'paper'),
+        'ibkr_host':           os.getenv('IBKR_HOST',    '127.0.0.1'),
+        'ibkr_port':           int(os.getenv('IBKR_PORT', '4002')),
+        'ibkr_account':        os.getenv('IBKR_ACCOUNT', 'DUP623346'),
         'risk_max_pos_pct':    float(os.getenv('RISK_MAX_POSITION_PCT', '2.0')),
         'risk_max_open':       int(os.getenv('RISK_MAX_OPEN_POSITIONS', '10')),
         'risk_portfolio_size': float(os.getenv('RISK_PORTFOLIO_SIZE', '100000')),

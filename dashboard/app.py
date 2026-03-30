@@ -3057,16 +3057,26 @@ def execution_candidates():
 @require_auth
 def execution_status():
     import sys, os; sys.path.insert(0, str(BASE_DIR))
-    from bot.brokers import get_broker_name
+    from bot.brokers import get_broker_name, get_broker
     from bot.risk import RiskManager
-    rm = RiskManager()
-    return jsonify({
-        'broker':          get_broker_name(),
+    rm   = RiskManager()
+    name = get_broker_name()
+    result = {
+        'broker':          name,
+        'is_live':         False,
         'max_position_pct':rm.max_position_pct,
         'max_open':        rm.max_open,
         'portfolio_size':  rm.portfolio_size,
         'allow_duplicates':rm.allow_duplicates,
-    })
+    }
+    # Include IBKR connection status if broker is ibkr_paper
+    if name == 'ibkr_paper':
+        try:
+            broker = get_broker()
+            result['ibkr'] = broker.connection_status()
+        except Exception as e:
+            result['ibkr'] = {'connected': False, 'error': str(e)}
+    return jsonify(result)
 
 
 # ── Strategy ─────────────────────────────────────────────────────────────────
