@@ -147,11 +147,12 @@ def alert_signal(config: dict, signal: dict) -> bool:
         'RSI: %.1f | MACD: %.4f\n'
         'EMA: %s\nATR: %.2f\n'
         'TFs: %s (%d/4)\n'
-        'Mode: SHADOW | Time: %s UTC'
+        'Broker: %s | Time: %s UTC'
     ) % (
         arrow, sym, direction.upper(), route_label,
         price, sl, tp, rsi, macd, ema_trend, atr,
-        tf_str, count, ts,
+        tf_str, count,
+        config.get('broker', 'paper').upper(), ts,
     )
 
     result = _send(config, text)
