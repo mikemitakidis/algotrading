@@ -136,6 +136,14 @@ def alert_signal(config: dict, signal: dict) -> bool:
 
     route_label = {'ETORO': '&#x2B50; ETORO (4/4)', 'IBKR': '&#x1F4CA; IBKR (3/4)'}.get(route, route)
 
+    broker = config.get('broker', 'paper').upper()
+    if broker == 'IBKR_PAPER':
+        mode_str = 'PAPER TRADING (IBKR paper account)'
+    elif broker == 'IBKR':
+        mode_str = 'LIVE TRADING (IBKR live account)'
+    else:
+        mode_str = f'SHADOW (no execution, broker={broker})'
+
     text = (
         '%s <b>%s &#x2014; %s</b>\n'
         'Route: %s\n'
@@ -147,12 +155,12 @@ def alert_signal(config: dict, signal: dict) -> bool:
         'RSI: %.1f | MACD: %.4f\n'
         'EMA: %s\nATR: %.2f\n'
         'TFs: %s (%d/4)\n'
-        'Broker: %s | Time: %s UTC'
+        'Mode: %s | Time: %s UTC'
     ) % (
         arrow, sym, direction.upper(), route_label,
         price, sl, tp, rsi, macd, ema_trend, atr,
         tf_str, count,
-        config.get('broker', 'paper').upper(), ts,
+        mode_str, ts,
     )
 
     result = _send(config, text)
