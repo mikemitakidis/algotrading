@@ -26,22 +26,39 @@ from bot.brokers.base import OrderIntent
 log = logging.getLogger(__name__)
 
 BASE_DIR    = Path(__file__).resolve().parent.parent
+# paper_orders.jsonl kept for audit — risk checks use execution_intents DB
 ORDERS_FILE = BASE_DIR / 'data' / 'paper_orders.jsonl'
 
 
+# Synthetic signal IDs used in test scripts — never count as real open positions
+_TEST_SIGNAL_IDS = {888888, 999999}
+
+
 def _load_open_intents() -> list:
-    """Read paper_orders.jsonl and return all logged intents."""
-    if not ORDERS_FILE.exists():
+    """
+    Load real open intents from execution_intents SQLite table.
+    Excludes: synthetic test rows, risk_rejected, error, not_implemented.
+    Only counts: accepted, paper_logged (real submitted orders).
+    """
+    db = BASE_DIR / 'data' / 'signals.db'
+    if not db.exists():
         return []
     try:
-        records = []
-        with open(ORDERS_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    records.append(json.loads(line))
-        return records
-    except Exception:
+        import sqlite3
+        conn = sqlite3.connect(str(db))
+        rows = conn.execute(
+            """SELECT symbol, direction, signal_id, status
+               FROM execution_intents
+               WHERE status IN ('accepted', 'paper_logged')
+               AND signal_id NOT IN ({})\n""".format(
+                ','.join(str(i) for i in _TEST_SIGNAL_IDS)
+            )
+        ).fetchall()
+        conn.close()
+        return [{'symbol': r[0], 'direction': r[1],
+                 'signal_id': r[2], 'status': r[3]} for r in rows]
+    except Exception as e:
+        log.warning('[RISK] _load_open_intents failed: %s', e)
         return []
 
 
