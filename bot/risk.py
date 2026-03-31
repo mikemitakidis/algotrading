@@ -95,7 +95,7 @@ class RiskManager:
         checks = {}
         reasons = []
 
-        # 0. Live mode hard limits — enforced before all other checks
+        # 0. Live mode hard limits + full reconciliation
         import os as _os
         broker = _os.getenv('BROKER', 'paper').lower().strip()
         if broker == 'ibkr_live':
@@ -105,16 +105,44 @@ class RiskManager:
                 checks['live_hard_cap_ok'] = False
             else:
                 checks['live_hard_cap_ok'] = True
-            # Reconcile against broker before live submission
+
+            # Full reconciliation: broker positions + open orders + local intents
             try:
                 from bot.brokers.ibkr_broker import IBKRBroker
-                broker_positions = IBKRBroker().get_positions()
-                checks['broker_positions'] = len(broker_positions)
-                log.info('[RISK] Live reconcile: %d open positions at broker',
-                         len(broker_positions))
+                _broker = IBKRBroker()
+                recon = _broker.reconcile()
+                broker_positions = recon.get('positions', [])
+                broker_orders    = recon.get('open_orders', [])
+                recon_warnings   = recon.get('warnings', [])
+
+                checks['broker_positions']  = len(broker_positions)
+                checks['broker_open_orders']= len(broker_orders)
+                checks['recon_warnings']    = recon_warnings
+
+                # Block if broker already has this symbol+direction open
+                broker_dup = any(
+                    p.get('symbol') == intent.symbol
+                    for p in broker_positions
+                    if abs(p.get('position', 0)) > 0
+                )
+                if broker_dup:
+                    reasons.append(f'broker_position_exists_{intent.symbol}')
+                    checks['broker_duplicate_ok'] = False
+                else:
+                    checks['broker_duplicate_ok'] = True
+
+                log.info('[RISK] Live reconcile: broker_positions=%d '
+                         'open_orders=%d broker_dup=%s',
+                         len(broker_positions), len(broker_orders), broker_dup)
+                if recon_warnings:
+                    log.warning('[RISK] Recon warnings: %s', recon_warnings)
+
             except Exception as _e:
-                checks['broker_positions'] = -1
-                log.warning('[RISK] Live reconcile failed: %s', _e)
+                # Fail-safe for live: if reconcile fails, block the order
+                reasons.append('live_reconcile_failed')
+                checks['broker_positions']   = -1
+                checks['broker_duplicate_ok']= False
+                log.error('[RISK] Live reconcile FAILED — blocking order: %s', _e)
 
         # 1. Market hours (basic — US equities Mon-Fri)
         now = datetime.now(timezone.utc)

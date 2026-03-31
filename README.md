@@ -1,7 +1,7 @@
 # Algo Trader v1
 
 Multi-timeframe trading signal scanner running in shadow mode (no live execution).
-Milestones 1–6 complete. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
+Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
 
 ## Current Status
 
@@ -12,8 +12,14 @@ Milestones 1–6 complete. See [ROADMAP.md](ROADMAP.md) for the full 15-mileston
 | 3 | Dashboard Observability | ✅ Complete |
 | 4 | Strategy Engine | ✅ Complete |
 | 5 | Backtesting | ✅ Complete |
-| 6 | Modular Data-Provider Architecture | ✅ Complete |
-| 7–15 | See ROADMAP.md | ⬜ Planned |
+| 6  | Modular Data-Provider Architecture | ✅ Complete |
+| 7  | Feature Engine + ML Logging        | ✅ Complete |
+| 8  | News/Sentiment Module              | ✅ Complete |
+| 9  | ML Meta-Labeling Pipeline          | ✅ Baseline complete |
+| 10 | Broker Execution + Data Flywheel   | ✅ Complete |
+| 11 | IBKR Paper Trading                 | ✅ Active (DUP623346) |
+| 12 | IBKR Live Trading                  | 🔒 Safety envelope built, not activated |
+| 13–15 | See ROADMAP.md                  | ⬜ Planned |
 
 ## What the Bot Does
 

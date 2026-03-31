@@ -77,10 +77,18 @@ CREATE TABLE execution_intents (
     broker           TEXT    DEFAULT 'paper',
     status           TEXT    DEFAULT 'pending',
     -- status: pending | risk_rejected | paper_logged | accepted |
-    --         rejected | filled | cancelled | error | not_implemented
+    --         rejected | filled | cancelled | error | not_implemented |
+    --         live_safety_blocked | account_mismatch | connection_failed
     broker_order_id  TEXT    DEFAULT NULL,
     rejection_reason TEXT    DEFAULT NULL,
-    risk_checks      TEXT    DEFAULT '{}'   -- JSON
+    risk_checks      TEXT    DEFAULT '{}'  ,  -- JSON
+    -- Order lifecycle tracking (M12)
+    submitted_at     TEXT    DEFAULT NULL,
+    filled_at        TEXT    DEFAULT NULL,
+    fill_price       REAL    DEFAULT NULL,
+    fill_qty         REAL    DEFAULT NULL,
+    cancelled_at     TEXT    DEFAULT NULL,
+    lifecycle_json   TEXT    DEFAULT '{}'   -- full event log JSON
 )
 """
 
@@ -234,6 +242,55 @@ def recent_candidates(conn: sqlite3.Connection, limit: int = 50) -> list:
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception:
         return []
+
+
+def update_intent_status(
+    conn: sqlite3.Connection,
+    intent_id: int,
+    status: str,
+    fill_price: float = None,
+    fill_qty: float = None,
+    event: str = None,
+) -> None:
+    """
+    Update an execution_intent row with lifecycle event.
+    Appends the event to lifecycle_json for full audit trail.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        # Read current lifecycle_json
+        row = conn.execute(
+            'SELECT lifecycle_json FROM execution_intents WHERE id=?', (intent_id,)
+        ).fetchone()
+        lifecycle = _json.loads(row[0] or '{}') if row else {}
+        events = lifecycle.get('events', [])
+        events.append({'ts': now, 'status': status, 'event': event or status})
+        lifecycle['events'] = events
+        lifecycle['last_status'] = status
+
+        updates = ['status=?', 'lifecycle_json=?']
+        values  = [status, _json.dumps(lifecycle)]
+
+        if status == 'filled' and fill_price:
+            updates += ['filled_at=?', 'fill_price=?', 'fill_qty=?']
+            values  += [now, fill_price, fill_qty]
+        elif status == 'cancelled':
+            updates += ['cancelled_at=?']
+            values  += [now]
+        elif status in ('accepted', 'paper_logged'):
+            updates += ['submitted_at=?']
+            values  += [now]
+
+        values.append(intent_id)
+        conn.execute(
+            f'UPDATE execution_intents SET {", ".join(updates)} WHERE id=?',
+            values
+        )
+        conn.commit()
+    except Exception as e:
+        log.warning('[FLYWHEEL] update_intent_status failed: %s', e)
 
 
 def recent_intents(conn: sqlite3.Connection, limit: int = 20) -> list:

@@ -87,6 +87,25 @@ def main():
         sys.exit(1)
 
     (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
+
+    # ── Live trading startup hard-stop ───────────────────────────────────
+    # If BROKER=ibkr_live, ALL safety config must be present before
+    # the bot is allowed to start. This is a hard sys.exit(1), not a warning.
+    _broker_name = config.get('broker', 'paper').lower().strip()
+    if _broker_name == 'ibkr_live':
+        from bot.brokers.ibkr_broker import _check_live_safety_config
+        _safe, _reason = _check_live_safety_config()
+        if not _safe:
+            log.error('=' * 60)
+            log.error('[STARTUP] LIVE TRADING STARTUP REFUSED')
+            log.error('[STARTUP] Safety config incomplete: %s', _reason)
+            log.error('[STARTUP] Fix .env and restart. Bot will NOT start.')
+            log.error('=' * 60)
+            write_state({'phase': 'refused', 'reason': f'live_safety: {_reason}'})
+            sys.exit(1)
+        log.info('[STARTUP] *** LIVE TRADING MODE — REAL MONEY ***')
+        log.info('[STARTUP] Live safety config: OK')
+
     conn = init_db(config['db_path'])
     init_features_table(conn)
     init_flywheel_tables(conn)
