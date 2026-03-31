@@ -62,11 +62,21 @@ def alert_startup(config: dict) -> bool:
     if not _is_enabled(config):
         return False
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    broker    = config.get('broker', 'paper').upper()
+    bot_mode  = config.get('bot_mode', 'shadow').upper()
+    # Clarify mode: shadow means no live execution, ibkr_paper means paper orders active
+    if broker == 'IBKR_PAPER':
+        mode_str = 'PAPER TRADING (IBKR paper account)'
+    elif broker == 'IBKR':
+        mode_str = 'LIVE TRADING (IBKR live account)'
+    else:
+        mode_str = f'SHADOW (no execution, broker={broker})'
     text = (
         '&#x1F7E2; <b>Algo Trader v1 &#x2014; Started</b>\n'
-        'Mode: %s\nFocus: %d symbols\nScan: %d min\nTime: %s'
+        'Mode: %s\nBroker: %s\nFocus: %d symbols\nScan: %d min\nTime: %s'
     ) % (
-        config.get('bot_mode', 'shadow').upper(),
+        mode_str,
+        broker,
         config.get('focus_size', 150),
         config.get('scan_interval_secs', 900) // 60,
         ts,
@@ -154,13 +164,18 @@ def alert_cycle_summary(config: dict, cycle: int,
                         signal_count: int, symbols_scanned: int) -> bool:
     if not _is_enabled(config):
         return False
-    if signal_count == 0:
+    # Always send cycle summary every 8 cycles (~2h) even with 0 signals
+    # so user knows the bot is alive and scanning
+    heartbeat_every = 8
+    if signal_count == 0 and (cycle % heartbeat_every != 0):
         return False
     ts   = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    broker = config.get('broker', 'paper').upper()
+    status = '&#x1F7E1;' if signal_count == 0 else '&#x1F4CB;'
     text = (
-        '&#x1F4CB; <b>Cycle %d Summary</b>\n'
-        'Symbols scanned: %d\nSignals found: %d\nTime: %s'
-    ) % (cycle, symbols_scanned, signal_count, ts)
+        '%s <b>Cycle %d Summary</b>\n'
+        'Symbols scanned: %d\nSignals found: %d\nBroker: %s\nTime: %s'
+    ) % (status, cycle, symbols_scanned, signal_count, broker, ts)
     return _send(config, text)
 
 
