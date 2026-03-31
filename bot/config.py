@@ -63,6 +63,10 @@ def load() -> dict:
         'ibkr_host':           os.getenv('IBKR_HOST',    '127.0.0.1'),
         'ibkr_port':           int(os.getenv('IBKR_PORT', '4002')),
         'ibkr_account':        os.getenv('IBKR_ACCOUNT', 'DUP623346'),
+        # M12 live trading safety config
+        'ibkr_live_account':   os.getenv('IBKR_LIVE_ACCOUNT', '').strip(),
+        'ibkr_live_port':      int(os.getenv('IBKR_LIVE_PORT', '4001')),
+        'ibkr_live_confirmed': os.getenv('IBKR_LIVE_CONFIRMED', '').strip(),
         'risk_max_pos_pct':    float(os.getenv('RISK_MAX_POSITION_PCT', '2.0')),
         'risk_max_open':       int(os.getenv('RISK_MAX_OPEN_POSITIONS', '10')),
         'risk_portfolio_size': float(os.getenv('RISK_PORTFOLIO_SIZE', '100000')),

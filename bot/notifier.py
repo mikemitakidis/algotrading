@@ -67,8 +67,8 @@ def alert_startup(config: dict) -> bool:
     # Clarify mode: shadow means no live execution, ibkr_paper means paper orders active
     if broker == 'IBKR_PAPER':
         mode_str = 'PAPER TRADING (IBKR paper account)'
-    elif broker == 'IBKR':
-        mode_str = 'LIVE TRADING (IBKR live account)'
+    elif broker == 'IBKR_LIVE':
+        mode_str = '⚠ LIVE TRADING (IBKR live — REAL MONEY)'
     else:
         mode_str = f'SHADOW (no execution, broker={broker})'
     text = (
@@ -139,8 +139,8 @@ def alert_signal(config: dict, signal: dict) -> bool:
     broker = config.get('broker', 'paper').upper()
     if broker == 'IBKR_PAPER':
         mode_str = 'PAPER TRADING (IBKR paper account)'
-    elif broker == 'IBKR':
-        mode_str = 'LIVE TRADING (IBKR live account)'
+    elif broker == 'IBKR_LIVE':
+        mode_str = '⚠ LIVE TRADING (IBKR live — REAL MONEY)'
     else:
         mode_str = f'SHADOW (no execution, broker={broker})'
 

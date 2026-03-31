@@ -95,6 +95,27 @@ class RiskManager:
         checks = {}
         reasons = []
 
+        # 0. Live mode hard limits — enforced before all other checks
+        import os as _os
+        broker = _os.getenv('BROKER', 'paper').lower().strip()
+        if broker == 'ibkr_live':
+            # Hard cap: position size cannot exceed 2% in live mode
+            if self.max_position_pct > 2.0:
+                reasons.append('live_position_pct_exceeds_2pct_hard_cap')
+                checks['live_hard_cap_ok'] = False
+            else:
+                checks['live_hard_cap_ok'] = True
+            # Reconcile against broker before live submission
+            try:
+                from bot.brokers.ibkr_broker import IBKRBroker
+                broker_positions = IBKRBroker().get_positions()
+                checks['broker_positions'] = len(broker_positions)
+                log.info('[RISK] Live reconcile: %d open positions at broker',
+                         len(broker_positions))
+            except Exception as _e:
+                checks['broker_positions'] = -1
+                log.warning('[RISK] Live reconcile failed: %s', _e)
+
         # 1. Market hours (basic — US equities Mon-Fri)
         now = datetime.now(timezone.utc)
         is_weekday = now.weekday() < 5
