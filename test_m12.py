@@ -86,6 +86,37 @@ def run(live_tests=False):
               f'{expected_in_reason} in reason={reason[:60]}')
 
     # ── Test 3: full config passes ────────────────────────────────────────
+    # Additional: broker open order for same symbol must block
+    section('2b. Broker open-order conflict blocks live submission')
+    # Simulate risk evaluation with mocked reconcile returning an open order
+    import unittest.mock as _mock
+    from bot.risk import RiskManager
+    from bot.brokers.base import OrderIntent
+    os.environ.update({
+        'BROKER': 'ibkr_live',
+        'IBKR_LIVE_ACCOUNT': 'TEST', 'IBKR_LIVE_PORT': '4001',
+        'IBKR_LIVE_CONFIRMED': 'yes', 'RISK_MAX_POSITION_PCT': '1.0',
+    })
+    _intent = OrderIntent(
+        signal_id=555555, symbol='MSFT', direction='long', route='IBKR',
+        entry_price=400.0, stop_loss=390.0, target_price=420.0,
+        valid_count=3, strategy_version=1,
+    )
+    # Mock reconcile to return an open order for MSFT
+    from bot.brokers import ibkr_broker as _ib_mod
+    _fake_recon = {
+        'positions':   [],
+        'open_orders': [{'symbol': 'MSFT', 'action': 'BUY', 'qty': 10, 'status': 'Submitted'}],
+        'warnings':    ['Open order: MSFT qty=10'],
+    }
+    with _mock.patch.object(_ib_mod.IBKRBroker, 'reconcile', return_value=_fake_recon):
+        rm = RiskManager()
+        _passed, _checks, _reason = rm.evaluate(_intent)
+    check('broker_open_order_blocks_live',
+          not _passed and 'broker_open_order_exists_MSFT' in (_reason or ''),
+          f'reason={_reason}')
+    os.environ['BROKER'] = 'ibkr_paper'
+
     section('3. Full config passes safety gate')
     os.environ.update({
         'IBKR_LIVE_ACCOUNT':   'TEST_LIVE_ACCT',
@@ -104,7 +135,10 @@ def run(live_tests=False):
 
     # ── Test 5: submit() blocked by safety gate ───────────────────────────
     section('5. submit() returns live_safety_blocked when gate fails')
-    os.environ['IBKR_LIVE_CONFIRMED'] = 'no'
+    # Clear ALL live config — gate must block before any connection attempt
+    for _k in ('IBKR_LIVE_ACCOUNT','IBKR_LIVE_CONFIRMED','IBKR_LIVE_PORT'):
+        os.environ.pop(_k, None)
+    os.environ['BROKER'] = 'ibkr_live'
     intent = OrderIntent(
         signal_id=777777, symbol='AAPL', direction='long', route='IBKR',
         entry_price=213.50, stop_loss=207.50, target_price=224.00,

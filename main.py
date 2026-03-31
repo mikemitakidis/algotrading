@@ -33,7 +33,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
 from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
-from bot.flywheel  import init_flywheel_tables, log_candidate, log_intent, recent_intents
+from bot.flywheel  import init_flywheel_tables, log_candidate, log_intent, recent_intents, update_intent_status
 from bot.brokers   import get_broker, get_broker_name
 from bot.brokers.base import OrderIntent
 from bot.risk       import RiskManager
@@ -212,7 +212,7 @@ def main():
                     intent.risk_checks = risk_checks
                     if risk_passed:
                         result = broker.submit(intent)
-                        log_intent(conn, row_id,
+                        intent_id = log_intent(conn, row_id,
                             signal.get('symbol',''), signal.get('direction',''),
                             signal.get('route',''),
                             signal.get('entry_price',0), signal.get('stop_loss',0),
@@ -222,8 +222,19 @@ def main():
                             broker.name, result.status,
                             broker_order_id=result.broker_order_id,
                             risk_checks=risk_checks)
+                        # Wire lifecycle: log initial status transition
+                        if intent_id:
+                            update_intent_status(
+                                conn, intent_id, result.status,
+                                event=f'broker_response:{result.status}'
+                            )
+                            if result.status not in ('accepted','paper_logged'):
+                                update_intent_status(
+                                    conn, intent_id, 'error',
+                                    event=f'broker_error:{result.reason[:80] if result.reason else "unknown"}'
+                                )
                     else:
-                        log_intent(conn, row_id,
+                        intent_id = log_intent(conn, row_id,
                             signal.get('symbol',''), signal.get('direction',''),
                             signal.get('route',''),
                             signal.get('entry_price',0), signal.get('stop_loss',0),
@@ -233,6 +244,11 @@ def main():
                             broker.name, 'risk_rejected',
                             rejection_reason=risk_reason,
                             risk_checks=risk_checks)
+                        if intent_id:
+                            update_intent_status(
+                                conn, intent_id, 'risk_rejected',
+                                event=f'risk_rejected:{risk_reason}'
+                            )
                     alert_signal(config, signal)
 
             if inserted:

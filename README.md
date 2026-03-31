@@ -1,6 +1,6 @@
 # Algo Trader v1
 
-Multi-timeframe trading signal scanner running in shadow mode (no live execution).
+Multi-timeframe algorithmic trading bot. Currently running IBKR paper trading (account DUP623346). Live trading safety envelope built (M12), not yet activated.
 Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
 
 ## Current Status
@@ -32,9 +32,9 @@ Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.
 
 ## What It Does NOT Do
 
-- No live trades. No broker connections. Shadow mode only.
+- No live-money trades yet. IBKR paper trading active via IB Gateway (M11).
 - No ML filtering yet (Milestone 9)
-- No automated execution (Milestones 10–13)
+- Automated paper execution via IBKR bracket orders (M11 active). Live execution ready behind safety gate (M12).
 
 ---
 

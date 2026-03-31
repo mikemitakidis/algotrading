@@ -119,21 +119,48 @@ class RiskManager:
                 checks['broker_open_orders']= len(broker_orders)
                 checks['recon_warnings']    = recon_warnings
 
-                # Block if broker already has this symbol+direction open
-                broker_dup = any(
+                # ── Block policy (broker is source of truth for live) ──────
+                # 1. Existing broker POSITION in this symbol → block
+                pos_conflict = any(
                     p.get('symbol') == intent.symbol
                     for p in broker_positions
                     if abs(p.get('position', 0)) > 0
                 )
-                if broker_dup:
-                    reasons.append(f'broker_position_exists_{intent.symbol}')
-                    checks['broker_duplicate_ok'] = False
-                else:
-                    checks['broker_duplicate_ok'] = True
+                # 2. Existing broker OPEN ORDER for this symbol → block
+                #    (covers bracket legs not yet filled: prevents double-entry)
+                order_conflict = any(
+                    o.get('symbol') == intent.symbol
+                    for o in broker_orders
+                )
+                broker_conflict = pos_conflict or order_conflict
 
-                log.info('[RISK] Live reconcile: broker_positions=%d '
-                         'open_orders=%d broker_dup=%s',
-                         len(broker_positions), len(broker_orders), broker_dup)
+                if broker_conflict:
+                    block_reason = (
+                        f'broker_position_exists_{intent.symbol}' if pos_conflict
+                        else f'broker_open_order_exists_{intent.symbol}'
+                    )
+                    reasons.append(block_reason)
+                    checks['broker_conflict_ok'] = False
+                    checks['broker_conflict_reason'] = block_reason
+                else:
+                    checks['broker_conflict_ok'] = True
+                    checks['broker_conflict_reason'] = None
+
+                # Max-open count: broker positions + local accepted intents
+                local_intents    = _load_open_intents()
+                combined_open    = len(broker_positions) + len(local_intents)
+                checks['combined_open_positions'] = combined_open
+                if combined_open >= self.max_open:
+                    reasons.append(f'combined_max_open_{self.max_open}')
+                    checks['combined_max_ok'] = False
+                else:
+                    checks['combined_max_ok'] = True
+
+                log.info('[RISK] Live recon: positions=%d open_orders=%d '
+                         'local_intents=%d combined=%d conflict=%s(%s)',
+                         len(broker_positions), len(broker_orders),
+                         len(local_intents), combined_open,
+                         broker_conflict, checks.get('broker_conflict_reason','none'))
                 if recon_warnings:
                     log.warning('[RISK] Recon warnings: %s', recon_warnings)
 
