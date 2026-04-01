@@ -112,7 +112,8 @@ def alert_signal(config: dict, signal: dict) -> bool:
         return False
 
     route  = signal.get('route', 'SHADOW')
-    count  = signal.get('valid_count', 0)
+    count         = signal.get('valid_count', 0)
+    available_tfs = signal.get('available_tfs', 4)  # denominator: TFs with data this cycle
     price  = signal.get('price', 0.0)
     rsi    = signal.get('rsi', 0.0)
     atr    = signal.get('atr', 0.0)
@@ -136,9 +137,9 @@ def alert_signal(config: dict, signal: dict) -> bool:
 
     # Route label uses actual valid_count — not hardcoded
     if route == 'ETORO':
-        route_label = f'&#x2B50; ETORO ({count}/4)'
+        route_label = f'&#x2B50; ETORO ({count}/{available_tfs})'
     elif route == 'IBKR':
-        route_label = f'&#x1F4CA; IBKR ({count}/4)'
+        route_label = f'&#x1F4CA; IBKR ({count}/{available_tfs})'
     else:
         route_label = route
 
@@ -160,12 +161,12 @@ def alert_signal(config: dict, signal: dict) -> bool:
         '&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;\n'
         'RSI: %.1f | MACD: %.4f\n'
         'EMA: %s\nATR: %.2f\n'
-        'TFs: %s (%d/4)\n'
+        'TFs: %s (%d/%d)\n'
         'Mode: %s | Time: %s UTC'
     ) % (
         arrow, sym, direction.upper(), route_label,
         price, sl, tp, rsi, macd, ema_trend, atr,
-        tf_str, count,
+        tf_str, count, available_tfs,
         mode_str, ts,
     )
 

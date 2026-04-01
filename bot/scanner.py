@@ -236,6 +236,7 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
                 'tf_4h':            tfs.get('4H',  0),
                 'tf_1d':            tfs.get('1D',  0),
                 'valid_count':      count,
+                'available_tfs':    available_tfs,
                 'entry_price':      round(entry, 4),
                 'stop_loss':        stop_loss,
                 'target_price':     target_price,

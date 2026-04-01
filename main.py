@@ -256,6 +256,23 @@ def main():
 
             alert_cycle_summary(config, cycle, len(signals), len(focus))
 
+            # ── Gateway health check (every cycle for IBKR brokers) ──────────
+            _bname = config.get('broker', 'paper').lower()
+            if 'ibkr' in _bname:
+                from bot.brokers.ibkr_broker import _gateway_available
+                _host = config.get('ibkr_host', '127.0.0.1')
+                _port = int(config.get('ibkr_port', 4002))
+                if not _gateway_available(_host, _port):
+                    log.error('[GATEWAY] IB Gateway DOWN at %s:%d — '
+                              'run: systemctl start ibgateway', _host, _port)
+                    # Send Telegram alert (throttled: only once per 4 cycles)
+                    if cycle % 4 == 1:
+                        from bot.notifier import _send
+                        _send(config,
+                              f'\u26a0\ufe0f <b>IB Gateway DOWN</b>\n'
+                              f'Port {_port} not responding.\n'
+                              f'Run: systemctl start ibgateway')
+
             last_cycle_at = datetime.now(timezone.utc).isoformat()
             next_cycle_at = datetime.fromtimestamp(
                 time.time() + scan_interval, tz=timezone.utc

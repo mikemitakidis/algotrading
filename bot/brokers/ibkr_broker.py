@@ -103,6 +103,16 @@ def _check_live_safety_config() -> tuple[bool, str]:
     return True, 'all live safety checks passed'
 
 
+def _gateway_available(host: str, port: int, timeout: float = 3.0) -> bool:
+    """Fast TCP check — returns True if port is listening, False otherwise."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 class IBKRBroker(BrokerAdapter):
     """
     IBKR broker — paper (M11) and live (M12) modes via ib_insync + IB Gateway.
@@ -225,6 +235,18 @@ class IBKRBroker(BrokerAdapter):
         Never raises — returns OrderResult with status='error' on any failure.
         """
         host, port, account, _ = _get_connection_params()
+
+        # ── Pre-submit gateway health check ────────────────────────────────────
+        if not _gateway_available(host, port):
+            log.error('[IBKR] Gateway not reachable at %s:%d — order blocked. '
+                      'Run: systemctl start ibgateway', host, port)
+            return OrderResult(
+                intent=intent,
+                status='connection_failed',
+                reason=f'IB Gateway not reachable at {host}:{port} — '
+                       f'run: systemctl start ibgateway',
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+            )
 
         # ── Live safety gate (checked on every submission) ─────────────────────
         if self.is_live:
