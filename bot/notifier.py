@@ -134,7 +134,13 @@ def alert_signal(config: dict, signal: dict) -> bool:
     else:
         sl, tp, arrow = price + 2*atr, price - 3*atr, '&#x1F534;'
 
-    route_label = {'ETORO': '&#x2B50; ETORO (4/4)', 'IBKR': '&#x1F4CA; IBKR (3/4)'}.get(route, route)
+    # Route label uses actual valid_count — not hardcoded
+    if route == 'ETORO':
+        route_label = f'&#x2B50; ETORO ({count}/4)'
+    elif route == 'IBKR':
+        route_label = f'&#x1F4CA; IBKR ({count}/4)'
+    else:
+        route_label = route
 
     broker = config.get('broker', 'paper').upper()
     if broker == 'IBKR_PAPER':
