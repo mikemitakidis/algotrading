@@ -1,10 +1,12 @@
 #!/bin/bash
-# disable_readonly.sh v3 — click-based dialog dismissal for Java/Swing Gateway popup
+# disable_readonly_permanent.sh
+# Navigates Gateway Configure → Settings → API and unchecks Read-Only API.
+# One-time operation. Persists to Gateway session files permanently.
+# Run ONCE after Gateway is logged in. Never needs to run again.
+
 export DISPLAY=:99
 LOG=/var/log/ibgateway/disable_readonly.log
-DIALOG_TITLE="API client needs write access action confirmation"
-
-echo "[$(date)] disable_readonly v3 starting (pid=$$)" >> "$LOG"
+echo "[$(date)] permanent disable starting" >> "$LOG"
 
 # Wait for login
 for i in $(seq 1 180); do
@@ -12,78 +14,100 @@ for i in $(seq 1 180); do
     sleep 1
 done
 echo "[$(date)] login ready" >> "$LOG"
+sleep 3
 
-# Probe connection to trigger the write-access dialog
-/opt/algo-trader/venv/bin/python3 - >> "$LOG" 2>&1 << 'PYEOF'
-try:
-    from ib_insync import IB
-    ib = IB()
-    ib.connect('127.0.0.1', 4002, clientId=99, timeout=10, readonly=False)
-    ib.sleep(3)
-    ib.managedAccounts()
-    ib.sleep(1)
-    ib.disconnect()
-    print("probe done")
-except Exception as e:
-    print("probe error:", e)
-PYEOF
+# Find Gateway main window
+WID=$(xdotool search --name "IB Gateway" 2>/dev/null | head -1)
+if [ -z "$WID" ]; then
+    WID=$(xdotool search --class "ibgateway" 2>/dev/null | head -1)
+fi
+echo "[$(date)] Gateway window: $WID" >> "$LOG"
 
-# Poll for dialog and dismiss via mouse click (Java Swing ignores synthetic keypresses)
-for i in $(seq 1 60); do
-    WID=$(xdotool search --name "$DIALOG_TITLE" 2>/dev/null | head -1)
-    if [ -n "$WID" ]; then
-        echo "[$(date)] dialog found window=$WID poll=$i" >> "$LOG"
-        scrot /tmp/ibgw_dialog_before.png 2>/dev/null
+# Screenshot current state
+scrot /tmp/gw_step1_main.png
+echo "[$(date)] step1: main window" >> "$LOG"
 
-        # Get window geometry
-        GEOM=$(xdotool getwindowgeometry "$WID" 2>/dev/null)
-        echo "[$(date)] geometry: $GEOM" >> "$LOG"
+# Get window position
+X=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f1)
+Y=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f2)
+W=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Geometry | awk '{print $2}' | cut -d'x' -f1)
+echo "[$(date)] window at ($X,$Y) width=$W" >> "$LOG"
 
-        # Get absolute window position
-        X=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f1)
-        Y=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f2)
-        W=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Geometry | awk '{print $2}' | cut -d'x' -f1)
-        H=$(xdotool getwindowgeometry "$WID" 2>/dev/null | grep Geometry | awk '{print $2}' | cut -d'x' -f2)
-        echo "[$(date)] pos=($X,$Y) size=${W}x${H}" >> "$LOG"
+# Raise and focus Gateway window
+xdotool windowraise "$WID"
+xdotool windowfocus --sync "$WID"
+sleep 1
 
-        # Raise and focus window properly for Java
-        xdotool windowraise "$WID" 2>/dev/null
-        xdotool windowfocus --sync "$WID" 2>/dev/null
-        sleep 0.8
+# Click Configure menu — typically ~4th item in menu bar, ~350px from left
+# Gateway width=700, menu items roughly at 60,150,250,350
+MENU_X=$(( X + 350 ))
+MENU_Y=$(( Y + 25 ))
+echo "[$(date)] clicking Configure at ($MENU_X,$MENU_Y)" >> "$LOG"
+xdotool mousemove "$MENU_X" "$MENU_Y"
+sleep 0.3
+xdotool click 1
+sleep 1
+scrot /tmp/gw_step2_configure_menu.png
+echo "[$(date)] step2: Configure menu" >> "$LOG"
 
-        # Click the confirm button — Java dialogs put the default button
-        # (Yes/Allow/OK) at bottom-right. For 602x210 dialog that's ~x=490,y=175
-        # Use absolute screen coordinates = window_origin + button_offset
-        BTN_X=$(( X + W - 112 ))
-        BTN_Y=$(( Y + H - 35 ))
-        echo "[$(date)] clicking button at abs=($BTN_X,$BTN_Y)" >> "$LOG"
-        xdotool mousemove "$BTN_X" "$BTN_Y"
-        sleep 0.3
-        xdotool click 1
-        sleep 0.8
+# Click Settings — last item in Configure dropdown (~bottom of menu)
+# Dropdown items are ~20px tall, Settings is typically ~5th item down
+SETTINGS_X=$(( MENU_X + 20 ))
+SETTINGS_Y=$(( MENU_Y + 100 ))
+echo "[$(date)] clicking Settings at ($SETTINGS_X,$SETTINGS_Y)" >> "$LOG"
+xdotool mousemove "$SETTINGS_X" "$SETTINGS_Y"
+sleep 0.3
+xdotool click 1
+sleep 1.5
+scrot /tmp/gw_step3_settings.png
+echo "[$(date)] step3: Settings dialog" >> "$LOG"
 
-        scrot /tmp/ibgw_dialog_after.png 2>/dev/null
+# In Settings dialog, find and click the API tab
+# API tab is usually the last tab — click at right side of tab bar
+DIAG_WID=$(xdotool search --name "Settings" 2>/dev/null | head -1)
+echo "[$(date)] Settings dialog window: $DIAG_WID" >> "$LOG"
+if [ -n "$DIAG_WID" ]; then
+    DX=$(xdotool getwindowgeometry "$DIAG_WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f1)
+    DY=$(xdotool getwindowgeometry "$DIAG_WID" 2>/dev/null | grep Position | awk '{print $2}' | cut -d',' -f2)
+    DW=$(xdotool getwindowgeometry "$DIAG_WID" 2>/dev/null | grep Geometry | awk '{print $2}' | cut -d'x' -f1)
+    echo "[$(date)] Settings at ($DX,$DY) width=$DW" >> "$LOG"
 
-        # Verify dismissed
-        STILL=$(xdotool search --name "$DIALOG_TITLE" 2>/dev/null | head -1)
-        if [ -z "$STILL" ]; then
-            echo "[$(date)] SUCCESS — write access dialog dismissed" >> "$LOG"
-        else
-            # Fallback: try clicking at fixed offsets for 602x210 known size
-            echo "[$(date)] first click missed — trying fixed offset for 602x210" >> "$LOG"
-            ABS_X=$(( X + 490 ))
-            ABS_Y=$(( Y + 175 ))
-            xdotool mousemove "$ABS_X" "$ABS_Y"
-            sleep 0.3
-            xdotool click 1
-            sleep 0.5
-            STILL2=$(xdotool search --name "$DIALOG_TITLE" 2>/dev/null | head -1)
-            [ -z "$STILL2" ] && echo "[$(date)] SUCCESS via fallback click" >> "$LOG" \
-                             || echo "[$(date)] FAIL — dialog still present" >> "$LOG"
-        fi
-        break
-    fi
-    sleep 2
-done
+    # Click API tab — typically rightmost tab, ~80% across tab bar at ~35px down
+    API_TAB_X=$(( DX + DW * 8 / 10 ))
+    API_TAB_Y=$(( DY + 35 ))
+    echo "[$(date)] clicking API tab at ($API_TAB_X,$API_TAB_Y)" >> "$LOG"
+    xdotool mousemove "$API_TAB_X" "$API_TAB_Y"
+    sleep 0.3
+    xdotool click 1
+    sleep 1
+    scrot /tmp/gw_step4_api_tab.png
+    echo "[$(date)] step4: API tab" >> "$LOG"
 
-echo "[$(date)] v3 done" >> "$LOG"
+    # The Read-Only API checkbox is typically in the top section of API tab
+    # Try clicking ~130px down from dialog top, ~25px from left edge
+    CHECKBOX_X=$(( DX + 25 ))
+    CHECKBOX_Y=$(( DY + 130 ))
+    echo "[$(date)] clicking Read-Only checkbox at ($CHECKBOX_X,$CHECKBOX_Y)" >> "$LOG"
+    xdotool mousemove "$CHECKBOX_X" "$CHECKBOX_Y"
+    sleep 0.3
+    xdotool click 1
+    sleep 0.5
+    scrot /tmp/gw_step5_unchecked.png
+    echo "[$(date)] step5: checkbox clicked" >> "$LOG"
+
+    # Click OK/Apply to save
+    OK_X=$(( DX + DW - 60 ))
+    OK_Y=$(( DY + 400 ))
+    echo "[$(date)] clicking OK at ($OK_X,$OK_Y)" >> "$LOG"
+    xdotool mousemove "$OK_X" "$OK_Y"
+    sleep 0.3
+    xdotool click 1
+    sleep 1
+    scrot /tmp/gw_step6_saved.png
+    echo "[$(date)] step6: saved" >> "$LOG"
+else
+    echo "[$(date)] Settings dialog not found — Configure menu click may have missed" >> "$LOG"
+fi
+
+echo "[$(date)] permanent disable done" >> "$LOG"
+ls -lh /tmp/gw_step*.png >> "$LOG" 2>/dev/null
