@@ -118,11 +118,21 @@ def run(dry_run: bool = False):
     print(f'    reason         : {result.reason}')
     print(f'    submitted_at   : {result.submitted_at}')
 
-    if result.status not in ('accepted', 'paper_logged'):
-        print(f'\n    FAIL: expected accepted, got {result.status}')
-        print(f'    Check IB Gateway is running and API access is enabled.')
+    if result.status == 'broker_rejected':
+        print(f'\n    FAIL: broker REJECTED the order — {result.reason}')
+        print('    This means Read-Only mode is active or API permissions are wrong.')
+        print('    Fix: restart Gateway after setting ReadOnlyApi=no in config.ini')
         sys.exit(1)
-    print('    PASS: order accepted by IB Gateway')
+    if result.status not in ('accepted',):
+        print(f'\n    FAIL: expected accepted, got {result.status}')
+        print(f'    Reason: {result.reason}')
+        sys.exit(1)
+    # Verify broker_order_id is a real unique ID, not a static fake
+    if result.broker_order_id in (None, '', 'IB-4-5-6'):
+        print(f'\n    WARN: broker_order_id={result.broker_order_id} — '
+              f'may be a locally-generated ID not confirmed by broker')
+    print(f'    PASS: order accepted by IB Gateway (status=accepted)')
+    print(f'    broker_order_id={result.broker_order_id}')
 
     # ── Step 4: Log to flywheel ───────────────────────────────────────────
     print('\n[5] Logging execution intent to flywheel DB...')

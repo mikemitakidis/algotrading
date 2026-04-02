@@ -304,23 +304,77 @@ class IBKRBroker(BrokerAdapter):
             parent_trade = ib.placeOrder(contract, parent)
             tp_trade     = ib.placeOrder(contract, take_profit)
             sl_trade     = ib.placeOrder(contract, stop_loss)
-            ib.sleep(2)
 
+            # Wait for broker acknowledgement — Error 321/Read-Only
+            # arrives asynchronously in trade.log, not as an exception
+            ib.sleep(3)
+
+            # ── Verify parent order was genuinely accepted ─────────────────
+            # Check trade.log for error entries (e.g. Error 321 Read-Only)
+            error_entries = [
+                e for e in (parent_trade.log or [])
+                if getattr(e, 'errorCode', 0) and getattr(e, 'errorCode', 0) > 0
+            ]
+            if error_entries:
+                err = error_entries[0]
+                reason_str = (
+                    f'IBKR rejected order: Error {err.errorCode} — {err.message}'
+                )
+                log.error('[IBKR] Order REJECTED by broker: %s', reason_str)
+                return OrderResult(
+                    intent=intent,
+                    status='broker_rejected',
+                    reason=reason_str,
+                    submitted_at=datetime.now(timezone.utc).isoformat(),
+                )
+
+            # Check order status is genuinely active at broker
+            from ib_insync import OrderStatus as _OS
+            parent_status = parent_trade.orderStatus.status
+            if parent_status == 'Inactive':
+                reason_str = (
+                    f'Order Inactive at broker — likely Read-Only mode or '
+                    f'permissions issue. Check Gateway API settings.'
+                )
+                log.error('[IBKR] Order INACTIVE (broker rejected): %s', reason_str)
+                return OrderResult(
+                    intent=intent,
+                    status='broker_rejected',
+                    reason=reason_str,
+                    submitted_at=datetime.now(timezone.utc).isoformat(),
+                )
+
+            if parent_status not in _OS.ActiveStates | {'Filled'}:
+                reason_str = (
+                    f'Unexpected order status from broker: {parent_status}. '
+                    f'Expected one of {_OS.ActiveStates}.'
+                )
+                log.error('[IBKR] Unexpected order status: %s', reason_str)
+                return OrderResult(
+                    intent=intent,
+                    status='broker_rejected',
+                    reason=reason_str,
+                    submitted_at=datetime.now(timezone.utc).isoformat(),
+                )
+
+            # ── Genuinely accepted ─────────────────────────────────────────
             parent_id  = str(parent_trade.order.orderId)
             tp_id      = str(tp_trade.order.orderId)
             sl_id      = str(sl_trade.order.orderId)
             broker_oid = f'IB-{parent_id}-{tp_id}-{sl_id}'
 
             mode_tag = 'LIVE' if self.is_live else 'PAPER'
-            log.info('[IBKR-%s] Bracket placed: parent=%s TP=%s SL=%s qty=%d',
+            log.info('[IBKR-%s] Bracket CONFIRMED: parent=%s TP=%s SL=%s '
+                     'status=%s qty=%d',
                      mode_tag, parent_id, tp_id, sl_id,
-                     round(intent.position_size or 1))
+                     parent_status, round(intent.position_size or 1))
 
             return OrderResult(
                 intent=intent,
                 status='accepted',
                 broker_order_id=broker_oid,
-                reason=f'Bracket order placed on {mode_tag} account {account}',
+                reason=f'Bracket confirmed on {mode_tag} account {account} '
+                       f'status={parent_status}',
                 submitted_at=datetime.now(timezone.utc).isoformat(),
             )
 
