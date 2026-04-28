@@ -358,10 +358,16 @@ class IBKRBroker(BrokerAdapter):
                 )
 
             # ── Genuinely accepted ─────────────────────────────────────────
-            parent_id  = str(parent_trade.order.orderId)
-            tp_id      = str(tp_trade.order.orderId)
-            sl_id      = str(sl_trade.order.orderId)
-            broker_oid = f'IB-{parent_id}-{tp_id}-{sl_id}'
+            # Use broker-assigned permId as canonical order reference
+            # permId is assigned server-side and is unique across sessions
+            parent_perm = parent_trade.orderStatus.permId
+            parent_id   = str(parent_trade.order.orderId)
+            tp_id       = str(tp_trade.order.orderId)
+            sl_id       = str(sl_trade.order.orderId)
+            if parent_perm and parent_perm != 0:
+                broker_oid = f'IB-PERM-{parent_perm}'
+            else:
+                broker_oid = f'IB-{parent_id}-{tp_id}-{sl_id}'
 
             mode_tag = 'LIVE' if self.is_live else 'PAPER'
             log.info('[IBKR-%s] Bracket CONFIRMED: parent=%s TP=%s SL=%s '
