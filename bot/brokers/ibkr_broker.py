@@ -236,19 +236,20 @@ class IBKRBroker(BrokerAdapter):
         """
         host, port, account, _ = _get_connection_params()
 
-        # ── Pre-submit gateway health check ────────────────────────────────────
-        if not _gateway_available(host, port):
-            log.error('[IBKR] Gateway not reachable at %s:%d — order blocked. '
-                      'Run: systemctl start ibgateway', host, port)
+        # ── Kill switch (checked first — before any network probe) ─────────────
+        from bot.kill_switch import is_kill_switch_active
+        if is_kill_switch_active():
+            log.error('[IBKR] KILL SWITCH ACTIVE — all submissions blocked')
             return OrderResult(
                 intent=intent,
-                status='connection_failed',
-                reason=f'IB Gateway not reachable at {host}:{port} — '
-                       f'run: systemctl start ibgateway',
+                status='kill_switch_active',
+                reason='Kill switch is active. Deactivate via dashboard before submitting.',
                 submitted_at=datetime.now(timezone.utc).isoformat(),
             )
 
-        # ── Live safety gate (checked on every submission) ─────────────────────
+        # ── Live safety gate (checked before any network probe) ─────────────────
+        # ORDER MATTERS: safety gate before _gateway_available() so that
+        # incomplete live config returns live_safety_blocked, not connection_failed
         if self.is_live:
             safe, reason = _check_live_safety_config()
             if not safe:
@@ -259,6 +260,18 @@ class IBKRBroker(BrokerAdapter):
                     reason=f'Live safety gate: {reason}',
                     submitted_at=datetime.now(timezone.utc).isoformat(),
                 )
+
+        # ── Pre-submit gateway health check (after safety gate) ─────────────────
+        if not _gateway_available(host, port):
+            log.error('[IBKR] Gateway not reachable at %s:%d — order blocked. '
+                      'Run: systemctl start ibgateway', host, port)
+            return OrderResult(
+                intent=intent,
+                status='connection_failed',
+                reason=f'IB Gateway not reachable at {host}:{port} — '
+                       f'run: systemctl start ibgateway',
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+            )
 
         log.info('[IBKR%s] Submitting %s %s | entry=%.2f stop=%.2f target=%.2f | acct=%s',
                  '-LIVE' if self.is_live else '', intent.symbol,

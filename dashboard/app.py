@@ -3079,6 +3079,34 @@ def execution_status():
     return jsonify(result)
 
 
+# ── Kill Switch ─────────────────────────────────────────────────────────────
+
+@app.route('/api/kill-switch/state')
+@require_auth
+def kill_switch_state():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.kill_switch import get_kill_switch_state
+    return jsonify(get_kill_switch_state())
+
+
+@app.route('/api/kill-switch/activate', methods=['POST'])
+@require_auth
+def kill_switch_activate():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.kill_switch import activate_kill_switch
+    reason = request.json.get('reason', 'Dashboard activation') if request.json else 'Dashboard activation'
+    return jsonify(activate_kill_switch(reason))
+
+
+@app.route('/api/kill-switch/deactivate', methods=['POST'])
+@require_auth
+def kill_switch_deactivate():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    from bot.kill_switch import deactivate_kill_switch
+    reason = request.json.get('reason', 'Dashboard deactivation') if request.json else 'Dashboard deactivation'
+    return jsonify(deactivate_kill_switch(reason))
+
+
 # ── Strategy ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/strategy')

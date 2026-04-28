@@ -109,6 +109,8 @@ def main():
     conn = init_db(config['db_path'])
     init_features_table(conn)
     init_flywheel_tables(conn)
+    from bot.kill_switch import ensure_default_state as _ks_init
+    _ks_init()
     risk_mgr = RiskManager()
     broker   = get_broker()
     log.info('[STARTUP] Broker: %s | Risk: max_pos=%s max_open=%d portfolio=$%.0f',

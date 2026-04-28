@@ -135,8 +135,9 @@ def run(live_tests=False):
 
     # ── Test 5: submit() blocked by safety gate ───────────────────────────
     section('5. submit() returns live_safety_blocked when gate fails')
-    # Clear ALL live config — gate must block before any connection attempt
-    for _k in ('IBKR_LIVE_ACCOUNT','IBKR_LIVE_CONFIRMED','IBKR_LIVE_PORT'):
+    # Safety gate now runs BEFORE _gateway_available() so no live Gateway needed
+    for _k in ('IBKR_LIVE_ACCOUNT','IBKR_LIVE_CONFIRMED','IBKR_LIVE_PORT',
+               'RISK_MAX_POSITION_PCT'):
         os.environ.pop(_k, None)
     os.environ['BROKER'] = 'ibkr_live'
     intent = OrderIntent(
@@ -205,6 +206,34 @@ def run(live_tests=False):
         os.environ['BROKER'] = 'ibkr_paper'
 
     # ── Summary ───────────────────────────────────────────────────────────
+    section('6. Kill switch blocks submission and persists')
+    os.environ['BROKER'] = 'ibkr_paper'
+    for _k in ('IBKR_LIVE_ACCOUNT','IBKR_LIVE_CONFIRMED','IBKR_LIVE_PORT'):
+        os.environ.pop(_k, None)
+    import sys as _sys; _sys.path.insert(0, str(BASE_DIR))
+    from bot.kill_switch import activate_kill_switch, deactivate_kill_switch, get_kill_switch_state
+    state = activate_kill_switch('test_m12 kill switch test')
+    check('kill_switch_activates', state['active'])
+    ks_intent = OrderIntent(
+        signal_id=333333, symbol='AAPL', direction='long', route='IBKR',
+        entry_price=200.0, stop_loss=195.0, target_price=210.0,
+        valid_count=2, strategy_version=1,
+    )
+    result_ks = IBKRBroker().submit(ks_intent)
+    check('kill_switch_blocks_submission',
+          result_ks.status == 'kill_switch_active',
+          f'status={result_ks.status}')
+    state2 = deactivate_kill_switch('test_m12 cleanup')
+    check('kill_switch_deactivates', not state2['active'])
+    state3 = get_kill_switch_state()
+    check('kill_switch_persists', not state3['active'])
+
+    # Restore env
+    os.environ['BROKER'] = 'ibkr_paper'
+    for k, v in saved.items():
+        if v is not None: os.environ[k] = v
+        else: os.environ.pop(k, None)
+
     print('\n' + '='*60)
     print('SUMMARY')
     print('='*60)
