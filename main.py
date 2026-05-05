@@ -224,17 +224,15 @@ def main():
                             broker.name, result.status,
                             broker_order_id=result.broker_order_id,
                             risk_checks=risk_checks)
-                        # Wire lifecycle: log initial status transition
+                        # Wire lifecycle: preserve truthful broker status
+                        # Do NOT overwrite with generic 'error' — statuses like
+                        # broker_rejected, kill_switch_active, live_safety_blocked,
+                        # connection_failed, account_mismatch must be preserved
                         if intent_id:
                             update_intent_status(
                                 conn, intent_id, result.status,
                                 event=f'broker_response:{result.status}'
                             )
-                            if result.status not in ('accepted','paper_logged'):
-                                update_intent_status(
-                                    conn, intent_id, 'error',
-                                    event=f'broker_error:{result.reason[:80] if result.reason else "unknown"}'
-                                )
                     else:
                         intent_id = log_intent(conn, row_id,
                             signal.get('symbol',''), signal.get('direction',''),

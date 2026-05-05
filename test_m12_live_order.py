@@ -30,6 +30,7 @@ Usage:
   python3 test_m12_live_order.py --symbol F --qty 1
 """
 import argparse
+import math
 import json
 import os
 import sqlite3
@@ -47,6 +48,34 @@ if _env.exists():
         pass
 
 sys.path.insert(0, str(BASE_DIR))
+
+
+def _test_price_validation():
+    """Prove NaN/invalid price hard-fail — 7 cases, no broker needed."""
+    print('\n=== Price Validation Tests ===')
+    cases = [
+        ('NaN price',     float('nan'), 195.0, 210.0),
+        ('NaN stop',      200.0, float('nan'), 210.0),
+        ('NaN target',    200.0, 195.0, float('nan')),
+        ('zero price',    0.0,   195.0, 210.0),
+        ('negative stop', 200.0, -1.0,  210.0),
+        ('stop >= price', 200.0, 200.0, 210.0),
+        ('price >= tgt',  200.0, 195.0, 200.0),
+    ]
+    passed = 0
+    for label, p, s, t in cases:
+        try:
+            for lbl, val in [('price', p), ('stop', s), ('target', t)]:
+                if not math.isfinite(val) or val <= 0:
+                    raise ValueError(f'Invalid {lbl}={val}')
+            if not (s < p < t):
+                raise ValueError(f'Bracket violated: stop={s} price={p} target={t}')
+            print(f'  FAIL (should have raised): {label}')
+        except ValueError as e:
+            print(f'  PASS: {label} → {e}')
+            passed += 1
+    print(f'\n{passed}/{len(cases)} validation cases caught correctly')
+    sys.exit(0 if passed == len(cases) else 1)
 
 
 def run(symbol: str, qty: int, dry_run: bool):
@@ -136,17 +165,33 @@ def run(symbol: str, qty: int, dry_run: bool):
         ib.connect(host, port, clientId=client_id, timeout=10, readonly=False)
         contract = Stock(symbol, 'SMART', 'USD')
         ib.qualifyContracts(contract)
+        ib.reqMarketDataType(3)   # delayed/frozen — works without real-time subscription
         ticker = ib.reqMktData(contract, '', False, False)
-        ib.sleep(2)
+        ib.sleep(3)
         price = ticker.last or ticker.close or ticker.bid
         ib.cancelMktData(contract)
         ib.disconnect()
-        if not price or price <= 0:
-            raise ValueError(f'Could not get price for {symbol}')
-        price = round(float(price), 2)
-        stop  = round(price * 0.98, 2)   # 2% stop
-        target= round(price * 1.02, 2)   # 2% target
+
+        # Hard validation — NaN/inf/zero/negative must never reach broker
+        price_f = float(price) if price is not None else float('nan')
+        stop_f  = round(price_f * 0.98, 2)
+        target_f= round(price_f * 1.02, 2)
+        for label, val in [('price', price_f), ('stop', stop_f), ('target', target_f)]:
+            if not math.isfinite(val) or val <= 0:
+                raise ValueError(
+                    f'Invalid {label}={val} for {symbol} — '
+                    f'market data unavailable or NaN. Aborting before broker submission.'
+                )
+        if not (stop_f < price_f < target_f):
+            raise ValueError(
+                f'Bracket relationship violated: stop={stop_f} price={price_f} '
+                f'target={target_f}. Must satisfy stop < price < target.'
+            )
+        price  = round(price_f, 2)
+        stop   = stop_f
+        target = target_f
         print(f'  price={price}  stop={stop}  target={target}')
+        print(f'  validation: all finite, positive, stop < price < target ✓')
     except Exception as e:
         print(f'  FAIL: could not get price: {e}')
         sys.exit(1)
@@ -223,7 +268,12 @@ if __name__ == '__main__':
                    help='Symbol to trade (default: F — Ford, ~$10)')
     p.add_argument('--qty',     type=int, default=1,
                    help='Fixed share quantity (default: 1)')
+    p.add_argument('--test-price-validation', action='store_true',
+                   help='Test NaN/invalid price rejection (7 cases, no broker needed)')
     p.add_argument('--dry-run', action='store_true',
                    help='Pre-flight checks only, no order submitted')
     args = p.parse_args()
-    run(args.symbol, args.qty, args.dry_run)
+    if args.test_price_validation:
+        _test_price_validation()
+    else:
+        run(args.symbol, args.qty, args.dry_run)
