@@ -2742,23 +2742,37 @@ function loadRisk(){
     var el = document.getElementById('rConfigForm');
     if(!d){ el.textContent = 'Could not load config.'; return; }
     var html = '<table style="border-collapse:collapse;width:100%">';
-    Object.keys(d).forEach(function(k){
+    Object.keys(d).sort().forEach(function(k){
       var cfg = d[k];
-      var inputType = cfg.type === 'bool' ? 'checkbox' : 'number';
-      var val = cfg.value || '';
-      var inputHtml = cfg.type === 'bool'
-        ? '<input type="checkbox" id="cfg_'+k+'" '+(val==='true'?'checked':'')+' style="width:16px;height:16px">'
-        : '<input type="number" id="cfg_'+k+'" value="'+val+'" step="any" '
+      var val = cfg.value !== undefined ? cfg.value : '';
+      var srcBadge = cfg.source === 'env'
+        ? '<span style="font-size:10px;background:#1f4e2e;color:#3fb950;padding:1px 5px;border-radius:3px;margin-left:4px">env</span>'
+        : '<span style="font-size:10px;background:#1a2035;color:#79c0ff;padding:1px 5px;border-radius:3px;margin-left:4px">default</span>';
+      var inputHtml;
+      if(cfg.type === 'bool'){
+        inputHtml = '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+          + '<input type="checkbox" id="cfg_'+k+'" '+(val==='true'?'checked':'')+' style="width:16px;height:16px">'
+          + '<span style="color:#8b949e;font-size:12px">'+(val==='true'?'true':'false')+'</span></label>';
+      } else {
+        var placeholder = cfg.optional ? 'blank = disabled' : cfg.default;
+        inputHtml = '<input type="number" id="cfg_'+k+'" value="'+val+'" step="any" '
           +(cfg.min!==null?'min="'+cfg.min+'"':'')+' '
           +(cfg.max!==null?'max="'+cfg.max+'"':'')+
-          ' style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:4px;width:160px">';
+          ' placeholder="'+placeholder+'"'
+          +' style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:4px;width:160px">';
+      }
+      var rangeHint = (cfg.min!==null && cfg.max!==null)
+        ? '<span style="color:#484f58;font-size:11px">'+cfg.min+' – '+cfg.max+'</span>' : '';
       html += '<tr style="border-bottom:1px solid #21262d">' +
-        '<td style="padding:6px 8px;color:#8b949e;font-size:12px;white-space:nowrap">'+k+'</td>' +
+        '<td style="padding:6px 8px;font-size:12px;white-space:nowrap">'
+          + '<span style="color:#e6edf3">'+k+'</span>'+srcBadge+'</td>' +
         '<td style="padding:6px 8px">'+inputHtml+'</td>' +
-        '<td style="padding:6px 8px;color:#484f58;font-size:11px">'+(cfg.min!==null?cfg.min+' – '+cfg.max:'')+'</td>' +
+        '<td style="padding:6px 8px">'+rangeHint+'</td>' +
         '</tr>';
     });
-    html += '</table>';
+    html += '</table><div style="margin-top:8px;font-size:11px;color:#484f58">'
+      + '<span style="background:#1f4e2e;color:#3fb950;padding:1px 5px;border-radius:3px">env</span> = explicitly set &nbsp;'
+      + '<span style="background:#1a2035;color:#79c0ff;padding:1px 5px;border-radius:3px">default</span> = using built-in default</div>';
     el.innerHTML = html;
   }).catch(function(){
     document.getElementById('rConfigForm').textContent = 'Could not load config.';
@@ -3405,8 +3419,37 @@ def portfolio_risk_rejections():
 @require_auth
 def portfolio_risk_config_get():
     import os
-    return jsonify({k: {'value': os.getenv(k, ''), 'type': t, 'min': lo, 'max': hi}
-                    for k, (t, lo, hi) in _M14_RISK_KEYS.items()})
+    # Defaults mirror PortfolioRiskPolicy.__init__ so UI shows effective values
+    _defaults = {
+        'RISK_MAX_DAILY_LOSS_PCT':         '3.0',
+        'RISK_MAX_DAILY_LOSS_USD':         '',          # optional — blank = disabled
+        'RISK_REQUIRE_DAILY_PNL_FOR_LIVE': 'true',
+        'RISK_ALLOW_DAILY_LOSS_OVERRIDE':  'false',
+        'RISK_MAX_SYMBOL_EXPOSURE_PCT':    '10.0',
+        'RISK_MAX_SECTOR_EXPOSURE_PCT':    '30.0',
+        'RISK_REQUIRE_SECTOR_FOR_LIVE':    'true',
+        'RISK_LOSS_STREAK_LIMIT':          '3',
+        'RISK_LOSS_STREAK_COOLDOWN_MINS':  '60',
+        'RISK_REQUIRE_OUTCOMES_FOR_LIVE':  'false',
+        'RISK_MAX_OPEN_POSITIONS':         '10',
+        'RISK_MAX_POSITION_PCT':           '2.0',
+        'RISK_PORTFOLIO_SIZE':             '100000',
+    }
+    result = {}
+    for k, (t, lo, hi) in _M14_RISK_KEYS.items():
+        raw = os.getenv(k)           # None if not set in env
+        default = _defaults.get(k, '')
+        effective = raw if raw is not None else default
+        result[k] = {
+            'value':     effective,
+            'default':   default,
+            'source':    'env' if raw is not None else 'default',
+            'optional':  k == 'RISK_MAX_DAILY_LOSS_USD',
+            'type':      t,
+            'min':       lo,
+            'max':       hi,
+        }
+    return jsonify(result)
 
 
 @app.route('/api/portfolio-risk/config', methods=['POST'])
@@ -3416,11 +3459,19 @@ def portfolio_risk_config_set():
     changes = request.json or {}
     errors = {}
     applied = {}
+    _optional_keys = {'RISK_MAX_DAILY_LOSS_USD'}
     for key, raw_val in changes.items():
         if key not in _M14_RISK_KEYS:
             errors[key] = 'not in whitelist'
             continue
         typ, lo, hi = _M14_RISK_KEYS[key]
+        # Allow blank only for optional keys — blank clears the env var
+        if str(raw_val).strip() == '':
+            if key in _optional_keys:
+                applied[key] = ''  # will delete from env
+            else:
+                errors[key] = 'required field cannot be blank'
+            continue
         try:
             if typ == 'bool':
                 val_str = 'true' if str(raw_val).lower() in ('true','1','yes') else 'false'
