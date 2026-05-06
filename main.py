@@ -33,10 +33,12 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
 from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
-from bot.flywheel  import init_flywheel_tables, log_candidate, log_intent, recent_intents, update_intent_status
+from bot.flywheel  import (init_flywheel_tables, log_candidate, log_intent, recent_intents,
+                            update_intent_status, get_daily_state, get_persistent_state,
+                            write_portfolio_snapshot)
 from bot.brokers   import get_broker, get_broker_name
 from bot.brokers.base import OrderIntent
-from bot.risk       import RiskManager
+from bot.risk       import RiskManager, PortfolioRiskPolicy, PortfolioRiskContext
 from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
                           alert_crash, alert_cycle_summary, alert_signal)
@@ -111,8 +113,9 @@ def main():
     init_flywheel_tables(conn)
     from bot.kill_switch import ensure_default_state as _ks_init
     _ks_init()
-    risk_mgr = RiskManager()
-    broker   = get_broker()
+    risk_mgr  = RiskManager()
+    port_risk = PortfolioRiskPolicy()
+    broker    = get_broker()
     log.info('[STARTUP] Broker: %s | Risk: max_pos=%s max_open=%d portfolio=$%.0f',
              broker.name, risk_mgr.max_position_pct, risk_mgr.max_open, risk_mgr.portfolio_size)
 
@@ -212,6 +215,28 @@ def main():
                     )
                     risk_passed, risk_checks, risk_reason = risk_mgr.evaluate(intent)
                     intent.risk_checks = risk_checks
+
+                    # M14: portfolio risk gate
+                    if risk_passed:
+                        _ctx = PortfolioRiskContext(
+                            broker=broker.name,
+                            mode='live' if 'live' in broker.name else 'paper',
+                            portfolio_value=risk_mgr.portfolio_size,
+                            portfolio_value_source='config',
+                            sector_map=port_risk.sector_map,
+                            daily_state=get_daily_state(conn),
+                            persistent_state=get_persistent_state(conn),
+                        )
+                        p_passed, p_checks, p_reason = port_risk.evaluate(intent, _ctx)
+                        if not p_passed:
+                            risk_passed = False
+                            risk_checks.update(p_checks)
+                            risk_reason = p_reason
+                            intent.risk_checks = risk_checks
+                        else:
+                            risk_checks.update(p_checks)
+                            intent.risk_checks = risk_checks
+
                     if risk_passed:
                         result = broker.submit(intent)
                         intent_id = log_intent(conn, row_id,
@@ -255,6 +280,21 @@ def main():
                 log.info('[MAIN] DB: %d signals inserted', inserted)
 
             alert_cycle_summary(config, cycle, len(signals), len(focus))
+
+            # M14: portfolio risk snapshot every cycle
+            try:
+                _snap_ctx = PortfolioRiskContext(
+                    broker=broker.name,
+                    mode='live' if 'live' in broker.name else 'paper',
+                    portfolio_value=risk_mgr.portfolio_size,
+                    portfolio_value_source='config',
+                    sector_map=port_risk.sector_map,
+                    daily_state=get_daily_state(conn),
+                    persistent_state=get_persistent_state(conn),
+                )
+                write_portfolio_snapshot(conn, cycle, broker.name, _snap_ctx)
+            except Exception as _snap_err:
+                log.warning('[M14] Snapshot write failed: %s', _snap_err)
 
             # ── Gateway health check (every cycle for IBKR brokers) ──────────
             _bname = config.get('broker', 'paper').lower()

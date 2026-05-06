@@ -111,12 +111,59 @@ CREATE TABLE signal_outcomes (
 
 # ── Initialisation ────────────────────────────────────────────────────────────
 
+
+DAILY_STATE_SCHEMA = """
+CREATE TABLE daily_state (
+    date                     TEXT PRIMARY KEY,
+    realised_pnl_usd         REAL DEFAULT 0,
+    realised_pnl_pct         REAL DEFAULT 0,
+    daily_pnl_source         TEXT DEFAULT 'unavailable',
+    daily_pnl_available      INTEGER DEFAULT 0,
+    daily_loss_block_active  INTEGER DEFAULT 0,
+    daily_loss_alert_sent    INTEGER DEFAULT 0,
+    updated_at               TEXT
+)
+"""
+
+PORTFOLIO_RISK_STATE_SCHEMA = """
+CREATE TABLE portfolio_risk_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_at  TEXT
+)
+"""
+
+PORTFOLIO_RISK_SNAPSHOT_SCHEMA = """
+CREATE TABLE portfolio_risk_snapshots (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at              TEXT NOT NULL,
+    cycle_id                INTEGER DEFAULT 0,
+    broker                  TEXT DEFAULT '',
+    portfolio_value         REAL,
+    portfolio_value_source  TEXT DEFAULT 'config',
+    daily_realised_pnl      REAL,
+    daily_pnl_available     INTEGER DEFAULT 0,
+    open_trade_count        INTEGER DEFAULT 0,
+    symbol_exposures_json   TEXT DEFAULT '{}',
+    sector_exposures_json   TEXT DEFAULT '{}',
+    loss_streak             INTEGER DEFAULT 0,
+    cooldown_until          TEXT DEFAULT NULL,
+    kill_switch_active      INTEGER DEFAULT 0,
+    risk_status             TEXT DEFAULT 'ok',
+    warnings_json           TEXT DEFAULT '[]',
+    policy_json             TEXT DEFAULT '{}'
+)
+"""
+
 def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     """Create flywheel tables if they don't exist. Safe to call on startup."""
     for name, schema in [
-        ('candidate_snapshots', CANDIDATE_SCHEMA),
-        ('execution_intents',   INTENT_SCHEMA),
-        ('signal_outcomes',     OUTCOME_SCHEMA),
+        ('candidate_snapshots',      CANDIDATE_SCHEMA),
+        ('execution_intents',        INTENT_SCHEMA),
+        ('signal_outcomes',          OUTCOME_SCHEMA),
+        ('daily_state',              DAILY_STATE_SCHEMA),
+        ('portfolio_risk_state',     PORTFOLIO_RISK_STATE_SCHEMA),
+        ('portfolio_risk_snapshots', PORTFOLIO_RISK_SNAPSHOT_SCHEMA),
     ]:
         exists = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -303,3 +350,130 @@ def recent_intents(conn: sqlite3.Connection, limit: int = 20) -> list:
         return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception:
         return []
+
+
+# ── M14 Portfolio Risk Writers ────────────────────────────────────────────────
+
+def get_daily_state(conn: sqlite3.Connection) -> dict:
+    """Get or create today's daily_state row."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    row = conn.execute(
+        'SELECT date,realised_pnl_usd,realised_pnl_pct,daily_pnl_source,'
+        'daily_pnl_available,daily_loss_block_active,daily_loss_alert_sent '
+        'FROM daily_state WHERE date=?', (today,)
+    ).fetchone()
+    if row:
+        return {'date': row[0], 'realised_pnl_usd': row[1], 'realised_pnl_pct': row[2],
+                'daily_pnl_source': row[3], 'daily_pnl_available': row[4],
+                'daily_loss_block_active': row[5], 'daily_loss_alert_sent': row[6]}
+    # Create fresh row for today
+    conn.execute(
+        "INSERT OR IGNORE INTO daily_state (date,updated_at) VALUES (?,?)",
+        (today, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    return {'date': today, 'realised_pnl_usd': 0, 'realised_pnl_pct': 0,
+            'daily_pnl_source': 'unavailable', 'daily_pnl_available': 0,
+            'daily_loss_block_active': 0, 'daily_loss_alert_sent': 0}
+
+
+def set_daily_loss_block(conn: sqlite3.Connection, active: bool,
+                          alert_sent: bool = False) -> None:
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    conn.execute(
+        "INSERT OR REPLACE INTO daily_state "
+        "(date,daily_loss_block_active,daily_loss_alert_sent,updated_at) "
+        "VALUES (?,?,?,(SELECT updated_at FROM daily_state WHERE date=?),?)"
+        if False else
+        "UPDATE daily_state SET daily_loss_block_active=?,daily_loss_alert_sent=?,updated_at=? "
+        "WHERE date=?",
+        (int(active), int(alert_sent), datetime.now(timezone.utc).isoformat(), today)
+    )
+    conn.commit()
+
+
+def get_persistent_state(conn: sqlite3.Connection) -> dict:
+    """Read all portfolio_risk_state key-value pairs."""
+    rows = conn.execute('SELECT key, value FROM portfolio_risk_state').fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def set_persistent_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    from datetime import datetime, timezone
+    conn.execute(
+        "INSERT OR REPLACE INTO portfolio_risk_state (key,value,updated_at) VALUES (?,?,?)",
+        (key, value, datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+
+
+def write_portfolio_snapshot(conn: sqlite3.Connection, cycle_id: int,
+                              broker: str, ctx,
+                              checks: dict | None = None) -> None:
+    """
+    Write one portfolio_risk_snapshots row.
+    Called every scan cycle regardless of whether any signal fired.
+    ctx is a PortfolioRiskContext instance.
+    checks is the last evaluate() checks dict if available.
+    """
+    import json
+    from datetime import datetime, timezone
+    from bot.kill_switch import is_kill_switch_active
+
+    daily = ctx.daily_state
+    risk_status = 'ok'
+    if checks:
+        if checks.get('verdict') == 'reject':
+            risk_status = 'blocked'
+        elif ctx.warnings:
+            risk_status = 'warning'
+
+    # Build symbol and sector exposure summaries
+    sym_exp = {}
+    sec_exp = {}
+    if checks:
+        sym_exp = {'symbol': getattr(ctx, '_last_symbol', ''),
+                   'pct': checks.get('symbol_exposure_pct'),
+                   'estimated': checks.get('symbol_exposure_estimated')}
+        sec_exp = {'sector': checks.get('sector'),
+                   'pct': checks.get('sector_exposure_pct'),
+                   'estimated': checks.get('sector_exposure_estimated')}
+
+    loss_streak = 0
+    cooldown = None
+    if checks:
+        streak_detail = checks.get('loss_streak', {})
+        loss_streak = streak_detail.get('streak', 0)
+        cooldown = streak_detail.get('cooldown_until')
+
+    policy = {
+        'max_daily_loss_pct': float(os.getenv('RISK_MAX_DAILY_LOSS_PCT', '3.0')),
+        'max_open_trades': int(os.getenv('RISK_MAX_OPEN_POSITIONS', '10')),
+        'max_symbol_pct': float(os.getenv('RISK_MAX_SYMBOL_EXPOSURE_PCT', '10.0')),
+        'max_sector_pct': float(os.getenv('RISK_MAX_SECTOR_EXPOSURE_PCT', '30.0')),
+    }
+
+    conn.execute(
+        """INSERT INTO portfolio_risk_snapshots
+           (created_at, cycle_id, broker, portfolio_value, portfolio_value_source,
+            daily_realised_pnl, daily_pnl_available, open_trade_count,
+            symbol_exposures_json, sector_exposures_json, loss_streak,
+            cooldown_until, kill_switch_active, risk_status, warnings_json, policy_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            cycle_id, broker,
+            ctx.portfolio_value, ctx.portfolio_value_source,
+            daily.get('realised_pnl_usd', 0), daily.get('daily_pnl_available', 0),
+            checks.get('open_trade_count', 0) if checks else 0,
+            json.dumps(sym_exp), json.dumps(sec_exp),
+            loss_streak, cooldown,
+            int(is_kill_switch_active()),
+            risk_status,
+            json.dumps(ctx.warnings),
+            json.dumps(policy),
+        )
+    )
+    conn.commit()

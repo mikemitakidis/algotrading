@@ -3079,6 +3079,143 @@ def execution_status():
     return jsonify(result)
 
 
+# ── M14 Portfolio Risk ───────────────────────────────────────────────────────
+
+_M14_RISK_KEYS = {
+    'RISK_MAX_DAILY_LOSS_PCT':         ('float', 0.1,  20.0),
+    'RISK_MAX_DAILY_LOSS_USD':         ('float', 0.0,  999999.0),
+    'RISK_REQUIRE_DAILY_PNL_FOR_LIVE': ('bool',  None, None),
+    'RISK_ALLOW_DAILY_LOSS_OVERRIDE':  ('bool',  None, None),
+    'RISK_MAX_SYMBOL_EXPOSURE_PCT':    ('float', 0.1,  100.0),
+    'RISK_MAX_SECTOR_EXPOSURE_PCT':    ('float', 0.1,  100.0),
+    'RISK_REQUIRE_SECTOR_FOR_LIVE':    ('bool',  None, None),
+    'RISK_LOSS_STREAK_LIMIT':          ('int',   1,    20),
+    'RISK_LOSS_STREAK_COOLDOWN_MINS':  ('int',   1,    10080),
+    'RISK_REQUIRE_OUTCOMES_FOR_LIVE':  ('bool',  None, None),
+    'RISK_MAX_OPEN_POSITIONS':         ('int',   1,    100),
+    'RISK_MAX_POSITION_PCT':           ('float', 0.1,  10.0),
+    'RISK_PORTFOLIO_SIZE':             ('float', 1000, 99999999),
+}
+
+
+@app.route('/api/portfolio-risk/state')
+@require_auth
+def portfolio_risk_state():
+    import sys, sqlite3
+    sys.path.insert(0, str(BASE_DIR))
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        from bot.flywheel import get_daily_state, get_persistent_state
+        daily = get_daily_state(conn)
+        persistent = get_persistent_state(conn)
+        cur = conn.execute('SELECT * FROM portfolio_risk_snapshots ORDER BY id DESC LIMIT 1')
+        cols = [d[0] for d in cur.description]
+        row = cur.fetchone()
+        snap = dict(zip(cols, row)) if row else {}
+        conn.close()
+        from bot.kill_switch import get_kill_switch_state
+        return jsonify({'daily_state': daily, 'persistent_state': persistent,
+                        'latest_snapshot': snap, 'kill_switch': get_kill_switch_state()})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio-risk/snapshots')
+@require_auth
+def portfolio_risk_snapshots():
+    import sys, sqlite3
+    sys.path.insert(0, str(BASE_DIR))
+    limit = min(int(request.args.get('limit', 20)), 100)
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        cur = conn.execute(
+            'SELECT * FROM portfolio_risk_snapshots ORDER BY id DESC LIMIT ?', (limit,))
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        conn.close()
+        return jsonify([dict(zip(cols, r)) for r in rows])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio-risk/rejections')
+@require_auth
+def portfolio_risk_rejections():
+    import sys, sqlite3
+    sys.path.insert(0, str(BASE_DIR))
+    limit = min(int(request.args.get('limit', 20)), 100)
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        rows = conn.execute(
+            "SELECT id,symbol,rejection_reason,risk_checks,timestamp "
+            "FROM execution_intents WHERE status='risk_rejected' "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        conn.close()
+        return jsonify([{'id': r[0], 'symbol': r[1], 'rejection_reason': r[2],
+                         'risk_checks': r[3], 'timestamp': r[4]} for r in rows])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio-risk/config', methods=['GET'])
+@require_auth
+def portfolio_risk_config_get():
+    import os
+    return jsonify({k: {'value': os.getenv(k, ''), 'type': t, 'min': lo, 'max': hi}
+                    for k, (t, lo, hi) in _M14_RISK_KEYS.items()})
+
+
+@app.route('/api/portfolio-risk/config', methods=['POST'])
+@require_auth
+def portfolio_risk_config_set():
+    import os, shutil
+    changes = request.json or {}
+    errors = {}
+    applied = {}
+    for key, raw_val in changes.items():
+        if key not in _M14_RISK_KEYS:
+            errors[key] = 'not in whitelist'
+            continue
+        typ, lo, hi = _M14_RISK_KEYS[key]
+        try:
+            if typ == 'bool':
+                val_str = 'true' if str(raw_val).lower() in ('true','1','yes') else 'false'
+            elif typ == 'int':
+                v = int(raw_val)
+                if lo is not None and v < lo: raise ValueError('below min ' + str(lo))
+                if hi is not None and v > hi: raise ValueError('above max ' + str(hi))
+                val_str = str(v)
+            else:
+                v = float(raw_val)
+                if lo is not None and v < lo: raise ValueError('below min ' + str(lo))
+                if hi is not None and v > hi: raise ValueError('above max ' + str(hi))
+                val_str = str(v)
+            applied[key] = val_str
+        except Exception as e:
+            errors[key] = str(e)
+    if errors:
+        return jsonify({'errors': errors}), 400
+    env_path = BASE_DIR / '.env'
+    if env_path.exists():
+        shutil.copy(env_path, str(env_path) + '.bak')
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+        env_dict = {}
+        for line in lines:
+            if '=' in line and not line.strip().startswith('#'):
+                k, _, v = line.partition('=')
+                env_dict[k.strip()] = v
+        for k, v in applied.items():
+            env_dict[k] = v
+            os.environ[k] = v
+        joined = '\n'.join(kk + '=' + vv for kk, vv in env_dict.items()) + '\n'
+        env_path.write_text(joined)
+        app.logger.info('[M14_CONFIG] Applied: %s', list(applied.keys()))
+        return jsonify({'applied': applied, 'note': 'takes effect next signal evaluation'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── Kill Switch ─────────────────────────────────────────────────────────────
 
 @app.route('/api/kill-switch/state')
