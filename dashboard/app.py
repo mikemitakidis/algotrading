@@ -154,6 +154,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('strategy')"  id="n-strategy">Strategy</a>
     <a onclick="go('sentiment')" id="n-sentiment">Sentiment</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
+    <a onclick="go('risk')"      id="n-risk">Risk</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
 </nav>
@@ -2555,6 +2556,233 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </div>
 <!-- END SENTIMENT PAGE -->
+
+<!-- RISK PAGE -->
+<div id="risk" class="page">
+<h2 style="color:#e6edf3;margin:0 0 16px">Portfolio Risk</h2>
+
+<!-- Status Banner -->
+<div id="riskBanner" style="padding:12px 16px;border-radius:6px;margin-bottom:16px;font-weight:600;font-size:15px">Loading...</div>
+
+<!-- Summary Cards Row -->
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+  <div class="card" style="padding:14px">
+    <div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:4px">Kill Switch</div>
+    <div id="rKillSwitch" style="font-size:18px;font-weight:700">—</div>
+  </div>
+  <div class="card" style="padding:14px">
+    <div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:4px">Open Trades</div>
+    <div id="rOpenTrades" style="font-size:18px;font-weight:700">—</div>
+  </div>
+  <div class="card" style="padding:14px">
+    <div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:4px">Daily P&amp;L</div>
+    <div id="rDailyPnl" style="font-size:18px;font-weight:700">—</div>
+  </div>
+  <div class="card" style="padding:14px">
+    <div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:4px">Loss Streak</div>
+    <div id="rLossStreak" style="font-size:18px;font-weight:700">—</div>
+  </div>
+</div>
+
+<!-- Daily Loss Block Status -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">Daily Loss Block</div>
+  <div id="rDailyLossBlock" style="font-size:13px;color:#8b949e">Loading...</div>
+</div>
+
+<!-- P&L Availability Note -->
+<div class="card" style="margin-bottom:16px;border-left:3px solid #d29922">
+  <div class="ct">Daily P&amp;L Availability</div>
+  <div id="rPnlNote" style="font-size:13px;color:#8b949e">Loading...</div>
+</div>
+
+<!-- Latest Snapshot -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">Latest Portfolio Snapshot</div>
+  <div id="rSnapshot" style="font-size:13px;color:#8b949e">Loading...</div>
+</div>
+
+<!-- Recent Risk Rejections -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">Recent Risk Rejections</div>
+  <div id="rRejections" style="font-size:13px;color:#8b949e">Loading...</div>
+</div>
+
+<!-- M14 Config Editor -->
+<div class="card">
+  <div class="ct">Portfolio Risk Settings</div>
+  <div style="color:#8b949e;font-size:12px;margin-bottom:12px">
+    Changes take effect on next signal evaluation. Only RISK_* keys are editable here. Secrets and broker keys are never shown.
+  </div>
+  <div id="rConfigForm" style="font-size:13px">Loading...</div>
+  <div id="rConfigMsg" style="margin-top:8px;font-size:13px"></div>
+  <button onclick="saveRiskConfig()" style="margin-top:12px;padding:8px 18px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">Save Settings</button>
+</div>
+
+</div><!-- end risk page -->
+
+<script>
+// ── Risk page ────────────────────────────────────────────────────────────────
+var _riskConfigData = {};
+
+function loadRisk(){
+  // Load state
+  api('/api/portfolio-risk/state', function(d){
+    if(d.error){ document.getElementById('riskBanner').textContent = 'Error: '+d.error; return; }
+    var snap = d.latest_snapshot || {};
+    var daily = d.daily_state || {};
+    var ks = d.kill_switch || {};
+
+    // Status banner
+    var status = (snap.risk_status || 'ok').toUpperCase();
+    var bannerEl = document.getElementById('riskBanner');
+    bannerEl.textContent = 'Risk Status: ' + status;
+    bannerEl.style.background = status==='BLOCKED'?'#da3633':status==='WARNING'?'#9e6a03':'#1a7f37';
+    bannerEl.style.color = '#fff';
+
+    // Kill switch
+    var ksActive = ks.active;
+    document.getElementById('rKillSwitch').innerHTML =
+      ksActive ? '<span style="color:#da3633">ACTIVE</span>' : '<span style="color:#3fb950">INACTIVE</span>';
+
+    // Open trades
+    document.getElementById('rOpenTrades').textContent =
+      (snap.open_trade_count !== undefined ? snap.open_trade_count : '—') +
+      ' / ' + (d.latest_snapshot ? JSON.parse(snap.policy_json||'{}').max_open_trades||'?' : '?');
+
+    // Daily P&L
+    var pnlAvail = daily.daily_pnl_available;
+    document.getElementById('rDailyPnl').innerHTML = pnlAvail
+      ? (daily.realised_pnl_pct||0).toFixed(2)+'%'
+      : '<span style="color:#8b949e">Unavailable</span>';
+
+    // Loss streak
+    document.getElementById('rLossStreak').textContent =
+      d.persistent_state && d.persistent_state.consecutive_losses
+        ? d.persistent_state.consecutive_losses : '0';
+
+    // Daily loss block
+    var blockEl = document.getElementById('rDailyLossBlock');
+    if(daily.daily_loss_block_active){
+      blockEl.innerHTML = '<span style="color:#da3633;font-weight:600">BLOCKED</span> — daily loss limit exceeded. Alert sent: '+(daily.daily_loss_alert_sent?'yes':'no');
+    } else {
+      blockEl.innerHTML = '<span style="color:#3fb950">No block active</span>';
+    }
+
+    // P&L availability note
+    document.getElementById('rPnlNote').innerHTML = pnlAvail
+      ? 'Source: ' + (daily.daily_pnl_source||'unknown')
+      : '<strong>Daily P&amp;L is currently unavailable.</strong> signal_outcomes has no qty/position_size column. '
+       +'The system honestly returns daily_pnl_available=false and follows unavailable-data rules. '
+       +'Real P&amp;L enforcement will activate when outcome linkage is complete in a future milestone.';
+
+    // Latest snapshot detail
+    var snapEl = document.getElementById('rSnapshot');
+    if(snap && snap.id){
+      var sym = '—', sec = '—';
+      try{ var se = JSON.parse(snap.symbol_exposures_json||'{}'); sym = se.symbol ? se.symbol+': '+se.pct+'%' : '—'; }catch(e){}
+      try{ var sece = JSON.parse(snap.sector_exposures_json||'{}'); sec = sece.sector ? sece.sector+': '+sece.pct+'%' : '—'; }catch(e){}
+      snapEl.innerHTML =
+        '<table style="border-collapse:collapse;width:100%">' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Cycle</td><td style="padding:3px 8px">'+snap.cycle_id+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Broker</td><td style="padding:3px 8px">'+snap.broker+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Portfolio</td><td style="padding:3px 8px">$'+(snap.portfolio_value||0).toLocaleString()+' ('+snap.portfolio_value_source+')</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Open Trades</td><td style="padding:3px 8px">'+snap.open_trade_count+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Symbol Exposure</td><td style="padding:3px 8px">'+sym+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Sector Exposure</td><td style="padding:3px 8px">'+sec+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Cooldown Until</td><td style="padding:3px 8px">'+(snap.cooldown_until||'none')+'</td></tr>' +
+        '<tr><td style="padding:3px 8px;color:#8b949e">Recorded</td><td style="padding:3px 8px">'+snap.created_at+'</td></tr>' +
+        '</table>';
+    } else { snapEl.textContent = 'No snapshot yet.'; }
+  });
+
+  // Load rejections
+  api('/api/portfolio-risk/rejections', function(d){
+    var el = document.getElementById('rRejections');
+    if(!d || !d.length){ el.textContent = 'No risk rejections recorded.'; return; }
+    var rows = d.slice(0,10).map(function(r){
+      var checks = '';
+      try{ checks = JSON.stringify(JSON.parse(r.risk_checks||'{}'), null, 1).substring(0,200); }catch(e){}
+      return '<tr style="border-bottom:1px solid #30363d">' +
+        '<td style="padding:4px 8px;color:#8b949e">'+r.timestamp.substring(0,16)+'</td>' +
+        '<td style="padding:4px 8px;font-weight:600">'+r.symbol+'</td>' +
+        '<td style="padding:4px 8px;color:#da3633">'+r.rejection_reason+'</td>' +
+        '<td style="padding:4px 8px;font-size:11px;color:#8b949e;max-width:300px;white-space:pre-wrap">'+checks+'</td>' +
+        '</tr>';
+    }).join('');
+    el.innerHTML = '<table style="border-collapse:collapse;width:100%;font-size:12px">' +
+      '<tr style="border-bottom:1px solid #30363d"><th style="padding:4px 8px;text-align:left;color:#8b949e">Time</th>' +
+      '<th style="padding:4px 8px;text-align:left">Symbol</th>' +
+      '<th style="padding:4px 8px;text-align:left">Reason</th>' +
+      '<th style="padding:4px 8px;text-align:left">Checks</th></tr>' + rows + '</table>';
+  });
+
+  // Load config
+  api('/api/portfolio-risk/config', function(d){
+    _riskConfigData = d;
+    var el = document.getElementById('rConfigForm');
+    if(!d){ el.textContent = 'Could not load config.'; return; }
+    var html = '<table style="border-collapse:collapse;width:100%">';
+    Object.keys(d).forEach(function(k){
+      var cfg = d[k];
+      var inputType = cfg.type === 'bool' ? 'checkbox' : 'number';
+      var val = cfg.value || '';
+      var inputHtml = cfg.type === 'bool'
+        ? '<input type="checkbox" id="cfg_'+k+'" '+(val==='true'?'checked':'')+' style="width:16px;height:16px">'
+        : '<input type="number" id="cfg_'+k+'" value="'+val+'" step="any" '
+          +(cfg.min!==null?'min="'+cfg.min+'"':'')+' '
+          +(cfg.max!==null?'max="'+cfg.max+'"':'')+
+          ' style="background:#0d1117;border:1px solid #30363d;color:#e6edf3;padding:4px 8px;border-radius:4px;width:160px">';
+      html += '<tr style="border-bottom:1px solid #21262d">' +
+        '<td style="padding:6px 8px;color:#8b949e;font-size:12px;white-space:nowrap">'+k+'</td>' +
+        '<td style="padding:6px 8px">'+inputHtml+'</td>' +
+        '<td style="padding:6px 8px;color:#484f58;font-size:11px">'+(cfg.min!==null?cfg.min+' – '+cfg.max:'')+'</td>' +
+        '</tr>';
+    });
+    html += '</table>';
+    el.innerHTML = html;
+  });
+}
+
+function saveRiskConfig(){
+  var payload = {};
+  Object.keys(_riskConfigData).forEach(function(k){
+    var cfg = _riskConfigData[k];
+    var el = document.getElementById('cfg_'+k);
+    if(!el) return;
+    payload[k] = cfg.type==='bool' ? (el.checked?'true':'false') : el.value;
+  });
+  var msgEl = document.getElementById('rConfigMsg');
+  msgEl.textContent = 'Saving...';
+  fetch('/api/portfolio-risk/config',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    credentials:'include',
+    body:JSON.stringify(payload)
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.errors){
+      msgEl.style.color='#da3633';
+      msgEl.textContent = 'Errors: '+JSON.stringify(d.errors);
+    } else {
+      msgEl.style.color='#3fb950';
+      msgEl.textContent = 'Saved. '+d.note;
+      loadRisk();
+    }
+  }).catch(function(e){
+    msgEl.style.color='#da3633';
+    msgEl.textContent = 'Save failed: '+e;
+  });
+}
+
+// Auto-load risk page when opened
+var _origGo = go;
+go = function(p){
+  _origGo(p);
+  if(p==='risk') loadRisk();
+};
+</script>
+
+<!-- END RISK PAGE -->
 </body>
 </html>"""
 
