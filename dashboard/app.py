@@ -154,7 +154,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('strategy')"  id="n-strategy">Strategy</a>
     <a onclick="go('sentiment')" id="n-sentiment">Sentiment</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
-    <a onclick="go('risk')"      id="n-risk">Risk</a>
+    <a onclick="go('risk');loadRisk()" id="n-risk">Risk</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
 </nav>
@@ -2562,7 +2562,10 @@ document.addEventListener('DOMContentLoaded', function(){
 <h2 style="color:#e6edf3;margin:0 0 16px">Portfolio Risk</h2>
 
 <!-- Status Banner -->
-<div id="riskBanner" style="padding:12px 16px;border-radius:6px;margin-bottom:16px;font-weight:600;font-size:15px">Loading...</div>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+  <div id="riskBanner" style="flex:1;padding:12px 16px;border-radius:6px;font-weight:600;font-size:15px">Loading...</div>
+  <button onclick="loadRisk()" style="padding:8px 14px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px">&#x21bb; Refresh</button>
+</div>
 
 <!-- Summary Cards Row -->
 <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
@@ -2627,8 +2630,14 @@ var _riskConfigData = {};
 
 function loadRisk(){
   // Load state
-  api('/api/portfolio-risk/state', function(d){
-    if(d.error){ document.getElementById('riskBanner').textContent = 'Error: '+d.error; return; }
+  fetch('/api/portfolio-risk/state')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(!d || d.error){
+      var b=document.getElementById('riskBanner');
+      b.textContent='Error loading risk state: '+(d&&d.error?d.error:'not authenticated');
+      b.style.background='#da3633'; b.style.color='#fff'; return;
+    }
     var snap = d.latest_snapshot || {};
     var daily = d.daily_state || {};
     var ks = d.kill_switch || {};
@@ -2694,10 +2703,16 @@ function loadRisk(){
         '<tr><td style="padding:3px 8px;color:#8b949e">Recorded</td><td style="padding:3px 8px">'+snap.created_at+'</td></tr>' +
         '</table>';
     } else { snapEl.textContent = 'No snapshot yet.'; }
+  }).catch(function(e){
+    var b=document.getElementById('riskBanner');
+    b.textContent='Risk API error: '+e;
+    b.style.background='#da3633'; b.style.color='#fff';
   });
 
   // Load rejections
-  api('/api/portfolio-risk/rejections', function(d){
+  fetch('/api/portfolio-risk/rejections')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
     var el = document.getElementById('rRejections');
     if(!d || !d.length){ el.textContent = 'No risk rejections recorded.'; return; }
     var rows = d.slice(0,10).map(function(r){
@@ -2715,10 +2730,14 @@ function loadRisk(){
       '<th style="padding:4px 8px;text-align:left">Symbol</th>' +
       '<th style="padding:4px 8px;text-align:left">Reason</th>' +
       '<th style="padding:4px 8px;text-align:left">Checks</th></tr>' + rows + '</table>';
+  }).catch(function(){
+    document.getElementById('rRejections').textContent = 'Could not load rejections.';
   });
 
   // Load config
-  api('/api/portfolio-risk/config', function(d){
+  fetch('/api/portfolio-risk/config')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
     _riskConfigData = d;
     var el = document.getElementById('rConfigForm');
     if(!d){ el.textContent = 'Could not load config.'; return; }
@@ -2741,6 +2760,8 @@ function loadRisk(){
     });
     html += '</table>';
     el.innerHTML = html;
+  }).catch(function(){
+    document.getElementById('rConfigForm').textContent = 'Could not load config.';
   });
 }
 
@@ -2774,12 +2795,7 @@ function saveRiskConfig(){
   });
 }
 
-// Auto-load risk page when opened
-var _origGo = go;
-go = function(p){
-  _origGo(p);
-  if(p==='risk') loadRisk();
-};
+// loadRisk() called directly from nav onclick — no go() override needed
 </script>
 
 <!-- END RISK PAGE -->
