@@ -23,6 +23,7 @@ Schema is additive and safe — existing tables unaffected.
 """
 import json
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -157,14 +158,19 @@ CREATE TABLE portfolio_risk_snapshots (
 
 def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     """Create flywheel tables if they don't exist. Safe to call on startup."""
-    for name, schema in [
-        ('candidate_snapshots',      CANDIDATE_SCHEMA),
-        ('execution_intents',        INTENT_SCHEMA),
-        ('signal_outcomes',          OUTCOME_SCHEMA),
+    # Tables with signal_id + symbol indexes
+    _indexed = [
+        ('candidate_snapshots', CANDIDATE_SCHEMA),
+        ('execution_intents',   INTENT_SCHEMA),
+        ('signal_outcomes',     OUTCOME_SCHEMA),
+    ]
+    # M14 tables — no signal_id/symbol columns, no generic indexes
+    _plain = [
         ('daily_state',              DAILY_STATE_SCHEMA),
         ('portfolio_risk_state',     PORTFOLIO_RISK_STATE_SCHEMA),
         ('portfolio_risk_snapshots', PORTFOLIO_RISK_SNAPSHOT_SCHEMA),
-    ]:
+    ]
+    for name, schema in _indexed:
         exists = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
         ).fetchone()
@@ -174,6 +180,14 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
                          f'ON {name}(signal_id)')
             conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{name}_symbol '
                          f'ON {name}(symbol)')
+            conn.commit()
+            log.info('[FLYWHEEL] Created table: %s', name)
+    for name, schema in _plain:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        if not exists:
+            conn.execute(schema)
             conn.commit()
             log.info('[FLYWHEEL] Created table: %s', name)
 
@@ -381,13 +395,12 @@ def get_daily_state(conn: sqlite3.Connection) -> dict:
 def set_daily_loss_block(conn: sqlite3.Connection, active: bool,
                           alert_sent: bool = False) -> None:
     from datetime import datetime, timezone
+    # Ensure today's row exists first, then UPDATE
+    get_daily_state(conn)  # creates row if missing
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     conn.execute(
-        "INSERT OR REPLACE INTO daily_state "
-        "(date,daily_loss_block_active,daily_loss_alert_sent,updated_at) "
-        "VALUES (?,?,?,(SELECT updated_at FROM daily_state WHERE date=?),?)"
-        if False else
-        "UPDATE daily_state SET daily_loss_block_active=?,daily_loss_alert_sent=?,updated_at=? "
+        "UPDATE daily_state "
+        "SET daily_loss_block_active=?, daily_loss_alert_sent=?, updated_at=? "
         "WHERE date=?",
         (int(active), int(alert_sent), datetime.now(timezone.utc).isoformat(), today)
     )

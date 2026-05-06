@@ -350,13 +350,14 @@ class PortfolioRiskPolicy:
             order_id  = o.get('order_id') or o.get('orderId') or 0
 
             if parent_id and parent_id != 0:
-                # Child leg — counted under parent
-                trade_ids.add(f'bracket_parent_{parent_id}')
+                # Child leg — key under parent's order_id
+                trade_ids.add(f'bracket_{parent_id}')
             elif oca_group:
                 trade_ids.add(f'oca_{oca_group}')
             else:
-                # Parent or standalone order
-                trade_ids.add(f'order_{order_id}')
+                # Parent or standalone — use bracket_{order_id}
+                # so that child legs (bracket_{this_id}) resolve to same key
+                trade_ids.add(f'bracket_{order_id}')
         detail['broker_orders'] = len(trade_ids)
 
         # Broker positions — deduplicate against order set by symbol
@@ -528,8 +529,10 @@ class PortfolioRiskPolicy:
             loss_pct = -pnl_pct  # positive = loss
             checks['daily_loss_pct'] = loss_pct
 
-            # Check if daily loss block already flagged
-            if daily.get('daily_loss_block_active') and not self.allow_loss_override:
+            if self.allow_loss_override:
+                # Override active — skip all daily loss enforcement
+                checks['daily_loss_ok'] = 'overridden'
+            elif daily.get('daily_loss_block_active'):
                 reasons.append('daily_loss_limit_exceeded')
                 checks['daily_loss_ok'] = False
             elif loss_pct >= self.max_daily_loss_pct:
