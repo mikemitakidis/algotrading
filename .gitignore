@@ -23,3 +23,10 @@ build/
 .idea/
 *.swp
 *.swo
+
+# M15 hardening — secrets and backup hygiene
+.github_token
+*.token
+.env.bak*
+*_backup.py
+*.bak
