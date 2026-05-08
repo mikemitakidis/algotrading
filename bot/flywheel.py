@@ -182,6 +182,9 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
                          f'ON {name}(symbol)')
             conn.commit()
             log.info('[FLYWHEEL] Created table: %s', name)
+    # M15 schema hardening — bring pre-M12 execution_intents tables up to date
+    # with the lifecycle columns declared in INTENT_SCHEMA. Idempotent.
+    ensure_execution_intents_migrations(conn)
     for name, schema in _plain:
         exists = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)
@@ -190,6 +193,52 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
             conn.execute(schema)
             conn.commit()
             log.info('[FLYWHEEL] Created table: %s', name)
+
+
+def ensure_execution_intents_migrations(conn: sqlite3.Connection) -> list:
+    """
+    M15 schema hardening — idempotent ALTER TABLE for M12 lifecycle columns.
+
+    The live execution_intents table predates the M12 lifecycle columns
+    declared in INTENT_SCHEMA. CREATE TABLE IF NOT EXISTS does not migrate
+    existing tables, which left update_intent_status writing to columns
+    that did not exist on disk (silent partial writes).
+
+    Idempotent: first call adds missing columns, subsequent calls return [].
+    Never drops or recreates the table. Never deletes data.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_intents'"
+    )
+    if not cur.fetchone():
+        # Table does not exist yet — init_flywheel_tables will CREATE it with
+        # the full INTENT_SCHEMA. Nothing to migrate.
+        return []
+    cur.execute("PRAGMA table_info(execution_intents)")
+    existing = {row[1] for row in cur.fetchall()}
+    required = [
+        ("submitted_at",   "TEXT"),
+        ("filled_at",      "TEXT"),
+        ("fill_price",     "REAL"),
+        ("fill_qty",       "REAL"),
+        ("cancelled_at",   "TEXT"),
+        ("lifecycle_json", "TEXT"),
+    ]
+    added: list = []
+    for col, sqltype in required:
+        if col not in existing:
+            cur.execute(
+                f"ALTER TABLE execution_intents ADD COLUMN {col} {sqltype}"
+            )
+            added.append(col)
+            log.info(
+                '[FLYWHEEL] ensure_execution_intents_migrations: added %s %s',
+                col, sqltype,
+            )
+    if added:
+        conn.commit()
+    return added
 
 
 # ── Candidate snapshot ────────────────────────────────────────────────────────
@@ -350,6 +399,12 @@ def update_intent_status(
             values
         )
         conn.commit()
+    except sqlite3.OperationalError as e:
+        log.error(
+            '[FLYWHEEL] update_intent_status: SQL failure (schema mismatch?): %s '
+            '| intent_id=%r status=%r', e, intent_id, status
+        )
+        raise
     except Exception as e:
         log.warning('[FLYWHEEL] update_intent_status failed: %s', e)
 
