@@ -2,6 +2,7 @@
 """main.py - Algo Trader v1"""
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -41,7 +42,11 @@ from bot.brokers.base import OrderIntent
 from bot.risk       import RiskManager, PortfolioRiskPolicy, PortfolioRiskContext
 from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
-                          alert_crash, alert_cycle_summary, alert_signal)
+                          alert_crash, alert_cycle_summary, alert_signal,
+                          send_gateway_alert)
+from bot.gateway_watchdog import GatewayWatchdog, WatchdogConfig
+from bot.recovery_executor import RecoveryController, RecoveryExecutor
+import bot.flywheel as _flywheel_mod
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +123,38 @@ def main():
     broker    = get_broker()
     log.info('[STARTUP] Broker: %s | Risk: max_pos=%s max_open=%d portfolio=$%.0f',
              broker.name, risk_mgr.max_position_pct, risk_mgr.max_open, risk_mgr.portfolio_size)
+
+    # ── M15.1 Gateway watchdog (single in-process timed prober) ──────────
+    # Owned by main.py. Runs on its own thread independent of scan cycle.
+    # Recovery is INERT in M15.1 (Option B): no real systemctl restart.
+    _wd_broker_mode = 'live' if 'live' in broker.name else 'paper'
+    _wd_cfg = WatchdogConfig.from_env(
+        broker_mode=_wd_broker_mode,
+        host=config.get('ibkr_host', '127.0.0.1'),
+        port=int(config.get('ibkr_port', 4002)),
+        systemd_unit=os.getenv('IBKR_SYSTEMD_UNIT', 'ibgateway'),
+    )
+    _recovery_ctrl = RecoveryController(
+        mode=_wd_cfg.mode,
+        min_restart_interval_min=_wd_cfg.min_restart_interval_min,
+        max_restarts_per_hour=_wd_cfg.max_restarts_per_hour,
+    )
+    _recovery_exec = RecoveryExecutor(mode=_wd_cfg.mode,
+                                      systemd_unit=_wd_cfg.systemd_unit)
+
+    def _gw_alert_adapter(severity, text, payload):
+        send_gateway_alert(config, severity, text, payload)
+
+    gateway_watchdog = GatewayWatchdog(
+        config=_wd_cfg, flywheel=_flywheel_mod,
+        notifier_send_fn=_gw_alert_adapter,
+        recovery_controller=_recovery_ctrl,
+        recovery_executor=_recovery_exec,
+    )
+    if 'ibkr' in broker.name:
+        gateway_watchdog.start()
+    else:
+        log.info('[GW-WATCHDOG] not started (broker=%s, IBKR-only)', broker.name)
 
     focus = FOCUS_SYMBOLS[:config['focus_size']]
     log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
@@ -238,6 +275,40 @@ def main():
                             intent.risk_checks = risk_checks
 
                     if risk_passed:
+                        # ── M15.1 broker-readiness gate (gateway watchdog) ──
+                        # AFTER risk passes, BEFORE broker.submit(): block
+                        # submission when watchdog reports gateway unhealthy.
+                        # Order preserved: risk → watchdog → existing _gateway_available
+                        # TCP probe (defense in depth, lives inside broker.submit).
+                        # This is broker/infrastructure readiness, NOT portfolio risk —
+                        # so it is here in main.py and NOT in RiskManager.evaluate().
+                        if 'ibkr' in broker.name and not gateway_watchdog.is_healthy_for_submission():
+                            _gw_health = gateway_watchdog.gateway_health_payload()
+                            _gw_checks = dict(risk_checks or {})
+                            _gw_checks['gateway_health'] = _gw_health
+                            intent_id = log_intent(conn, row_id,
+                                signal.get('symbol',''), signal.get('direction',''),
+                                signal.get('route',''),
+                                signal.get('entry_price',0), signal.get('stop_loss',0),
+                                signal.get('target_price',0),
+                                intent.position_size, intent.risk_usd,
+                                signal.get('valid_count',0), signal.get('strategy_version',1),
+                                broker.name, 'broker_unready',
+                                rejection_reason='gateway_unhealthy_block',
+                                risk_checks=_gw_checks)
+                            if intent_id:
+                                update_intent_status(
+                                    conn, intent_id, 'broker_unready',
+                                    event='broker_unready:gateway_unhealthy_block'
+                                )
+                            log.warning(
+                                '[GW-WATCHDOG] submission blocked: %s state=%s',
+                                signal.get('symbol',''),
+                                _gw_health.get('watchdog_status'),
+                            )
+                            alert_signal(config, signal)
+                            continue
+
                         result = broker.submit(intent)
                         intent_id = log_intent(conn, row_id,
                             signal.get('symbol',''), signal.get('direction',''),

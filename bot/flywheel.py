@@ -79,7 +79,13 @@ CREATE TABLE execution_intents (
     status           TEXT    DEFAULT 'pending',
     -- status: pending | risk_rejected | paper_logged | accepted |
     --         rejected | filled | cancelled | error | not_implemented |
-    --         live_safety_blocked | account_mismatch | connection_failed
+    --         live_safety_blocked | account_mismatch | connection_failed |
+    --         broker_unready
+    -- broker_unready (M15.1): set BEFORE submission when the gateway
+    --   watchdog flags broker infrastructure unhealthy. Distinct from
+    --   connection_failed: connection_failed = "we tried to submit and
+    --   IB API rejected"; broker_unready = "watchdog said no, we never
+    --   attempted submission". Pair with rejection_reason='gateway_unhealthy_block'.
     broker_order_id  TEXT    DEFAULT NULL,
     rejection_reason TEXT    DEFAULT NULL,
     risk_checks      TEXT    DEFAULT '{}'  ,  -- JSON
@@ -156,6 +162,32 @@ CREATE TABLE portfolio_risk_snapshots (
 )
 """
 
+# M15.1 — Gateway watchdog tables.
+# gateway_state: latest watchdog snapshot (single row, key='current').
+# gateway_events: append-only audit trail of state transitions and recovery
+#                 decisions. Indexed on ts, event_type, broker_mode (explicit;
+#                 NEVER added to _indexed loop because it has no signal_id/
+#                 symbol columns — repeat of M14 f09dbc6 lesson would error).
+GATEWAY_STATE_SCHEMA = """
+CREATE TABLE gateway_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+)
+"""
+
+GATEWAY_EVENTS_SCHEMA = """
+CREATE TABLE gateway_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,
+    event_type    TEXT NOT NULL,
+    broker_mode   TEXT NOT NULL,
+    status_before TEXT,
+    status_after  TEXT,
+    details_json  TEXT
+)
+"""
+
 def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     """Create flywheel tables if they don't exist. Safe to call on startup."""
     # Tables with signal_id + symbol indexes
@@ -164,11 +196,13 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
         ('execution_intents',   INTENT_SCHEMA),
         ('signal_outcomes',     OUTCOME_SCHEMA),
     ]
-    # M14 tables — no signal_id/symbol columns, no generic indexes
+    # M14 + M15.1 tables — no signal_id/symbol columns, no generic indexes
     _plain = [
         ('daily_state',              DAILY_STATE_SCHEMA),
         ('portfolio_risk_state',     PORTFOLIO_RISK_STATE_SCHEMA),
         ('portfolio_risk_snapshots', PORTFOLIO_RISK_SNAPSHOT_SCHEMA),
+        ('gateway_state',            GATEWAY_STATE_SCHEMA),
+        ('gateway_events',           GATEWAY_EVENTS_SCHEMA),
     ]
     for name, schema in _indexed:
         exists = conn.execute(
@@ -193,6 +227,16 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
             conn.execute(schema)
             conn.commit()
             log.info('[FLYWHEEL] Created table: %s', name)
+    # M15.1 — explicit indexes for gateway_events. NOT added via _indexed loop:
+    # that loop adds generic signal_id/symbol indexes which would fail here
+    # (M14 f09dbc6 lesson, codified).
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_gateway_events_ts '
+                 'ON gateway_events(ts)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_gateway_events_event_type '
+                 'ON gateway_events(event_type)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_gateway_events_broker_mode '
+                 'ON gateway_events(broker_mode)')
+    conn.commit()
 
 
 def ensure_execution_intents_migrations(conn: sqlite3.Connection) -> list:
@@ -545,3 +589,140 @@ def write_portfolio_snapshot(conn: sqlite3.Connection, cycle_id: int,
         )
     )
     conn.commit()
+
+
+# ── M15.1 Gateway watchdog helpers ────────────────────────────────────────────
+
+def write_gateway_state(state: dict, conn: Optional[sqlite3.Connection] = None,
+                        db_path: Optional[str] = None) -> None:
+    """M15.1 — upsert latest watchdog state into gateway_state (key='current').
+
+    Caller may pass either an open connection or a db_path. If neither is
+    given, falls back to the path from the SIGNALS_DB_PATH env var or the
+    canonical data/signals.db.
+    """
+    own = conn is None
+    if own:
+        path = db_path or os.getenv('SIGNALS_DB_PATH') or str(
+            Path(__file__).resolve().parent.parent / 'data' / 'signals.db'
+        )
+        conn = sqlite3.connect(path)
+    try:
+        ts = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        conn.execute(
+            "INSERT INTO gateway_state(key, value, updated_at) "
+            "VALUES('current', ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value=excluded.value, updated_at=excluded.updated_at",
+            (json.dumps(state, default=str), ts),
+        )
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        log.error('[FLYWHEEL] write_gateway_state: SQL failure: %s', e)
+        raise
+    except Exception as e:
+        log.warning('[FLYWHEEL] write_gateway_state failed: %s', e)
+    finally:
+        if own and conn is not None:
+            conn.close()
+
+
+def read_gateway_state(conn: Optional[sqlite3.Connection] = None,
+                       db_path: Optional[str] = None) -> dict:
+    """M15.1 — fetch latest watchdog state. Returns {} if absent."""
+    own = conn is None
+    if own:
+        path = db_path or os.getenv('SIGNALS_DB_PATH') or str(
+            Path(__file__).resolve().parent.parent / 'data' / 'signals.db'
+        )
+        conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT value, updated_at FROM gateway_state WHERE key='current'"
+        ).fetchone()
+        if not row:
+            return {}
+        try:
+            payload = json.loads(row[0])
+        except Exception:
+            payload = {}
+        payload['_persisted_at'] = row[1]
+        return payload
+    except Exception as e:
+        log.warning('[FLYWHEEL] read_gateway_state failed: %s', e)
+        return {}
+    finally:
+        if own and conn is not None:
+            conn.close()
+
+
+def write_gateway_event(event_type: str, broker_mode: str,
+                        status_before: Optional[str] = None,
+                        status_after: Optional[str] = None,
+                        details: Optional[dict] = None,
+                        conn: Optional[sqlite3.Connection] = None,
+                        db_path: Optional[str] = None) -> Optional[int]:
+    """M15.1 — append-only audit row in gateway_events."""
+    own = conn is None
+    if own:
+        path = db_path or os.getenv('SIGNALS_DB_PATH') or str(
+            Path(__file__).resolve().parent.parent / 'data' / 'signals.db'
+        )
+        conn = sqlite3.connect(path)
+    try:
+        ts = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        cur = conn.execute(
+            "INSERT INTO gateway_events("
+            "ts, event_type, broker_mode, status_before, status_after, details_json"
+            ") VALUES(?, ?, ?, ?, ?, ?)",
+            (ts, event_type, broker_mode, status_before, status_after,
+             json.dumps(details or {}, default=str)),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.OperationalError as e:
+        log.error('[FLYWHEEL] write_gateway_event: SQL failure: %s', e)
+        raise
+    except Exception as e:
+        log.warning('[FLYWHEEL] write_gateway_event failed: %s', e)
+        return None
+    finally:
+        if own and conn is not None:
+            conn.close()
+
+
+def read_gateway_events(limit: int = 20,
+                        conn: Optional[sqlite3.Connection] = None,
+                        db_path: Optional[str] = None) -> list:
+    """M15.1 — most recent gateway_events rows, newest first."""
+    own = conn is None
+    if own:
+        path = db_path or os.getenv('SIGNALS_DB_PATH') or str(
+            Path(__file__).resolve().parent.parent / 'data' / 'signals.db'
+        )
+        conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT id, ts, event_type, broker_mode, status_before, "
+            "status_after, details_json "
+            "FROM gateway_events ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                d = json.loads(r[6]) if r[6] else {}
+            except Exception:
+                d = {}
+            out.append({
+                'id': r[0], 'ts': r[1], 'event_type': r[2],
+                'broker_mode': r[3], 'status_before': r[4],
+                'status_after': r[5], 'details': d,
+            })
+        return out
+    except Exception as e:
+        log.warning('[FLYWHEEL] read_gateway_events failed: %s', e)
+        return []
+    finally:
+        if own and conn is not None:
+            conn.close()

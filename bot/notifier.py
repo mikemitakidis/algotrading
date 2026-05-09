@@ -195,6 +195,31 @@ def alert_cycle_summary(config: dict, cycle: int,
     return _send(config, text)
 
 
+def send_gateway_alert(config: dict, severity: str, text: str,
+                       payload: dict = None) -> bool:
+    """
+    M15.1 — Gateway watchdog alert.
+    Direct send via _send(); the watchdog manages its own dedup, so this
+    bypasses the (symbol, direction) cooldown table used by alert_signal.
+
+    severity: 'info' | 'warning' | 'critical'
+    Returns True on send, False on failure (never raises).
+    """
+    if not _is_enabled(config):
+        return False
+    try:
+        prefix = {
+            'info': '\u2705',
+            'warning': '\u26a0\ufe0f',
+            'critical': '\U0001F6A8',
+        }.get(severity, '\u2139\ufe0f')
+        body = '%s <b>Gateway watchdog</b>\n%s' % (prefix, text)
+        return bool(_send(config, body))
+    except Exception as e:
+        log.warning('[TELEGRAM] send_gateway_alert failed: %s', e)
+        return False
+
+
 def send_test(config: dict) -> tuple:
     """
     Send a test message to Telegram.

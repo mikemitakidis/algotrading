@@ -2567,6 +2567,31 @@ document.addEventListener('DOMContentLoaded', function(){
   <button onclick="loadRisk()" style="padding:8px 14px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px">&#x21bb; Refresh</button>
 </div>
 
+<!-- M15.1 Gateway Watchdog Panel -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">&#x1F50C; Gateway Watchdog</div>
+  <div id="gwBanner" style="padding:8px 12px;border-radius:5px;font-weight:600;font-size:13px;margin-bottom:10px;background:#21262d;color:#8b949e">Loading...</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;font-size:12px">
+    <div><span style="color:#8b949e">State:</span> <span id="gwState" style="color:#e6edf3;font-weight:600">&mdash;</span></div>
+    <div><span style="color:#8b949e">service_running:</span> <span id="gwService">&mdash;</span></div>
+    <div><span style="color:#8b949e">tcp_ok:</span> <span id="gwTcp">&mdash;</span></div>
+    <div><span style="color:#8b949e">api_ok:</span> <span id="gwApi">&mdash;</span></div>
+    <div><span style="color:#8b949e">API latency:</span> <span id="gwLatency">&mdash;</span></div>
+    <div><span style="color:#8b949e">Last success:</span> <span id="gwLastSuccess">&mdash;</span></div>
+    <div><span style="color:#8b949e">Last probe:</span> <span id="gwLastProbe">&mdash;</span></div>
+    <div><span style="color:#8b949e">Probe age (s):</span> <span id="gwAge" style="font-weight:600">&mdash;</span></div>
+    <div><span style="color:#8b949e">Failure count:</span> <span id="gwFailCount">&mdash;</span></div>
+    <div><span style="color:#8b949e">Degraded:</span> <span id="gwDegraded">&mdash;</span></div>
+    <div><span style="color:#8b949e">Manual action:</span> <span id="gwManual">&mdash;</span></div>
+    <div><span style="color:#8b949e">Mode:</span> <span id="gwMode">&mdash;</span></div>
+    <div><span style="color:#8b949e">Broker:</span> <span id="gwBroker">&mdash;</span></div>
+  </div>
+  <div style="margin-top:12px">
+    <div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-bottom:4px">Last 10 events</div>
+    <div id="gwEvents" style="font-size:11px;color:#8b949e;max-height:160px;overflow-y:auto">Loading...</div>
+  </div>
+</div>
+
 <!-- Summary Cards Row -->
 <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:16px">
   <div class="card" style="padding:14px">
@@ -2628,7 +2653,84 @@ document.addEventListener('DOMContentLoaded', function(){
 // ── Risk page ────────────────────────────────────────────────────────────────
 var _riskConfigData = {};
 
+// M15.1 — Gateway watchdog panel loader (uses fetch, NOT undefined api()).
+function loadGateway(){
+  fetch('/api/gateway/state')
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    if(!d || d.error){
+      var b=document.getElementById('gwBanner');
+      if(b){ b.textContent='Gateway state error: '+(d&&d.error?d.error:'unknown');
+             b.style.background='#9e6a03'; b.style.color='#fff'; }
+      return;
+    }
+    var s = d.state || {};
+    var events = d.events || [];
+
+    var banner = document.getElementById('gwBanner');
+    var state = s.state || 'unknown';
+    banner.textContent = 'STATE: ' + state.toUpperCase();
+    var bg = '#21262d', fg = '#8b949e';
+    if(state === 'api_up_healthy'){ bg = '#1a7f37'; fg = '#fff'; }
+    else if(state === 'service_down' || state === 'service_running_tcp_down'){ bg = '#da3633'; fg = '#fff'; }
+    else if(state === 'tcp_up_api_down'){ bg = '#9e6a03'; fg = '#fff'; }
+    banner.style.background = bg; banner.style.color = fg;
+
+    function setEl(id, v){
+      var el = document.getElementById(id);
+      if(el) el.textContent = (v === null || v === undefined) ? '\u2014' : v;
+    }
+    setEl('gwState', s.state);
+    setEl('gwService', s.service_running);
+    setEl('gwTcp', s.tcp_ok);
+    setEl('gwApi', s.api_ok);
+    setEl('gwLatency', (s.api_latency_ms !== null && s.api_latency_ms !== undefined) ? s.api_latency_ms + ' ms' : '\u2014');
+    setEl('gwLastSuccess', s.last_success_ts);
+    setEl('gwLastProbe', s.last_probe_ts);
+    // Highlight stale probes (red text if probe_age > 3*interval, ~3 min default)
+    var ageEl = document.getElementById('gwAge');
+    if(ageEl){
+      var age = s.probe_age_seconds;
+      ageEl.textContent = (age === null || age === undefined) ? '\u2014' : age;
+      ageEl.style.color = (age !== null && age > 180) ? '#da3633' : '#e6edf3';
+    }
+    setEl('gwFailCount', s.failure_count);
+    setEl('gwDegraded', s.degraded);
+    setEl('gwManual', s.manual_action_required);
+    setEl('gwMode', s.mode);
+    setEl('gwBroker', s.broker_mode);
+
+    // Events table (last 10)
+    var evEl = document.getElementById('gwEvents');
+    if(evEl){
+      if(!events.length){
+        evEl.textContent = 'No events recorded yet.';
+      } else {
+        var rows = events.slice(0,10).map(function(e){
+          var ts = (e.ts || '').substring(0,19).replace('T',' ');
+          var trans = (e.status_before||'') + ' \u2192 ' + (e.status_after||'');
+          return '<tr style="border-bottom:1px solid #21262d">' +
+            '<td style="padding:3px 6px;color:#8b949e">'+ts+'</td>' +
+            '<td style="padding:3px 6px">'+e.event_type+'</td>' +
+            '<td style="padding:3px 6px;color:#8b949e">'+e.broker_mode+'</td>' +
+            '<td style="padding:3px 6px;color:#8b949e">'+trans+'</td></tr>';
+        }).join('');
+        evEl.innerHTML = '<table style="border-collapse:collapse;width:100%;font-size:11px">' +
+          '<tr style="border-bottom:1px solid #30363d"><th style="padding:3px 6px;text-align:left;color:#8b949e">ts</th>' +
+          '<th style="padding:3px 6px;text-align:left;color:#8b949e">event</th>' +
+          '<th style="padding:3px 6px;text-align:left;color:#8b949e">broker</th>' +
+          '<th style="padding:3px 6px;text-align:left;color:#8b949e">transition</th></tr>' + rows + '</table>';
+      }
+    }
+  }).catch(function(err){
+    var b=document.getElementById('gwBanner');
+    if(b){ b.textContent='Gateway load error: '+err;
+           b.style.background='#da3633'; b.style.color='#fff'; }
+  });
+}
+
 function loadRisk(){
+  loadGateway();
   // Load state
   fetch('/api/portfolio-risk/state')
   .then(function(r){ return r.json(); })
@@ -3508,6 +3610,23 @@ def portfolio_risk_config_set():
         app.logger.info('[M14_CONFIG] Applied: %s', list(applied.keys()))
         return jsonify({'applied': applied, 'note': 'takes effect next signal evaluation'})
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── M15.1 Gateway Watchdog ──────────────────────────────────────────────────
+
+@app.route('/api/gateway/state')
+@require_auth
+def gateway_state():
+    """M15.1 — current watchdog state + last 20 events."""
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    try:
+        from bot.flywheel import read_gateway_state, read_gateway_events
+        state = read_gateway_state(db_path=str(DB_PATH))
+        events = read_gateway_events(limit=20, db_path=str(DB_PATH))
+        return jsonify({'state': state, 'events': events})
+    except Exception as e:
+        app.logger.exception('gateway_state failed')
         return jsonify({'error': str(e)}), 500
 
 
