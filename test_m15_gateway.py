@@ -98,46 +98,106 @@ class TestRecoveryExecutorInert(unittest.TestCase):
             EVENT_RESTART_NOT_IMPLEMENTED_M15_1,
         )
 
-    def test_no_restart_command_in_source(self):
-        """ChatGPT-correct grep: search for ACTUAL restart commands, not the
-        legitimate read-only `is-active` probe in gateway_watchdog.py.
+    def test_no_restart_call_in_real_code(self):
+        """AST-based proof of M15.1 contract: no subprocess.{run,call,Popen,
+        check_call,check_output} call anywhere in real code passes a string
+        literal 'restart' (and/or 'systemctl' + 'restart' together).
 
-        We use Python's tokenize module to strip comments AND string literals
-        before scanning, so the M15.2 instructional comment in
-        recovery_executor.py (which describes the future subprocess call as
-        TEXT inside a comment) does not falsely flag.
+        Why AST and not grep/tokenize-strip-strings:
+        - tokenize that strips STRING tokens would mask a real call like
+          subprocess.run(['systemctl', 'restart', 'ibgateway'])
+          because the dangerous 'restart' lives INSIDE a string literal.
+        - AST traversal naturally excludes comments and docstrings (those
+          are not children of Call nodes), but DOES inspect string
+          constants passed as arguments. That is exactly what we want.
         """
-        import io, re, tokenize
+        import ast
+
+        SUBPROCESS_FUNCS = {
+            'run', 'call', 'check_call', 'check_output', 'Popen',
+        }
+
+        def _is_subprocess_call(node):
+            if not isinstance(node, ast.Call):
+                return False
+            f = node.func
+            # subprocess.run(...), subprocess.Popen(...), etc.
+            if isinstance(f, ast.Attribute) and f.attr in SUBPROCESS_FUNCS:
+                obj = f.value
+                if isinstance(obj, ast.Name) and obj.id == 'subprocess':
+                    return True
+            # Bare run(...) after `from subprocess import run` — flag too
+            if isinstance(f, ast.Name) and f.id in SUBPROCESS_FUNCS:
+                return True
+            return False
+
+        def _string_constants_in(node):
+            out = []
+            for child in ast.walk(node):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    out.append(child.value)
+            return out
+
+        offenders = []
         for fname in ('bot/recovery_executor.py', 'bot/gateway_watchdog.py'):
             path = os.path.join(os.path.dirname(__file__), fname)
-            with open(path, 'rb') as f:
-                source_bytes = f.read()
-            # Tokenize and rebuild source from NAME / OP / NUMBER tokens only
-            # (drops comments and string literals — but preserves real code).
-            code_tokens = []
-            try:
-                for tok in tokenize.tokenize(io.BytesIO(source_bytes).readline):
-                    if tok.type in (tokenize.COMMENT, tokenize.STRING,
-                                    tokenize.NL, tokenize.NEWLINE,
-                                    tokenize.INDENT, tokenize.DEDENT,
-                                    tokenize.ENCODING, tokenize.ENDMARKER):
-                        continue
-                    code_tokens.append(tok.string)
-            except tokenize.TokenizeError:
-                self.fail(f'tokenize failure on {fname}')
-            code_only = ' '.join(code_tokens)
-            # Real-code patterns that would constitute a restart attempt
-            forbidden = [
-                # subprocess.run(... "restart" or 'restart' in args)
-                r'subprocess\s*\.\s*run\s*\(.*restart',
-                r'systemctl\s+restart',
-                r"['\"]restart['\"]",  # the literal string 'restart' in code
-            ]
-            for pat in forbidden:
-                self.assertIsNone(
-                    re.search(pat, code_only),
-                    f'M15.1 contract violated in {fname}: pattern {pat!r} found in real code',
-                )
+            with open(path) as f:
+                tree = ast.parse(f.read(), filename=fname)
+            for node in ast.walk(tree):
+                if not _is_subprocess_call(node):
+                    continue
+                strs = [s.lower() for s in _string_constants_in(node)]
+                # Hard fail: 'restart' literal anywhere in subprocess call args
+                if any(s == 'restart' for s in strs):
+                    offenders.append(
+                        (fname, node.lineno, "subprocess call with 'restart' literal arg")
+                    )
+                # Belt-and-braces: any string literal containing 'restart'
+                # token AND any other arg containing 'systemctl'
+                joined = ' '.join(strs)
+                if 'restart' in joined and 'systemctl' in joined:
+                    offenders.append(
+                        (fname, node.lineno, "subprocess call combines systemctl + restart")
+                    )
+        if offenders:
+            self.fail(
+                'M15.1 contract violated — restart call(s) found:\n  ' +
+                '\n  '.join(f'{f}:{ln} — {msg}' for f, ln, msg in offenders)
+            )
+
+    def test_subprocess_only_used_for_is_active_probe(self):
+        """Positive assertion: the ONLY subprocess call in the watchdog/
+        recovery code is the read-only `systemctl is-active <unit>` probe."""
+        import ast
+        allowed_combos = [{'systemctl', 'is-active'}]
+
+        for fname in ('bot/recovery_executor.py', 'bot/gateway_watchdog.py'):
+            path = os.path.join(os.path.dirname(__file__), fname)
+            with open(path) as f:
+                tree = ast.parse(f.read(), filename=fname)
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in {'run', 'call', 'check_call',
+                                               'check_output', 'Popen'}):
+                    continue
+                obj = node.func.value
+                if not (isinstance(obj, ast.Name) and obj.id == 'subprocess'):
+                    continue
+                strs = set()
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                        strs.add(child.value)
+                # The call's string args must be a subset of an allowed combo
+                ok = any(strs.issubset(allowed) or strs == allowed
+                         for allowed in allowed_combos) or strs == set()
+                # Allow the variable arg `unit` (not a constant) — strs only
+                # contains literal constants. The is-active probe has
+                # ['systemctl', 'is-active', unit] -> literals = {'systemctl','is-active'}
+                if not ok:
+                    self.fail(
+                        f'{fname}:{node.lineno} subprocess call has unexpected '
+                        f'string literals: {strs}'
+                    )
 
 
 # ============================================================

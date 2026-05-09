@@ -367,22 +367,21 @@ def main():
             except Exception as _snap_err:
                 log.warning('[M14] Snapshot write failed: %s', _snap_err)
 
-            # ── Gateway health check (every cycle for IBKR brokers) ──────────
-            _bname = config.get('broker', 'paper').lower()
-            if 'ibkr' in _bname:
-                from bot.brokers.ibkr_broker import _gateway_available
-                _host = config.get('ibkr_host', '127.0.0.1')
-                _port = int(config.get('ibkr_port', 4002))
-                if not _gateway_available(_host, _port):
-                    log.error('[GATEWAY] IB Gateway DOWN at %s:%d — '
-                              'run: systemctl start ibgateway', _host, _port)
-                    # Send Telegram alert (throttled: only once per 4 cycles)
-                    if cycle % 4 == 1:
-                        from bot.notifier import _send
-                        _send(config,
-                              f'\u26a0\ufe0f <b>IB Gateway DOWN</b>\n'
-                              f'Port {_port} not responding.\n'
-                              f'Run: systemctl start ibgateway')
+            # ── M15.1: cached watchdog state log (READ-ONLY, no probe, no alert) ──
+            # Single prober is the GatewayWatchdog thread. The duplicate
+            # cycle-time _gateway_available probe + Telegram _send call have
+            # been removed (M15.1 architecture: one prober, one alerter).
+            # broker.submit() still runs its own _gateway_available TCP probe
+            # as final defense-in-depth.
+            if 'ibkr' in broker.name and gateway_watchdog._thread is not None:
+                _gw = gateway_watchdog.current_state()
+                log.info(
+                    '[GW-WATCHDOG] cycle %d cached state=%s '
+                    'service=%s tcp=%s api=%s probe_age=%ss',
+                    cycle, _gw.get('state'),
+                    _gw.get('service_running'), _gw.get('tcp_ok'),
+                    _gw.get('api_ok'), _gw.get('probe_age_seconds'),
+                )
 
             last_cycle_at = datetime.now(timezone.utc).isoformat()
             next_cycle_at = datetime.fromtimestamp(

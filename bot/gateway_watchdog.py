@@ -284,17 +284,19 @@ class GatewayWatchdog:
             return self._declared_state == STATE_API_UP_HEALTHY
 
     def gateway_health_payload(self) -> dict:
-        """Compact payload for risk_checks JSON on a broker_unready row.
+        """Full health payload for risk_checks JSON on a broker_unready row.
 
-        ChatGPT-required fields, controlled set:
-          service_running, tcp_ok, api_ok, last_success_ts,
-          failure_count, watchdog_status.
+        Returns the complete watchdog snapshot (same as current_state()):
+          - REQUIRED 6 fields:    service_running, tcp_ok, api_ok,
+                                  last_success_ts, failure_count, watchdog_status
+          - Plus richer context:  state, last_probe_ts, probe_age_seconds,
+                                  api_latency_ms, degraded,
+                                  manual_action_required, broker_mode, mode,
+                                  stuck_in_api_down_min
+        Returning the full state improves audit fidelity for blocked
+        intents — preferred over a compact subset.
         """
-        s = self.current_state()
-        return {k: s[k] for k in (
-            'service_running', 'tcp_ok', 'api_ok',
-            'last_success_ts', 'failure_count', 'watchdog_status',
-        )}
+        return self.current_state()
 
     # ---------- internal ----------
     def _loop(self) -> None:
