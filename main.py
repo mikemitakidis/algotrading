@@ -46,6 +46,7 @@ from bot.notifier import (alert_startup, alert_stopped,
                           send_gateway_alert)
 from bot.gateway_watchdog import GatewayWatchdog, WatchdogConfig
 from bot.recovery_executor import RecoveryController, RecoveryExecutor
+from bot.heartbeat import Heartbeat
 import bot.flywheel as _flywheel_mod
 
 
@@ -171,6 +172,14 @@ def main():
     uptime_started = datetime.now(timezone.utc).isoformat()
     scan_interval  = config['scan_interval_secs']
 
+    # ── M15.2 Heartbeat (independent of scan cycle, daemon thread) ──────
+    # Writes data/heartbeat.json every HEARTBEAT_INTERVAL_SEC (default 45s)
+    # so /api/health can detect process death/wedge even between scans.
+    # Started unconditionally — heartbeat is about bot liveness, not
+    # broker mode. Failures here must not block the trading loop.
+    heartbeat = Heartbeat(scan_interval_sec=scan_interval)
+    heartbeat.start()
+
     write_state({
         'phase':               'starting',
         'mode':                config['bot_mode'],
@@ -194,6 +203,7 @@ def main():
             cycle += 1
             now_iso = datetime.now(timezone.utc).isoformat()
             log.info('[MAIN] === Cycle %d starting | %d symbols ===', cycle, len(focus))
+            heartbeat.record_scan_started()
 
             write_state({
                 'phase':               'scanning',
@@ -390,6 +400,7 @@ def main():
 
             log.info('[MAIN] === Cycle %d complete | Signals: %d | Next in %ds ===',
                      cycle, len(signals), scan_interval)
+            heartbeat.record_scan_completed()
 
             state = {
                 'phase':               'cooldown',

@@ -3630,6 +3630,215 @@ def gateway_state():
         return jsonify({'error': str(e)}), 500
 
 
+# ── M15.2 Health endpoint (external monitoring) ─────────────────────────────
+# Public endpoint (no session-cookie auth) so external monitors can reach it.
+# Optional bearer-token protection via HEALTH_ENDPOINT_AUTH_TOKEN env var.
+# - No token configured  -> minimal payload to everyone (logs WARN once)
+# - Token configured, no Authorization header -> minimal payload
+# - Token configured, wrong Authorization     -> 401
+# - Token configured, correct Authorization   -> full payload
+# This endpoint NEVER touches signals.db. All state is read from
+# data/heartbeat.json (atomic writes) and data/kill_switch.json.
+import hmac as _hmac
+
+_health_unauth_warned = False
+
+
+def _resolve_health_token():
+    return os.environ.get('HEALTH_ENDPOINT_AUTH_TOKEN', '').strip()
+
+
+def _is_valid_bearer(header_value, expected_token):
+    if not header_value or not expected_token:
+        return False
+    if not header_value.startswith('Bearer '):
+        return False
+    presented = header_value[len('Bearer '):].strip()
+    # Constant-time comparison
+    return _hmac.compare_digest(presented, expected_token)
+
+
+def _seconds_since(iso_ts):
+    if not iso_ts:
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        dt = _dt.fromisoformat(iso_ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return int((_dt.now(_tz.utc) - dt).total_seconds())
+    except Exception:
+        return None
+
+
+@app.route('/api/health')
+def api_health():
+    """M15.2 — external monitoring endpoint.
+
+    Status synthesis (first match wins):
+      1. heartbeat file missing OR mtime age > HEARTBEAT_STALE_SEC
+                                                  -> critical / 503
+      2. heartbeat says db_writable=False         -> critical / 503
+      3. scan_started > scan_completed AND
+         scan_started_age > 2 * scan_interval     -> critical / 503 (scan_wedged)
+      4. scan_completed_age > scan_interval * SCAN_STALE_MULTIPLIER
+                                                  -> critical / 503
+      5. watchdog state != api_up_healthy OR
+         kill_switch_active                       -> degraded  / 200
+      6. otherwise                                -> ok        / 200
+    """
+    global _health_unauth_warned
+
+    import sys
+    sys.path.insert(0, str(BASE_DIR))
+    from bot.heartbeat import read_heartbeat, resolve_heartbeat_path
+
+    # ── Auth handling ────────────────────────────────────────────────────
+    expected_token = _resolve_health_token()
+    presented_header = request.headers.get('Authorization', '')
+    authed = False
+    if expected_token:
+        if presented_header:
+            if not _is_valid_bearer(presented_header, expected_token):
+                return jsonify({'error': 'unauthorized'}), 401
+            authed = True
+        # No header sent → minimal payload (no rejection)
+    else:
+        if not _health_unauth_warned:
+            app.logger.warning(
+                '[HEALTH] HEALTH_ENDPOINT_AUTH_TOKEN not configured — '
+                '/api/health is serving minimal payload to all callers'
+            )
+            _health_unauth_warned = True
+
+    # ── Inputs ───────────────────────────────────────────────────────────
+    hb_stale_sec = int(os.environ.get('HEARTBEAT_STALE_SEC', '90'))
+    scan_stale_mult = float(os.environ.get('SCAN_STALE_MULTIPLIER', '3'))
+
+    hb_path = resolve_heartbeat_path()
+    hb = read_heartbeat(hb_path)
+
+    # mtime is the trustworthy liveness signal (cannot be spoofed by the
+    # JSON contents). We cross-check against last_heartbeat_ts inside.
+    mtime_age = None
+    if hb_path.exists():
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            mtime_age = int((_dt.now(_tz.utc).timestamp()
+                             - hb_path.stat().st_mtime))
+        except OSError:
+            mtime_age = None
+
+    # Cross-check mtime vs JSON ts (tamper signal)
+    tamper_warning = None
+    if hb and hb.get('last_heartbeat_ts') and mtime_age is not None:
+        json_age = _seconds_since(hb['last_heartbeat_ts'])
+        if json_age is not None and abs(json_age - mtime_age) > 5:
+            tamper_warning = (
+                f'heartbeat_ts_mtime_mismatch '
+                f'json_age={json_age}s mtime_age={mtime_age}s'
+            )
+            app.logger.warning('[HEALTH] %s', tamper_warning)
+
+    # Prefer mtime for staleness (trustworthy)
+    hb_age_sec = mtime_age if mtime_age is not None else (
+        _seconds_since(hb.get('last_heartbeat_ts')) if hb else None
+    )
+
+    scan_interval_sec = (hb or {}).get('scan_interval_sec') or 0
+    scan_started_age = _seconds_since((hb or {}).get('last_scan_started_ts'))
+    scan_completed_age = _seconds_since((hb or {}).get('last_scan_completed_ts'))
+    db_writable = bool((hb or {}).get('db_writable', False))
+
+    # Watchdog state (read-only via flywheel helper — no DB locking)
+    gw_state_name = 'unknown'
+    gw_state_full = {}
+    try:
+        from bot.flywheel import read_gateway_state
+        gw_state_full = read_gateway_state(db_path=str(DB_PATH)) or {}
+        gw_state_name = gw_state_full.get('state', 'unknown') or 'unknown'
+    except Exception:
+        pass  # keep going; watchdog state absence is not bot-death
+
+    # Kill switch
+    kill_switch_active = False
+    try:
+        from bot.kill_switch import is_kill_switch_active
+        kill_switch_active = bool(is_kill_switch_active())
+    except Exception:
+        pass
+
+    # ── Status synthesis ────────────────────────────────────────────────
+    status = 'ok'
+    http_code = 200
+    reason = None
+
+    if hb is None:
+        status, http_code, reason = 'critical', 503, 'heartbeat_missing'
+    elif hb_age_sec is None or hb_age_sec > hb_stale_sec:
+        status, http_code, reason = 'critical', 503, 'heartbeat_stale'
+    elif not db_writable:
+        status, http_code, reason = 'critical', 503, 'db_unwritable'
+    elif (scan_started_age is not None
+          and (scan_completed_age is None or scan_started_age < scan_completed_age)
+          and scan_interval_sec > 0
+          and scan_started_age > 2 * scan_interval_sec):
+        # scan_started timestamp is fresher than scan_completed AND
+        # scan_started itself is far in the past → loop wedged mid-scan
+        status, http_code, reason = 'critical', 503, 'scan_wedged'
+    elif (scan_completed_age is not None and scan_interval_sec > 0
+          and scan_completed_age > scan_stale_mult * scan_interval_sec):
+        status, http_code, reason = 'critical', 503, 'scan_stale'
+    elif kill_switch_active:
+        status, http_code, reason = 'degraded', 200, 'kill_switch_active'
+    elif gw_state_name not in ('api_up_healthy', 'unknown', ''):
+        # 'unknown' = watchdog not yet probed (e.g. paper broker without
+        # watchdog or first few seconds after boot). Don't flag as degraded.
+        status, http_code, reason = 'degraded', 200, 'gateway_degraded'
+
+    # ── Payload ─────────────────────────────────────────────────────────
+    from datetime import datetime as _dt, timezone as _tz
+    minimal = {
+        'status': status,
+        'http_code': http_code,
+        'checked_at': _dt.now(_tz.utc).isoformat(timespec='seconds'),
+        'heartbeat_age_sec': hb_age_sec,
+        'scan_age_sec': scan_completed_age,
+        'gateway_state': gw_state_name,
+        'reason_code': reason,
+    }
+    if not authed:
+        return jsonify(minimal), http_code
+
+    full = dict(minimal)
+    full.update({
+        'heartbeat': {
+            'age_sec': hb_age_sec,
+            'mtime_age_sec': mtime_age,
+            'stale_threshold_sec': hb_stale_sec,
+            'fresh': (hb_age_sec is not None and hb_age_sec <= hb_stale_sec),
+            'last_heartbeat_ts': (hb or {}).get('last_heartbeat_ts'),
+            'interval_sec': (hb or {}).get('heartbeat_interval_sec'),
+        },
+        'scan': {
+            'started_age_sec': scan_started_age,
+            'completed_age_sec': scan_completed_age,
+            'last_scan_started_ts': (hb or {}).get('last_scan_started_ts'),
+            'last_scan_completed_ts': (hb or {}).get('last_scan_completed_ts'),
+            'interval_sec': scan_interval_sec,
+            'stale_multiplier': scan_stale_mult,
+        },
+        'db_writable': db_writable,
+        'db_writable_checked_at': (hb or {}).get('db_writable_checked_at'),
+        'gateway': gw_state_full,
+        'kill_switch_active': kill_switch_active,
+        'pid': (hb or {}).get('pid'),
+        'process_started_at': (hb or {}).get('process_started_at'),
+        'warnings': [w for w in [tamper_warning] if w],
+    })
+    return jsonify(full), http_code
+
+
 # ── Kill Switch ─────────────────────────────────────────────────────────────
 
 @app.route('/api/kill-switch/state')

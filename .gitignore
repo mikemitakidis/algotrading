@@ -30,3 +30,8 @@ build/
 .env.bak*
 *_backup.py
 *.bak
+
+# M15.2 heartbeat (atomic-rename JSON written every 45s by main.py)
+data/heartbeat.json
+data/heartbeat.json.tmp.*
+data/.hb_probe_*
