@@ -188,6 +188,61 @@ class TestHeartbeatModule(unittest.TestCase):
             writer.rollback()
             writer.close()
 
+    def test_heartbeat_includes_gateway_summary(self):
+        """Heartbeat payload must include a gateway summary read from
+        signals.db read-only. This is what /api/health consumes."""
+        # Build a full flywheel DB and write a gateway_state row
+        import bot.flywheel as fw
+        conn = sqlite3.connect(str(self.db_path))
+        fw.init_flywheel_tables(conn)
+        conn.close()
+        fw.write_gateway_state(
+            {'state': 'api_up_healthy', 'tcp_ok': True, 'api_ok': True,
+             'probe_age_seconds': 12, 'broker_mode': 'paper'},
+            db_path=str(self.db_path),
+        )
+        hb = self._make(interval_sec=60)
+        hb.start()
+        try:
+            data = json.loads(self.hb_path.read_text())
+            self.assertIn('gateway', data)
+            gw = data['gateway']
+            self.assertEqual(gw.get('state'), 'api_up_healthy')
+            self.assertEqual(gw.get('tcp_ok'), True)
+            self.assertEqual(gw.get('probe_age_seconds'), 12)
+        finally:
+            hb.stop(timeout=2)
+
+    def test_gateway_summary_read_uses_readonly(self):
+        """The heartbeat thread must read gateway_state read-only —
+        no write lock contention with the trading scan loop."""
+        from bot.heartbeat import _read_gateway_summary
+        import bot.flywheel as fw
+        conn = sqlite3.connect(str(self.db_path))
+        fw.init_flywheel_tables(conn)
+        conn.close()
+        fw.write_gateway_state({'state': 'api_up_healthy'}, db_path=str(self.db_path))
+        # Hold a writer transaction
+        writer = sqlite3.connect(str(self.db_path))
+        writer.execute('BEGIN IMMEDIATE')
+        try:
+            start = time.monotonic()
+            summary = _read_gateway_summary(self.db_path)
+            elapsed = time.monotonic() - start
+            self.assertEqual(summary.get('state'), 'api_up_healthy')
+            self.assertLess(elapsed, 1.0,
+                            'gateway summary read must not block on writer lock')
+        finally:
+            writer.rollback()
+            writer.close()
+
+    def test_gateway_summary_returns_empty_when_db_missing(self):
+        """Missing or unreadable signals.db must NOT raise — heartbeat
+        keeps ticking with an empty gateway summary."""
+        from bot.heartbeat import _read_gateway_summary
+        missing = self.tmpdir / 'nonexistent.db'
+        self.assertEqual(_read_gateway_summary(missing), {})
+
 
 # ============================================================
 # /api/health endpoint
@@ -253,6 +308,7 @@ class TestHealthEndpoint(unittest.TestCase):
             'scan_interval_sec':       900,
             'db_writable':             True,
             'db_writable_checked_at':  now.isoformat(timespec='seconds'),
+            'gateway':                 {'state': 'api_up_healthy'},
             'pid':                     12345,
             'process_started_at':      (now - timedelta(hours=1)).isoformat(timespec='seconds'),
             'heartbeat_interval_sec':  45,
@@ -320,16 +376,10 @@ class TestHealthEndpoint(unittest.TestCase):
         self.assertEqual(body['reason_code'], 'scan_stale')
 
     def test_gateway_degraded_returns_degraded_200(self):
-        self._write_hb()
-        # Seed gateway_state with non-healthy state in temp DB
-        import bot.flywheel as fw
-        conn = sqlite3.connect(str(self.db_path))
-        fw.init_flywheel_tables(conn)
-        conn.close()
-        fw.write_gateway_state(
-            {'state': 'service_running_tcp_down', 'tcp_ok': False, 'api_ok': False},
-            db_path=str(self.db_path),
-        )
+        # Gateway summary now lives in the heartbeat file, not signals.db.
+        # /api/health reads gateway state from heartbeat ONLY.
+        self._write_hb(gateway={'state': 'service_running_tcp_down',
+                                'tcp_ok': False, 'api_ok': False})
         r = self._get()
         self.assertEqual(r.status_code, 200,
                          'degraded must NOT page external monitors')
@@ -339,13 +389,7 @@ class TestHealthEndpoint(unittest.TestCase):
         self.assertEqual(body['gateway_state'], 'service_running_tcp_down')
 
     def test_healthy_returns_ok_200(self):
-        self._write_hb()
-        # Healthy gateway in DB
-        import bot.flywheel as fw
-        conn = sqlite3.connect(str(self.db_path))
-        fw.init_flywheel_tables(conn)
-        conn.close()
-        fw.write_gateway_state({'state': 'api_up_healthy'}, db_path=str(self.db_path))
+        self._write_hb(gateway={'state': 'api_up_healthy'})
         r = self._get()
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
@@ -355,9 +399,9 @@ class TestHealthEndpoint(unittest.TestCase):
     def test_gateway_unknown_does_not_flag_degraded(self):
         """First few seconds after boot the watchdog has state='unknown'.
         That must NOT be treated as degraded."""
-        self._write_hb()
+        # gateway summary absent or state='unknown' → ok
+        self._write_hb(gateway={})
         r = self._get()
-        # Without gateway_state row, gw_state_name='unknown' -> ok
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
         self.assertEqual(body['status'], 'ok')
@@ -445,6 +489,70 @@ class TestHealthEndpoint(unittest.TestCase):
         self.assertEqual(r.status_code, 503)
         body = r.get_json()
         self.assertEqual(body['reason_code'], 'heartbeat_stale')
+
+    # ---- M15.2 review fix: endpoint must NOT touch signals.db ----
+
+    def test_endpoint_does_not_open_signals_db(self):
+        """Hard proof: /api/health must NEVER open signals.db, in any mode.
+
+        Runs the endpoint with sqlite3.connect monkeypatched to record every
+        call. Asserts no call ever names signals.db (whether via str path or
+        file:...?mode=ro URI). This guards the dashboard process from any
+        future lock contention with the trading scan loop.
+        """
+        import sqlite3 as _sqlite3
+        opened = []
+        real_connect = _sqlite3.connect
+
+        def tracking_connect(target, *args, **kwargs):
+            opened.append(str(target))
+            return real_connect(target, *args, **kwargs)
+
+        self._write_hb(gateway={'state': 'api_up_healthy'})
+        with patch.object(_sqlite3, 'connect', side_effect=tracking_connect):
+            # Hit every code path in the endpoint
+            r1 = self._get()  # ok branch
+            r2 = self._get(headers={'Authorization': 'Bearer x'})  # unauth path (no token configured)
+            os.environ['HEALTH_ENDPOINT_AUTH_TOKEN'] = 'secret'
+            r3 = self._get(headers={'Authorization': 'Bearer secret'})  # full payload
+            r4 = self._get(headers={'Authorization': 'Bearer wrong'})  # 401
+            os.environ.pop('HEALTH_ENDPOINT_AUTH_TOKEN', None)
+
+        # None of those /api/health requests must have opened signals.db
+        offenders = [t for t in opened if 'signals.db' in t]
+        self.assertEqual(
+            offenders, [],
+            f'/api/health opened signals.db: {offenders}'
+        )
+
+    def test_endpoint_does_not_import_read_gateway_state(self):
+        """Source proof: api_health() function body does not reference
+        read_gateway_state. Belt-and-braces against future regressions."""
+        import ast
+        repo = Path(__file__).resolve().parent
+        with open(repo / 'dashboard' / 'app.py') as f:
+            tree = ast.parse(f.read())
+        api_health_fn = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == 'api_health':
+                api_health_fn = node
+                break
+        self.assertIsNotNone(api_health_fn, 'api_health function not found')
+        # Collect every Name/Attribute referenced inside api_health
+        names = set()
+        for child in ast.walk(api_health_fn):
+            if isinstance(child, ast.Name):
+                names.add(child.id)
+            elif isinstance(child, ast.Attribute):
+                names.add(child.attr)
+            elif isinstance(child, ast.ImportFrom) and child.module:
+                for alias in child.names:
+                    names.add(alias.name)
+        self.assertNotIn(
+            'read_gateway_state', names,
+            'api_health() must not reference read_gateway_state — gateway '
+            'summary comes from heartbeat.json'
+        )
 
 
 if __name__ == '__main__':

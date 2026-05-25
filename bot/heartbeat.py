@@ -115,6 +115,57 @@ def _probe_db_writable(db_path: Path, data_dir: Path) -> bool:
         return False
 
 
+def _read_gateway_summary(db_path: Path) -> dict:
+    """Read a compact gateway-state summary from signals.db (READ-ONLY).
+
+    Called by the heartbeat tick — this is the ONLY component that touches
+    signals.db for /api/health purposes. The dashboard endpoint reads the
+    resulting summary from heartbeat.json, never from signals.db, to keep
+    the dashboard process lock-free relative to the trading scan loop.
+
+    Returns {} on any error so a missing or unreadable DB never breaks
+    the heartbeat write or the bot.
+    """
+    if not db_path.exists():
+        return {}
+    try:
+        # Read-only URI handle — cannot acquire a write lock.
+        conn = sqlite3.connect(
+            f'file:{db_path}?mode=ro', uri=True, timeout=2.0,
+        )
+        try:
+            cur = conn.execute(
+                "SELECT value, updated_at FROM gateway_state WHERE key='current'"
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+            try:
+                payload = json.loads(row[0])
+            except (TypeError, ValueError):
+                return {}
+            # Compact summary — keep payload small and structurally stable.
+            return {
+                'state':                  payload.get('state'),
+                'tcp_ok':                 payload.get('tcp_ok'),
+                'api_ok':                 payload.get('api_ok'),
+                'service_running':        payload.get('service_running'),
+                'probe_age_seconds':      payload.get('probe_age_seconds'),
+                'last_success_ts':        payload.get('last_success_ts'),
+                'last_probe_ts':          payload.get('last_probe_ts'),
+                'degraded':               payload.get('degraded'),
+                'manual_action_required': payload.get('manual_action_required'),
+                'broker_mode':            payload.get('broker_mode'),
+                'mode':                   payload.get('mode'),
+                'persisted_at':           row[1],
+            }
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as e:
+        log.debug('[HEARTBEAT] gateway summary read failed: %s', e)
+        return {}
+
+
 def _atomic_write_json(path: Path, payload: dict) -> None:
     """Write JSON atomically: tempfile in same dir, then os.replace.
     Guarantees readers never see partial/truncated content."""
@@ -216,6 +267,7 @@ class Heartbeat:
 
     def _tick(self) -> None:
         db_writable = _probe_db_writable(self.signals_db_path, self.data_dir)
+        gateway_summary = _read_gateway_summary(self.signals_db_path)
         with self._lock:
             payload = {
                 'last_heartbeat_ts':       _utc_iso(),
@@ -224,6 +276,7 @@ class Heartbeat:
                 'scan_interval_sec':       self.scan_interval_sec,
                 'db_writable':             db_writable,
                 'db_writable_checked_at':  _utc_iso(),
+                'gateway':                 gateway_summary,
                 'pid':                     self._pid,
                 'process_started_at':      self._process_started_at,
                 'heartbeat_interval_sec':  self.interval_sec,

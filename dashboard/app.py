@@ -3750,17 +3750,14 @@ def api_health():
     scan_completed_age = _seconds_since((hb or {}).get('last_scan_completed_ts'))
     db_writable = bool((hb or {}).get('db_writable', False))
 
-    # Watchdog state (read-only via flywheel helper — no DB locking)
-    gw_state_name = 'unknown'
-    gw_state_full = {}
-    try:
-        from bot.flywheel import read_gateway_state
-        gw_state_full = read_gateway_state(db_path=str(DB_PATH)) or {}
-        gw_state_name = gw_state_full.get('state', 'unknown') or 'unknown'
-    except Exception:
-        pass  # keep going; watchdog state absence is not bot-death
+    # Watchdog state — read from heartbeat file ONLY. /api/health must
+    # NEVER open signals.db (zero lock contention with the trading scan
+    # loop). The heartbeat thread is the one component that touches
+    # signals.db read-only and writes the summary into heartbeat.json.
+    gw_summary = (hb or {}).get('gateway') or {}
+    gw_state_name = gw_summary.get('state') or 'unknown'
 
-    # Kill switch
+    # Kill switch (file-based — does not touch signals.db)
     kill_switch_active = False
     try:
         from bot.kill_switch import is_kill_switch_active
@@ -3830,7 +3827,7 @@ def api_health():
         },
         'db_writable': db_writable,
         'db_writable_checked_at': (hb or {}).get('db_writable_checked_at'),
-        'gateway': gw_state_full,
+        'gateway': gw_summary,
         'kill_switch_active': kill_switch_active,
         'pid': (hb or {}).get('pid'),
         'process_started_at': (hb or {}).get('process_started_at'),
