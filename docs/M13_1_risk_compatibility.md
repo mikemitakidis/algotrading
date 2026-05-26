@@ -31,15 +31,15 @@ limit, max open positions, and per-position exposure cap apply to
 IBKR trades only. Same for eToro.
 
 **Pros:**
-- Minimal change to `bot/risk.py`. Risk state already partitioned by
-  broker in `daily_state` (rows keyed by broker_mode). The policy
-  evaluator just needs to filter inputs by `route='ETORO'` vs
-  `route='IBKR'`.
+- Conceptually simple. Risk discipline is per-pool, easy to reason
+  about, easy to test.
 - No real-time currency normalisation required. IBKR limits stay in
   GBP, eToro limits stay in USD.
 - No coupling between brokers. A bad day on IBKR does not freeze
   eToro and vice versa.
-- Easy to reason about. Easy to test.
+- Scales cleanly if a third broker is ever added.
+- Reversible: extending Option A to a combined-portfolio reporting
+  layer later is straightforward. Going the other way is not.
 
 **Cons:**
 - Risk discipline is per-pool, not whole-portfolio. An operator who
@@ -47,17 +47,45 @@ IBKR trades only. Same for eToro.
   daily risk by trading both at their per-broker limit.
 - Requires operator discipline at account funding level (set IBKR
   daily limit + eToro daily limit such that the sum is acceptable).
+- **Requires a schema change before it can be implemented.** The
+  current `daily_state` schema is keyed by `date` alone — it is a
+  single-broker table. To support Option A, one of the following is
+  needed (decision deferred to M13.6):
 
-**Change footprint in `bot/risk.py`:**
-- `PortfolioRiskPolicy.evaluate()` accepts a `broker_mode` parameter
-  and filters open positions / daily PnL by that broker.
-- `daily_state` rows are looked up by `(date, broker_mode)` instead
-  of just `date`. (Schema already supports this — `daily_state` has
-  a `broker_mode` column from M14.)
+  1. **Schema migration on `daily_state`**: composite primary key
+     `(date, broker_mode)`, plus a `broker_mode` column. Backfill
+     existing rows with `broker_mode='ibkr_live'` (the historical
+     default). Idempotent migration in the same style as the M15.0
+     `execution_intents` lifecycle-column migration.
+  2. **Separate broker-scoped state table** (e.g.
+     `daily_state_per_broker`) keyed by `(date, broker_mode)`,
+     leaving the existing `daily_state` table untouched as the
+     legacy single-broker view. New code reads/writes the new table;
+     the old table is read-only or eventually retired.
+  3. **Composite-key encoding inside the existing PRIMARY KEY**
+     (e.g. `date='2026-05-25:etoro_real'`). Avoids a schema change
+     but pushes a parsing concern into every reader. Least clean of
+     the three.
+
+  M13.6 will pick one of (1), (2), or (3) — likely (1) for cleanliness,
+  (2) if the migration cost on the live VPS DB looks higher than
+  expected. **The decision is deferred. M13.1 only records that a
+  schema decision is needed.**
+
+**Change footprint when M13.6 implements this:**
+- `bot/risk.py`: `PortfolioRiskPolicy.evaluate()` accepts a
+  `broker_mode` parameter and filters open positions / daily PnL by
+  that broker.
+- `bot/flywheel.py`: schema change in `daily_state` per the migration
+  path chosen, plus helpers (`get_daily_state`, `update_daily_state`)
+  accept a `broker_mode` parameter.
+- Open-position lookups already filter by `broker` column on
+  `execution_intents` (column exists since M10) — no change there.
 - New `.env.example` entries:
   `RISK_MAX_OPEN_POSITIONS_ETORO`, `RISK_DAILY_LOSS_LIMIT_ETORO`,
   etc. — separate from the existing IBKR ones.
-- About 30–50 lines added to `bot/risk.py`. No data flow changes.
+- Estimated ~50–80 LOC delta in `bot/risk.py`, plus migration code in
+  `bot/flywheel.py`, plus a new `test_m13_6_risk.py`.
 
 ### Option B — Combined cross-broker portfolio
 
@@ -134,15 +162,23 @@ without changing the risk-enforcement path.
 - `PortfolioRiskPolicy.evaluate()` takes a `broker_mode` parameter
   and filters its inputs (open positions, today's PnL) by that
   broker.
-- Lookups against `daily_state` use the existing `broker_mode`
-  column. (No schema migration needed — the column exists since
-  M14.)
-- Lookups against open positions filter by `broker` column. (No
-  schema migration needed — the column exists since M10.)
+- `daily_state` schema gets either (a) a migration adding a
+  `broker_mode` column and a composite `(date, broker_mode)` primary
+  key, or (b) a new sibling table `daily_state_per_broker`. **A
+  schema decision is required** — the current `daily_state` schema
+  has only `date` as primary key. Final approach picked in M13.6
+  design review.
+- `get_daily_state()` and `update_daily_state()` in `bot/flywheel.py`
+  accept a `broker_mode` parameter.
+- Lookups against open positions filter by `broker` column on
+  `execution_intents`. (No schema migration needed here — the column
+  has existed since M10.)
 - `.env.example` gains a duplicated set of risk limit envs scoped
   per broker. Existing IBKR-scoped ones become explicitly named.
 - Backwards compatibility shim: if only the unscoped envs are set,
   they default for both brokers.
+- New `test_m13_6_risk.py` covers the dual-broker risk path and
+  proves single-broker behaviour is unchanged.
 
 ### What does NOT change
 
