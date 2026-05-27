@@ -731,27 +731,36 @@ class TestNoEnvCoupling(unittest.TestCase):
 # Section 12: REGISTRATION + INTEGRATION ABSENCE
 # ===========================================================================
 class TestNotRegistered(unittest.TestCase):
-    """Verify the adapter is NOT wired into any production runtime path."""
+    """Verify the read adapter is NOT wired into any live execution path.
+    Note: Since M13.3, bot/brokers/__init__.py DOES reference eToro — but
+    only to register PaperEtoroBroker for BROKER=etoro_paper and to
+    explicitly REJECT BROKER=etoro_real. Both invariants checked here."""
 
-    def test_etoro_real_not_a_recognized_broker(self):
-        """main.py / bot.brokers must not recognize 'etoro_real' yet."""
+    def test_etoro_real_fails_loudly(self):
+        """BROKER=etoro_real must raise ValueError, NEVER fall back silently."""
         from bot.brokers import get_broker
-        # We don't actually instantiate; we just confirm there's no
-        # special case for 'etoro' in the factory yet.
-        repo = Path(__file__).resolve().parent
-        with open(repo / 'bot' / 'brokers' / '__init__.py') as f:
-            src = f.read()
-        self.assertNotIn('etoro', src.lower(),
-                         'bot/brokers/__init__.py must not reference etoro in M13.2')
+        prev = os.environ.get('BROKER')
+        os.environ['BROKER'] = 'etoro_real'
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                get_broker()
+            msg = str(ctx.exception).lower()
+            self.assertIn('etoro_real', msg)
+            self.assertIn('not implemented', msg)
+        finally:
+            if prev is None:
+                os.environ.pop('BROKER', None)
+            else:
+                os.environ['BROKER'] = prev
 
     def test_main_py_does_not_import_etoro_package(self):
         repo = Path(__file__).resolve().parent
         with open(repo / 'main.py') as f:
             src = f.read()
         self.assertNotIn('from bot.etoro', src,
-                         'main.py must not import bot.etoro in M13.2')
+                         'main.py must not import bot.etoro in M13.2/M13.3')
         self.assertNotIn('import bot.etoro', src,
-                         'main.py must not import bot.etoro in M13.2')
+                         'main.py must not import bot.etoro in M13.2/M13.3')
 
 
 if __name__ == '__main__':
