@@ -129,3 +129,27 @@ Validation errors are returned as a list of
   Enabling `etoro_live_enabled` will require lifting the M13.4A guard.
 - **M13.6** — cross-broker risk pool. `daily_state` schema decision
   (broker_mode column vs sibling table vs composite key) still parked.
+
+## M13.4A.1 — UX polish (no policy change)
+
+Pure UI refinement of the Broker Allocation panel. **Policy schema,
+validation rules, persistence, and endpoint behaviour are unchanged.**
+DOM input IDs are preserved (`ba_g_*`, `ba_i_*`, `ba_e_*`, `ba_r_*`,
+`data-ba-allowed`), so `_baReadForm()` and the test suite are untouched.
+
+Visible changes:
+- Card-style layout (header bar + body) for Global / IBKR / eToro / Routing
+- Coloured status badges on each card: `ENABLED` (green) / `DISABLED` (grey) /
+  `⚠ KILL SWITCH ACTIVE` (red)
+- "Effective Status" summary at the top of the panel showing Global / IBKR /
+  eToro states. Broker effective state factors in the global state — a broker
+  shows DISABLED if global is disabled, even if the broker's own toggle is on.
+- Kill-switch toggles now render as a distinct red-bordered control with an
+  explicit `⚠ KILL SWITCH ACTIVE` label when on
+- Money inputs use a `$`-prefixed input group; numeric labels no longer
+  carry the `($)` suffix
+- Short helper text under each field explaining what it controls
+- Yellow warning banner when all three capital caps (global, IBKR, eToro)
+  are `$0.00`
+- Allowed-broker chips show a green outline when selected
+- `eToro live enabled` rendered as a clearly locked red pill

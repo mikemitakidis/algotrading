@@ -2650,9 +2650,10 @@ document.addEventListener('DOMContentLoaded', function(){
 <!-- M13.4A — Broker Allocation + Budget Controls -->
 <div class="card" style="margin-top:16px">
   <div class="ct">&#x1F4B0; Broker Allocation &amp; Budget Controls (M13.4A)</div>
-  <div style="color:#8b949e;font-size:12px;margin-bottom:12px">
-    Caps and switches consulted by future M13.5 live writer. <b>Server-side validation is the gate.</b>
-    No live trading is wired yet. <code>etoro_real</code> is not selectable in M13.4A.
+  <div style="color:#8b949e;font-size:12px;margin-bottom:14px;line-height:1.5">
+    Configure how much capital each broker is allowed to auto-trade and which brokers are eligible.
+    The M13.5 live writer (future) will consult these settings before any order is sent.
+    <b>Server-side validation is the gate.</b> No live trading is wired yet. <code>etoro_real</code> is not selectable in M13.4A.
   </div>
   <div id="baMsg" style="margin-bottom:10px;font-size:13px"></div>
   <div id="baForm" style="font-size:13px">Loading...</div>
@@ -2927,27 +2928,120 @@ function saveRiskConfig(){
 }
 
 // ── M13.4A — Broker Allocation + Budget Controls ────────────────────────────
+// M13.4A.1 — UX polish: card layout, status badges, effective summary,
+// helper text, money-formatted labels, kill-switch emphasis, zero-cap warning.
+// Policy logic, persistence, validation, and DOM IDs are unchanged.
 var _baPolicy = null;
+
+function _baEscape(s){
+  return String(s===undefined||s===null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function _baFmtMoney(v){
+  var n = Number(v);
+  if(!isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
 
 function _baInput(id, value, attrs){
   attrs = attrs || '';
-  return '<input id="'+id+'" value="'+(value===undefined||value===null?'':value)+'" '+attrs+
-         ' style="width:100%;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">';
+  return '<input id="'+id+'" value="'+_baEscape(value)+'" '+attrs+
+         ' style="width:100%;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:13px">';
+}
+function _baMoneyInput(id, value){
+  return '<div style="display:flex;align-items:center;gap:0;border:1px solid #30363d;border-radius:4px;background:#0d1117;overflow:hidden">'+
+    '<span style="padding:6px 8px;color:#8b949e;background:#161b22;border-right:1px solid #30363d;font-size:13px">$</span>'+
+    '<input id="'+id+'" value="'+_baEscape(value)+'" type="number" min="0" step="0.01" '+
+    'style="flex:1;background:transparent;color:#e6edf3;border:0;padding:6px 8px;font-family:inherit;font-size:13px;outline:none">'+
+    '</div>';
 }
 function _baCheckbox(id, checked){
-  return '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">'+
-    '<input type="checkbox" id="'+id+'"'+(checked?' checked':'')+'> '+
+  return '<label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">'+
+    '<input type="checkbox" id="'+id+'"'+(checked?' checked':'')+' style="width:16px;height:16px;cursor:pointer"> '+
     '<span style="color:#8b949e;font-size:12px">enabled</span></label>';
 }
-function _baRow(label, html){
-  return '<div style="display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:center;margin-bottom:8px">'+
-    '<div style="color:#8b949e;font-size:12px">'+label+'</div>'+html+'</div>';
+function _baKillCheckbox(id, checked){
+  // Visually prominent kill-switch toggle.
+  var color = checked ? '#f85149' : '#8b949e';
+  var weight = checked ? '700' : '500';
+  return '<label style="display:inline-flex;align-items:center;gap:10px;cursor:pointer;padding:6px 10px;border:1px solid '+
+         (checked?'#da3633':'#30363d')+';border-radius:6px;background:'+
+         (checked?'rgba(248,81,73,0.10)':'transparent')+'">'+
+    '<input type="checkbox" id="'+id+'"'+(checked?' checked':'')+' style="width:16px;height:16px;cursor:pointer;accent-color:#da3633"> '+
+    '<span style="color:'+color+';font-size:12px;font-weight:'+weight+';letter-spacing:0.5px">'+
+      (checked?'\u26A0 KILL SWITCH ACTIVE':'kill switch')+
+    '</span></label>';
 }
-function _baSection(title, html, accent){
+function _baRow(label, html, hint){
+  var hintHtml = hint ? '<div style="color:#6e7681;font-size:11px;margin-top:2px;line-height:1.4">'+hint+'</div>' : '';
+  return '<div style="display:grid;grid-template-columns:230px 1fr;gap:12px;align-items:start;margin-bottom:10px">'+
+    '<div><div style="color:#c9d1d9;font-size:12px;font-weight:500">'+label+'</div>'+hintHtml+'</div>'+
+    '<div>'+html+'</div></div>';
+}
+
+// Status badge: ENABLED / DISABLED / KILL SWITCH ACTIVE.
+function _baBadge(state){
+  // state: 'enabled' | 'disabled' | 'kill'
+  var cfg = {
+    enabled:  {label:'ENABLED',            bg:'rgba(63,185,80,0.15)',  bd:'#3fb950', fg:'#3fb950'},
+    disabled: {label:'DISABLED',           bg:'rgba(139,148,158,0.15)',bd:'#484f58', fg:'#8b949e'},
+    kill:     {label:'\u26A0 KILL SWITCH ACTIVE', bg:'rgba(248,81,73,0.15)', bd:'#da3633', fg:'#f85149'}
+  };
+  var c = cfg[state] || cfg.disabled;
+  return '<span style="display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:0.6px;'+
+         'border:1px solid '+c.bd+';border-radius:999px;background:'+c.bg+';color:'+c.fg+'">'+c.label+'</span>';
+}
+
+function _baEffectiveState(block, isGlobal, globalState){
+  // Returns 'enabled' | 'disabled' | 'kill'.
+  if(block && block.kill_switch) return 'kill';
+  if(isGlobal){
+    return block && block.auto_trading_enabled ? 'enabled' : 'disabled';
+  }
+  // For a broker: effective enabled requires global enabled AND broker enabled.
+  if(globalState !== 'enabled') return 'disabled';
+  return block && block.auto_trading_enabled ? 'enabled' : 'disabled';
+}
+
+function _baCard(title, badgeHtml, bodyHtml, accent){
   accent = accent || '#30363d';
-  return '<div style="border:1px solid '+accent+';border-radius:8px;padding:12px;margin-bottom:14px;background:#0d1117">'+
-    '<div style="font-size:11px;font-weight:600;color:#8b949e;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">'+title+'</div>'+
-    html+'</div>';
+  return '<div style="border:1px solid '+accent+';border-radius:8px;margin-bottom:14px;background:#0d1117;overflow:hidden">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid '+accent+';background:#161b22">'+
+      '<div style="font-size:12px;font-weight:700;color:#e6edf3;letter-spacing:0.8px;text-transform:uppercase">'+title+'</div>'+
+      '<div>'+(badgeHtml||'')+'</div>'+
+    '</div>'+
+    '<div style="padding:14px">'+bodyHtml+'</div>'+
+    '</div>';
+}
+
+function _baSummary(states){
+  // states: {global:'enabled'|'disabled'|'kill', ibkr:..., etoro:...}
+  function row(label, s){
+    return '<div style="display:flex;align-items:center;gap:10px">'+
+      '<span style="min-width:64px;color:#8b949e;font-size:12px;font-weight:600">'+label+'</span>'+
+      _baBadge(s)+'</div>';
+  }
+  return '<div style="border:1px solid #30363d;border-radius:8px;background:#161b22;padding:12px 14px;margin-bottom:14px">'+
+    '<div style="font-size:11px;font-weight:600;color:#8b949e;letter-spacing:0.8px;text-transform:uppercase;margin-bottom:10px">Effective Status</div>'+
+    '<div style="display:flex;flex-wrap:wrap;gap:18px">'+
+      row('Global', states.global)+
+      row('IBKR',   states.ibkr)+
+      row('eToro',  states.etoro)+
+    '</div></div>';
+}
+
+function _baZeroCapsWarning(g, ibkr, etoro){
+  var allZero =
+    Number(g.max_auto_trading_capital||0) === 0 &&
+    Number(ibkr.max_auto_trading_capital||0) === 0 &&
+    Number(etoro.max_auto_trading_capital||0) === 0;
+  if(!allZero) return '';
+  return '<div style="border:1px solid #d29922;background:rgba(210,153,34,0.10);color:#e3b341;'+
+    'padding:10px 12px;border-radius:6px;font-size:12px;margin-bottom:14px;line-height:1.5">'+
+    '<b>\u26A0 All capital caps are $0.00.</b> Even with auto-trading enabled, no broker can place '+
+    'a trade until at least one positive cap is configured.</div>';
 }
 
 function renderBrokerAllocation(p){
@@ -2960,59 +3054,92 @@ function renderBrokerAllocation(p){
   allowed = allowed.filter(function(b){ return b !== 'etoro_real'; });
   var defBroker = routing.default_broker || 'paper';
 
-  var globalHtml =
-    _baRow('Auto-trading enabled', _baCheckbox('ba_g_auto', !!g.auto_trading_enabled)) +
-    _baRow('Kill switch', _baCheckbox('ba_g_kill', !!g.kill_switch)) +
-    _baRow('Max auto-trading capital ($)',
-           _baInput('ba_g_cap', g.max_auto_trading_capital, 'type="number" min="0" step="0.01"'));
+  // Effective states.
+  var gState = _baEffectiveState(g, true);
+  var ibkrState  = _baEffectiveState(ibkr,  false, gState);
+  var etoroState = _baEffectiveState(etoro, false, gState);
 
-  function brokerSectionHtml(prefix, b){
-    return _baRow('Auto-trading enabled', _baCheckbox(prefix+'_auto', !!b.auto_trading_enabled)) +
-           _baRow('Kill switch', _baCheckbox(prefix+'_kill', !!b.kill_switch)) +
-           _baRow('Max auto-trading capital ($)',
-                  _baInput(prefix+'_cap', b.max_auto_trading_capital, 'type="number" min="0" step="0.01"')) +
-           _baRow('Max single trade amount ($)',
-                  _baInput(prefix+'_single', b.max_single_trade_amount, 'type="number" min="0" step="0.01"')) +
-           _baRow('Max daily loss ($)',
-                  _baInput(prefix+'_loss', b.max_daily_loss, 'type="number" min="0" step="0.01"')) +
+  // Global card body.
+  var globalBody =
+    _baRow('Auto-trading enabled',
+           _baCheckbox('ba_g_auto', !!g.auto_trading_enabled),
+           'Master toggle. When off, no broker is allowed to auto-trade.') +
+    _baRow('Kill switch',
+           _baKillCheckbox('ba_g_kill', !!g.kill_switch),
+           'Emergency stop for ALL brokers. Overrides every per-broker setting.') +
+    _baRow('Max auto-trading capital',
+           _baMoneyInput('ba_g_cap', g.max_auto_trading_capital),
+           'Hard ceiling across all brokers. Per-broker capital cannot exceed this when greater than $0.');
+
+  function brokerBody(prefix, b){
+    return _baRow('Auto-trading enabled',
+                  _baCheckbox(prefix+'_auto', !!b.auto_trading_enabled),
+                  'Allow the M13.5 live writer to send orders via this broker.') +
+           _baRow('Kill switch',
+                  _baKillCheckbox(prefix+'_kill', !!b.kill_switch),
+                  'Emergency stop for this broker only.') +
+           _baRow('Max auto-trading capital',
+                  _baMoneyInput(prefix+'_cap', b.max_auto_trading_capital),
+                  'Total capital this broker is allowed to deploy.') +
+           _baRow('Max single trade amount',
+                  _baMoneyInput(prefix+'_single', b.max_single_trade_amount),
+                  'Per-order cap. Must be \u2264 max auto-trading capital.') +
+           _baRow('Max daily loss',
+                  _baMoneyInput(prefix+'_loss', b.max_daily_loss),
+                  'Daily realised loss limit before this broker is paused.') +
            _baRow('Max open positions',
-                  _baInput(prefix+'_pos', b.max_open_positions, 'type="number" min="0" step="1"'));
+                  _baInput(prefix+'_pos', b.max_open_positions, 'type="number" min="0" step="1"'),
+                  'Hard cap on simultaneous open positions for this broker.');
   }
 
-  // Routing: editable selects only over the policy-allowed brokers (minus etoro_real).
-  // etoro_real is intentionally not selectable in M13.4A.
+  // Routing: editable controls only over the M13.4A whitelist (minus etoro_real).
   var routeOptions = ['paper','ibkr_paper','ibkr_live','etoro_paper'];
   var allowedChecks = routeOptions.map(function(b){
     var checked = allowed.indexOf(b) !== -1;
-    return '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:12px;color:#e6edf3">'+
-      '<input type="checkbox" data-ba-allowed="'+b+'"'+(checked?' checked':'')+'> '+b+'</label>';
+    return '<label style="display:inline-flex;align-items:center;gap:6px;margin:0 14px 6px 0;padding:4px 8px;'+
+      'border:1px solid '+(checked?'#3fb950':'#30363d')+';border-radius:6px;'+
+      'background:'+(checked?'rgba(63,185,80,0.08)':'transparent')+';font-size:12px;color:#e6edf3;cursor:pointer">'+
+      '<input type="checkbox" data-ba-allowed="'+b+'"'+(checked?' checked':'')+'> '+
+      '<code style="font-size:11px;color:#e6edf3">'+b+'</code></label>';
   }).join('');
-  var defSelect = '<select id="ba_r_default" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">'+
+  var defSelect = '<select id="ba_r_default" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:13px">'+
     routeOptions.map(function(b){
       return '<option value="'+b+'"'+(defBroker===b?' selected':'')+'>'+b+'</option>';
     }).join('') + '</select>';
 
   var routeOverrides = routing.route_overrides || {};
   function overrideSelect(name, current){
-    return '<select id="ba_r_ov_'+name+'" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">'+
+    return '<select id="ba_r_ov_'+name+'" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px 8px;font-family:inherit;font-size:13px">'+
       routeOptions.map(function(b){
         return '<option value="'+b+'"'+(current===b?' selected':'')+'>'+b+'</option>';
       }).join('') + '</select>';
   }
 
-  var routingHtml =
-    _baRow('Allowed brokers', '<div>'+allowedChecks+'</div>') +
-    _baRow('Default broker', defSelect) +
-    _baRow('Route override: IBKR \u2192', overrideSelect('IBKR', routeOverrides.IBKR || 'ibkr_live')) +
-    _baRow('Route override: ETORO \u2192', overrideSelect('ETORO', routeOverrides.ETORO || 'etoro_paper')) +
+  var routingBody =
+    _baRow('Allowed brokers', '<div>'+allowedChecks+'</div>',
+           'Brokers the policy will let the live writer touch. <code>etoro_real</code> is intentionally not selectable in M13.4A.') +
+    _baRow('Default broker', defSelect,
+           'Fallback broker when a signal has no route override. Must be in Allowed brokers.') +
+    _baRow('Route override: IBKR \u2192', overrideSelect('IBKR', routeOverrides.IBKR || 'ibkr_live'),
+           'Where signals tagged IBKR are sent.') +
+    _baRow('Route override: ETORO \u2192', overrideSelect('ETORO', routeOverrides.ETORO || 'etoro_paper'),
+           'Where signals tagged ETORO are sent.') +
     _baRow('eToro live enabled',
-           '<span style="color:#f85149;font-weight:600">FALSE (locked in M13.4A)</span>');
+           '<span style="display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:0.6px;'+
+           'border:1px solid #da3633;border-radius:999px;background:rgba(248,81,73,0.10);color:#f85149">FALSE \u2014 LOCKED IN M13.4A</span>',
+           'Will unlock in M13.5 with explicit approval. <code>etoro_live_enabled=true</code> is rejected by the server until then.');
+
+  function accentFor(state){
+    return state === 'kill' ? '#da3633' : '#30363d';
+  }
 
   var html =
-    _baSection('Global', globalHtml, (g.kill_switch ? '#da3633' : '#30363d')) +
-    _baSection('IBKR',   brokerSectionHtml('ba_i', ibkr), (ibkr.kill_switch ? '#da3633' : '#30363d')) +
-    _baSection('eToro',  brokerSectionHtml('ba_e', etoro), (etoro.kill_switch ? '#da3633' : '#30363d')) +
-    _baSection('Routing', routingHtml);
+    _baSummary({global:gState, ibkr:ibkrState, etoro:etoroState}) +
+    _baZeroCapsWarning(g, ibkr, etoro) +
+    _baCard('Global',  _baBadge(gState),     globalBody,           accentFor(gState)) +
+    _baCard('IBKR',    _baBadge(ibkrState),  brokerBody('ba_i', ibkr),  accentFor(ibkrState)) +
+    _baCard('eToro',   _baBadge(etoroState), brokerBody('ba_e', etoro), accentFor(etoroState)) +
+    _baCard('Routing', '', routingBody, '#30363d');
   document.getElementById('baForm').innerHTML = html;
 }
 
