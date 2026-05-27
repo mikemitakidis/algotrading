@@ -2647,6 +2647,21 @@ document.addEventListener('DOMContentLoaded', function(){
   <button onclick="saveRiskConfig()" style="margin-top:12px;padding:8px 18px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">Save Settings</button>
 </div>
 
+<!-- M13.4A — Broker Allocation + Budget Controls -->
+<div class="card" style="margin-top:16px">
+  <div class="ct">&#x1F4B0; Broker Allocation &amp; Budget Controls (M13.4A)</div>
+  <div style="color:#8b949e;font-size:12px;margin-bottom:12px">
+    Caps and switches consulted by future M13.5 live writer. <b>Server-side validation is the gate.</b>
+    No live trading is wired yet. <code>etoro_real</code> is not selectable in M13.4A.
+  </div>
+  <div id="baMsg" style="margin-bottom:10px;font-size:13px"></div>
+  <div id="baForm" style="font-size:13px">Loading...</div>
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button onclick="saveBrokerAllocation()" style="padding:8px 18px;background:#238636;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px">Save Allocation Policy</button>
+    <button onclick="loadBrokerAllocation()" style="padding:8px 14px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px">&#x21bb; Reload</button>
+  </div>
+</div>
+
 </div><!-- end risk page -->
 
 <script>
@@ -2910,6 +2925,199 @@ function saveRiskConfig(){
     msgEl.textContent = 'Save failed: '+e;
   });
 }
+
+// ── M13.4A — Broker Allocation + Budget Controls ────────────────────────────
+var _baPolicy = null;
+
+function _baInput(id, value, attrs){
+  attrs = attrs || '';
+  return '<input id="'+id+'" value="'+(value===undefined||value===null?'':value)+'" '+attrs+
+         ' style="width:100%;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">';
+}
+function _baCheckbox(id, checked){
+  return '<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">'+
+    '<input type="checkbox" id="'+id+'"'+(checked?' checked':'')+'> '+
+    '<span style="color:#8b949e;font-size:12px">enabled</span></label>';
+}
+function _baRow(label, html){
+  return '<div style="display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:center;margin-bottom:8px">'+
+    '<div style="color:#8b949e;font-size:12px">'+label+'</div>'+html+'</div>';
+}
+function _baSection(title, html, accent){
+  accent = accent || '#30363d';
+  return '<div style="border:1px solid '+accent+';border-radius:8px;padding:12px;margin-bottom:14px;background:#0d1117">'+
+    '<div style="font-size:11px;font-weight:600;color:#8b949e;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">'+title+'</div>'+
+    html+'</div>';
+}
+
+function renderBrokerAllocation(p){
+  var g = p['global'] || {};
+  var ibkr = p.ibkr || {};
+  var etoro = p.etoro || {};
+  var routing = p.routing || {};
+  var allowed = (routing.allowed_brokers || []).slice();
+  // Defensive: never show etoro_real in the UI.
+  allowed = allowed.filter(function(b){ return b !== 'etoro_real'; });
+  var defBroker = routing.default_broker || 'paper';
+
+  var globalHtml =
+    _baRow('Auto-trading enabled', _baCheckbox('ba_g_auto', !!g.auto_trading_enabled)) +
+    _baRow('Kill switch', _baCheckbox('ba_g_kill', !!g.kill_switch)) +
+    _baRow('Max auto-trading capital ($)',
+           _baInput('ba_g_cap', g.max_auto_trading_capital, 'type="number" min="0" step="0.01"'));
+
+  function brokerSectionHtml(prefix, b){
+    return _baRow('Auto-trading enabled', _baCheckbox(prefix+'_auto', !!b.auto_trading_enabled)) +
+           _baRow('Kill switch', _baCheckbox(prefix+'_kill', !!b.kill_switch)) +
+           _baRow('Max auto-trading capital ($)',
+                  _baInput(prefix+'_cap', b.max_auto_trading_capital, 'type="number" min="0" step="0.01"')) +
+           _baRow('Max single trade amount ($)',
+                  _baInput(prefix+'_single', b.max_single_trade_amount, 'type="number" min="0" step="0.01"')) +
+           _baRow('Max daily loss ($)',
+                  _baInput(prefix+'_loss', b.max_daily_loss, 'type="number" min="0" step="0.01"')) +
+           _baRow('Max open positions',
+                  _baInput(prefix+'_pos', b.max_open_positions, 'type="number" min="0" step="1"'));
+  }
+
+  // Routing: editable selects only over the policy-allowed brokers (minus etoro_real).
+  // etoro_real is intentionally not selectable in M13.4A.
+  var routeOptions = ['paper','ibkr_paper','ibkr_live','etoro_paper'];
+  var allowedChecks = routeOptions.map(function(b){
+    var checked = allowed.indexOf(b) !== -1;
+    return '<label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:12px;color:#e6edf3">'+
+      '<input type="checkbox" data-ba-allowed="'+b+'"'+(checked?' checked':'')+'> '+b+'</label>';
+  }).join('');
+  var defSelect = '<select id="ba_r_default" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">'+
+    routeOptions.map(function(b){
+      return '<option value="'+b+'"'+(defBroker===b?' selected':'')+'>'+b+'</option>';
+    }).join('') + '</select>';
+
+  var routeOverrides = routing.route_overrides || {};
+  function overrideSelect(name, current){
+    return '<select id="ba_r_ov_'+name+'" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:5px 7px;font-family:inherit;font-size:13px">'+
+      routeOptions.map(function(b){
+        return '<option value="'+b+'"'+(current===b?' selected':'')+'>'+b+'</option>';
+      }).join('') + '</select>';
+  }
+
+  var routingHtml =
+    _baRow('Allowed brokers', '<div>'+allowedChecks+'</div>') +
+    _baRow('Default broker', defSelect) +
+    _baRow('Route override: IBKR \u2192', overrideSelect('IBKR', routeOverrides.IBKR || 'ibkr_live')) +
+    _baRow('Route override: ETORO \u2192', overrideSelect('ETORO', routeOverrides.ETORO || 'etoro_paper')) +
+    _baRow('eToro live enabled',
+           '<span style="color:#f85149;font-weight:600">FALSE (locked in M13.4A)</span>');
+
+  var html =
+    _baSection('Global', globalHtml, (g.kill_switch ? '#da3633' : '#30363d')) +
+    _baSection('IBKR',   brokerSectionHtml('ba_i', ibkr), (ibkr.kill_switch ? '#da3633' : '#30363d')) +
+    _baSection('eToro',  brokerSectionHtml('ba_e', etoro), (etoro.kill_switch ? '#da3633' : '#30363d')) +
+    _baSection('Routing', routingHtml);
+  document.getElementById('baForm').innerHTML = html;
+}
+
+function loadBrokerAllocation(){
+  var msg = document.getElementById('baMsg');
+  msg.textContent = '';
+  fetch('/api/broker-allocation', {credentials:'include'})
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, body:d}; }); })
+    .then(function(o){
+      if(!o.ok || o.body.error){
+        msg.style.color = '#da3633';
+        msg.textContent = 'Load failed: ' + (o.body.error || 'unknown');
+        return;
+      }
+      _baPolicy = o.body.policy;
+      renderBrokerAllocation(_baPolicy);
+    })
+    .catch(function(e){
+      msg.style.color = '#da3633';
+      msg.textContent = 'Load failed: ' + e;
+    });
+}
+
+function _baReadForm(){
+  function val(id){ var el = document.getElementById(id); return el ? el.value : ''; }
+  function chk(id){ var el = document.getElementById(id); return !!(el && el.checked); }
+  function num(id){ var v = val(id); return v === '' ? 0 : Number(v); }
+  function int_(id){ var v = val(id); return v === '' ? 0 : parseInt(v, 10); }
+
+  var allowed = [];
+  document.querySelectorAll('input[data-ba-allowed]').forEach(function(el){
+    if(el.checked) allowed.push(el.getAttribute('data-ba-allowed'));
+  });
+
+  return {
+    version: 1,
+    'global': {
+      auto_trading_enabled: chk('ba_g_auto'),
+      max_auto_trading_capital: num('ba_g_cap'),
+      kill_switch: chk('ba_g_kill')
+    },
+    ibkr: {
+      auto_trading_enabled: chk('ba_i_auto'),
+      max_auto_trading_capital: num('ba_i_cap'),
+      max_single_trade_amount: num('ba_i_single'),
+      max_daily_loss: num('ba_i_loss'),
+      max_open_positions: int_('ba_i_pos'),
+      kill_switch: chk('ba_i_kill')
+    },
+    etoro: {
+      auto_trading_enabled: chk('ba_e_auto'),
+      max_auto_trading_capital: num('ba_e_cap'),
+      max_single_trade_amount: num('ba_e_single'),
+      max_daily_loss: num('ba_e_loss'),
+      max_open_positions: int_('ba_e_pos'),
+      kill_switch: chk('ba_e_kill')
+    },
+    routing: {
+      default_broker: val('ba_r_default') || 'paper',
+      route_overrides: {
+        IBKR: val('ba_r_ov_IBKR') || 'ibkr_live',
+        ETORO: val('ba_r_ov_ETORO') || 'etoro_paper'
+      },
+      allowed_brokers: allowed,
+      etoro_live_enabled: false
+    }
+  };
+}
+
+function saveBrokerAllocation(){
+  var msg = document.getElementById('baMsg');
+  msg.style.color = '#8b949e';
+  msg.textContent = 'Saving...';
+  var payload = _baReadForm();
+  fetch('/api/broker-allocation', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok, body:d}; }); })
+    .then(function(o){
+      if(!o.ok){
+        msg.style.color = '#da3633';
+        var errs = (o.body && o.body.errors) ? o.body.errors : [{msg: o.body && o.body.error || 'unknown'}];
+        msg.innerHTML = 'Save rejected: <code style="font-size:11px">'+
+          errs.map(function(e){ return (e.path||'')+': '+(e.code||'')+' '+(e.msg||''); }).join(' | ')+'</code>';
+        return;
+      }
+      msg.style.color = '#3fb950';
+      msg.textContent = 'Saved. Reloading to confirm persistence...';
+      // Reload from server to confirm persistence round-trip.
+      loadBrokerAllocation();
+    })
+    .catch(function(e){
+      msg.style.color = '#da3633';
+      msg.textContent = 'Save failed: ' + e;
+    });
+}
+
+// Wire into existing loadRisk() flow without modifying its body.
+var _origLoadRisk = (typeof loadRisk === 'function') ? loadRisk : null;
+loadRisk = function(){
+  if(_origLoadRisk) _origLoadRisk();
+  loadBrokerAllocation();
+};
 
 // loadRisk() called directly from nav onclick — no go() override needed
 </script>
@@ -3611,6 +3819,52 @@ def portfolio_risk_config_set():
         return jsonify({'applied': applied, 'note': 'takes effect next signal evaluation'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ── M13.4A Broker Allocation + Budget Controls ──────────────────────────────
+
+@app.route('/api/broker-allocation', methods=['GET'])
+@require_auth
+def broker_allocation_get():
+    import sqlite3 as _sql
+    from bot.broker_allocation import load_policy
+    try:
+        conn = _sql.connect(str(DB_PATH))
+        policy = load_policy(conn)
+        conn.close()
+        return jsonify({'policy': policy})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/broker-allocation', methods=['POST'])
+@require_auth
+def broker_allocation_set():
+    import sqlite3 as _sql
+    from bot.broker_allocation import validate_policy, save_policy
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({
+            'ok': False,
+            'errors': [{'path': '$', 'code': 'type_error',
+                        'msg': 'request body must be a JSON object'}]
+        }), 400
+    result = validate_policy(payload)
+    if not result.ok:
+        return jsonify({'ok': False, 'errors': result.errors}), 400
+    try:
+        conn = _sql.connect(str(DB_PATH))
+        save_policy(conn, payload)
+        conn.close()
+        return jsonify({'ok': True, 'note': 'policy persisted'})
+    except ValueError as e:
+        # Validation already passed, but save_policy re-validates defensively.
+        return jsonify({
+            'ok': False,
+            'errors': [{'path': '$', 'code': 'save_rejected', 'msg': str(e)}]
+        }), 400
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 # ── M15.1 Gateway Watchdog ──────────────────────────────────────────────────
