@@ -136,10 +136,10 @@ sanctioned operator-only `live_broker.py` (`EXCLUDED_FILES`), and the
 "operator-only" wording. All other `bot/etoro/` modules remain
 write-free and env-read-free.
 
-## 9. Open known unknowns (deferred to a demo dry-run)
+## 9. Open known unknowns (deferred)
 
-Carried from M13.5.A §8 — to be resolved against the eToro **demo**
-endpoint before the first real write, not in this milestone:
+Carried from M13.5.A §8 — to be resolved before the first real write,
+not in this milestone:
 
 - §8.1 No-SL/No-TP encoding (currently `IsNoStopLoss`/`IsNoTakeProfit`).
 - §8.2 Failure response body shape (parser is defensive across shapes).
@@ -147,5 +147,17 @@ endpoint before the first real write, not in this milestone:
 - §8.6 API-side minimum `Amount` (CLI default `--amount-min=10.0`).
 - §8.7 Cancel-endpoint exact path (not invoked in the happy path).
 
-No demo call was made in M13.5.B implementation; all transport in tests
-is injected.
+**Demo mode is DISABLED in M13.5.B.** `--demo` fails closed with a clear
+error (`DEMO_MODE_ENABLED = False`) before any credential read, runtime
+import, or broker construction. The earlier draft allowed demo mode to
+fall back to real credentials and to use the real public API base URL
+while bypassing `ETORO_LIVE_ENABLED` — that was unsafe and has been
+removed. Re-enabling demo requires ALL of `ETORO_DEMO_API_KEY`,
+`ETORO_DEMO_USER_KEY`, and a verified `ETORO_DEMO_BASE_URL` (sandbox),
+with no fallback to real keys and no use of the real API base for demo.
+Until a verified sandbox URL exists, the §8 unknowns are resolved by
+other means (documentation/operator inspection), not by a live demo
+call.
+
+No demo call and no real call were made in M13.5.B implementation; all
+transport in tests is injected.

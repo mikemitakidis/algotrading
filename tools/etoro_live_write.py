@@ -87,6 +87,36 @@ def _load_env(repo_root: Path = _REPO_ROOT) -> bool:
 _load_env()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Demo mode — DISABLED in M13.5.B
+# ─────────────────────────────────────────────────────────────────────────────
+# Demo mode is disabled until an official eToro demo/sandbox base URL is
+# verified. Re-enabling it requires ALL of the following, with NO fallback
+# to real credentials and NO bypass of ETORO_LIVE_ENABLED against a real
+# endpoint:
+#   * ETORO_DEMO_API_KEY
+#   * ETORO_DEMO_USER_KEY
+#   * ETORO_DEMO_BASE_URL   (a verified sandbox URL, never the real API)
+DEMO_MODE_ENABLED = False
+DEMO_DISABLED_MESSAGE = (
+    "Demo mode is disabled until an official eToro demo/sandbox base URL "
+    "is verified. Remove --demo to run against the real endpoint (which "
+    "requires ETORO_LIVE_ENABLED=true and full preflight + nonce "
+    "confirmation), or wait for a verified sandbox URL."
+)
+
+
+def _demo_guard(demo: bool) -> None:
+    """Fail closed if --demo is requested while demo mode is disabled.
+
+    This runs BEFORE any credential read or broker construction, so a
+    --demo invocation can never reach key-loading, URL selection, or the
+    live flag bypass.
+    """
+    if demo and not DEMO_MODE_ENABLED:
+        raise SystemExit(DEMO_DISABLED_MESSAGE)
+
+
 # Defer heavy imports until inside main() so this file is cheap to
 # load for --help and for the scanner-isolation test.
 def _import_runtime():
@@ -132,32 +162,58 @@ def _build_payload(args) -> dict:
     return payload
 
 
-def _read_keys(demo: bool) -> tuple[str, str, bool]:
-    """Read api/user keys + live-flag from .env. Never logged.
+def _read_keys(demo: bool) -> tuple[str, str, bool, str]:
+    """Read api/user keys + live-flag + base URL from the environment.
+    Never logged. Returns (api_key, user_key, env_live, base_url).
 
-    If demo=True, the ETORO_LIVE_ENABLED flag check is bypassed; the
-    eToro demo endpoint is then used by the caller. Even in demo mode
-    we still require keys to be present.
+    REAL mode (demo=False):
+      * Uses ETORO_REAL_API_KEY / ETORO_REAL_USER_KEY.
+      * env_live reflects ETORO_LIVE_ENABLED (no bypass).
+      * base_url is the real public API.
+
+    DEMO mode (demo=True):
+      * Reaches here ONLY if DEMO_MODE_ENABLED is True (the caller runs
+        _demo_guard first). It is currently disabled, so this branch is
+        defensive.
+      * Uses ETORO_DEMO_API_KEY / ETORO_DEMO_USER_KEY with NO fallback
+        to real credentials.
+      * REQUIRES ETORO_DEMO_BASE_URL — a verified sandbox URL. We refuse
+        to use the real public API base for demo, and we never bypass
+        ETORO_LIVE_ENABLED against a non-verified endpoint.
     """
+    if demo:
+        if not DEMO_MODE_ENABLED:
+            # Defensive: should be unreachable because _demo_guard runs
+            # first, but never silently proceed.
+            raise SystemExit(DEMO_DISABLED_MESSAGE)
+        api_key = (os.environ.get("ETORO_DEMO_API_KEY") or "").strip()
+        user_key = (os.environ.get("ETORO_DEMO_USER_KEY") or "").strip()
+        demo_base = (os.environ.get("ETORO_DEMO_BASE_URL") or "").strip()
+        if not api_key or not user_key:
+            raise SystemExit(
+                "Demo mode requires ETORO_DEMO_API_KEY and "
+                "ETORO_DEMO_USER_KEY. There is NO fallback to real "
+                "credentials. Aborting."
+            )
+        if not demo_base:
+            raise SystemExit(
+                "Demo mode requires a verified ETORO_DEMO_BASE_URL "
+                "(sandbox). The real public API base is never used for "
+                "demo. Aborting."
+            )
+        # Demo runs against an explicitly verified sandbox URL only.
+        return api_key, user_key, True, demo_base
+
+    # REAL mode.
     api_key = (os.environ.get("ETORO_REAL_API_KEY") or "").strip()
     user_key = (os.environ.get("ETORO_REAL_USER_KEY") or "").strip()
-    if demo:
-        # Demo keys are separate.
-        api_key = (os.environ.get("ETORO_DEMO_API_KEY") or api_key).strip()
-        user_key = (os.environ.get("ETORO_DEMO_USER_KEY") or user_key).strip()
     if not api_key or not user_key:
         raise SystemExit(
-            "ETORO_REAL_API_KEY / ETORO_REAL_USER_KEY (or *_DEMO_* for "
-            "--demo) must be set in .env. Aborting."
+            "ETORO_REAL_API_KEY / ETORO_REAL_USER_KEY must be set in .env. "
+            "Aborting."
         )
     env_live = os.environ.get("ETORO_LIVE_ENABLED", "").strip().lower() == "true"
-    if demo:
-        # In demo mode we treat env_live as True for the purposes of
-        # the EtoroLiveBroker constructor (the broker itself does not
-        # care about real vs demo — the base URL does). Real-money
-        # path stays gated.
-        env_live = True
-    return api_key, user_key, env_live
+    return api_key, user_key, env_live, "https://public-api.etoro.com"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Subcommand: oneshot — prepare + interactive confirm + submit in one process
@@ -167,6 +223,11 @@ def cmd_oneshot(args) -> int:
     """Prepare, ask for confirmation, then submit — all in one process
     so the NonceStore is retained. This is the recommended path for
     the first real write."""
+    # Fail closed FIRST — before importing runtime modules, reading any
+    # credential, or constructing any broker — if --demo is requested
+    # while demo mode is disabled.
+    _demo_guard(args.demo)
+
     rt = _import_runtime()
     load_policy = rt["load_policy"]
     validate_policy = rt["validate_policy"]
@@ -184,8 +245,10 @@ def cmd_oneshot(args) -> int:
     db_path = _resolve_db_path(args.db)
     payload = _build_payload(args)
 
-    # Load credentials and env flag.
-    api_key, user_key, env_live = _read_keys(args.demo)
+    # Load credentials, env flag, and base URL. _read_keys never falls
+    # back from demo to real credentials and never returns the real API
+    # base URL for demo mode.
+    api_key, user_key, env_live, base_url = _read_keys(args.demo)
     if not env_live:
         print("ERROR: ETORO_LIVE_ENABLED is not 'true' in .env. Refusing.")
         return 2
@@ -229,11 +292,11 @@ def cmd_oneshot(args) -> int:
     audit = AuditLogger(audit_path)
     nonce_store = NonceStore()
 
-    # Construct the broker.
-    base_url = args.base_url or (
-        "https://public-api.etoro.com" if not args.demo else
-        "https://public-api.etoro.com"
-    )
+    # Construct the broker. base_url comes from _read_keys (real API for
+    # real mode; verified sandbox for demo). An explicit --base-url
+    # override is honoured if provided (operator's responsibility).
+    if args.base_url:
+        base_url = args.base_url
     broker = EtoroLiveBroker(
         api_key=api_key,
         user_key=user_key,
@@ -430,7 +493,11 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("--db", default=None,
                         help="SQLite path. Defaults to <repo>/data/signals.db.")
-    parser.add_argument("--demo", action="store_true")
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="DISABLED in M13.5.B. Demo mode fails closed until an "
+             "official eToro sandbox base URL is verified; it never "
+             "falls back to real credentials or the real API.")
     parser.add_argument("--base-url", default=None)
 
     sub = parser.add_subparsers(dest="cmd", required=True)
