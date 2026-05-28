@@ -108,6 +108,13 @@ broker_rejected | cancelled | unverified}`; plus `policy_rejected` /
 once `positions[]` is populated), 2 → cancelled, 3 → broker_rejected;
 `errorCode` set → broker_rejected regardless of statusID.
 
+`filled → closed_manual` is an explicitly-permitted lifecycle transition
+(the operator manual-close path) and does **not** require
+`allow_terminal_override`; every other transition out of a terminal
+status still does. The operator CLI loads `<repo>/.env` automatically at
+startup (no manual `source` needed); an already-exported variable is not
+overridden, and no secret value is ever printed.
+
 ## 8. Test summary
 
 New M13.5.B suites (154 tests; run in two processes to honour the

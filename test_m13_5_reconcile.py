@@ -143,16 +143,35 @@ class TestReconcile(unittest.TestCase):
         self.assertEqual(row[0], "closed_manual")
         self.assertIsNotNone(row[1])
 
-    def test_terminal_override_required(self):
+    def test_mark_closed_manual_after_filled_no_override(self):
+        # M13.5.B blocker-2 fix: closing a filled position via the web UI
+        # and recording it (runbook step 5) must work WITHOUT the override
+        # flag — exactly as the runbook command shows.
         iid = self.db.make_unverified()
-        # First mark filled (terminal).
         recon.cmd_mark_filled(_ns(
             db=self.db.path, intent_id=iid,
             evidence=json.dumps({"position_id": 1, "fill_price": 1.0,
                                  "fill_qty": 1.0}),
             note=None, allow_terminal_override=False,
         ))
-        # Now try to mark closed_manual WITHOUT override -> LifecycleError.
+        rc = recon.cmd_mark_closed_manual(_ns(
+            db=self.db.path, intent_id=iid, evidence=None,
+            note="closed in web UI", allow_terminal_override=False,
+        ))
+        self.assertEqual(rc, 0)
+        with sqlite3.connect(self.db.path) as c:
+            row = c.execute("SELECT status FROM execution_intents WHERE id=?",
+                            (iid,)).fetchone()
+        self.assertEqual(row[0], "closed_manual")
+
+    def test_terminal_override_still_required_for_other_terminals(self):
+        # Protection preserved: broker_rejected -> closed_manual is NOT a
+        # whitelisted transition, so it still needs the override flag.
+        iid = self.db.make_unverified()
+        recon.cmd_mark_rejected(_ns(
+            db=self.db.path, intent_id=iid, evidence=None,
+            note=None, allow_terminal_override=False,
+        ))
         from bot.etoro.lifecycle import LifecycleError
         with self.assertRaises(LifecycleError):
             recon.cmd_mark_closed_manual(_ns(

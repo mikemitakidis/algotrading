@@ -51,6 +51,15 @@ ETORO_LIFECYCLE_STATUSES = {
 # further updates.
 _TERMINAL = {"filled", "broker_rejected", "cancelled", "closed_manual"}
 
+# Explicitly-permitted transitions OUT of a terminal status that do NOT
+# require allow_terminal_override. Closing a real, filled position via
+# the eToro web UI and recording it as closed_manual is a normal,
+# expected operator action (see M13.5 operator runbook step 5). All
+# other terminal-out transitions still require the override flag.
+_ALLOWED_TERMINAL_TRANSITIONS = {
+    ("filled", "closed_manual"),
+}
+
 
 class LifecycleError(RuntimeError):
     """Raised when a lifecycle transition is invalid or unsafe."""
@@ -136,7 +145,9 @@ def apply_transition(
       - Sets `filled_at`/`fill_price`/`fill_qty` on 'filled'.
       - Sets `cancelled_at` on 'cancelled' and 'closed_manual'.
       - Refuses transitions out of a terminal status unless
-        `allow_terminal_override=True`.
+        `allow_terminal_override=True`, EXCEPT the explicitly-permitted
+        normal transitions in _ALLOWED_TERMINAL_TRANSITIONS (currently
+        filled -> closed_manual, the operator manual-close path).
       - Refuses an unknown status string (defensive — eToro lifecycle
         vocabulary is closed).
       - Single SQL UPDATE — never inserts a new row.
@@ -157,10 +168,11 @@ def apply_transition(
     cur_status = row.get("status") or ""
 
     if cur_status in _TERMINAL and not allow_terminal_override:
-        raise LifecycleError(
-            f"intent {intent_id} already terminal ({cur_status!r}); "
-            f"cannot transition to {new_status!r}"
-        )
+        if (cur_status, new_status) not in _ALLOWED_TERMINAL_TRANSITIONS:
+            raise LifecycleError(
+                f"intent {intent_id} already terminal ({cur_status!r}); "
+                f"cannot transition to {new_status!r}"
+            )
 
     lifecycle = _load_lifecycle(row)
     events = lifecycle.get("events")

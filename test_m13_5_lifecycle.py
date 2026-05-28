@@ -125,6 +125,39 @@ class TestApplyTransition(_DBFixtureMixin, unittest.TestCase):
         self.assertEqual(row["status"], "closed_manual")
         self.assertIsNotNone(row["cancelled_at"])
 
+    def test_filled_to_closed_manual_without_override(self):
+        # M13.5.B blocker-2 fix: the operator manual-close path
+        # (filled -> closed_manual) is an explicitly-permitted terminal
+        # transition and must NOT require allow_terminal_override=True.
+        # This matches the runbook step 5 command (no override flag).
+        iid = self.fx.make_intent()
+        with self.fx.conn() as c:
+            apply_transition(c, iid, "submitted", broker_order_id="x")
+            apply_transition(c, iid, "filled", fill_price=10.0, fill_qty=1.0)
+            row = apply_transition(c, iid, "closed_manual")  # no override
+        self.assertEqual(row["status"], "closed_manual")
+        self.assertIsNotNone(row["cancelled_at"])
+
+    def test_filled_to_cancelled_still_refused_without_override(self):
+        # Protection preserved: other terminal-out transitions still
+        # require the explicit override flag.
+        iid = self.fx.make_intent()
+        with self.fx.conn() as c:
+            apply_transition(c, iid, "submitted")
+            apply_transition(c, iid, "filled", fill_price=1.0, fill_qty=1.0)
+            with self.assertRaises(LifecycleError):
+                apply_transition(c, iid, "cancelled")   # not in allowlist
+
+    def test_broker_rejected_to_closed_manual_still_refused_without_override(self):
+        # Only filled -> closed_manual is whitelisted; broker_rejected ->
+        # closed_manual still requires the override.
+        iid = self.fx.make_intent()
+        with self.fx.conn() as c:
+            apply_transition(c, iid, "submitted")
+            apply_transition(c, iid, "broker_rejected")
+            with self.assertRaises(LifecycleError):
+                apply_transition(c, iid, "closed_manual")  # not whitelisted
+
     def test_terminal_refuses_further_transition(self):
         iid = self.fx.make_intent()
         with self.fx.conn() as c:

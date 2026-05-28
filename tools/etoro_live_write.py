@@ -5,17 +5,25 @@ This is the SOLE construction site for EtoroLiveBroker. It is never
 imported by main.py, the scanner, the strategy, or the risk manager.
 The test suite test_m13_5_scanner_isolation.py asserts this.
 
-Usage (high-level):
-  $ python3 tools/etoro_live_write.py --help
-  $ python3 tools/etoro_live_write.py prepare \
-      --instrument-id 1000 --amount 10.0
-  # ... CLI prints confirmation block with NONCE ...
-  $ python3 tools/etoro_live_write.py submit \
-      --intent-id 42 --confirm "CONFIRM <nonce>"
+The CLI exposes a single subcommand, `oneshot`, which performs the
+whole flow inside one process so the in-memory NonceStore is retained
+between nonce issuance and confirmation:
 
-The CLI is split into subcommands so each step is observable and the
-operator confirmation between `prepare` and `submit` is enforced by
-the operator, not by chained subprocess calls.
+  prepare intent -> 16-gate preflight -> issue per-payload nonce ->
+  operator confirms (CONFIRM <nonce>) -> exactly one POST -> bounded
+  poll (5x2s) -> terminal status or 'unverified'.
+
+Usage:
+  $ python3 tools/etoro_live_write.py --help
+  $ python3 tools/etoro_live_write.py oneshot \
+      --instrument-id 1000 --amount 10.0 --symbol SPY \
+      --market-open --close-plan "manual close via eToro web UI"
+  # CLI prints a confirmation block with a NONCE; at the CONFIRM>
+  # prompt type exactly: CONFIRM <nonce>
+  # (or pass --confirm "CONFIRM <nonce>" non-interactively)
+
+.env is loaded automatically at startup (see _load_env), so the
+operator does not need to manually `source` it before running.
 
 NEVER does:
   - automatic submission without explicit operator confirmation
@@ -41,12 +49,42 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# Logging only — never print secrets.
+# Logging only — never print secrets. Defined before _load_env() so the
+# import-time .env load can log via this logger.
 logging.basicConfig(
     level=os.environ.get("ETORO_CLI_LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s [etoro_live_write] %(message)s",
 )
 log = logging.getLogger(__name__)
+
+
+def _load_env(repo_root: Path = _REPO_ROOT) -> bool:
+    """Load <repo>/.env into os.environ so the operator does not have to
+    manually `source` it before running this CLI (matches the runbook).
+
+    Mirrors bot/config.py: guarded by an existence check; existing
+    environment variables are NOT overridden (load_dotenv default
+    override=False), so an explicitly-exported value wins. Returns True
+    if a .env file was found and loaded. Never prints secrets.
+    """
+    env_path = repo_root / ".env"
+    if env_path.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(env_path)
+            log.info("[etoro_live_write] loaded .env from %s", env_path)
+            return True
+        except Exception as e:  # pragma: no cover - defensive
+            log.warning("[etoro_live_write] could not load .env: %s", e)
+            return False
+    log.warning("[etoro_live_write] no .env at %s — using current "
+                "environment only", env_path)
+    return False
+
+
+# Load .env at import time so every code path (oneshot, _read_keys) sees
+# the operator's configured keys + ETORO_LIVE_ENABLED.
+_load_env()
 
 
 # Defer heavy imports until inside main() so this file is cheap to
@@ -69,49 +107,6 @@ def _import_runtime():
     from bot.etoro.order_poller import poll_until_terminal
     from bot.flywheel import log_intent, init_flywheel_tables as ensure_schema
     return locals()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Argument parsing
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="etoro_live_write",
-        description="M13.5.B operator-only live eToro write CLI. "
-                    "Refuses to run without explicit per-payload nonce.",
-    )
-    p.add_argument(
-        "--db", default=None,
-        help="SQLite path. Defaults to <repo>/data/signals.db.",
-    )
-    p.add_argument(
-        "--demo", action="store_true",
-        help="Run against eToro demo endpoint instead of real-money. "
-             "ETORO_LIVE_ENABLED .env flag is bypassed; policy gates "
-             "are still enforced.",
-    )
-
-    sub = p.add_subparsers(dest="cmd", required=False)
-
-    prep = sub.add_parser("prepare", help="Insert pending intent + print nonce.")
-    prep.add_argument("--instrument-id", type=int, required=True)
-    prep.add_argument("--amount", type=float, required=True)
-    prep.add_argument("--is-buy", action="store_true", default=True)
-    prep.add_argument("--leverage", type=int, default=1)
-    prep.add_argument("--symbol", type=str, required=True,
-                      help="Human-readable symbol, e.g. SPY. For audit only.")
-    prep.add_argument("--no-stop-loss", action="store_true", default=True)
-    prep.add_argument("--no-take-profit", action="store_true", default=True)
-    prep.add_argument("--close-plan", type=str, required=True,
-                      help="Operator-typed manual close plan (M13.4B §8.5).")
-
-    sub.add_parser("submit", help="Submit a previously prepared intent.").add_argument(
-        "--intent-id", type=int, required=True,
-    )
-    # `submit` continued in main() because argparse subparsers need
-    # additional optional flags — keep simple here.
-    return p
 
 
 def _resolve_db_path(arg_db: Optional[str]) -> str:
@@ -164,140 +159,6 @@ def _read_keys(demo: bool) -> tuple[str, str, bool]:
         env_live = True
     return api_key, user_key, env_live
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Subcommand: prepare
-# ─────────────────────────────────────────────────────────────────────────────
-
-def cmd_prepare(args) -> int:
-    rt = _import_runtime()
-    load_policy = rt["load_policy"]
-    validate_policy = rt["validate_policy"]
-    log_intent = rt["log_intent"]
-    ensure_schema = rt["ensure_schema"]
-    NonceStore = rt["NonceStore"]
-    apply_transition = rt["apply_transition"]
-    attach_evidence = rt["attach_evidence"]
-
-    db_path = _resolve_db_path(args.db)
-    payload = _build_payload(args)
-
-    conn = sqlite3.connect(db_path)
-    try:
-        ensure_schema(conn)
-        policy = load_policy(conn)
-        val = validate_policy(policy)
-        if not val.ok:
-            print("ERROR: broker allocation policy failed validation. "
-                  "Fix in dashboard before continuing.")
-            print(json.dumps(val.errors, indent=2))
-            return 2
-
-        # Insert pending row.
-        client_intent_id = str(uuid.uuid4())
-        intent_id = log_intent(
-            conn,
-            signal_id=0,                       # operator-triggered, no signal
-            symbol=args.symbol,
-            direction="long",
-            route="ETORO",
-            entry_price=0.0,                   # unknown until fill
-            stop_loss=0.0,
-            target_price=0.0,
-            position_size=0.0,
-            risk_usd=0.0,
-            valid_count=0,
-            strategy_version=0,
-            broker="etoro_real" if not args.demo else "etoro_real_demo",
-            status="pending_live_write",
-            broker_order_id=None,
-            rejection_reason=None,
-            risk_checks={"source": "operator_cli_m13_5_b"},
-        )
-        if intent_id is None:
-            print("ERROR: failed to insert execution_intent row.")
-            return 2
-
-        # Stamp the row's lifecycle_json with the client_intent_id
-        # before nonce issuance. This is the canonical idempotency key.
-        attach_evidence(conn, intent_id, key="client_intent_id",
-                        value=client_intent_id)
-        attach_evidence(conn, intent_id, key="payload_redacted_initial",
-                        value={
-                            "InstrumentID": payload["InstrumentID"],
-                            "IsBuy":        payload["IsBuy"],
-                            "Leverage":     payload["Leverage"],
-                            "Amount":       payload["Amount"],
-                            "symbol":       args.symbol,
-                        })
-        attach_evidence(conn, intent_id, key="close_plan", value=args.close_plan)
-    finally:
-        conn.close()
-
-    # Issue nonce. Store is in-process; persist its digest into
-    # lifecycle_json so the operator can verify integrity between
-    # prepare and submit. The actual single-use guard is enforced by
-    # the in-process NonceStore at submit time.
-    store = NonceStore()
-    rec = store.issue(payload, ttl_seconds=900)   # 15 min for first write
-
-    # Persist digest into the row so submit can re-issue if same process.
-    conn = sqlite3.connect(db_path)
-    try:
-        attach_evidence(conn, intent_id, key="nonce_digest", value=rec.digest)
-        attach_evidence(conn, intent_id, key="nonce_issued_at_ms",
-                        value=rec.issued_at_ms)
-        attach_evidence(conn, intent_id, key="nonce_ttl_seconds",
-                        value=rec.ttl_seconds)
-    finally:
-        conn.close()
-
-    # Print confirmation block (M13.4B §10).
-    print()
-    print("┌──────────────── LIVE WRITE CONFIRMATION ──────────────────┐")
-    print(f"│ Mode:           {'DEMO (sandbox)' if args.demo else 'REAL-MONEY':<46}│")
-    print(f"│ Intent ID:      {intent_id:<46}│")
-    print(f"│ Symbol:         {args.symbol:<46}│")
-    print(f"│ Instrument ID:  {payload['InstrumentID']:<46}│")
-    print(f"│ Side:           {'BUY' if payload['IsBuy'] else 'SELL':<46}│")
-    print(f"│ Amount:         ${payload['Amount']:<45}│")
-    print(f"│ Leverage:       {payload['Leverage']:<46}│")
-    print(f"│ Close plan:     {args.close_plan[:46]:<46}│")
-    print(f"│                                                            │")
-    print(f"│ NONCE: {rec.digest:<52}│")
-    print(f"│ To proceed:                                                │")
-    print(f"│   python3 tools/etoro_live_write.py submit \\               │")
-    print(f"│       --intent-id {intent_id} --confirm 'CONFIRM {rec.digest}' \\         │")
-    print(f"│       --instrument-id {payload['InstrumentID']} --amount {payload['Amount']}      │")
-    print("└────────────────────────────────────────────────────────────┘")
-    print()
-    print("Have the eToro web UI open and authenticated before submitting.")
-    print()
-    return 0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Subcommand: submit
-# ─────────────────────────────────────────────────────────────────────────────
-
-def cmd_submit(args) -> int:
-    """The submit subcommand requires re-supplying the payload fields so
-    nonce validation re-derives the digest. This guards against drift
-    between the row and the operator's invocation.
-
-    Because the NonceStore is in-process, the same Python process must
-    issue and validate. M13.5.B keeps it simple: prepare+submit are
-    invoked as a single command via the `oneshot` subcommand for the
-    first real write. This `submit` subcommand exists for tests and
-    advanced operator workflows only.
-    """
-    print("ERROR: standalone `submit` is not supported in M13.5.B. "
-          "Use `oneshot` for an end-to-end operator-confirmed run, "
-          "or invoke the live broker programmatically from a Python "
-          "session that retains the NonceStore.")
-    return 2
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Subcommand: oneshot — prepare + interactive confirm + submit in one process
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,10 +180,6 @@ def cmd_oneshot(args) -> int:
     PreflightError = rt["PreflightError"]
     AuditLogger = rt["AuditLogger"]
     poll_until_terminal = rt["poll_until_terminal"]
-
-    if not args.confirm and not args.assume_yes:
-        # Will prompt interactively after preflight.
-        pass
 
     db_path = _resolve_db_path(args.db)
     payload = _build_payload(args)
@@ -598,10 +455,17 @@ def main(argv: Optional[list] = None) -> int:
     o.add_argument("--spread-max-bps",    type=float, default=50.0)
     o.add_argument("--amount-min",        type=float, default=10.0)
 
-    # Confirmation:
+    # Confirmation: the operator must echo the per-payload nonce. There
+    # is deliberately NO "assume yes" / skip-confirmation option — the
+    # nonce is unpredictable by design, so it cannot be pre-approved
+    # without the operator seeing it. --confirm lets the operator supply
+    # the echoed nonce non-interactively AFTER reading it from a prior
+    # run is not possible (nonce is single-use); it exists for automated
+    # tests and advanced flows where the nonce is captured in-process.
     o.add_argument("--confirm", type=str, default=None,
-                   help="Pre-supplied 'CONFIRM <nonce>' string (avoids stdin prompt).")
-    o.add_argument("--assume-yes", action="store_true")
+                   help="Pre-supplied 'CONFIRM <nonce>' string (avoids the "
+                        "interactive stdin prompt). Must still match the "
+                        "per-payload nonce issued this run.")
 
     # Polling:
     o.add_argument("--poll-max-attempts", type=int, default=5)
