@@ -292,11 +292,10 @@ def cmd_oneshot(args) -> int:
     audit = AuditLogger(audit_path)
     nonce_store = NonceStore()
 
-    # Construct the broker. base_url comes from _read_keys (real API for
-    # real mode; verified sandbox for demo). An explicit --base-url
-    # override is honoured if provided (operator's responsibility).
-    if args.base_url:
-        base_url = args.base_url
+    # Construct the broker. base_url comes solely from _read_keys: the
+    # fixed real public API for real mode, or a verified sandbox URL for
+    # demo (currently disabled). There is deliberately NO CLI override —
+    # real credentials can never be redirected to an arbitrary host.
     broker = EtoroLiveBroker(
         api_key=api_key,
         user_key=user_key,
@@ -498,7 +497,6 @@ def main(argv: Optional[list] = None) -> int:
         help="DISABLED in M13.5.B. Demo mode fails closed until an "
              "official eToro sandbox base URL is verified; it never "
              "falls back to real credentials or the real API.")
-    parser.add_argument("--base-url", default=None)
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 

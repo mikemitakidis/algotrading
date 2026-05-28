@@ -115,6 +115,14 @@ status still does. The operator CLI loads `<repo>/.env` automatically at
 startup (no manual `source` needed); an already-exported variable is not
 overridden, and no secret value is ever printed.
 
+Real-money mode always uses exactly `https://public-api.etoro.com`. The
+CLI exposes **no** `--base-url` override, so real credentials can never
+be redirected to an arbitrary host by a mistyped or copied command. The
+base URL is returned by `_read_keys` (fixed real API for real mode; a
+verified sandbox URL for demo, which is disabled). Tests exercise
+alternate endpoints only via an injected transport at the broker level,
+never via a CLI flag.
+
 ## 8. Test summary
 
 New M13.5.B suites (154 tests; run in two processes to honour the

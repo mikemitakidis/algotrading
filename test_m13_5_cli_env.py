@@ -244,5 +244,60 @@ class TestDemoFailsClosedEndToEnd(unittest.TestCase):
             cli._import_runtime = orig_import
 
 
+class TestNoBaseUrlOverride(unittest.TestCase):
+    """Prove the CLI exposes no --base-url override, so real credentials
+    can never be redirected to an arbitrary host. Real mode always uses
+    exactly https://public-api.etoro.com (returned by _read_keys)."""
+
+    REAL_BASE = "https://public-api.etoro.com"
+
+    def test_base_url_flag_is_rejected(self):
+        # argparse must reject --base-url with a non-zero SystemExit.
+        with self.assertRaises(SystemExit) as ctx:
+            cli.main([
+                "oneshot",
+                "--base-url", "https://evil.example.com",
+                "--instrument-id", "1000", "--amount", "10",
+                "--symbol", "SPY", "--close-plan", "x", "--market-open",
+            ])
+        # argparse exits with code 2 on unrecognized arguments.
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_parser_has_no_base_url_action(self):
+        # Inspect the parser: there must be no --base-url option string.
+        import argparse
+        seen = []
+
+        real_parse = argparse.ArgumentParser.parse_args
+
+        def capture(self, *a, **k):
+            for action in self._actions:
+                seen.extend(action.option_strings)
+            raise SystemExit(0)  # stop before doing work
+
+        argparse.ArgumentParser.parse_args = capture
+        try:
+            try:
+                cli.main(["oneshot", "--instrument-id", "1", "--amount", "1",
+                          "--symbol", "X", "--close-plan", "x"])
+            except SystemExit:
+                pass
+        finally:
+            argparse.ArgumentParser.parse_args = real_parse
+        self.assertNotIn("--base-url", seen)
+
+    def test_real_mode_base_url_is_fixed_public_api(self):
+        # _read_keys real mode returns exactly the public API base.
+        with _CleanEnv(), tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _write_env(root,
+                       f"ETORO_REAL_API_KEY={SENTINEL_API}\n"
+                       f"ETORO_REAL_USER_KEY={SENTINEL_USER}\n"
+                       f"ETORO_LIVE_ENABLED=true\n")
+            cli._load_env(root)
+            _, _, _, base_url = cli._read_keys(demo=False)
+            self.assertEqual(base_url, self.REAL_BASE)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
