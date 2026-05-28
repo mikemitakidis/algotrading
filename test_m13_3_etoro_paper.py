@@ -550,11 +550,18 @@ class TestNoWriteCapability(unittest.TestCase):
         'post', 'delete', 'put', 'patch',
         '_post', '_delete', '_put', '_patch',
     }
+    # M13.5.B: bot/etoro/live_broker.py is the deliberate, operator-only
+    # live-write path. Never reachable from the scanner runtime (proven
+    # by test_m13_5_scanner_isolation.py); constructed only by
+    # tools/etoro_live_write.py. Excluded from this read-path scan.
+    EXCLUDED_FILES = {'live_broker.py'}
 
     def test_no_write_methods_anywhere_in_etoro_package(self):
         offenders = []
         repo = Path(__file__).resolve().parent
         for fname in sorted(glob.glob(str(repo / 'bot' / 'etoro' / '*.py'))):
+            if os.path.basename(fname) in self.EXCLUDED_FILES:
+                continue
             with open(fname) as f:
                 tree = ast.parse(f.read(), filename=fname)
             rel = os.path.relpath(fname, str(repo))
@@ -627,10 +634,19 @@ class TestFactoryRegistration(unittest.TestCase):
     def _with_broker_env(self, name):
         return _EnvCtx('BROKER', name)
 
+    def _unwrap(self, b):
+        # M13.5.B: get_broker() may now wrap the concrete broker in a
+        # SignalOnlyBroker when policy disables auto-trading. Unwrap to
+        # assert the underlying concrete type.
+        from bot.etoro.signal_only_broker import SignalOnlyBroker
+        if isinstance(b, SignalOnlyBroker):
+            return b.wrapped
+        return b
+
     def test_etoro_paper_returns_paper_etoro_broker(self):
         with self._with_broker_env('etoro_paper'):
             from bot.brokers import get_broker
-            b = get_broker()
+            b = self._unwrap(get_broker())
             self.assertIsInstance(b, PaperEtoroBroker)
             self.assertEqual(b.name, 'etoro_paper')
             self.assertFalse(b.is_live)
@@ -642,8 +658,9 @@ class TestFactoryRegistration(unittest.TestCase):
                 get_broker()
             msg = str(ctx.exception).lower()
             self.assertIn('etoro_real', msg)
-            self.assertIn('not implemented', msg)
-            self.assertIn('etoro_paper', msg)
+            # M13.5.B: message updated — live writer exists but is
+            # operator-only, never selectable via the registry.
+            self.assertIn('operator-only', msg)
 
     def test_unknown_broker_still_falls_back_to_paper(self):
         """Backwards compatibility: unknown names still warn-and-fall-back.
@@ -651,7 +668,7 @@ class TestFactoryRegistration(unittest.TestCase):
         with self._with_broker_env('completely_unknown_xyz'):
             from bot.brokers import get_broker
             from bot.brokers.paper_broker import PaperBroker
-            b = get_broker()
+            b = self._unwrap(get_broker())
             self.assertIsInstance(b, PaperBroker)
 
 

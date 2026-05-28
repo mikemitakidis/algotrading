@@ -32,10 +32,15 @@ log = logging.getLogger(__name__)
 # Persistence key in portfolio_risk_state(key, value, updated_at)
 POLICY_KEY = "broker_allocation_policy"
 
-# Brokers that may ever appear in allowed_brokers in M13.4A.
-# etoro_real is intentionally absent — M13.5 will gate it separately.
-ALLOWED_BROKER_WHITELIST = {"paper", "ibkr_paper", "ibkr_live", "etoro_paper"}
-FORBIDDEN_BROKERS = {"etoro_real"}
+# Brokers that may ever appear in allowed_brokers. M13.5.B extends the
+# whitelist to include etoro_real, since the live writer ships in this
+# milestone. Runtime gating still requires BOTH policy.etoro_live_enabled
+# AND .env ETORO_LIVE_ENABLED to be True before any real POST.
+ALLOWED_BROKER_WHITELIST = {"paper", "ibkr_paper", "ibkr_live",
+                            "etoro_paper", "etoro_real"}
+# M13.5.B: no broker is hard-blocked at policy validation. Runtime
+# gates (preflight + .env + nonce) decide whether a real POST happens.
+FORBIDDEN_BROKERS: set = set()
 
 POLICY_VERSION = 1
 
@@ -270,10 +275,9 @@ def _validate_routing(r: Any, errors: list) -> None:
     if not _is_bool(r["etoro_live_enabled"]):
         _err(errors, "routing.etoro_live_enabled", "type_error",
              "etoro_live_enabled must be a boolean")
-    elif r["etoro_live_enabled"] is True:
-        # M13.4A: live eToro is explicitly rejected.
-        _err(errors, "routing.etoro_live_enabled", "etoro_live_forbidden",
-             "etoro_live_enabled=true is not permitted in M13.4A")
+    # M13.5.B: etoro_live_enabled=true is now policy-permitted.
+    # Runtime guards (.env ETORO_LIVE_ENABLED + EtoroLiveBroker preflight
+    # + operator nonce) decide whether a real POST is actually emitted.
 
 
 def _validate_cross_broker_capital(policy: dict, errors: list) -> None:
@@ -454,7 +458,9 @@ def is_auto_trading_allowed(policy: dict, broker_name: str) -> tuple[bool, str]:
         return False, "global_disabled"
 
     routing = policy.get("routing") or {}
-    etoro_live = bool(routing.get("etoro_live_enabled")) if isinstance(routing, dict) else False
+    # Strict: routing.etoro_live_enabled must be True identity, not just truthy.
+    etoro_live = (isinstance(routing, dict)
+                  and routing.get("etoro_live_enabled") is True)
 
     # Special-case etoro_real: blocked unless etoro_live_enabled True.
     # In M13.4A validation rejects etoro_live_enabled=true, so this returns

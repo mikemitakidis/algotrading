@@ -266,11 +266,19 @@ class TestNoWriteCapability(unittest.TestCase):
         'post', 'delete', 'put', 'patch',
         '_post', '_delete', '_put', '_patch',
     }
+    # M13.5.B: bot/etoro/live_broker.py is the deliberate, operator-only
+    # live-write path. It is never reachable from the scanner runtime
+    # (proven by test_m13_5_scanner_isolation.py) and is constructed only
+    # by tools/etoro_live_write.py. Exclude it from this read-path scan;
+    # every other bot/etoro/ module must remain write-free.
+    EXCLUDED_FILES = {'live_broker.py'}
 
     def _collect_offenders(self):
         offenders = []
         repo = Path(__file__).resolve().parent
         for fname in sorted(glob.glob(str(repo / 'bot' / 'etoro' / '*.py'))):
+            if os.path.basename(fname) in self.EXCLUDED_FILES:
+                continue
             with open(fname) as f:
                 tree = ast.parse(f.read(), filename=fname)
             rel = os.path.relpath(fname, str(repo))
@@ -746,7 +754,11 @@ class TestNotRegistered(unittest.TestCase):
                 get_broker()
             msg = str(ctx.exception).lower()
             self.assertIn('etoro_real', msg)
-            self.assertIn('not implemented', msg)
+            # M13.5.B: get_broker() still fails loudly for etoro_real, but
+            # the message now states the live writer is operator-only
+            # (not 'not implemented', since the writer DOES exist — it is
+            # just never constructed via the registry).
+            self.assertIn('operator-only', msg)
         finally:
             if prev is None:
                 os.environ.pop('BROKER', None)

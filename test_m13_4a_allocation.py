@@ -290,26 +290,39 @@ class TestValidatorRouting(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("not_in_allowed", _codes(result))
 
-    def test_etoro_real_in_allowed_brokers_rejected(self):
+    def test_etoro_real_in_allowed_brokers_accepted_m13_5_b(self):
+        # M13.5.B: etoro_real is now in ALLOWED_BROKER_WHITELIST. Validation
+        # accepts it. Runtime gating (is_auto_trading_allowed + .env flag +
+        # EtoroLiveBroker preflight + operator nonce) blocks actual writes.
         p = _good()
         p["routing"]["allowed_brokers"].append("etoro_real")
         result = validate_policy(p)
-        self.assertFalse(result.ok)
-        self.assertIn("forbidden_broker", _codes(result))
+        self.assertTrue(result.ok, msg=f"errors={result.errors}")
+        # And policy alone is still insufficient to enable live trading:
+        # without etoro_live_enabled=True, is_auto_trading_allowed says no.
+        p["global"]["auto_trading_enabled"] = True
+        p["etoro"]["auto_trading_enabled"] = True
+        ok, reason = is_auto_trading_allowed(p, "etoro_real")
+        self.assertFalse(ok)
+        self.assertEqual(reason, "etoro_live_disabled")
 
-    def test_etoro_real_as_default_broker_rejected(self):
+    def test_etoro_real_as_default_broker_accepted_when_in_allowed(self):
+        # M13.5.B: now permitted at validation, provided it's in allowed_brokers.
         p = _good()
+        p["routing"]["allowed_brokers"].append("etoro_real")
         p["routing"]["default_broker"] = "etoro_real"
         result = validate_policy(p)
-        self.assertFalse(result.ok)
-        self.assertIn("forbidden_broker", _codes(result))
+        self.assertTrue(result.ok, msg=f"errors={result.errors}")
 
-    def test_etoro_live_enabled_true_rejected(self):
+    def test_etoro_live_enabled_true_now_accepted_at_validation(self):
+        # M13.5.B: the M13.4A 'etoro_live_forbidden' rejection is lifted.
+        # The flag is permitted at validation; runtime gating decides.
         p = _good()
         p["routing"]["etoro_live_enabled"] = True
         result = validate_policy(p)
-        self.assertFalse(result.ok)
-        self.assertIn("etoro_live_forbidden", _codes(result))
+        self.assertTrue(result.ok, msg=f"errors={result.errors}")
+        # etoro_live_forbidden must no longer appear among error codes.
+        self.assertNotIn("etoro_live_forbidden", _codes(result))
 
     def test_unknown_broker_in_allowed_rejected(self):
         p = _good()
@@ -327,12 +340,19 @@ class TestValidatorRouting(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("not_in_allowed", _codes(result))
 
-    def test_route_override_to_etoro_real_rejected(self):
+    def test_route_override_to_etoro_real_requires_in_allowed_m13_5_b(self):
+        # M13.5.B: route override to etoro_real is now permitted if and only
+        # if etoro_real is also in allowed_brokers.
         p = _good()
+        # Without etoro_real in allowed_brokers -> rejected as not_in_allowed.
         p["routing"]["route_overrides"]["ETORO"] = "etoro_real"
         result = validate_policy(p)
         self.assertFalse(result.ok)
-        self.assertIn("forbidden_broker", _codes(result))
+        self.assertIn("not_in_allowed", _codes(result))
+        # With etoro_real in allowed_brokers -> accepted at validation.
+        p["routing"]["allowed_brokers"].append("etoro_real")
+        result2 = validate_policy(p)
+        self.assertTrue(result2.ok, msg=f"errors={result2.errors}")
 
     def test_route_overrides_non_string_rejected(self):
         p = _good()
@@ -393,8 +413,10 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(loaded["etoro"]["max_auto_trading_capital"], 1234.5)
 
     def test_save_invalid_raises(self):
+        # M13.5.B: etoro_live_enabled=True is no longer invalid. Use a
+        # genuinely invalid value (negative money field) instead.
         bad = _good()
-        bad["routing"]["etoro_live_enabled"] = True
+        bad["ibkr"]["max_daily_loss"] = -1.0
         with self._conn() as c:
             with self.assertRaises(ValueError):
                 save_policy(c, bad)
@@ -450,11 +472,18 @@ class TestReadHelpers(unittest.TestCase):
         p = _good()
         self.assertTrue(is_broker_allowed(p, "paper"))
 
-    def test_is_broker_allowed_etoro_real_always_false(self):
+    def test_is_broker_allowed_etoro_real_follows_allowed_brokers_m13_5_b(self):
+        # M13.5.B: is_broker_allowed now reflects allowed_brokers honestly.
+        # The runtime gating against live writes lives in
+        # is_auto_trading_allowed() + the .env flag + the live broker
+        # preflight, not in is_broker_allowed().
         p = _good()
-        # Even if someone tried to inject it, is_broker_allowed must say no.
-        p["routing"]["allowed_brokers"].append("etoro_real")
+        # Default policy does not list etoro_real -> False.
         self.assertFalse(is_broker_allowed(p, "etoro_real"))
+        # Operator opts in -> True at the registry level. Live writes
+        # still require the additional gates.
+        p["routing"]["allowed_brokers"].append("etoro_real")
+        self.assertTrue(is_broker_allowed(p, "etoro_real"))
 
     def test_is_broker_allowed_unknown_false(self):
         p = _good()
@@ -616,7 +645,8 @@ class TestDashboardEndpoints(unittest.TestCase):
 
     # --- rejection paths ----------------------------------------------------
 
-    def test_post_rejects_etoro_live_enabled_true(self):
+    def test_post_accepts_etoro_live_enabled_true_m13_5_b(self):
+        # M13.5.B: validation no longer rejects etoro_live_enabled=true.
         self._login()
         p = _good()
         p["routing"]["etoro_live_enabled"] = True
@@ -625,12 +655,10 @@ class TestDashboardEndpoints(unittest.TestCase):
             data=json.dumps(p),
             content_type="application/json",
         )
-        self.assertEqual(r.status_code, 400)
-        body = r.get_json()
-        codes = {e["code"] for e in body.get("errors", [])}
-        self.assertIn("etoro_live_forbidden", codes)
+        self.assertEqual(r.status_code, 200, msg=r.get_data(as_text=True))
 
-    def test_post_rejects_etoro_real_in_allowed_brokers(self):
+    def test_post_accepts_etoro_real_in_allowed_brokers_m13_5_b(self):
+        # M13.5.B: etoro_real is now in ALLOWED_BROKER_WHITELIST.
         self._login()
         p = _good()
         p["routing"]["allowed_brokers"].append("etoro_real")
@@ -639,10 +667,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             data=json.dumps(p),
             content_type="application/json",
         )
-        self.assertEqual(r.status_code, 400)
-        body = r.get_json()
-        codes = {e["code"] for e in body.get("errors", [])}
-        self.assertIn("forbidden_broker", codes)
+        self.assertEqual(r.status_code, 200, msg=r.get_data(as_text=True))
 
     def test_post_rejects_unknown_top_level_key(self):
         self._login()
