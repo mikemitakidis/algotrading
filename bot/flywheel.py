@@ -188,6 +188,246 @@ CREATE TABLE gateway_events (
 )
 """
 
+# ── M14.B: Risk Intelligence Layer schema (additive, non-destructive) ────────
+# Three new tables. The legacy daily_state table is NOT modified. Existing
+# readers (get_daily_state, set_daily_loss_block) continue to use daily_state
+# as the source of truth. daily_state_per_broker carries forward the legacy
+# fields so the M14 engine has a faithful per-broker / GLOBAL view.
+
+M14_B_SCHEMA_VERSION = 1
+M14_B_SENTINEL_KEY   = "schema_version_daily_state_per_broker"
+M14_B_SAVEPOINT_NAME = "m14_b_schema"
+
+_VALID_BROKER_SCOPES   = "'ibkr_live','ibkr_paper','etoro_real','etoro_paper','GLOBAL'"
+_VALID_DSPB_SOURCES    = "'backfill','ingested','reconciled','manual_fallback','rollup'"
+_VALID_RS_SOURCES      = "'scheduled','on_demand','pre_decision'"
+_VALID_RD_ACTIONS      = "'trade_open','trade_close','query_authority'"
+_VALID_RD_RESULTS      = "'allow','block','downgrade_then_block'"
+_VALID_RD_SOURCES      = "'auto','manual','reconciled','manual_reset'"
+_VALID_AUTHORITY       = "'OFF','SIGNAL_ONLY','PAPER_ONLY','ONE_SHOT_MANUAL','AUTO_ALLOWED'"
+
+DAILY_STATE_PER_BROKER_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS daily_state_per_broker (
+    date                     TEXT    NOT NULL,
+    broker_scope             TEXT    NOT NULL
+                              CHECK (broker_scope IN ({_VALID_BROKER_SCOPES})),
+    -- Legacy-compatible fields carried forward from daily_state so the
+    -- GLOBAL backfill preserves the existing daily-state surface.
+    realised_pnl_usd         REAL    NOT NULL DEFAULT 0,
+    realised_pnl_pct         REAL    NOT NULL DEFAULT 0,
+    daily_pnl_source         TEXT    NOT NULL DEFAULT 'unavailable',
+    daily_pnl_available      INTEGER NOT NULL DEFAULT 0,
+    daily_loss_block_active  INTEGER NOT NULL DEFAULT 0,
+    daily_loss_alert_sent    INTEGER NOT NULL DEFAULT 0,
+    -- M14 new fields. Populated by M14.C/D/E ingestion; M14.B leaves them
+    -- at defaults for backfill rows.
+    realised_daily_loss      REAL    NOT NULL DEFAULT 0,
+    open_positions           INTEGER NOT NULL DEFAULT 0,
+    capital_deployed         REAL    NOT NULL DEFAULT 0,
+    peak_equity              REAL,
+    drawdown_from_peak       REAL    NOT NULL DEFAULT 0,
+    source                   TEXT    NOT NULL DEFAULT 'backfill'
+                              CHECK (source IN ({_VALID_DSPB_SOURCES})),
+    last_ingested_at         TEXT,
+    fresh_reads_count        INTEGER NOT NULL DEFAULT 0,
+    lifecycle_json           TEXT,
+    updated_at               TEXT    NOT NULL,
+    PRIMARY KEY (date, broker_scope)
+)
+"""
+
+RISK_SNAPSHOTS_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS risk_snapshots (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    taken_at           TEXT    NOT NULL,
+    policy_version     INTEGER,
+    snapshot_json      TEXT    NOT NULL,
+    freshness_summary  TEXT,
+    source             TEXT    NOT NULL
+                        CHECK (source IN ({_VALID_RS_SOURCES})),
+    created_at         TEXT    NOT NULL
+)
+"""
+
+# Note: risk_decisions.snapshot_id is a SOFT FK to risk_snapshots(id).
+# Real FK enforcement requires PRAGMA foreign_keys=ON, which is a separate,
+# wider change (would affect every existing table). M14.B intentionally
+# does not flip that pragma; integrity is checked in the engine (M14.E).
+RISK_DECISIONS_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS risk_decisions (
+    decision_id        TEXT    PRIMARY KEY,
+    taken_at           TEXT    NOT NULL,
+    broker_scope       TEXT    NOT NULL
+                        CHECK (broker_scope IN ({_VALID_BROKER_SCOPES})),
+    requested_action   TEXT    NOT NULL
+                        CHECK (requested_action IN ({_VALID_RD_ACTIONS})),
+    request_json       TEXT,
+    result             TEXT    NOT NULL
+                        CHECK (result IN ({_VALID_RD_RESULTS})),
+    authority_before   TEXT    NOT NULL
+                        CHECK (authority_before IN ({_VALID_AUTHORITY})),
+    authority_after    TEXT    NOT NULL
+                        CHECK (authority_after IN ({_VALID_AUTHORITY})),
+    reason_codes       TEXT    NOT NULL,
+    recovery_paths     TEXT,
+    snapshot_id        INTEGER,
+    source             TEXT    NOT NULL
+                        CHECK (source IN ({_VALID_RD_SOURCES})),
+    actor              TEXT,
+    explainer          TEXT,
+    created_at         TEXT    NOT NULL
+)
+"""
+
+
+def ensure_daily_state_per_broker_migrations(conn: sqlite3.Connection) -> dict:
+    """M14.B — additive schema + one-time backfill.
+
+    Creates three new tables (daily_state_per_broker, risk_snapshots,
+    risk_decisions) and backfills every existing daily_state row into
+    daily_state_per_broker with broker_scope='GLOBAL'. Idempotent on
+    repeated calls.
+
+    Key properties (per M14.B ChatGPT review corrections):
+
+      * Additive: the legacy daily_state table is NEVER modified.
+      * Idempotent: CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS
+        run every call. The version sentinel controls ONLY whether the
+        one-time backfill runs again; it never hides missing DDL.
+      * Nested-safe: wrapped in a SAVEPOINT so it works whether or not
+        the caller is already inside a transaction.
+      * Legacy-shape compatible: the GLOBAL backfill carries forward the
+        full legacy daily_state field surface (daily_pnl_source,
+        daily_pnl_available, daily_loss_block_active, daily_loss_alert_sent)
+        so bot/risk_authority/state.get_daily_state_compat can return the
+        same dict shape as bot.flywheel.get_daily_state.
+
+    Returns a dict summary: {'created_tables', 'created_indexes',
+    'backfilled_rows', 'sentinel_version'}.
+    """
+    from datetime import datetime, timezone
+
+    started_tx = not conn.in_transaction
+    if started_tx:
+        conn.execute("BEGIN")
+    sp = M14_B_SAVEPOINT_NAME
+    conn.execute(f"SAVEPOINT {sp}")
+    try:
+        # 1) DDL is always run idempotently — version sentinel never hides
+        #    missing tables or indexes.
+        existing_tables_before = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        for name, schema in (
+            ("daily_state_per_broker", DAILY_STATE_PER_BROKER_SCHEMA),
+            ("risk_snapshots",         RISK_SNAPSHOTS_SCHEMA),
+            ("risk_decisions",         RISK_DECISIONS_SCHEMA),
+        ):
+            conn.execute(schema)
+
+        # Indexes — minimal set. PK covers (date, broker_scope) lookups;
+        # composite (broker_scope, date) supports per-scope history.
+        # No redundant single-column indexes (per M14.B correction #5).
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_dspb_scope_date "
+            "ON daily_state_per_broker(broker_scope, date)"
+        )
+        # risk_decisions: one composite for the most likely audit query.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_rd_scope_taken "
+            "ON risk_decisions(broker_scope, taken_at)"
+        )
+
+        existing_tables_after = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        created_tables = sorted(existing_tables_after - existing_tables_before)
+
+        # 2) Version sentinel — controls ONLY whether to backfill.
+        cur = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='portfolio_risk_state'"
+        ).fetchone()
+        sentinel_ok = False
+        if cur:
+            row = conn.execute(
+                "SELECT value FROM portfolio_risk_state WHERE key=?",
+                (M14_B_SENTINEL_KEY,),
+            ).fetchone()
+            sentinel_ok = bool(row and str(row[0]) == str(M14_B_SCHEMA_VERSION))
+
+        backfilled_rows = 0
+        if not sentinel_ok:
+            # Only run backfill if the source table actually exists. On a
+            # fresh DB with no daily_state, this is a no-op.
+            ds = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_state'"
+            ).fetchone()
+            if ds:
+                before = conn.execute(
+                    "SELECT COUNT(*) FROM daily_state_per_broker"
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT OR IGNORE INTO daily_state_per_broker "
+                    "(date, broker_scope, "
+                    " realised_pnl_usd, realised_pnl_pct, "
+                    " daily_pnl_source, daily_pnl_available, "
+                    " daily_loss_block_active, daily_loss_alert_sent, "
+                    " realised_daily_loss, source, updated_at) "
+                    "SELECT date, 'GLOBAL', "
+                    "       COALESCE(realised_pnl_usd, 0), "
+                    "       COALESCE(realised_pnl_pct, 0), "
+                    "       COALESCE(daily_pnl_source, 'unavailable'), "
+                    "       COALESCE(daily_pnl_available, 0), "
+                    "       COALESCE(daily_loss_block_active, 0), "
+                    "       COALESCE(daily_loss_alert_sent, 0), "
+                    "       0, 'backfill', "
+                    "       COALESCE(updated_at, ?) "
+                    "FROM daily_state",
+                    (datetime.now(timezone.utc).isoformat(),)
+                )
+                after = conn.execute(
+                    "SELECT COUNT(*) FROM daily_state_per_broker"
+                ).fetchone()[0]
+                backfilled_rows = after - before
+
+            # Write sentinel. portfolio_risk_state must exist for this; it
+            # is created by init_flywheel_tables's _plain loop.
+            if cur:
+                conn.execute(
+                    "INSERT OR REPLACE INTO portfolio_risk_state "
+                    "(key, value, updated_at) VALUES (?, ?, ?)",
+                    (M14_B_SENTINEL_KEY, str(M14_B_SCHEMA_VERSION),
+                     datetime.now(timezone.utc).isoformat()),
+                )
+
+        conn.execute(f"RELEASE {sp}")
+        if started_tx:
+            conn.commit()
+        if created_tables:
+            log.info("[FLYWHEEL] M14.B created tables: %s", created_tables)
+        if backfilled_rows:
+            log.info("[FLYWHEEL] M14.B backfilled %d daily_state rows -> GLOBAL",
+                     backfilled_rows)
+        return {
+            "created_tables":   created_tables,
+            "created_indexes":  ["ix_dspb_scope_date", "ix_rd_scope_taken"],
+            "backfilled_rows":  backfilled_rows,
+            "sentinel_version": M14_B_SCHEMA_VERSION,
+        }
+    except Exception:
+        # SAVEPOINT rollback undoes all DDL + the sentinel write.
+        conn.execute(f"ROLLBACK TO {sp}")
+        conn.execute(f"RELEASE {sp}")
+        if started_tx:
+            conn.rollback()
+        raise
+
+
 def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     """Create flywheel tables if they don't exist. Safe to call on startup."""
     # Tables with signal_id + symbol indexes
@@ -227,6 +467,10 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
             conn.execute(schema)
             conn.commit()
             log.info('[FLYWHEEL] Created table: %s', name)
+    # M14.B — additive Risk Intelligence schema (new tables only; backfill
+    # daily_state into per-broker GLOBAL rows). Idempotent; never touches the
+    # legacy daily_state table.
+    ensure_daily_state_per_broker_migrations(conn)
     # M15.1 — explicit indexes for gateway_events. NOT added via _indexed loop:
     # that loop adds generic signal_id/symbol indexes which would fail here
     # (M14 f09dbc6 lesson, codified).
