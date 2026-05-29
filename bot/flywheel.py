@@ -428,6 +428,125 @@ def ensure_daily_state_per_broker_migrations(conn: sqlite3.Connection) -> dict:
         raise
 
 
+# ── M14.D: broker_positions schema (additive, idempotent) ────────────────────
+# Append-only per-position snapshot table. Each ingest run shares one
+# exposure_batch_id (UUID populated by the orchestrator), so M14.E can
+# fetch "latest snapshot per scope" via MAX(fetched_at_utc) -> SELECT
+# WHERE exposure_batch_id = that.
+#
+# CHECK constraints enforce the broker_scope and side enums. The PK is
+# position_row_id (per-row autoincrement); exposure_batch_id is a
+# regular column that groups rows belonging to one snapshot.
+
+M14_D_SCHEMA_VERSION = 1
+M14_D_SENTINEL_KEY   = "schema_version_broker_positions"
+M14_D_SAVEPOINT_NAME = "m14_d_schema"
+
+_M14D_VALID_SCOPES = "'ibkr_live','ibkr_paper','etoro_real','etoro_paper'"
+_M14D_VALID_SIDES  = "'long','short'"
+
+BROKER_POSITIONS_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS broker_positions (
+    position_row_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    exposure_batch_id    TEXT    NOT NULL,
+    broker_scope         TEXT    NOT NULL
+                          CHECK (broker_scope IN ({_M14D_VALID_SCOPES})),
+    date                 TEXT    NOT NULL,
+    fetched_at_utc       TEXT    NOT NULL,
+    symbol               TEXT    NOT NULL,
+    side                 TEXT    NOT NULL
+                          CHECK (side IN ({_M14D_VALID_SIDES})),
+    qty                  REAL    NOT NULL,
+    exposure_usd         REAL    NOT NULL,
+    avg_price            REAL,
+    mark_price           REAL,
+    unrealised_pnl_usd   REAL,
+    opened_at            TEXT,
+    instrument_id        INTEGER,
+    raw_evidence         TEXT,
+    created_at           TEXT    NOT NULL
+)
+"""
+
+
+def ensure_broker_positions_migration(conn: sqlite3.Connection) -> dict:
+    """M14.D — additive append-only per-position snapshot table.
+
+    Idempotent. Uses a SAVEPOINT so it is nested-safe whether or not the
+    caller is already in a transaction. The version sentinel does NOT
+    skip DDL — CREATE TABLE/INDEX IF NOT EXISTS run every call so a
+    missing object is recreated. The sentinel is used only to mark that
+    we have visited this migration (no backfill is performed; the table
+    is fresh).
+
+    Returns a dict summary suitable for logging.
+    """
+    from datetime import datetime, timezone
+
+    started_tx = not conn.in_transaction
+    if started_tx:
+        conn.execute("BEGIN")
+    sp = M14_D_SAVEPOINT_NAME
+    conn.execute(f"SAVEPOINT {sp}")
+    try:
+        existing_before = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        conn.execute(BROKER_POSITIONS_SCHEMA)
+        # Indexes, idempotent — recreate if dropped.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_bp_scope_date_fetched "
+            "ON broker_positions(broker_scope, date, fetched_at_utc)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_bp_scope_batch "
+            "ON broker_positions(broker_scope, exposure_batch_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_bp_symbol "
+            "ON broker_positions(symbol)"
+        )
+        existing_after = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        created_tables = sorted(existing_after - existing_before)
+
+        # Write the version sentinel into portfolio_risk_state.
+        cur = conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='portfolio_risk_state'"
+        ).fetchone()
+        if cur:
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio_risk_state "
+                "(key, value, updated_at) VALUES (?, ?, ?)",
+                (M14_D_SENTINEL_KEY, str(M14_D_SCHEMA_VERSION),
+                 datetime.now(timezone.utc).isoformat()),
+            )
+
+        conn.execute(f"RELEASE {sp}")
+        if started_tx:
+            conn.commit()
+        if created_tables:
+            log.info("[FLYWHEEL] M14.D created tables: %s", created_tables)
+        return {
+            "created_tables":  created_tables,
+            "created_indexes": ["ix_bp_scope_date_fetched",
+                                "ix_bp_scope_batch", "ix_bp_symbol"],
+            "sentinel_version": M14_D_SCHEMA_VERSION,
+        }
+    except Exception:
+        conn.execute(f"ROLLBACK TO {sp}")
+        conn.execute(f"RELEASE {sp}")
+        if started_tx:
+            conn.rollback()
+        raise
+
+
 def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     """Create flywheel tables if they don't exist. Safe to call on startup."""
     # Tables with signal_id + symbol indexes
@@ -471,6 +590,10 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     # daily_state into per-broker GLOBAL rows). Idempotent; never touches the
     # legacy daily_state table.
     ensure_daily_state_per_broker_migrations(conn)
+    # M14.D — additive broker_positions snapshot table (append-only).
+    # Idempotent; no backfill. Fresh table created in dependency order
+    # after portfolio_risk_state (M14.B sentinel target).
+    ensure_broker_positions_migration(conn)
     # M15.1 — explicit indexes for gateway_events. NOT added via _indexed loop:
     # that loop adds generic signal_id/symbol indexes which would fail here
     # (M14 f09dbc6 lesson, codified).
