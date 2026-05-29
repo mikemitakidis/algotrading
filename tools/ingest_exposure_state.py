@@ -119,9 +119,13 @@ def cmd_run(args) -> int:
         ingest_exposure_once,
     )
     from bot.flywheel import init_flywheel_tables
-    from bot.risk_authority.ingest_audit import IngestAuditLogger
+    from bot.risk_authority.ingest_audit import get_ingest_audit_logger
 
-    audit = IngestAuditLogger(_REPO_ROOT / "data" / "risk_exposure.log")
+    # Same factory M14.C's CLI uses. We pass a distinct path so M14.D's
+    # exposure audit history lands in data/risk_exposure.log instead of
+    # M14.C's data/risk_ingest.log. Returns a bot.etoro.audit.AuditLogger
+    # with the same redaction guarantees.
+    audit = get_ingest_audit_logger(_REPO_ROOT / "data" / "risk_exposure.log")
     db_path = _resolve_db_path(args.db)
 
     if args.scope and args.all_scopes:
