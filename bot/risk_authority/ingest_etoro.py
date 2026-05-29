@@ -92,23 +92,29 @@ class EtoroPnLAdapter:
                 today_items.append(it)
 
         if today_items:
-            try:
-                # Skip entries with missing net_profit; if ALL are missing
-                # we don't trust the data → unknown.
-                vals = [float(_attr(it, "net_profit"))
-                        for it in today_items
-                        if _attr(it, "net_profit") is not None]
-                if not vals:
+            # Per ChatGPT M14.C blocker fix: if ANY same-day closed trade
+            # is missing `net_profit` or has a non-numeric value, return
+            # UNKNOWN. Skipping missing entries can silently undercount
+            # loss. Empty same-day list (no closed trades today) is
+            # already handled below as KNOWN ZERO. Date filter
+            # (_within_utc_day above) ensures previous-day rows are
+            # ignored before this validation runs.
+            vals: List[float] = []
+            for it in today_items:
+                v = _attr(it, "net_profit")
+                if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
                     return make_unknown(
                         self.name, trading_day=today,
-                        error="parse_error:net_profit_missing_on_all_items",
+                        error=f"parse_error:net_profit_missing_or_non_numeric:type={type(v).__name__}",
                     )
-                realised_total = sum(vals)
-            except (TypeError, ValueError) as e:
-                return make_unknown(
-                    self.name, trading_day=today,
-                    error=f"parse_error:{e}",
-                )
+                try:
+                    vals.append(float(v))
+                except (TypeError, ValueError) as e:
+                    return make_unknown(
+                        self.name, trading_day=today,
+                        error=f"parse_error:{e}",
+                    )
+            realised_total = sum(vals)
         else:
             # No closed trades today — KNOWN ZERO.
             realised_total = 0.0

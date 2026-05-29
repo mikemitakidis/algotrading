@@ -76,17 +76,30 @@ class IBKRPnLAdapter:
                 continue
             today_execs.append(ex)
 
-        # If the reader returned but with malformed entries (no realized_pnl
-        # in any of today's), treat as unknown — we can't trust the data.
+        # Validate every same-day execution. Per ChatGPT M14.C blocker
+        # fix: if ANY same-day execution is missing `realized_pnl` or has
+        # a non-numeric value, we cannot trust the day's PnL — return
+        # UNKNOWN. Silent zero-fill on missing PnL would understate loss.
+        # Empty same-day list (no trades today) stays KNOWN ZERO.
+        # Bool is a subclass of int; reject it explicitly so True/False
+        # do not slip through as 1.0/0.0.
         if today_execs:
-            try:
-                realised_total = sum(float(ex.get("realized_pnl", 0.0))
-                                     for ex in today_execs)
-            except (TypeError, ValueError) as e:
-                return make_unknown(
-                    self.name, trading_day=today,
-                    error=f"executions_malformed:{e}",
-                )
+            vals = []
+            for ex in today_execs:
+                v = ex.get("realized_pnl", None)
+                if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+                    return make_unknown(
+                        self.name, trading_day=today,
+                        error=f"executions_missing_realized_pnl:type={type(v).__name__}",
+                    )
+                try:
+                    vals.append(float(v))
+                except (TypeError, ValueError) as e:
+                    return make_unknown(
+                        self.name, trading_day=today,
+                        error=f"executions_malformed:{e}",
+                    )
+            realised_total = sum(vals)
         else:
             # No trades today — KNOWN ZERO (not unknown). Distinguished
             # from unknown by quality and lifecycle.status downstream.

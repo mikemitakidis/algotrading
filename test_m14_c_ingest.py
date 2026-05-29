@@ -208,7 +208,14 @@ class TestIBKRAdapter(unittest.TestCase):
                             executions_reader=_fake_ibkr_reader_with(execs))
         r = a.read(today="2026-05-28")
         self.assertEqual(r.quality, ReadingQuality.UNKNOWN)
-        self.assertIn("executions_malformed", r.error)
+        # Either error code is acceptable: the strict type-check branch
+        # rejects non-numerics directly; the float-cast branch is the
+        # fallback if a numeric-looking value still fails conversion.
+        self.assertTrue(
+            "executions_missing_realized_pnl" in r.error
+            or "executions_malformed" in r.error,
+            f"unexpected error: {r.error}",
+        )
 
     def test_account_reader_failure_is_opportunistic(self):
         def acct_boom():
@@ -239,6 +246,57 @@ class TestIBKRAdapter(unittest.TestCase):
         with self.assertRaises(ValueError):
             IBKRPnLAdapter(broker_scope="etoro_real",
                             executions_reader=lambda t: [])
+
+    # ── Blocker fix tests (ChatGPT M14.C correction) ──────────────────
+
+    def test_same_day_execution_missing_realized_pnl_is_unknown(self):
+        # A same-day execution without `realized_pnl` is untrusted data —
+        # MUST return UNKNOWN, never silently treat as 0.0.
+        execs = [{"time_utc": "2026-05-28T13:00:00Z"}]  # no realized_pnl
+        a = IBKRPnLAdapter(broker_scope="ibkr_live",
+                            executions_reader=_fake_ibkr_reader_with(execs))
+        r = a.read(today="2026-05-28")
+        self.assertEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertIsNone(r.realised_pnl_usd)
+        self.assertIn("executions_missing_realized_pnl", r.error)
+
+    def test_mixed_same_day_one_missing_pnl_is_unknown(self):
+        # If ANY same-day exec is missing realized_pnl, the whole day is
+        # unknown — silent skipping would understate loss.
+        execs = [
+            _exec(12.0, "2026-05-28T09:00:00Z"),
+            {"time_utc": "2026-05-28T13:00:00Z"},   # missing realized_pnl
+        ]
+        a = IBKRPnLAdapter(broker_scope="ibkr_live",
+                            executions_reader=_fake_ibkr_reader_with(execs))
+        r = a.read(today="2026-05-28")
+        self.assertEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertIsNone(r.realised_pnl_usd)
+
+    def test_previous_day_missing_pnl_is_ignored(self):
+        # A previous-day exec with no realized_pnl is filtered out by the
+        # date predicate before validation; today's valid execs still
+        # produce a clean reading.
+        execs = [
+            {"time_utc": "2026-05-27T12:00:00Z"},   # yesterday, no pnl
+            _exec(7.5, "2026-05-28T09:00:00Z"),
+        ]
+        a = IBKRPnLAdapter(broker_scope="ibkr_live",
+                            executions_reader=_fake_ibkr_reader_with(execs))
+        r = a.read(today="2026-05-28")
+        self.assertNotEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertEqual(r.realised_pnl_usd, 7.5)
+
+    def test_empty_execution_list_is_known_zero(self):
+        # No executions today, but the read succeeded — KNOWN ZERO,
+        # distinguishable from UNKNOWN by quality + is_known_zero.
+        a = IBKRPnLAdapter(broker_scope="ibkr_live",
+                            executions_reader=lambda t: [])
+        r = a.read(today="2026-05-28")
+        self.assertNotEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertEqual(r.realised_pnl_usd, 0.0)
+        self.assertEqual(r.realised_daily_loss, 0.0)
+        self.assertTrue(is_known_zero(r))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,6 +369,59 @@ class TestEtoroAdapter(unittest.TestCase):
         with self.assertRaises(ValueError):
             EtoroPnLAdapter(broker_scope="ibkr_live",
                              history_reader=lambda d: [])
+
+    # ── Blocker fix tests (ChatGPT M14.C correction) ──────────────────
+
+    def test_same_day_closed_trade_missing_net_profit_is_unknown(self):
+        # A same-day closed trade without `net_profit` is untrusted data —
+        # MUST return UNKNOWN, never silently treat as 0.0.
+        items = [{"close_timestamp": "2026-05-28T15:00:00Z"}]  # no net_profit
+        a = EtoroPnLAdapter(broker_scope="etoro_real",
+                             history_reader=_fake_etoro_reader_with(items))
+        r = a.read(today="2026-05-28")
+        self.assertEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertIsNone(r.realised_pnl_usd)
+        self.assertIn("net_profit_missing_or_non_numeric", r.error)
+
+    def test_mixed_same_day_one_missing_net_profit_is_unknown(self):
+        # If ANY same-day closed trade is missing net_profit, the whole
+        # day is unknown — silent skipping would understate loss.
+        items = [
+            _history_item(-5.0, "2026-05-28T09:30:00Z"),
+            {"close_timestamp": "2026-05-28T15:00:00Z"},  # missing net_profit
+        ]
+        a = EtoroPnLAdapter(broker_scope="etoro_real",
+                             history_reader=_fake_etoro_reader_with(items))
+        r = a.read(today="2026-05-28")
+        self.assertEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertIsNone(r.realised_pnl_usd)
+
+    def test_previous_day_missing_net_profit_is_ignored(self):
+        # A previous-day closed trade with no net_profit is filtered out
+        # by the close-timestamp predicate before validation; today's
+        # valid item still produces a clean reading.
+        items = [
+            {"close_timestamp": "2026-05-27T14:00:00Z"},   # yesterday, no profit
+            _history_item(4.25, "2026-05-28T09:30:00Z"),
+        ]
+        a = EtoroPnLAdapter(broker_scope="etoro_real",
+                             history_reader=_fake_etoro_reader_with(items))
+        r = a.read(today="2026-05-28")
+        self.assertNotEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertEqual(r.realised_pnl_usd, 4.25)
+
+    def test_empty_history_after_stricter_validation_is_known_zero(self):
+        # Re-asserts the known-zero contract under the stricter blocker
+        # validation: even with the "any missing net_profit → UNKNOWN"
+        # rule, an empty same-day list still resolves to KNOWN ZERO
+        # because the strict check only runs when same-day items exist.
+        a = EtoroPnLAdapter(broker_scope="etoro_real",
+                             history_reader=lambda d: [])
+        r = a.read(today="2026-05-28")
+        self.assertNotEqual(r.quality, ReadingQuality.UNKNOWN)
+        self.assertEqual(r.realised_pnl_usd, 0.0)
+        self.assertEqual(r.realised_daily_loss, 0.0)
+        self.assertTrue(is_known_zero(r))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
