@@ -245,6 +245,73 @@ def cmd_oneshot(args) -> int:
     db_path = _resolve_db_path(args.db)
     payload = _build_payload(args)
 
+    # ─── M14.F: Risk Authority preflight ──────────────────────────────
+    # MUST run before:
+    #   * _read_keys() / ETORO_LIVE_ENABLED env-flag check (so the
+    #     Risk Authority is testable when env_live is false/absent);
+    #   * any EtoroLiveBroker construction;
+    #   * any nonce mint;
+    #   * any schema validate / transport.
+    #
+    # The preflight is the ONLY surface that calls decide_and_audit
+    # in this CLI. If Risk Authority blocks, we exit 4 immediately and
+    # NEVER touch credentials, transport, or broker state.
+    #
+    # Per the approved M14.F plan: --authority allows the operator to
+    # supply the current authority level; the engine still consults
+    # every gate regardless of the supplied level. Default is
+    # ONE_SHOT_MANUAL (the level required for a single live trade).
+    from bot.risk_authority import Authority, run_risk_preflight
+    from bot.risk_authority.engine import TradeRequest as RATradeRequest
+    try:
+        auth_level = Authority.from_string(args.authority)
+    except ValueError as e:
+        print(f"ERROR: --authority {args.authority!r}: {e}")
+        return 2
+
+    preflight_request = RATradeRequest(
+        symbol=args.symbol,
+        amount_usd=float(args.amount),
+        side=("long" if args.is_buy else "short"),
+        leverage=int(args.leverage),
+    )
+    conn_pf = sqlite3.connect(db_path)
+    try:
+        from bot.flywheel import init_flywheel_tables as _ensure_schema
+        _ensure_schema(conn_pf)        # ensure risk_snapshots/risk_decisions exist
+        preflight = run_risk_preflight(
+            conn_pf,
+            broker_scope="etoro_real",
+            request=preflight_request,
+            current_authority=auth_level,
+            actor="operator",
+            audit_source="manual",
+            market_open=bool(args.market_open),
+            quote_age_sec=args.quote_age_sec,
+            quote_max_age_sec=float(args.quote_max_age_sec),
+            spread_bps=args.spread_bps,
+            spread_max_bps=float(args.spread_max_bps),
+        )
+    finally:
+        conn_pf.close()
+
+    if not preflight.allowed:
+        # Risk Authority block. Exit 4 per the approved exit-code table.
+        # NEVER touch transport, credentials, nonce, or broker
+        # construction beyond this point.
+        print("ERROR: Risk Authority blocked this live-write request.")
+        print(f"  decision_id     = {preflight.decision_id}")
+        print(f"  authority_before = {preflight.authority_before.name}")
+        print(f"  authority_after  = {preflight.authority_after.name}")
+        print(f"  reason_codes    = {list(preflight.reason_codes)}")
+        for reason, path in preflight.recovery_paths.items():
+            print(f"  recovery[{reason}] = {path}")
+        return 4
+
+    # Risk Authority allowed. Proceed into the existing M13.5 envelope
+    # exactly as before — no gate is removed or weakened.
+    # ───────────────────────────────────────────────────────────────────
+
     # Load credentials, env flag, and base URL. _read_keys never falls
     # back from demo to real credentials and never returns the real API
     # base URL for demo mode.
@@ -519,6 +586,22 @@ def main(argv: Optional[list] = None) -> int:
     o.add_argument("--spread-bps",        type=float, default=None)
     o.add_argument("--spread-max-bps",    type=float, default=50.0)
     o.add_argument("--amount-min",        type=float, default=10.0)
+
+    # M14.F: operator-supplied authority level for the Risk Authority
+    # preflight. Default ONE_SHOT_MANUAL (the minimum level required
+    # for trade_open per REQUIRED_AUTHORITY). AUTO_ALLOWED is accepted
+    # for operator/testing use but does NOT bypass any Risk Authority
+    # gate — every decide() call walks all 25 gates regardless of
+    # supplied authority.
+    o.add_argument(
+        "--authority",
+        type=str,
+        default="ONE_SHOT_MANUAL",
+        choices=("OFF", "SIGNAL_ONLY", "PAPER_ONLY",
+                 "ONE_SHOT_MANUAL", "AUTO_ALLOWED"),
+        help="Operator-supplied authority level for the Risk Authority "
+             "preflight. Default ONE_SHOT_MANUAL.",
+    )
 
     # Confirmation: the operator must echo the per-payload nonce. There
     # is deliberately NO "assume yes" / skip-confirmation option — the

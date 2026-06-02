@@ -10,5 +10,9 @@ public re-exports below are deliberately minimal (Authority + decide).
 """
 from bot.risk_authority.authority import Authority  # re-export
 from bot.risk_authority.engine import decide        # re-export
+from bot.risk_authority.preflight import (
+    PreflightResult,
+    run_risk_preflight,
+)  # re-export (M14.F)
 
-__all__ = ["Authority", "decide"]
+__all__ = ["Authority", "decide", "PreflightResult", "run_risk_preflight"]
