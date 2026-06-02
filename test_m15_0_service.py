@@ -444,5 +444,175 @@ class TestExistingEndpointsUnchanged(unittest.TestCase):
             self.assertIn(u, urls, f"pre-M15.0 route {u} missing")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Group 7 — deploy.sh has the same systemd-detection guard as sync.sh
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDeployShBehaviour(unittest.TestCase):
+    """deploy.sh must detect canonical M15.0 systemd units and skip its
+    pkill/nohup/@reboot block when they're present. Legacy nohup path
+    must remain as the fallback for pre-install / post-rollback. The
+    sync.sh daemon launch stays unconditional in both modes (sync.sh is
+    not a systemd unit — it does its own detection internally)."""
+
+    def setUp(self):
+        with open(os.path.join(_REPO, "deploy.sh")) as f:
+            self.src = f.read()
+
+    def test_bash_syntax_valid(self):
+        path = os.path.join(_REPO, "deploy.sh")
+        r = subprocess.run(["bash", "-n", path],
+                            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0,
+            f"deploy.sh has a bash syntax error: {r.stderr}")
+
+    def test_detection_block_present(self):
+        """deploy.sh must check for both canonical unit names before
+        deciding which path to take."""
+        self.assertIn("algo-trader.service", self.src,
+            "deploy.sh must reference algo-trader.service")
+        self.assertIn("algo-trader-dashboard.service", self.src,
+            "deploy.sh must reference algo-trader-dashboard.service")
+        self.assertIn("list-unit-files", self.src,
+            "deploy.sh must detect units via systemctl list-unit-files")
+
+    def test_use_systemd_branch_skips_mutations(self):
+        """The USE_SYSTEMD=1 branch must NOT contain pkill/nohup of
+        main.py / dashboard, and must NOT install an @reboot cron."""
+        # Find the if-branch boundaries.
+        m = re.search(r'if \[ "\$USE_SYSTEMD" = "1" \]; then\s*\n(.*?)\nelse',
+                       self.src, re.DOTALL)
+        self.assertIsNotNone(m,
+            "deploy.sh: USE_SYSTEMD=1 branch not found")
+        systemd_branch = m.group(1)
+
+        forbidden = [
+            "pkill -f \"python3.*main.py\"",
+            "pkill -f \"python3.*app.py\"",
+            "nohup $VENV/bin/python3 $BASE/main.py",
+            "nohup $VENV/bin/python3 $BASE/dashboard/app.py",
+            "@reboot sleep 15 && bash",
+        ]
+        for pat in forbidden:
+            self.assertNotIn(pat, systemd_branch,
+                f"USE_SYSTEMD=1 branch must NOT contain: {pat!r}")
+
+    def test_legacy_branch_preserves_original_behaviour(self):
+        """The else branch (USE_SYSTEMD!=1) must contain the original
+        pkill + nohup + @reboot lines verbatim — fallback for pre-install
+        and post-rollback states."""
+        m = re.search(r'\nelse\s*\n(.*?)\nfi\s*\n', self.src, re.DOTALL)
+        self.assertIsNotNone(m,
+            "deploy.sh: USE_SYSTEMD else-branch not found")
+        legacy_branch = m.group(1)
+
+        required = [
+            ("pkill -f \"python3.*main.py\"",        "legacy pkill main.py"),
+            ("pkill -f \"python3.*app.py\"",         "legacy pkill app.py"),
+            ("nohup $VENV/bin/python3 $BASE/main.py",
+             "legacy nohup main.py"),
+            ("nohup $VENV/bin/python3 $BASE/dashboard/app.py",
+             "legacy nohup dashboard"),
+            ("@reboot sleep 15 && bash",             "legacy @reboot cron"),
+        ]
+        for pat, label in required:
+            self.assertIn(pat, legacy_branch,
+                f"legacy branch missing required pattern ({label}): {pat!r}")
+
+    def test_systemd_branch_does_not_enable_units(self):
+        """deploy.sh must NOT enable the units — enable is the explicit
+        operator step in install.sh. It may start an already-enabled
+        unit if it's not running. This preserves operator intent."""
+        m = re.search(r'if \[ "\$USE_SYSTEMD" = "1" \]; then\s*\n(.*?)\nelse',
+                       self.src, re.DOTALL)
+        self.assertIsNotNone(m)
+        systemd_branch = m.group(1)
+
+        # Must not call `systemctl enable` from deploy.sh — that's
+        # install.sh's job.
+        self.assertNotIn("systemctl enable", systemd_branch,
+            "deploy.sh must NOT enable units (install.sh's job)")
+        # Must not mask, disable, or stop.
+        for verb in ("systemctl mask", "systemctl disable",
+                     "systemctl stop"):
+            self.assertNotIn(verb, systemd_branch,
+                f"deploy.sh must not call: {verb}")
+
+    def test_systemd_branch_respects_disabled_state(self):
+        """If the operator has disabled a unit, deploy.sh must NOT
+        re-start it — operator intent wins."""
+        m = re.search(r'if \[ "\$USE_SYSTEMD" = "1" \]; then\s*\n(.*?)\nelse',
+                       self.src, re.DOTALL)
+        self.assertIsNotNone(m)
+        systemd_branch = m.group(1)
+        # The branch must guard `systemctl start` with an is-enabled check.
+        self.assertIn("is-enabled", systemd_branch,
+            "M15.0 branch must guard start on is-enabled check")
+
+    def test_systemd_branch_removes_pre_m15_0_cron(self):
+        """If the host previously had the @reboot deploy.sh cron from
+        the legacy mode, deploy.sh under M15.0 mode must remove it to
+        prevent the cron from racing with systemd at next boot."""
+        m = re.search(r'if \[ "\$USE_SYSTEMD" = "1" \]; then\s*\n(.*?)\nelse',
+                       self.src, re.DOTALL)
+        self.assertIsNotNone(m)
+        systemd_branch = m.group(1)
+        self.assertIn("crontab -l 2>/dev/null | grep -v \"deploy.sh\"",
+                       systemd_branch,
+            "M15.0 branch must strip the pre-M15.0 @reboot deploy.sh entry")
+
+    def test_sync_daemon_launch_outside_both_branches(self):
+        """sync.sh launch must be outside both branches — sync.sh is
+        always relaunched the same way (it does its own systemd
+        detection internally for restarting the bot/dashboard)."""
+        # The sync daemon launch should not appear inside the USE_SYSTEMD=1
+        # branch (because that would couple two unrelated decisions).
+        m_systemd = re.search(r'if \[ "\$USE_SYSTEMD" = "1" \]; then\s*\n(.*?)\nelse',
+                               self.src, re.DOTALL)
+        m_legacy = re.search(r'\nelse\s*\n(.*?)\nfi\s*\n', self.src, re.DOTALL)
+        self.assertIsNotNone(m_systemd)
+        self.assertIsNotNone(m_legacy)
+        # Neither branch should contain the sync.sh launch.
+        for branch_name, branch in (("systemd", m_systemd.group(1)),
+                                     ("legacy", m_legacy.group(1))):
+            self.assertNotIn("nohup bash $BASE/sync.sh", branch,
+                f"sync.sh launch must NOT be inside the {branch_name} branch")
+        # But the file overall must launch sync.sh exactly once.
+        n_sync_launch = self.src.count("nohup bash $BASE/sync.sh")
+        self.assertEqual(n_sync_launch, 1,
+            f"sync.sh must be launched exactly once; got {n_sync_launch}")
+
+    def test_header_documents_dual_mode(self):
+        """The file header must explain that deploy.sh runs in M15.0
+        mode vs legacy mode, so future operators understand the
+        behaviour without reading the body."""
+        first_lines = "\n".join(self.src.splitlines()[:25])
+        self.assertIn("M15.0", first_lines,
+            "deploy.sh header must mention M15.0")
+        self.assertIn("legacy", first_lines.lower(),
+            "deploy.sh header must label the non-M15.0 path as legacy")
+
+    def test_no_trading_logic_imports(self):
+        """deploy.sh must not import any Python modules at the bash
+        level — it stays a pure shell bootstrapper. The import-check
+        block uses python3 -c which is fine (it imports only stdlib +
+        the four whitelisted libraries: yfinance, pandas, numpy, flask,
+        dotenv, requests). Anything else is a red flag."""
+        # Inspect the python3 -c block.
+        m = re.search(r"python3 -c \"(.*?)\"", self.src, re.DOTALL)
+        self.assertIsNotNone(m)
+        py_block = m.group(1)
+        forbidden_imports = [
+            "bot.scanner", "bot.strategy", "bot.risk",
+            "bot.risk_authority", "bot.brokers", "bot.etoro",
+            "tools.etoro_live_write",
+        ]
+        for f in forbidden_imports:
+            self.assertNotIn(f, py_block,
+                f"deploy.sh import-check block must not import: {f}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -61,7 +61,7 @@ What `install.sh` does:
 
 The script is **idempotent** — re-running it after a successful install is safe and produces the same final state.
 
-**Auto-restart on reboot:** the existing `@reboot` crontab entry (`bash deploy.sh`) continues to fire. After M15.0 install, `deploy.sh`'s nohup-launch block becomes a no-op because `systemctl` has already started the canonical units. **Tracked open item:** `deploy.sh` should detect M15.0 install and skip its nohup-launch block; this is a follow-up patch in M15.0 closeout if the audit window allows, otherwise M15.x.
+**Auto-restart on reboot:** the canonical M15.0 units have `WantedBy=multi-user.target`, so systemd brings them up at every boot automatically. The pre-existing `@reboot bash deploy.sh` crontab entry (installed by the legacy `deploy.sh` path) is **removed by `deploy.sh` itself** the next time it runs in M15.0 mode, so it no longer races with systemd. If you also run `infra/systemd/install.sh`, it stops the legacy `sync.sh` daemon and lets `deploy.sh` re-launch it under M15.0 awareness on the next pass.
 
 ---
 
@@ -125,8 +125,16 @@ Explicitly out of scope, preserved for later:
 - **`ingest_ibkr_exposure.py` wiring.** Still a `NotImplementedError` stub; engine returns `exposure_unknown` for IBKR scopes. M15.x.
 - **Dashboard auth/security hardening.** The dashboard remains bound to `0.0.0.0:8080` with the existing session-based `@require_auth`. M15.3.
 - **`manual_reset` operator flow.** Design-only. M15.3 or later.
-- **`deploy.sh` cleanup.** Continues to call nohup unconditionally at first boot. After M15.0 install, the nohup-launch becomes a no-op because the systemd units are already started. A follow-up patch will add an explicit "skip nohup if systemd units are loaded" guard; tracked as an M15.0 follow-up or M15.1 cleanup.
 - **No trading logic changes** anywhere. `main.py`, `bot/scanner.py`, `bot/strategy.py`, `bot/risk.py`, all `bot/risk_authority/*.py`, `tools/etoro_live_write.py` are protected.
+
+### `deploy.sh` and `sync.sh` are systemd-aware (M15.0 follow-up resolved)
+
+Both `deploy.sh` and `sync.sh` detect whether the canonical M15.0 units are present and adapt:
+
+- **`deploy.sh` in M15.0 mode** (units present, running as root): skips `pkill` / `nohup` of `main.py` and `dashboard/app.py`; skips the `@reboot` crontab installation; calls `systemctl daemon-reload` then starts each enabled-but-inactive unit. Operator intent is preserved — if a unit was explicitly disabled, `deploy.sh` does not re-start it. If the host has a pre-M15.0 `@reboot deploy.sh` cron entry, `deploy.sh` removes it (idempotent) so it doesn't race with systemd at next boot.
+- **`deploy.sh` in legacy mode** (units absent — pre-install or post-rollback): runs the original `pkill` / `nohup` / `@reboot` cron path verbatim. Backward-compatible.
+- **`sync.sh`** uses the same detection: when units exist + script is root, it uses `systemctl restart` to update; otherwise it falls back to `pkill + nohup`.
+- **`sync.sh` itself is NOT a systemd unit.** It's a small background daemon launched by `deploy.sh` via `nohup`, unconditionally, regardless of mode. The detection happens inside `sync.sh` per-cycle — it only affects how `sync.sh` restarts the bot/dashboard on a new commit, not how `sync.sh` itself runs.
 
 ---
 
