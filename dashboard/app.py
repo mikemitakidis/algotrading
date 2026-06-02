@@ -155,6 +155,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('sentiment')" id="n-sentiment">Sentiment</a>
     <a onclick="go('settings')"  id="n-settings">Settings</a>
     <a onclick="go('risk');loadRisk()" id="n-risk">Risk</a>
+    <a onclick="go('riskauth');loadRiskAuthority()" id="n-riskauth">Risk Authority</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
 </nav>
@@ -2665,6 +2666,73 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </div><!-- end risk page -->
 
+<div id="riskauth" class="page">
+<h2 style="color:#e6edf3;margin:0 0 16px">Risk Authority (M14)</h2>
+<div style="margin-bottom:12px;padding:10px 14px;background:#161b22;border:1px solid #30363d;border-radius:6px;font-size:12px;color:#8b949e">
+  Read-only view of the M14 Risk Authority engine state. The dashboard cannot
+  modify authority, override decisions, place orders, or contact a broker
+  from this tab. Live writes still go through the operator-only CLI
+  (<code>tools/etoro_live_write.py</code>).
+</div>
+
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+  <div id="raBanner" style="flex:1;padding:12px 16px;border-radius:6px;font-weight:600;font-size:14px;background:#21262d;color:#8b949e">Loading...</div>
+  <button onclick="loadRiskAuthority()" style="padding:8px 14px;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px">&#x21bb; Refresh</button>
+</div>
+
+<!-- Combined snapshot summary -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">&#x1F4CA; Latest Risk Snapshot</div>
+  <div id="raSnapshotMeta" style="font-size:12px;color:#8b949e;margin-bottom:10px">Loading...</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;font-size:13px">
+    <div><span style="color:#8b949e">Combined capital deployed:</span> <span id="raCombinedCap" style="font-weight:600">&mdash;</span></div>
+    <div><span style="color:#8b949e">Combined open positions:</span> <span id="raCombinedPos">&mdash;</span></div>
+    <div><span style="color:#8b949e">Combined daily loss:</span> <span id="raCombinedLoss">&mdash;</span></div>
+    <div><span style="color:#8b949e">Any PnL unknown:</span> <span id="raAnyPnlUnknown">&mdash;</span></div>
+    <div><span style="color:#8b949e">Any exposure unknown:</span> <span id="raAnyExpUnknown">&mdash;</span></div>
+    <div><span style="color:#8b949e">Trading day (UTC):</span> <span id="raTradingDay">&mdash;</span></div>
+  </div>
+</div>
+
+<!-- Per-scope state cards -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">&#x1F4CD; Per-Scope State</div>
+  <div id="raScopes" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">Loading...</div>
+</div>
+
+<!-- Authority view -->
+<div class="card" style="margin-bottom:16px">
+  <div class="ct">&#x1F510; Authority &amp; Governor (read-only)</div>
+  <div style="font-size:11px;color:#8b949e;margin-bottom:8px">
+    Latest authority recorded per scope. Manual reset is design-only in M14.G — there is no button.
+  </div>
+  <div id="raAuthority" style="font-size:12px">Loading...</div>
+</div>
+
+<!-- Recent decisions -->
+<div class="card">
+  <div class="ct">&#x1F4DC; Latest Risk Decisions</div>
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;font-size:12px">
+    <span style="color:#8b949e">Limit:</span>
+    <select id="raDecLimit" onchange="loadRiskAuthority()" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:4px">
+      <option value="10">10</option><option value="20" selected>20</option>
+      <option value="50">50</option><option value="100">100</option>
+    </select>
+    <span style="color:#8b949e">Scope:</span>
+    <select id="raDecScope" onchange="loadRiskAuthority()" style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:4px">
+      <option value="">all</option>
+      <option value="ibkr_live">ibkr_live</option>
+      <option value="ibkr_paper">ibkr_paper</option>
+      <option value="etoro_real">etoro_real</option>
+      <option value="etoro_paper">etoro_paper</option>
+    </select>
+    <span id="raDecCount" style="color:#8b949e;margin-left:auto">&mdash;</span>
+  </div>
+  <div id="raDecisions" style="font-size:12px">Loading...</div>
+</div>
+
+</div><!-- end riskauth page -->
+
 <script>
 // ── Risk page ────────────────────────────────────────────────────────────────
 var _riskConfigData = {};
@@ -3247,6 +3315,170 @@ loadRisk = function(){
 };
 
 // loadRisk() called directly from nav onclick — no go() override needed
+
+// ── M14.G Risk Authority tab (read-only) ────────────────────────────────────
+// All four endpoints are GET-only; never POST/DELETE/PUT/PATCH from this
+// tab. No dashboard live-write surface, no manual_reset action.
+function _raFmtUsd(v){
+  if(v === null || v === undefined) return '<span style="color:#f85149">unknown</span>';
+  var n = Number(v);
+  if(!isFinite(n)) return '<span style="color:#f85149">NaN</span>';
+  return '$' + n.toFixed(2);
+}
+function _raFmtInt(v){
+  if(v === null || v === undefined) return '<span style="color:#f85149">unknown</span>';
+  return String(v);
+}
+function _raFmtBool(v){
+  if(v === true) return '<span style="color:#f85149">yes</span>';
+  if(v === false) return '<span style="color:#2ea043">no</span>';
+  return '&mdash;';
+}
+function _raStatusBadge(label, known, isZero){
+  // Known-zero must look different from unknown. Plan says: never collapse.
+  if(label === 'absent') return '<span style="background:#3b1f2b;color:#f85149;padding:2px 6px;border-radius:3px;font-size:11px">absent (unknown)</span>';
+  if(!known) return '<span style="background:#3b1f2b;color:#f85149;padding:2px 6px;border-radius:3px;font-size:11px">unknown</span>';
+  if(isZero) return '<span style="background:#0f2e1a;color:#2ea043;padding:2px 6px;border-radius:3px;font-size:11px">'+label+' (known-zero)</span>';
+  return '<span style="background:#1f3b25;color:#3fb950;padding:2px 6px;border-radius:3px;font-size:11px">'+label+'</span>';
+}
+function _raWarningBadges(warnings){
+  if(!warnings || warnings.length === 0)
+    return '<span style="color:#2ea043;font-size:11px">none</span>';
+  return warnings.map(function(w){
+    return '<span style="background:#3b2a1f;color:#f0883e;padding:1px 5px;border-radius:3px;font-size:10px;margin-right:4px">'+w+'</span>';
+  }).join('');
+}
+function _raEscape(s){
+  if(s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function loadRiskAuthority(){
+  document.getElementById('raBanner').textContent = 'Loading Risk Authority state...';
+
+  // 1. Snapshot
+  fetch('/api/risk-authority/snapshot/latest').then(function(r){return r.json();}).then(function(s){
+    if(s.snapshot_id === null || s.snapshot_id === undefined){
+      document.getElementById('raSnapshotMeta').innerHTML = '<span style="color:#f0883e">No risk_snapshots row yet — engine has not been invoked.</span>';
+      document.getElementById('raCombinedCap').textContent = '—';
+      document.getElementById('raCombinedPos').textContent = '—';
+      document.getElementById('raCombinedLoss').textContent = '—';
+      document.getElementById('raAnyPnlUnknown').textContent = '—';
+      document.getElementById('raAnyExpUnknown').textContent = '—';
+      document.getElementById('raTradingDay').textContent = '—';
+      document.getElementById('raBanner').innerHTML = '<span style="color:#f0883e">No Risk Authority decisions recorded yet</span>';
+      return;
+    }
+    document.getElementById('raSnapshotMeta').innerHTML =
+      'snapshot_id=' + s.snapshot_id +
+      ' &middot; taken_at=' + _raEscape(s.taken_at) +
+      ' &middot; policy_version=' + _raEscape(s.policy_version) +
+      ' &middot; source=' + _raEscape(s.source);
+    var c = s.combined || {};
+    document.getElementById('raCombinedCap').innerHTML  = _raFmtUsd(c.combined_capital_deployed);
+    document.getElementById('raCombinedPos').innerHTML  = _raFmtInt(c.combined_open_positions);
+    document.getElementById('raCombinedLoss').innerHTML = _raFmtUsd(c.combined_realised_daily_loss);
+    document.getElementById('raAnyPnlUnknown').innerHTML = _raFmtBool(c.any_pnl_unknown);
+    document.getElementById('raAnyExpUnknown').innerHTML = _raFmtBool(c.any_exposure_unknown);
+    document.getElementById('raTradingDay').textContent = s.trading_day_utc || '—';
+    var banner = (c.any_pnl_unknown || c.any_exposure_unknown)
+      ? '<span style="color:#f85149">Snapshot shows unknown state — fail-closed in effect</span>'
+      : '<span style="color:#2ea043">Snapshot clean</span>';
+    document.getElementById('raBanner').innerHTML = banner;
+  }).catch(function(e){
+    document.getElementById('raBanner').innerHTML = '<span style="color:#f85149">Error loading snapshot: '+_raEscape(e)+'</span>';
+  });
+
+  // 2. Per-scope state
+  fetch('/api/risk-authority/scopes').then(function(r){return r.json();}).then(function(s){
+    var scopes = s.scopes || {};
+    var html = '';
+    ['ibkr_live','ibkr_paper','etoro_real','etoro_paper'].forEach(function(scope){
+      var sv = scopes[scope] || {};
+      html += '<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:5px">';
+      html += '<div style="font-weight:700;color:#e6edf3;margin-bottom:6px">'+_raEscape(scope)+'</div>';
+      html += '<div style="font-size:11px;line-height:1.6">';
+      html += '<div><span style="color:#8b949e">PnL:</span> ' + _raStatusBadge(sv.pnl_status, sv.pnl_known, sv.pnl_known_zero) + '</div>';
+      html += '<div><span style="color:#8b949e">Realised loss:</span> ' + _raFmtUsd(sv.realised_daily_loss) + '</div>';
+      html += '<div><span style="color:#8b949e">Exposure:</span> ' + _raStatusBadge(sv.exposure_status, sv.exposure_known, sv.exposure_known_zero) + '</div>';
+      html += '<div><span style="color:#8b949e">Open positions:</span> ' + _raFmtInt(sv.open_positions) + '</div>';
+      html += '<div><span style="color:#8b949e">Capital deployed:</span> ' + _raFmtUsd(sv.capital_deployed) + '</div>';
+      html += '<div><span style="color:#8b949e">Drawdown:</span> ' + (sv.drawdown_from_peak ? (Number(sv.drawdown_from_peak)*100).toFixed(2)+'%' : '0.00%') + '</div>';
+      html += '<div><span style="color:#8b949e">Fresh reads:</span> ' + _raFmtInt(sv.exposure_fresh_reads_count) + '</div>';
+      html += '<div style="margin-top:5px"><span style="color:#8b949e">Warnings:</span> ' + _raWarningBadges(sv.warnings) + '</div>';
+      html += '</div></div>';
+    });
+    document.getElementById('raScopes').innerHTML = html;
+  }).catch(function(e){
+    document.getElementById('raScopes').innerHTML = '<span style="color:#f85149">Error: '+_raEscape(e)+'</span>';
+  });
+
+  // 3. Authority view (read-only)
+  fetch('/api/risk-authority/authority').then(function(r){return r.json();}).then(function(s){
+    var scopes = s.scopes || {};
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="color:#8b949e;border-bottom:1px solid #30363d"><th style="text-align:left;padding:6px">scope</th><th style="text-align:left;padding:6px">latest authority</th><th style="text-align:left;padding:6px">latest result</th><th style="text-align:left;padding:6px">downgrade reason</th><th style="text-align:left;padding:6px">manual reset required?</th><th style="text-align:left;padding:6px">last decision</th></tr></thead><tbody>';
+    ['ibkr_live','ibkr_paper','etoro_real','etoro_paper'].forEach(function(scope){
+      var a = scopes[scope] || {};
+      var authBadge = a.latest_authority_after
+        ? '<span style="background:#1f3b25;color:#3fb950;padding:1px 5px;border-radius:3px">'+_raEscape(a.latest_authority_after)+'</span>'
+        : '<span style="color:#8b949e">no decisions yet</span>';
+      var manual = a.manual_reset_would_be_required
+        ? '<span style="color:#f85149;font-weight:600">yes (operator action required)</span>'
+        : '<span style="color:#2ea043">no</span>';
+      html += '<tr style="border-bottom:1px solid #21262d">';
+      html += '<td style="padding:6px;color:#e6edf3">'+_raEscape(scope)+'</td>';
+      html += '<td style="padding:6px">'+authBadge+'</td>';
+      html += '<td style="padding:6px;color:#8b949e">'+_raEscape(a.latest_result || '—')+'</td>';
+      html += '<td style="padding:6px;color:#8b949e">'+_raEscape(a.latest_downgrade_reason || '—')+'</td>';
+      html += '<td style="padding:6px">'+manual+'</td>';
+      html += '<td style="padding:6px;color:#8b949e;font-size:10px">'+_raEscape(a.latest_taken_at || '—')+'</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('raAuthority').innerHTML = html;
+  }).catch(function(e){
+    document.getElementById('raAuthority').innerHTML = '<span style="color:#f85149">Error: '+_raEscape(e)+'</span>';
+  });
+
+  // 4. Latest decisions
+  var limit = document.getElementById('raDecLimit').value;
+  var scopeFilter = document.getElementById('raDecScope').value;
+  var url = '/api/risk-authority/decisions?limit=' + encodeURIComponent(limit);
+  if(scopeFilter) url += '&scope=' + encodeURIComponent(scopeFilter);
+  fetch(url).then(function(r){return r.json();}).then(function(s){
+    document.getElementById('raDecCount').textContent =
+      'showing ' + (s.decisions ? s.decisions.length : 0) + ' of ' + (s.total_count || 0) + ' total';
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="color:#8b949e;border-bottom:1px solid #30363d">';
+    html += '<th style="text-align:left;padding:4px 6px">taken_at</th>';
+    html += '<th style="text-align:left;padding:4px 6px">scope</th>';
+    html += '<th style="text-align:left;padding:4px 6px">action</th>';
+    html += '<th style="text-align:left;padding:4px 6px">result</th>';
+    html += '<th style="text-align:left;padding:4px 6px">auth before&rarr;after</th>';
+    html += '<th style="text-align:left;padding:4px 6px">reason codes</th>';
+    html += '<th style="text-align:left;padding:4px 6px">snapshot</th>';
+    html += '</tr></thead><tbody>';
+    (s.decisions || []).forEach(function(d){
+      var resCol = d.result === 'allow' ? '#3fb950' : '#f85149';
+      html += '<tr style="border-bottom:1px solid #21262d">';
+      html += '<td style="padding:4px 6px;color:#8b949e">'+_raEscape(d.taken_at)+'</td>';
+      html += '<td style="padding:4px 6px;color:#e6edf3">'+_raEscape(d.broker_scope)+'</td>';
+      html += '<td style="padding:4px 6px;color:#8b949e">'+_raEscape(d.requested_action)+'</td>';
+      html += '<td style="padding:4px 6px;color:'+resCol+';font-weight:600">'+_raEscape(d.result)+'</td>';
+      html += '<td style="padding:4px 6px;color:#8b949e">'+_raEscape(d.authority_before)+' &rarr; '+_raEscape(d.authority_after)+'</td>';
+      var rc = Array.isArray(d.reason_codes) ? d.reason_codes.join(', ') : '';
+      html += '<td style="padding:4px 6px;color:#f0883e">'+_raEscape(rc)+'</td>';
+      html += '<td style="padding:4px 6px;color:#8b949e">'+_raEscape(d.snapshot_id || '—')+'</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    if(!s.decisions || s.decisions.length === 0){
+      html = '<span style="color:#8b949e">No decisions recorded yet.</span>';
+    }
+    document.getElementById('raDecisions').innerHTML = html;
+  }).catch(function(e){
+    document.getElementById('raDecisions').innerHTML = '<span style="color:#f85149">Error: '+_raEscape(e)+'</span>';
+  });
+}
 </script>
 
 <!-- END RISK PAGE -->
@@ -3992,6 +4224,90 @@ def broker_allocation_set():
         }), 400
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ── M14.G Risk Authority — READ-ONLY dashboard surface ───────────────────────
+# Four endpoints expose M14.B–F state for operator visibility. No DB writes,
+# no broker calls, no live-write paths, no authority editing. All routes are
+# GET-only; Flask returns 405 on POST/DELETE/PUT/PATCH by default.
+
+@app.route('/api/risk-authority/decisions', methods=['GET'])
+@require_auth
+def risk_authority_decisions():
+    import sqlite3 as _sql
+    from bot.risk_authority.dashboard_read import (
+        list_recent_decisions, DECISIONS_DEFAULT_LIMIT, DECISIONS_MAX_LIMIT,
+    )
+    try:
+        raw_limit = request.args.get('limit', str(DECISIONS_DEFAULT_LIMIT))
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = DECISIONS_DEFAULT_LIMIT
+        scope = request.args.get('scope')
+        if scope is not None and scope.strip() == "":
+            scope = None
+        conn = _sql.connect(str(DB_PATH))
+        try:
+            result = list_recent_decisions(conn, limit=limit, scope=scope)
+        finally:
+            conn.close()
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/risk-authority/scopes', methods=['GET'])
+@require_auth
+def risk_authority_scopes():
+    import sqlite3 as _sql
+    from bot.risk_authority.dashboard_read import get_scope_status
+    try:
+        conn = _sql.connect(str(DB_PATH))
+        try:
+            result = get_scope_status(conn)
+        finally:
+            conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/risk-authority/snapshot/latest', methods=['GET'])
+@require_auth
+def risk_authority_snapshot_latest():
+    import sqlite3 as _sql
+    from bot.risk_authority.dashboard_read import get_latest_snapshot
+    try:
+        conn = _sql.connect(str(DB_PATH))
+        try:
+            result = get_latest_snapshot(conn)
+        finally:
+            conn.close()
+        if result is None:
+            return jsonify({'snapshot_id': None,
+                            'message': 'no risk_snapshots row yet'}), 200
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/risk-authority/authority', methods=['GET'])
+@require_auth
+def risk_authority_authority():
+    import sqlite3 as _sql
+    from bot.risk_authority.dashboard_read import get_authority_view
+    try:
+        conn = _sql.connect(str(DB_PATH))
+        try:
+            result = get_authority_view(conn)
+        finally:
+            conn.close()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ── M15.1 Gateway Watchdog ──────────────────────────────────────────────────

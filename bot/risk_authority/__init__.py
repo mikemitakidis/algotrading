@@ -14,5 +14,15 @@ from bot.risk_authority.preflight import (
     PreflightResult,
     run_risk_preflight,
 )  # re-export (M14.F)
+from bot.risk_authority.dashboard_read import (
+    get_authority_view,
+    get_latest_snapshot,
+    get_scope_status,
+    list_recent_decisions,
+)  # re-export (M14.G — read-only)
 
-__all__ = ["Authority", "decide", "PreflightResult", "run_risk_preflight"]
+__all__ = [
+    "Authority", "decide", "PreflightResult", "run_risk_preflight",
+    "list_recent_decisions", "get_scope_status",
+    "get_latest_snapshot", "get_authority_view",
+]
