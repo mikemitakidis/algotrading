@@ -90,19 +90,41 @@ def _build_etoro_exposure_adapter(scope: str):
 
 
 def _build_ibkr_exposure_adapter(scope: str):
-    """Wire IBKRExposureAdapter. The production positions_reader that
-    bridges to the live Gateway is not wired in M14.D (mirrors M14.C's
-    IBKR PnL adapter situation). Returns UNKNOWN honestly when called
-    until that bridging lands in a follow-up."""
+    """Wire IBKRExposureAdapter.
+
+    M15.5 (commit chain after `d73a04a`) wires the `ibkr_paper`
+    positions reader to a read-only IB API session via
+    `bot.risk_authority.ibkr_paper_reader.make_ibkr_paper_positions_reader`.
+    The session is gated behind the M15.4 `bot.gateway_health` readiness
+    check and connects with `readonly=True`; AST-asserted no order
+    methods (placeOrder/cancelOrder/modifyOrder/reqGlobalCancel) appear
+    anywhere in the reader module.
+
+    `ibkr_live` REMAINS unwired by design — paper mode only in M15.5.
+    Any future live wiring requires a separately approved milestone
+    and is NOT in scope here.
+    """
     from bot.risk_authority.ingest_ibkr_exposure import IBKRExposureAdapter
 
-    def _reader():
-        raise NotImplementedError(
-            "IBKR positions reader not yet wired to the live Gateway "
-            "connection in M14.D. Pass an explicit reader from a Python "
-            "session, or wait for the follow-up wiring."
+    if scope == "ibkr_live":
+        def _reader_live():
+            raise NotImplementedError(
+                "ibkr_live exposure reader is intentionally not wired in "
+                "M15.5; paper mode only. Live wiring requires a separately "
+                "approved milestone."
+            )
+        return IBKRExposureAdapter(broker_scope=scope,
+                                    positions_reader=_reader_live)
+
+    if scope == "ibkr_paper":
+        from bot.risk_authority.ibkr_paper_reader import (
+            make_ibkr_paper_positions_reader,
         )
-    return IBKRExposureAdapter(broker_scope=scope, positions_reader=_reader)
+        _reader_paper = make_ibkr_paper_positions_reader()
+        return IBKRExposureAdapter(broker_scope=scope,
+                                    positions_reader=_reader_paper)
+
+    raise ValueError(f"unsupported IBKR scope {scope!r}")
 
 
 def _resolve_adapter(scope: str):
