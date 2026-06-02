@@ -44,7 +44,7 @@ project-wide reconciliation narrative lives in
 | 11 | IBKR Paper Trading | CLOSED | `bot/brokers/ibkr_broker.py` + IBC 3.22.0; `test_m11.py` |
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
-| 14 | Portfolio / Risk Layer | PARTIAL (A–D CLOSED; E/F/G/H PENDING) | See M14 detail below |
+| 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
 | 15 | Production Hardening | PARTIAL (M15.0/.1/.2 CLOSED; M15.3 PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
@@ -138,7 +138,9 @@ project-wide reconciliation narrative lives in
 - **Zero real eToro orders placed.** First funded eToro order is **outside M13 and M14**; tracked as **M21** (First Funded eToro Go-Live).
 - **Status correction:** older notes called M13 "externally blocked." That is no longer true; M13 closed in the current chat thread.
 
-### Milestone 14 — Portfolio / Risk Layer (PARTIAL — A–D CLOSED; E/F/G/H PENDING)
+### Milestone 14 — Portfolio / Risk Layer (CLOSED — A through H)
+
+**Authoritative closeout:** [`docs/M14_FINAL_AUDIT.md`](docs/M14_FINAL_AUDIT.md).
 
 | Sub-milestone | Status | Commit | Evidence |
 |---|---|---|---|
@@ -146,23 +148,20 @@ project-wide reconciliation narrative lives in
 | M14.B — Schema + migration | CLOSED | `42ee08c` | `test_m14_b_schema.py` 27/27; VPS verified |
 | M14.C — Realised-PnL ingestion adapters | CLOSED | `d9c53eb` | `test_m14_c_ingest.py` 47/47; VPS dry-run verified |
 | M14.D — Exposure ingestion + `broker_positions` | CLOSED | `729ad2d` | `test_m14_d_exposure.py` 60/60; VPS dry-run verified |
-| M14.E — Risk Authority Engine + Governor | PENDING | — | Plan: see `docs/PROJECT_STATUS_RECONCILIATION.md` §M14.E |
-| M14.F — eToro preflight integration | PENDING | — | Closes the manual `realised_daily_loss` seam in `tools/etoro_live_write.py` |
-| M14.G — Dashboard risk surfaces | PENDING | — | Read-only; no live-write button |
-| M14.H — Closeout / audit doc | PENDING | — | — |
+| M14.E — Risk Authority Engine + Governor | CLOSED | `ace0fda` | `test_m14_e_engine.py` 105/105; VPS verified |
+| M14.F — eToro preflight integration | CLOSED | `2e20b52` | `test_m14_f_preflight.py` 34/34; VPS verified |
+| M14.G — Dashboard read-only visibility | CLOSED | `71e893a` | `test_m14_g_dashboard.py` 51/51; VPS verified |
+| M14.H — Closeout / audit doc | CLOSED | (this commit) | `docs/M14_FINAL_AUDIT.md` |
 
-**Files in `bot/risk_authority/`** (12 modules):
-- M14.B: `state.py` (compat shim).
-- M14.C: `reading.py`, `ingest.py`, `ingest_etoro.py`, `ingest_ibkr.py`, `ingest_audit.py`.
-- M14.D: `exposure_reading.py`, `ingest_exposure.py`, `ingest_etoro_exposure.py`, `ingest_ibkr_exposure.py`.
-- Plus `__init__.py` and `__pycache__`.
+**M14 totals:** 9 commits on `main`; ~12,321 lines added; 17 new modules under `bot/risk_authority/`; 324 sub-milestone tests; 25 engine gates; 31 reason codes; 4 read-only dashboard endpoints; 10 layers of live-write defense in depth; **0** real-money orders placed; **0** scanner-to-live bypasses introduced.
 
-**Carry-forward limitation (acknowledged):** On the VPS, M14.C/M14.D return
-`unknown` for the eToro real adapter (`keys_absent`) and the IBKR exposure
-adapter (`NotImplementedError` — positions reader not yet wired to Gateway).
-This is acceptable for M14.C/M14.D closure because the engines correctly
-classify unknowns and refuse to fake zero; production-grade adapter wiring
-happens around M14.E/F/G or in M15.3 infra recovery.
+**Carry-forward limitations (tracked in M15):**
+- IBKR exposure reader is a `NotImplementedError` stub — engine returns `exposure_unknown` for IBKR scopes until wired to Gateway (M15.x).
+- eToro keys absent on VPS (no `ETORO_LIVE_ENABLED`, no `ETORO_REAL_API_KEY`). First funded order is M21, not M14.
+- Dashboard accessed via `http://138.199.196.95:8080/` — security hardening is M15.3.
+- `manual_reset` is design-only; no UI or API path can issue one in M14.
+
+These are acceptable for M14 closure because every "unknown" returns fail-closed; the engine refuses to fabricate zero, and the dashboard distinguishes known-zero from unknown-zero explicitly.
 
 ### Milestone 15 — Production Hardening (PARTIAL)
 

@@ -136,22 +136,33 @@ deferred. Today: trains and evaluates only.
 - **Zero real eToro orders placed.** First funded order remains a separate
   later go-live event (not part of M13, not part of M14).
 
-### Milestone 14 — Portfolio / Risk Layer ⚠ A–D CLOSED; E/F/G/H PENDING
+### Milestone 14 — Portfolio / Risk Layer ✅ CLOSED (A through H)
 **Goal:** Risk Intelligence Layer — broker-scoped state, exposure, decision
 core + governor, eToro preflight integration, dashboard, closeout.
+
+**Authoritative closeout document:** [`docs/M14_FINAL_AUDIT.md`](docs/M14_FINAL_AUDIT.md).
+
 - **M14.A** design doc (CLOSED, `3f4448e`).
 - **M14.B** additive `daily_state_per_broker` + `risk_snapshots` +
-  `risk_decisions` schema; legacy `daily_state` untouched (CLOSED, `42ee08c`).
+  `risk_decisions` + `broker_positions` schema; legacy `daily_state` untouched (CLOSED, `42ee08c`).
 - **M14.C** read-only realised-PnL ingestion adapters (IBKR + eToro) with
   fail-closed semantics; CLI `tools/ingest_risk_state.py` (CLOSED, `d9c53eb`).
 - **M14.D** read-only exposure/positions adapters + `broker_positions` batch
   schema + cross-engine separation; CLI `tools/ingest_exposure_state.py`
   (CLOSED, `729ad2d`).
-- **M14.E** Risk Authority Engine + downgrade-only governor — PENDING.
-- **M14.F** eToro preflight integration (kill the manual `realised_daily_loss`
-  seam) — PENDING.
-- **M14.G** Dashboard read-only risk surfaces — PENDING.
-- **M14.H** Closeout / audit doc — PENDING.
+- **M14.E** Risk Authority Engine + downgrade-only governor; pure `decide()`,
+  25 gates, 31 reason codes, M13.4A policy bridge, `decide_and_audit`
+  thin wrapper as the only DB-writing surface (CLOSED, `ace0fda`,
+  `test_m14_e_engine.py` 105/105).
+- **M14.F** eToro live-write preflight integration — `run_risk_preflight`
+  inserted before transport/env/nonce/broker construction; exit 4 on block
+  (CLOSED, `2e20b52`, `test_m14_f_preflight.py` 34/34).
+- **M14.G** read-only Risk Authority dashboard tab + 4 GET endpoints
+  (CLOSED, `71e893a`, `test_m14_g_dashboard.py` 51/51).
+- **M14.H** Closeout / audit doc — this document + `docs/M14_FINAL_AUDIT.md`
+  (CLOSED).
+
+**M14 totals:** 9 commits, ~12,321 lines, 17 new modules, 324 sub-milestone tests, 0 real-money orders placed, 0 bypasses around Risk Authority.
 
 ### Milestone 15 — Production Hardening ⚠ PARTIAL
 **Goal:** Monitoring, alerting, failover, full audit log, compliance-grade logging.
@@ -159,8 +170,17 @@ core + governor, eToro preflight integration, dashboard, closeout.
 - **M15.1** Gateway state + reconciliation tooling (CLOSED, `test_m15_gateway.py` 33/33).
 - **M15.2** Health endpoint + external monitoring (CLOSED, `test_m15_2_health.py` 28/28, `docs/M15_2_external_monitoring.md`).
 - **M15.3** Infra recovery: process-manager / systemd unit-name cleanup
-  (carried forward from M13.5.C, M14.B/C/D VPS warnings), IB Gateway
-  reliability hardening — PENDING.
+  (carried forward from M13.5.C, M14.B/C/D VPS warnings, and reaffirmed
+  by M14 final audit as the **next concrete unit of work after M14**),
+  IB Gateway reliability hardening — PENDING.
+
+> **Post-M14 priority** (from `docs/M14_FINAL_AUDIT.md` §10): the next
+> milestone after M14 is **M15.0 — scanner / systemd reliability and
+> production process clarity**, before any M16+ intelligence work.
+> Until the scanner systemd unit-name mismatch is resolved (all known
+> unit names report inactive while the bot demonstrably runs), every
+> milestone-acceptance signal carries an asterisk. The roadmap order is
+> unchanged; M16+ does not start until M15 is closed.
 
 ---
 
