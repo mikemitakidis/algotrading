@@ -166,21 +166,36 @@ core + governor, eToro preflight integration, dashboard, closeout.
 
 ### Milestone 15 — Production Hardening ⚠ PARTIAL
 **Goal:** Monitoring, alerting, failover, full audit log, compliance-grade logging.
-- **M15.0** Flywheel schema (CLOSED, baseline for M14).
+- **M15.0-pre** Flywheel schema (CLOSED, prerequisite for M14; originally
+  labelled M15.0 — renumbered to disambiguate from the production-process
+  M15.0 that closed 2026-06-02).
 - **M15.1** Gateway state + reconciliation tooling (CLOSED, `test_m15_gateway.py` 33/33).
 - **M15.2** Health endpoint + external monitoring (CLOSED, `test_m15_2_health.py` 28/28, `docs/M15_2_external_monitoring.md`).
-- **M15.3** Infra recovery: process-manager / systemd unit-name cleanup
-  (carried forward from M13.5.C, M14.B/C/D VPS warnings, and reaffirmed
-  by M14 final audit as the **next concrete unit of work after M14**),
-  IB Gateway reliability hardening — PENDING.
+- **M15.0** ✅ CLOSED — Scanner / systemd reliability + production process
+  clarity (commit chain `57dc200` → `597635d`, `test_m15_0_service.py` 40/40).
+  Canonical systemd units installed and active on the VPS:
+  `algo-trader.service` (main bot/scanner) and
+  `algo-trader-dashboard.service` (Flask dashboard). VPS verification
+  2026-06-02: both PIDs owned by `/system.slice/<unit>`, both
+  active/enabled, exactly one of each process, `/api/health` HTTP 200.
+  Rollback snapshot: `/var/lib/algo-trader/m15_0_snapshots/20260602T210527Z`.
+  New read-only `/api/system/services` endpoint reports the canonical
+  service map; auth-protected (returns `{"error":"Unauthorized"}` to
+  unauthenticated callers — expected behaviour). `deploy.sh` + `sync.sh`
+  are systemd-aware with verbatim legacy nohup fallback for pre-install
+  and post-rollback states. Authoritative reference:
+  `docs/M15_0_systemd_canonical.md`.
+- **M15.3** Infra recovery: IB Gateway reliability hardening,
+  `ingest_ibkr_exposure.py` wiring, dashboard auth/TLS hardening,
+  `manual_reset` operator flow, compliance-grade audit/export — PENDING.
+  *(Process-manager / systemd unit-name mismatch is no longer a
+  carry-forward — it was the substance of M15.0 and is now CLOSED.)*
 
-> **Post-M14 priority** (from `docs/M14_FINAL_AUDIT.md` §10): the next
-> milestone after M14 is **M15.0 — scanner / systemd reliability and
-> production process clarity**, before any M16+ intelligence work.
-> Until the scanner systemd unit-name mismatch is resolved (all known
-> unit names report inactive while the bot demonstrably runs), every
-> milestone-acceptance signal carries an asterisk. The roadmap order is
-> unchanged; M16+ does not start until M15 is closed.
+> **Next concrete unit of work after M15.0:** TBD per operator
+> direction. Candidates: M15.x IB Gateway reliability hardening (lowest
+> risk, unblocks `ingest_ibkr_exposure.py`), or M15.3 dashboard
+> auth/security hardening. The roadmap order is unchanged; M16+
+> intelligence does not start until M15 is closed.
 
 ---
 

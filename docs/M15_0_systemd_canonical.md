@@ -1,5 +1,11 @@
 # M15.0 — Canonical Systemd Service Map
 
+**Status:** ✅ M15.0 CLOSED — VPS install completed and verified 2026-06-02.
+- Commit chain: `57dc200` (repo-side artifacts) → `597635d` (`deploy.sh` follow-up).
+- VPS install timestamp: `20260602T210527Z`.
+- Rollback snapshot directory: `/var/lib/algo-trader/m15_0_snapshots/20260602T210527Z` — see §6 for the one-command revert.
+- Both canonical units `active/enabled`; `main.py` and `dashboard/app.py` PIDs each owned by `/system.slice/<unit>`; exactly one of each process; `/api/health` returns HTTP 200.
+
 This is the **authoritative operator reference** for how the bot, dashboard,
 and ancillary processes are supervised on the Hetzner VPS as of M15.0.
 
@@ -80,7 +86,7 @@ After install, normal operator actions:
 | Disable auto-start at boot | `sudo systemctl disable algo-trader algo-trader-dashboard` |
 | Roll back to nohup-managed state | `sudo bash /opt/algo-trader/infra/systemd/rollback.sh <snapshot_dir>` |
 
-The dashboard exposes a read-only view of the canonical map and live state at `GET /api/system/services` (auth-gated like every other dashboard route).
+The dashboard exposes a read-only view of the canonical map and live state at `GET /api/system/services` (auth-gated like every other dashboard `/api/*` route — unauthenticated callers receive `{"error":"Unauthorized"}`; the Risk Authority tab and authenticated curl see the full JSON payload).
 
 ---
 

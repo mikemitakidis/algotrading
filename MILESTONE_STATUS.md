@@ -45,7 +45,7 @@ project-wide reconciliation narrative lives in
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
-| 15 | Production Hardening | PARTIAL (M15.0/.1/.2 CLOSED; M15.3 PENDING) | See M15 detail below |
+| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2 CLOSED; M15.3 PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
 ---
@@ -167,14 +167,24 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 
 | Sub-milestone | Status | Evidence |
 |---|---|---|
-| M15.0 — Flywheel schema baseline | CLOSED | `bot/flywheel.py`; `test_m15_schema.py` 6/6 |
+| M15.0-pre — Flywheel schema baseline (prerequisite for M14) | CLOSED | `bot/flywheel.py`; `test_m15_schema.py` 6/6. *Originally labelled M15.0; renumbered here to disambiguate from the production-process M15.0 that closed 2026-06-02.* |
 | M15.1 — Gateway state + reconciliation | CLOSED | `test_m15_gateway.py` 33/33 |
 | M15.2 — Health endpoint + external monitoring | CLOSED | `test_m15_2_health.py` 28/28; `docs/M15_2_external_monitoring.md` |
-| M15.3 — Infra recovery (process manager, IB Gateway reliability) | PENDING | — |
+| M15.0 — Scanner / systemd reliability + production process clarity | CLOSED | `597635d` (chain `57dc200` → `597635d`); `test_m15_0_service.py` 40/40; VPS-verified 2026-06-02 |
+| M15.3 — Infra recovery (IB Gateway reliability + dashboard auth) | PENDING | — |
 
-**M15.3 open items** (carry-forwards from M13.5.C, M14.B, M14.C, M14.D VPS verifications):
-- **Scanner systemd unit-name mismatch.** `algo-trader`, `scanner`, and `algo-scanner` all report `inactive` while the bot is demonstrably running (`/api/health` 200, heartbeat fresh, dashboard port listening). The actual process manager / unit name needs identifying or documenting.
+**M15.0 closeout (production process clarity)** — VPS-verified 2026-06-02:
+- Canonical systemd units installed and active: `algo-trader.service` (runs `main.py`) and `algo-trader-dashboard.service` (runs `dashboard/app.py`).
+- VPS evidence: `main.py` PID owned by `/system.slice/algo-trader.service`; `dashboard/app.py` PID owned by `/system.slice/algo-trader-dashboard.service`; both active/enabled; exactly one of each; `/api/health` returns HTTP 200.
+- Rollback snapshot path: `/var/lib/algo-trader/m15_0_snapshots/20260602T210527Z` — use `sudo bash /opt/algo-trader/infra/systemd/rollback.sh /var/lib/algo-trader/m15_0_snapshots/20260602T210527Z` to revert to the pre-install nohup-managed state. Trading state in `signals.db` survives both install and rollback.
+- New read-only API endpoint `/api/system/services` reports the canonical service map and live systemd state. **Auth-protected** — unauthenticated requests return `{"error":"Unauthorized"}`; the dashboard's Risk Authority tab and any authenticated curl will see the JSON payload.
+- `deploy.sh` and `sync.sh` are now systemd-aware: when canonical units exist + script runs as root, both prefer `systemctl restart` over the legacy `pkill + nohup` path; legacy fallback preserved for pre-install / post-rollback states.
+- Authoritative operator reference: [`docs/M15_0_systemd_canonical.md`](docs/M15_0_systemd_canonical.md).
+
+**M15.3 open items** (carry-forwards from prior milestones — process-manager identification is now CLOSED via M15.0):
 - **IB Gateway reliability hardening.** Beyond nightly `AutoRestartTime`: structured restart-on-stale-heartbeat, monitor 4001/4002 socket health, alert on prolonged disconnect.
+- **`ingest_ibkr_exposure.py` wiring.** Currently a `NotImplementedError` stub; engine returns `exposure_unknown` for IBKR scopes until wired to Gateway.
+- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
 - **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
 
 ---
