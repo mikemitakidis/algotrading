@@ -5,7 +5,10 @@ ingestion, exposure logic, and dashboard are deferred to M14.C–G per the
 approved M14.A design (docs/M14_A_design.md).
 
 This package must NEVER be imported from bot.scanner, bot.strategy,
-bot.risk, or main.py. M14.E will introduce the pure decide() core; until
-then this module contains read-only helpers for Risk-Authority-internal
-use only.
+bot.risk, or main.py. M14.E introduces the pure decide() core; the
+public re-exports below are deliberately minimal (Authority + decide).
 """
+from bot.risk_authority.authority import Authority  # re-export
+from bot.risk_authority.engine import decide        # re-export
+
+__all__ = ["Authority", "decide"]
