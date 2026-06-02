@@ -1,0 +1,38 @@
+[Unit]
+# M15.0 canonical bot/scanner unit. Runs main.py as PID 1 inside the unit
+# (Type=simple). Independent of the dashboard unit so the dashboard can be
+# restarted without interrupting an in-flight scanner cycle.
+Description=Algo Trader — main bot / scanner
+Documentation=https://github.com/mikemitakidis/algotrading docs/M15_0_systemd_canonical.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=-/opt/algo-trader/.env
+ExecStart=/opt/algo-trader/venv/bin/python3 /opt/algo-trader/main.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Logging
+StandardOutput=append:/opt/algo-trader/logs/bot.systemd.log
+StandardError=append:/opt/algo-trader/logs/bot.systemd.err
+SyslogIdentifier=algo-trader
+
+# Resource bounds (conservative; M15.x may tune)
+LimitNOFILE=8192
+
+# Kill semantics — give the bot up to 30s to shut down cleanly before SIGKILL.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

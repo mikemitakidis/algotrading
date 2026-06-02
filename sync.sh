@@ -41,15 +41,36 @@ while true; do
             continue
         fi
 
-        # Restart both services
-        pkill -f "python3.*main.py"    2>/dev/null || true
-        pkill -f "python3.*dashboard"  2>/dev/null || true
-        sleep 2
+        # Restart both services.
+        # M15.0: if the canonical systemd units exist AND we have systemctl
+        # access (root), prefer them. Otherwise fall back to the legacy
+        # pkill+nohup path (pre-M15.0 behaviour).
+        BOT_UNIT=algo-trader.service
+        DASH_UNIT=algo-trader-dashboard.service
+        USE_SYSTEMD=0
+        if [ "$(id -u)" = "0" ] && command -v systemctl >/dev/null 2>&1; then
+            if systemctl list-unit-files --no-legend 2>/dev/null | grep -q "^$BOT_UNIT" && \
+               systemctl list-unit-files --no-legend 2>/dev/null | grep -q "^$DASH_UNIT"; then
+                USE_SYSTEMD=1
+            fi
+        fi
 
-        nohup $VENV/bin/python3 $BASE/dashboard/app.py >> $BASE/logs/dashboard.log 2>&1 &
-        nohup $VENV/bin/python3 $BASE/main.py          > /dev/null 2>&1 &
+        if [ "$USE_SYSTEMD" = "1" ]; then
+            echo "$(date): restart via systemctl ($BOT_UNIT, $DASH_UNIT)" >> $LOG
+            systemctl restart "$DASH_UNIT" >> $LOG 2>&1
+            systemctl restart "$BOT_UNIT"  >> $LOG 2>&1
+            echo "$(date): Restarted via systemd. Bot active=$(systemctl is-active $BOT_UNIT) Dash active=$(systemctl is-active $DASH_UNIT)" >> $LOG
+        else
+            echo "$(date): restart via legacy nohup (M15.0 units not installed)" >> $LOG
+            pkill -f "python3.*main.py"    2>/dev/null || true
+            pkill -f "python3.*dashboard"  2>/dev/null || true
+            sleep 2
 
-        echo "$(date): Restarted. Bot:$(pgrep -f main.py) Dash:$(pgrep -f dashboard)" >> $LOG
+            nohup $VENV/bin/python3 $BASE/dashboard/app.py >> $BASE/logs/dashboard.log 2>&1 &
+            nohup $VENV/bin/python3 $BASE/main.py          > /dev/null 2>&1 &
+
+            echo "$(date): Restarted via nohup. Bot:$(pgrep -f main.py) Dash:$(pgrep -f dashboard)" >> $LOG
+        fi
     fi
 
     sleep 60

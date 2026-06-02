@@ -1,0 +1,39 @@
+[Unit]
+# M15.0 canonical dashboard unit. Runs dashboard/app.py as PID 1 inside the
+# unit (Type=simple). Independent of algo-trader.service: stopping the
+# dashboard MUST NOT affect the bot, and stopping the bot MUST NOT affect
+# the dashboard.
+Description=Algo Trader — Flask dashboard (port 8080)
+Documentation=https://github.com/mikemitakidis/algotrading docs/M15_0_systemd_canonical.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=-/opt/algo-trader/.env
+ExecStart=/opt/algo-trader/venv/bin/python3 /opt/algo-trader/dashboard/app.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Logging
+StandardOutput=append:/opt/algo-trader/logs/dashboard.systemd.log
+StandardError=append:/opt/algo-trader/logs/dashboard.systemd.err
+SyslogIdentifier=algo-trader-dashboard
+
+# Resource bounds
+LimitNOFILE=4096
+
+# Kill semantics
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

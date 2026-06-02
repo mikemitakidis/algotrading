@@ -4310,6 +4310,122 @@ def risk_authority_authority():
         return jsonify({'error': str(e)}), 500
 
 
+# ── M15.0 Production process visibility — READ-ONLY ─────────────────────────
+# Reports the canonical M15.0 service map and the real systemd state for each
+# unit. No mutations; no live-write surface; no manual_reset. Separate from
+# /api/health so external monitoring contracts (M15.2) are unaffected.
+
+# Canonical service map. If install.sh has been run, both services should
+# report active=active. If not yet installed, both should report not-found
+# — that's the legacy nohup-managed state and is the operator's signal that
+# M15.0 hasn't been applied on this host.
+_M15_0_SERVICES = (
+    ('algo-trader.service',           'main.py',          'bot/scanner main loop'),
+    ('algo-trader-dashboard.service', 'dashboard/app.py', 'this Flask dashboard'),
+)
+
+
+def _systemctl_state(unit):
+    """Return (active_state, enabled_state) for a unit. Both are strings;
+    'not-found' if systemctl doesn't know the unit; 'unavailable' if
+    systemctl itself can't be invoked (no systemd, no PATH, etc.)."""
+    import subprocess
+    try:
+        active = subprocess.run(
+            ['systemctl', 'is-active', unit],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip() or 'not-found'
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return ('unavailable', 'unavailable')
+    try:
+        enabled = subprocess.run(
+            ['systemctl', 'is-enabled', unit],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip() or 'not-found'
+    except (FileNotFoundError, subprocess.SubprocessError):
+        enabled = 'unavailable'
+    return (active, enabled)
+
+
+def _process_owner_cgroup(pattern):
+    """Return the cgroup path of the first process matching `pattern`, or
+    None if no such process is running. Read-only /proc inspection."""
+    import re, os as _os
+    try:
+        for pid_str in _os.listdir('/proc'):
+            if not pid_str.isdigit():
+                continue
+            try:
+                with open(f'/proc/{pid_str}/cmdline', 'rb') as fh:
+                    cmdline = fh.read().replace(b'\x00', b' ').decode(
+                        'utf-8', errors='replace')
+            except (OSError, IOError):
+                continue
+            if re.search(pattern, cmdline):
+                try:
+                    with open(f'/proc/{pid_str}/cgroup', 'r') as fh:
+                        cg = fh.read().strip().split('\n')[0]
+                except (OSError, IOError):
+                    cg = None
+                return {'pid': int(pid_str), 'cgroup': cg}
+    except (OSError, IOError):
+        pass
+    return None
+
+
+@app.route('/api/system/services', methods=['GET'])
+@require_auth
+def system_services():
+    """Read-only view of M15.0 canonical service map + actual systemd state.
+
+    Returns:
+      {
+        "services": [
+          {"unit", "script", "description",
+           "active", "enabled",
+           "process": {"pid", "cgroup"} | null,
+           "managed_by": "systemd" | "session" | "unknown"},
+          ...
+        ],
+        "m15_0_installed": bool,   # true iff both canonical units exist + active
+        "as_of_utc": str,
+      }
+    """
+    from datetime import datetime, timezone
+    try:
+        out = []
+        all_active = True
+        for unit, script_path, desc in _M15_0_SERVICES:
+            active, enabled = _systemctl_state(unit)
+            proc = _process_owner_cgroup(rf'python[0-9.]*\s.*{script_path}')
+            if proc and proc.get('cgroup') and unit in proc['cgroup']:
+                managed = 'systemd'
+            elif proc and proc.get('cgroup') and 'user.slice' in proc['cgroup']:
+                managed = 'session'
+            elif proc:
+                managed = 'unknown'
+            else:
+                managed = 'not-running'
+            if active != 'active':
+                all_active = False
+            out.append({
+                'unit':        unit,
+                'script':      script_path,
+                'description': desc,
+                'active':      active,
+                'enabled':     enabled,
+                'process':     proc,
+                'managed_by':  managed,
+            })
+        return jsonify({
+            'services':         out,
+            'm15_0_installed':  all_active,
+            'as_of_utc': datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ── M15.1 Gateway Watchdog ──────────────────────────────────────────────────
 
 @app.route('/api/gateway/state')
