@@ -4443,6 +4443,26 @@ def gateway_state():
         return jsonify({'error': str(e)}), 500
 
 
+# ── M15.4 IB Gateway truth layer — READ-ONLY point-in-time view ─────────────
+# Distinct from /api/gateway/state (M15.1 historical events from DB).
+# This endpoint reads systemd + ports + IBC config + log tail + journalctl
+# at request time and returns a single classified status. No DB writes,
+# no systemctl mutations, no IB API call, no broker construction. The
+# existing M15.1 endpoint is preserved unchanged.
+
+@app.route('/api/gateway/health', methods=['GET'])
+@require_auth
+def gateway_health():
+    import sys; sys.path.insert(0, str(BASE_DIR))
+    try:
+        from bot.gateway_health import assemble_health
+        return jsonify(assemble_health())
+    except Exception as e:
+        app.logger.exception('gateway_health failed')
+        return jsonify({'error': str(e)}), 500
+
+
+
 # ── M15.2 Health endpoint (external monitoring) ─────────────────────────────
 # Public endpoint (no session-cookie auth) so external monitors can reach it.
 # Optional bearer-token protection via HEALTH_ENDPOINT_AUTH_TOKEN env var.

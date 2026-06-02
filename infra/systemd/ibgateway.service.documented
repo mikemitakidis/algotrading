@@ -1,0 +1,60 @@
+# M15.4 reference mirror of the ibgateway.service unit running in
+# production on the Hetzner VPS as of 2026-06-02.
+#
+# THIS FILE IS NOT INSTALLED BY ANY SCRIPT. It is a version-controlled
+# snapshot so future audits can detect drift between what production
+# actually runs and what the repo says production runs.
+#
+# Source of truth: /etc/systemd/system/ibgateway.service on the VPS.
+# Last reconciled: 2026-06-02 (M15.4 read-only audit).
+#
+# Do NOT run `infra/systemd/install.sh` against this file — that script
+# only handles algo-trader.service and algo-trader-dashboard.service.
+# Changes to the live ibgateway.service unit require a separately
+# approved operator step; see docs/M15_4_ib_gateway_runbook.md §3.
+
+[Unit]
+# Note: the audit did not capture the exact After= / Wants= lines on
+# the VPS unit. They are unlikely to affect reliability (network is
+# already up at boot when systemd reaches this unit). Reconcile on
+# next M15.4 audit if a drift check finds them present.
+Description=Interactive Brokers Gateway (IBC headless)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:99
+ExecStart=/opt/ibc/start_ibgateway.sh
+
+# Restart policy reconciled from M15.4 audit on 2026-06-02:
+#   Restart=always
+#   RestartSec=30s
+#   StartLimitBurst=3
+#
+# Operator-tunable knobs (not changed by M15.4 — documented for the
+# runbook to reference):
+#   * `Restart=always` is correct given IBC needs an external nightly
+#     window (AutoRestartTime=23:45 in IBC config) plus restart on
+#     any systemd-detected failure.
+#   * `RestartSec=30` gives the JVM enough time to fully terminate
+#     before a new instance binds the API port. Anything shorter has
+#     historically caused "port still in use" races.
+#   * `StartLimitBurst=3` is conservative — three failures inside the
+#     default `StartLimitIntervalSec` (10 minutes) cause systemd to
+#     give up. Combined with the login-error failure mode the M15.4
+#     audit found, this means a credential outage will surface as a
+#     visible systemd failure within ~30 minutes rather than silently
+#     looping forever.
+Restart=always
+RestartSec=30
+StartLimitBurst=3
+
+# Logging — both streams go to a single appended log file. M15.4's
+# bot/gateway_health.py tails this file for login-error inference.
+StandardOutput=append:/var/log/ibgateway/ibgateway.log
+StandardError=append:/var/log/ibgateway/ibgateway.log
+
+[Install]
+WantedBy=multi-user.target
