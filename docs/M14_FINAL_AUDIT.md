@@ -1,7 +1,7 @@
 # M14 — Risk Authority Layer: Final Audit
 
 **Status:** ✅ M14 CLOSED (A through H)
-**Closeout commit:** _filled in at commit time; this section is the last edited part of the doc_
+**Closeout commit:** `db7d9f5` (M14.H — docs-only closeout audit)
 **Closeout date:** 2026-06-02 (UTC)
 
 This is the **authoritative closeout document** for M14 (Portfolio / Risk Layer). For the live state of every milestone across the project, see [`MILESTONE_STATUS.md`](../MILESTONE_STATUS.md). The historical reconciliation context lives in [`PROJECT_STATUS_RECONCILIATION.md`](PROJECT_STATUS_RECONCILIATION.md) and is preserved as a record of how the project's status was understood at earlier points; this document supersedes it for **M14-specific** status from 2026-06-02 onward.
