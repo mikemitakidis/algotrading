@@ -185,17 +185,57 @@ core + governor, eToro preflight integration, dashboard, closeout.
   are systemd-aware with verbatim legacy nohup fallback for pre-install
   and post-rollback states. Authoritative reference:
   `docs/M15_0_systemd_canonical.md`.
-- **M15.3** Infra recovery: IB Gateway reliability hardening,
-  `ingest_ibkr_exposure.py` wiring, dashboard auth/TLS hardening,
-  `manual_reset` operator flow, compliance-grade audit/export — PENDING.
+- **M15.4** ✅ CLOSED — IB Gateway reliability + broker connectivity
+  health (visibility/truth layer) (commit `073a8bd`,
+  `test_m15_4_gateway_health.py` 47/47). New read-only helper
+  `bot/gateway_health.py` combines `systemctl is-active/is-enabled/show`,
+  TCP connect-and-close probe on 4001/4002, trading-mode discovery
+  from `start_ibgateway.sh` + IBC config, `/var/log/ibgateway/ibgateway.log`
+  tail, and `journalctl -u ibgateway.service` into a single
+  point-in-time classification (`service_down`,
+  `service_active_port_closed`, `service_active_login_error`,
+  `service_active_api_port_open`, `unknown`). New endpoint
+  `GET /api/gateway/health` — auth-protected, returns HTTP 401 to
+  unauthenticated callers (confirmed on VPS after dashboard restart);
+  existing M15.1 `/api/gateway/state` preserved unchanged. **No IB
+  API call was added** — `reqCurrentTime` / `ib.connect` / `placeOrder`
+  / `cancelOrder` are AST-asserted absent. Reference mirror of
+  production `ibgateway.service` at
+  `infra/systemd/ibgateway.service.documented` (not installed by any
+  script). VPS classification on closeout day: `ibgateway.service`
+  active/enabled but **no listener on either 4001 or 4002**, log
+  shows a login/authentication error → `status =
+  service_active_login_error`, `ready_for_ibkr_trading = False`.
+  This is the headline value: systemd "active" is no longer
+  conflated with "IBKR trading is ready". Authoritative reference:
+  `docs/M15_4_ib_gateway_runbook.md`.
+- **M15.3** Infra recovery — remaining scope (after M15.0 and M15.4):
+  dashboard auth / TLS / IP-allowlist hardening, `manual_reset`
+  operator flow, compliance-grade audit log + regulatory export,
+  `ingest_ibkr_exposure.py` wiring (blocked on a healthy IB Gateway —
+  currently in `service_active_login_error` state per M15.4; operator
+  must fix credentials per `docs/M15_4_ib_gateway_runbook.md` §3
+  before this can proceed). PENDING.
   *(Process-manager / systemd unit-name mismatch is no longer a
-  carry-forward — it was the substance of M15.0 and is now CLOSED.)*
+  carry-forward — it was the substance of M15.0 and is now CLOSED.
+  IB Gateway visibility / truth reporting is no longer a
+  carry-forward either — it was the substance of M15.4 and is now
+  CLOSED. M15.3 is now purely about active remediation surfaces and
+  operator-action layers.)*
 
-> **Next concrete unit of work after M15.0:** TBD per operator
-> direction. Candidates: M15.x IB Gateway reliability hardening (lowest
-> risk, unblocks `ingest_ibkr_exposure.py`), or M15.3 dashboard
-> auth/security hardening. The roadmap order is unchanged; M16+
-> intelligence does not start until M15 is closed.
+> **Next concrete unit of work after M15.4:** TBD per operator
+> direction. Candidates, in rough priority order:
+> 1. Operator credential fix on `/opt/ibc/config*.ini` so IB Gateway
+>    transitions out of `service_active_login_error`. **This is an
+>    operator action, not a milestone** — it does not require any
+>    code change.
+> 2. `ingest_ibkr_exposure.py` wiring (unblocks IBKR exposure
+>    reporting in the engine; depends on prerequisite #1).
+> 3. M15.3 dashboard auth/security hardening + `manual_reset`
+>    operator flow + compliance audit/export.
+>
+> The roadmap order is unchanged; M16+ intelligence does not start
+> until M15 is closed.
 
 ---
 

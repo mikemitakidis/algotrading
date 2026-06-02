@@ -45,7 +45,7 @@ project-wide reconciliation narrative lives in
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
-| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2 CLOSED; M15.3 PENDING) | See M15 detail below |
+| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4 CLOSED; M15.3 PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
 ---
@@ -171,7 +171,21 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 | M15.1 — Gateway state + reconciliation | CLOSED | `test_m15_gateway.py` 33/33 |
 | M15.2 — Health endpoint + external monitoring | CLOSED | `test_m15_2_health.py` 28/28; `docs/M15_2_external_monitoring.md` |
 | M15.0 — Scanner / systemd reliability + production process clarity | CLOSED | `597635d` (chain `57dc200` → `597635d`); `test_m15_0_service.py` 40/40; VPS-verified 2026-06-02 |
-| M15.3 — Infra recovery (IB Gateway reliability + dashboard auth) | PENDING | — |
+| M15.4 — IB Gateway reliability + broker connectivity health (visibility/truth layer) | CLOSED | `073a8bd`; `test_m15_4_gateway_health.py` 47/47; VPS-verified 2026-06-02 |
+| M15.3 — Infra recovery (dashboard auth + manual_reset + compliance audit/export) | PENDING | — |
+
+**M15.4 closeout (IB Gateway visibility/truth layer)** — VPS-verified 2026-06-02:
+- New read-only helper `bot/gateway_health.py` combines five sources (`systemctl is-active/is-enabled/show`, TCP connect-and-close probe on 4001/4002, trading-mode discovery from `start_ibgateway.sh` + IBC config, `/var/log/ibgateway/ibgateway.log` tail, `journalctl -u ibgateway.service`) into a single point-in-time classification.
+- New read-only endpoint `GET /api/gateway/health`. **Auth-protected** — unauthenticated requests return HTTP 401, exactly as expected for the dashboard's `@require_auth` model (confirmed on the VPS after dashboard restart). The existing M15.1 `/api/gateway/state` historical-events endpoint is preserved unchanged.
+- Live VPS classification on the day of closeout: `ibgateway.service` reports active/enabled, but **no listener on either 4001 or 4002**, and the gateway log shows a `Unrecognized Username or Password` style entry. The truth layer therefore classifies the state as `status = service_active_login_error` and `ready_for_ibkr_trading = False`. This is the headline value of M15.4: systemd "active" is no longer mistaken for "IBKR trading is ready".
+- **No IB API call was added.** M15.4 explicitly does not call `reqCurrentTime`, `ib.connect`, `placeOrder`, `cancelOrder`, or any other IB API method; AST-asserted on every commit. The pre-existing M15.1 `bot/gateway_watchdog.py` (which does run a background `reqCurrentTime` ping) is unchanged.
+- Authoritative operator reference: [`docs/M15_4_ib_gateway_runbook.md`](docs/M15_4_ib_gateway_runbook.md) — includes status classification table, three known failure-mode recovery procedures, and a drift-detection checklist against the reference mirror at `infra/systemd/ibgateway.service.documented` (mirror is **not** installed by any script).
+- Closing M15.4 does NOT close the carry-forward of automated IBKR exposure ingestion. `ingest_ibkr_exposure.py` remains a `NotImplementedError` stub; the engine continues to return `exposure_unknown` for IBKR scopes. Wiring it depends on a healthy IB Gateway, which currently is in the `service_active_login_error` state — the operator action listed in the M15.4 runbook §3 must be taken first.
+
+**M15.3 open items** (carry-forwards from prior milestones — process-manager identification is CLOSED via M15.0; IB Gateway **visibility** is CLOSED via M15.4; remaining items below are about active remediation and operator-action surfaces):
+- **`ingest_ibkr_exposure.py` wiring.** Stub today; requires a healthy IB Gateway. Blocked by the live login-error state surfaced by M15.4 until operator fixes credentials per the runbook.
+- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
+- **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
 
 **M15.0 closeout (production process clarity)** — VPS-verified 2026-06-02:
 - Canonical systemd units installed and active: `algo-trader.service` (runs `main.py`) and `algo-trader-dashboard.service` (runs `dashboard/app.py`).
@@ -180,12 +194,6 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 - New read-only API endpoint `/api/system/services` reports the canonical service map and live systemd state. **Auth-protected** — unauthenticated requests return `{"error":"Unauthorized"}`; the dashboard's Risk Authority tab and any authenticated curl will see the JSON payload.
 - `deploy.sh` and `sync.sh` are now systemd-aware: when canonical units exist + script runs as root, both prefer `systemctl restart` over the legacy `pkill + nohup` path; legacy fallback preserved for pre-install / post-rollback states.
 - Authoritative operator reference: [`docs/M15_0_systemd_canonical.md`](docs/M15_0_systemd_canonical.md).
-
-**M15.3 open items** (carry-forwards from prior milestones — process-manager identification is now CLOSED via M15.0):
-- **IB Gateway reliability hardening.** Beyond nightly `AutoRestartTime`: structured restart-on-stale-heartbeat, monitor 4001/4002 socket health, alert on prolonged disconnect.
-- **`ingest_ibkr_exposure.py` wiring.** Currently a `NotImplementedError` stub; engine returns `exposure_unknown` for IBKR scopes until wired to Gateway.
-- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
-- **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
 
 ---
 

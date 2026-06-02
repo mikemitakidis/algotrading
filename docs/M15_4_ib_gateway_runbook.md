@@ -1,8 +1,18 @@
 # M15.4 — IB Gateway Operator Runbook
 
-**Status:** ✅ M15.4 CLOSED (visibility/truth layer; no auto-recovery added).
-**Authoritative reference for everything below:** `bot/gateway_health.py`
-(the helper module) and `GET /api/gateway/health` (the endpoint).
+**Status:** ✅ M15.4 CLOSED — VPS-verified 2026-06-02 at commit `073a8bd`.
+**Test count on closeout:** `test_m15_4_gateway_health.py` 47/47.
+**Live classification on the day of closeout** (recorded for future drift checks):
+- `algo-trader.service` — active/enabled.
+- `algo-trader-dashboard.service` — active/enabled.
+- `ibgateway.service` — active/enabled.
+- TCP listeners on 4001 / 4002 — **none** (both ports refused connection).
+- Gateway log tail — contains a `Unrecognized Username or Password` style line.
+- `bot.gateway_health.assemble_health()` therefore returns: `status = service_active_login_error`, `ready_for_ibkr_trading = False`.
+- `/api/health` HTTP 200; `/api/gateway/health` HTTP 401 to unauthenticated callers (expected — see §4).
+- **No IB API call was added** by M15.4. AST-asserted absent on every commit.
+
+The headline takeaway: `ibgateway.service` being "active" no longer means the IB API is ready. M15.4 closes that gap.
 
 For the broader project status, see [`../MILESTONE_STATUS.md`](../MILESTONE_STATUS.md)
 and [`M14_FINAL_AUDIT.md`](M14_FINAL_AUDIT.md).
