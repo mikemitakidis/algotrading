@@ -8,3 +8,4 @@ xgboost>=2.0
 alpaca-py>=0.8
 pyarrow
 ib_insync>=0.9
+bcrypt==5.0.0

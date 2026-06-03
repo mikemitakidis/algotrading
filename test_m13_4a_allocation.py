@@ -595,11 +595,25 @@ class TestDashboardEndpoints(unittest.TestCase):
         self.client = self.dash_app.app.test_client()
 
     def _login(self):
-        return self.client.post(
+        # M15.3.A: capture CSRF token from login response so subsequent
+        # POSTs can attach the X-CSRF-Token header. /api/login itself
+        # is CSRF-exempt (no session yet) but every other state-changing
+        # endpoint requires the header.
+        r = self.client.post(
             "/api/login",
             data=json.dumps({"password": "testpw"}),
             content_type="application/json",
         )
+        try:
+            self._csrf = (r.get_json() or {}).get("csrf_token", "")
+        except Exception:
+            self._csrf = ""
+        return r
+
+    def _csrf_headers(self):
+        """M15.3.A: header to attach to state-changing requests after
+        _login(). Empty string if login hasn't been called yet."""
+        return {"X-CSRF-Token": getattr(self, "_csrf", "")}
 
     # --- auth ---------------------------------------------------------------
 
@@ -633,6 +647,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data=json.dumps(p),
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 200, msg=r.get_data(as_text=True))
         body = r.get_json()
@@ -654,6 +669,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data=json.dumps(p),
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 200, msg=r.get_data(as_text=True))
 
@@ -666,6 +682,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data=json.dumps(p),
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 200, msg=r.get_data(as_text=True))
 
@@ -677,6 +694,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data=json.dumps(p),
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 400)
         body = r.get_json()
@@ -691,6 +709,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data=json.dumps(p),
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 400)
 
@@ -700,6 +719,7 @@ class TestDashboardEndpoints(unittest.TestCase):
             "/api/broker-allocation",
             data="not json",
             content_type="application/json",
+            headers=self._csrf_headers(),
         )
         self.assertEqual(r.status_code, 400)
 

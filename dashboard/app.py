@@ -5,6 +5,7 @@ Reads bot_state.json, bot.log, and signals.db only — does not trade.
 No JS backtick template literals.
 """
 import json
+import logging
 import os
 import sqlite3
 import subprocess
@@ -19,13 +20,163 @@ from dotenv import load_dotenv
 BASE_DIR   = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
+# M15.3.A — auth/security hardening primitives.
+from dashboard.auth import (
+    verify_password as _m153a_verify_password,
+    RateLimiter, LoginRateLimited,
+    issue_csrf_token as _m153a_issue_csrf,
+    rotate_csrf_token as _m153a_rotate_csrf,
+    csrf_required,
+    harden_app_config as _m153a_harden_app,
+    rotate_session as _m153a_rotate_session,
+    enforce_session_timeout as _m153a_enforce_timeout,
+    is_secure_cookie_mode as _m153a_is_secure_mode,
+    ensure_auth_events_schema as _m153a_ensure_schema,
+    record_auth_event as _m153a_record_event,
+)
+from dashboard.auth.passwords import password_configured as _m153a_pw_configured
+from dashboard.auth.sessions import (
+    DEFAULT_IDLE_MIN as _M153A_IDLE_MIN,
+    DEFAULT_MAX_HOUR as _M153A_MAX_HOUR,
+)
+from dashboard.auth.csrf import get_csrf_token as _m153a_get_csrf
+
+_m153a_log = logging.getLogger("dashboard.m153a")
+_m153a_log.setLevel(logging.INFO)
+
 app = Flask(__name__)
-_pw = os.getenv('DASHBOARD_PASSWORD', 'changeme')
-app.secret_key = _pw + '_algo_session'
+
+# M15.3.A — Stable secret key.
+# Old behaviour (pre-M15.3.A): app.secret_key was derived from
+# DASHBOARD_PASSWORD, which invalidated all sessions when the password
+# changed AND made the secret guessable when the password was the
+# default 'changeme'. The new policy:
+#   1. If DASHBOARD_SECRET_KEY env is set, use it (preferred).
+#   2. Else fall back to a password-derived key with a loud warning.
+# The fallback exists strictly to avoid locking the operator out
+# during the first M15.3.A deploy — tools/set_dashboard_password.py
+# generates and writes a real secret on first run.
+_secret_env = os.getenv('DASHBOARD_SECRET_KEY', '').strip()
+if _secret_env:
+    app.secret_key = _secret_env
+    _m153a_log.info("Using DASHBOARD_SECRET_KEY from env (stable across password rotations).")
+else:
+    # Transitional fallback. Loud one-time warning at startup.
+    _fallback_pw = os.getenv('DASHBOARD_PASSWORD', 'changeme')
+    app.secret_key = _fallback_pw + '_algo_session'
+    _m153a_log.warning(
+        "DASHBOARD_SECRET_KEY not set — falling back to password-derived "
+        "secret key (transitional behaviour). Run "
+        "`python tools/set_dashboard_password.py` to write a stable "
+        "secret to .env. See docs/M15_3_A_dashboard_auth.md §4."
+    )
+
+# M15.3.A — Cookie hardening (env-gated Secure flag per correction #2).
+_m153a_cookie_diag = _m153a_harden_app(app, logger=_m153a_log)
+_m153a_log.info(
+    "M15.3.A cookie config: httponly=%s samesite=%s secure=%s idle_min=%s max_hour=%s",
+    _m153a_cookie_diag["httponly"], _m153a_cookie_diag["samesite"],
+    _m153a_cookie_diag["secure"], _m153a_cookie_diag["idle_min"],
+    _m153a_cookie_diag["max_hour"],
+)
+
+# M15.3.A — Bind-host warning (soft cutover per Q-A.3 / correction #3).
+# Default remains 0.0.0.0 during transition. If the operator hasn't
+# explicitly acknowledged plaintext exposure AND hasn't switched to
+# 127.0.0.1 + Caddy, log a warning at startup. Loud, not blocking.
+_m153a_bind_host = os.getenv('DASHBOARD_BIND_HOST', '0.0.0.0').strip() or '0.0.0.0'
+_m153a_accept_plaintext = os.getenv('DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE', '').strip().lower() in ('true', '1', 'yes')
+if _m153a_bind_host == '0.0.0.0' and not _m153a_is_secure_mode() and not _m153a_accept_plaintext:
+    _m153a_log.warning(
+        "DASHBOARD_BIND_HOST=0.0.0.0 and no HTTPS mode — dashboard is "
+        "exposed on plaintext HTTP to any reachable network. Either: "
+        "(a) set DASHBOARD_BIND_HOST=127.0.0.1 and front with Caddy/TLS "
+        "(see docs/M15_3_A_dashboard_auth.md §3), or "
+        "(b) set DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE=yes to silence "
+        "this warning if you've explicitly accepted the risk during "
+        "the transition window."
+    )
+
+# M15.3.A — Password-configured warning.
+if not _m153a_pw_configured():
+    _m153a_log.error(
+        "Dashboard has no real password configured. Set DASHBOARD_PASSWORD_HASH "
+        "via `python tools/set_dashboard_password.py` (preferred) or "
+        "DASHBOARD_PASSWORD in .env (transitional fallback). The default "
+        "'changeme' is REJECTED for login — the dashboard is currently "
+        "unreachable until a password is configured."
+    )
+
+# M15.3.A — Module-level rate-limiter for /api/login.
+_m153a_login_limiter = RateLimiter()
 
 LOG_PATH   = BASE_DIR / 'logs' / 'bot.log'
 DB_PATH    = BASE_DIR / 'data' / 'signals.db'
 STATE_PATH = BASE_DIR / 'data' / 'bot_state.json'
+
+
+# M15.3.A — Ensure auth_events table exists at startup.
+def _m153a_ensure_auth_schema_once() -> None:
+    try:
+        c = sqlite3.connect(str(DB_PATH))
+        try:
+            _m153a_ensure_schema(c)
+        finally:
+            c.close()
+    except Exception as e:
+        _m153a_log.error("auth_events schema bootstrap failed: %s", e)
+_m153a_ensure_auth_schema_once()
+
+
+def _m153a_client_ip() -> str:
+    """Best-effort client IP. Honours X-Forwarded-For when set
+    (reverse-proxy scenario). Returns "" if not derivable."""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or ''
+
+
+def _m153a_audit(kind: str, *, success: bool,
+                  extras: dict | None = None) -> None:
+    """Write one auth_events row, swallowing DB errors so audit
+    never blocks the request. The errors are logged."""
+    try:
+        c = sqlite3.connect(str(DB_PATH))
+        try:
+            _m153a_record_event(
+                c,
+                kind=kind,
+                client_ip=_m153a_client_ip(),
+                user_agent=request.headers.get('User-Agent', ''),
+                session_id=request.cookies.get(app.config.get('SESSION_COOKIE_NAME', 'session'), ''),
+                success=success,
+                extras=extras,
+            )
+        finally:
+            c.close()
+    except Exception as e:
+        _m153a_log.error("auth_events insert failed (kind=%s): %s", kind, e)
+
+
+# M15.3.A — Per-request session timeout enforcement.
+@app.before_request
+def _m153a_enforce_session():
+    if request.endpoint is None:
+        return None
+    # Only enforce on authenticated sessions; unauthed flows (e.g.
+    # /api/login) handle their own checks. We still call this on
+    # every request so that an expired auth marker is cleared
+    # PROMPTLY rather than at the next protected endpoint.
+    if session.get('authed'):
+        valid = _m153a_enforce_timeout(
+            session,
+            idle_min=_M153A_IDLE_MIN,
+            max_hour=_M153A_MAX_HOUR,
+        )
+        if not valid:
+            _m153a_audit('session_expired', success=False)
+    return None
 
 
 def get_password():
@@ -814,6 +965,41 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
 </div><!-- /appWrap -->
 
 <script>
+// ─── M15.3.A: CSRF auto-attach ───
+// Every state-changing fetch (POST/PUT/PATCH/DELETE) automatically
+// gets the X-CSRF-Token header attached. /api/login is exempt
+// because no session/token exists yet. Existing fetch(...) call
+// sites do not need to change — we wrap window.fetch once here.
+window._csrfToken = null;
+(function() {
+  var _origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    var method = (opts.method || 'GET').toUpperCase();
+    var stateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !== -1;
+    var isLogin = (typeof url === 'string') && url.indexOf('/api/login') !== -1;
+    if (stateChanging && !isLogin) {
+      opts.headers = opts.headers || {};
+      // Don't clobber an explicitly-set header.
+      if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+        opts.headers['X-CSRF-Token'] = window._csrfToken || '';
+      }
+    }
+    return _origFetch.call(window, url, opts);
+  };
+})();
+// On page load, if a session is already authed (from a prior login),
+// fetch the current CSRF token. The /api/auth/csrf endpoint returns
+// 401 if not authed — silently OK, login flow will populate it then.
+(function() {
+  fetch('/api/auth/csrf', {method: 'GET', credentials: 'same-origin'})
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(d) {
+      if (d && d.csrf_token) { window._csrfToken = d.csrf_token; }
+    })
+    .catch(function() {});
+})();
+
 // ─── globals ───
 var _sigs = [];
 var _lf   = 'all';
@@ -827,12 +1013,20 @@ function doLogin(){
   if(!pw){ document.getElementById('lerr').textContent='Enter a password'; return; }
   document.getElementById('lerr').textContent = 'Checking...';
   fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw})})
-  .then(function(r){ return r.json(); })
-  .then(function(d){
+  .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, status: r.status, body: d}; }); })
+  .then(function(res){
+    var d = res.body || {};
     if(d.ok){
+      // M15.3.A — capture the CSRF token so subsequent state-changing
+      // requests can attach the X-CSRF-Token header.
+      if (d.csrf_token) { window._csrfToken = d.csrf_token; }
       document.getElementById('loginWrap').style.display = 'none';
       document.getElementById('appWrap').style.display   = 'block';
       boot();
+    } else if (res.status === 429 && d.error === 'rate_limited') {
+      document.getElementById('lerr').textContent = 'Too many failed attempts. Retry in ' + (d.retry_after_sec || '?') + 's.';
+    } else if (res.status === 503 && d.error === 'no_password_configured') {
+      document.getElementById('lerr').textContent = 'Dashboard has no password configured. Run tools/set_dashboard_password.py on the server.';
     } else {
       document.getElementById('lerr').textContent = 'Incorrect password';
     }
@@ -3497,17 +3691,88 @@ def index():
 
 @app.route('/api/login', methods=['POST'])
 def login():
+    """M15.3.A — bcrypt + plaintext fallback, rate-limit, audit.
+
+    CSRF-EXEMPT (per Q-A.7): no session exists yet to embed the token in.
+    Protected by rate-limit + bcrypt's natural ~250ms verify time.
+
+    Response shape on success: {ok: True, csrf_token: "..."}
+    The client (browser JS) stores the csrf_token and attaches it to
+    every subsequent state-changing request as X-CSRF-Token header.
+    """
+    client_ip = _m153a_client_ip()
+
+    # 1. Rate-limit check — short-circuit before any password compare.
+    try:
+        _m153a_login_limiter.check_locked(client_ip)
+    except LoginRateLimited as e:
+        _m153a_audit('login_locked', success=False, extras={
+            'retry_after_sec': e.retry_after_sec,
+            'policy': _m153a_login_limiter.policy(),
+        })
+        return jsonify({'ok': False,
+                         'error': 'rate_limited',
+                         'retry_after_sec': e.retry_after_sec}), 429
+
+    # 2. Defensive: if no password is configured (default 'changeme'
+    # only), refuse all logins. Better than accepting 'changeme' from
+    # the network.
+    if not _m153a_pw_configured():
+        _m153a_audit('login_unconfigured', success=False)
+        return jsonify({'ok': False, 'error': 'no_password_configured'}), 503
+
+    # 3. Verify password.
     data = request.get_json(silent=True) or {}
-    if data.get('password') == get_password():
-        session['authed'] = True
-        return jsonify({'ok': True})
-    return jsonify({'ok': False}), 401
+    provided = data.get('password', '')
+    matched, info = _m153a_verify_password(provided if isinstance(provided, str) else '')
+
+    if not matched:
+        _m153a_login_limiter.record_failure(client_ip)
+        _m153a_audit('login_failure', success=False, extras={
+            'path': info.get('path', 'none'),
+            'failure_count': _m153a_login_limiter.failure_count(client_ip),
+        })
+        return jsonify({'ok': False}), 401
+
+    # 4. Success — rotate session, issue CSRF, audit.
+    _m153a_login_limiter.record_success(client_ip)
+    _m153a_rotate_session(session, client_ip=client_ip)
+    new_csrf = _m153a_issue_csrf(session)
+    audit_extras = {'path': info.get('path', 'none')}
+    if info.get('warning'):
+        audit_extras['warning'] = info['warning']
+    _m153a_audit('login_success', success=True, extras=audit_extras)
+    return jsonify({'ok': True, 'csrf_token': new_csrf})
 
 
 @app.route('/api/logout', methods=['POST'])
+@require_auth
+@csrf_required
 def logout():
+    """M15.3.A — logout requires auth + CSRF (per Q-A.7).
+
+    A CSRF-free logout could be abused to log the operator out via a
+    malicious page; the CSRF requirement makes that impossible
+    cross-origin."""
+    _m153a_audit('logout', success=True)
     session.clear()
     return jsonify({'ok': True})
+
+
+@app.route('/api/auth/csrf', methods=['GET'])
+@require_auth
+def auth_csrf():
+    """M15.3.A — return the current session's CSRF token.
+
+    Used by the dashboard JS on page load (after determining the
+    operator is already logged in from a prior session) to repopulate
+    window._csrfToken without forcing a re-login."""
+    tok = _m153a_get_csrf(session)
+    if not tok:
+        # Session is authed but has no token (legacy session from
+        # before M15.3.A deploy). Issue one now.
+        tok = _m153a_issue_csrf(session)
+    return jsonify({'csrf_token': tok})
 
 
 # ── Status ──────────────────────────────────────────────────────────────────
@@ -3626,6 +3891,7 @@ def _run_bot():
 
 @app.route('/api/start', methods=['POST'])
 @require_auth
+@csrf_required
 def start():
     _run_bot()
     return jsonify({'ok': True})
@@ -3633,6 +3899,7 @@ def start():
 
 @app.route('/api/stop', methods=['POST'])
 @require_auth
+@csrf_required
 def stop():
     subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
     return jsonify({'ok': True})
@@ -3640,6 +3907,7 @@ def stop():
 
 @app.route('/api/restart', methods=['POST'])
 @require_auth
+@csrf_required
 def restart():
     def _do():
         time.sleep(1)
@@ -3673,6 +3941,7 @@ def telegram_current():
 
 @app.route('/api/telegram/save', methods=['POST'])
 @require_auth
+@csrf_required
 def telegram_save():
     data = request.get_json(silent=True) or {}
     try:
@@ -3701,6 +3970,7 @@ def telegram_save():
 
 @app.route('/api/telegram/test', methods=['POST'])
 @require_auth
+@csrf_required
 def telegram_test():
     import sys
     sys.path.insert(0, str(BASE_DIR))
@@ -3749,6 +4019,7 @@ def telegram_getupdates():
 
 @app.route('/api/settings/password', methods=['POST'])
 @require_auth
+@csrf_required
 def save_password():
     data = request.get_json(silent=True) or {}
     pw = data.get('password', '').strip()
@@ -3766,6 +4037,7 @@ def save_password():
 
 @app.route('/api/backtest/reset', methods=['POST'])
 @require_auth
+@csrf_required
 def backtest_reset():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.backtest_job import reset_job
@@ -3775,6 +4047,7 @@ def backtest_reset():
 
 @app.route('/api/backtest/cancel', methods=['POST'])
 @require_auth
+@csrf_required
 def backtest_cancel():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.backtest_job import cancel_job
@@ -3784,6 +4057,7 @@ def backtest_cancel():
 
 @app.route('/api/backtest/run', methods=['POST'])
 @require_auth
+@csrf_required
 def backtest_run():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.backtest_job import start_job, is_running
@@ -4123,6 +4397,7 @@ def portfolio_risk_config_get():
 
 @app.route('/api/portfolio-risk/config', methods=['POST'])
 @require_auth
+@csrf_required
 def portfolio_risk_config_set():
     import os, shutil
     changes = request.json or {}
@@ -4198,6 +4473,7 @@ def broker_allocation_get():
 
 @app.route('/api/broker-allocation', methods=['POST'])
 @require_auth
+@csrf_required
 def broker_allocation_set():
     import sqlite3 as _sql
     from bot.broker_allocation import validate_policy, save_policy
@@ -4681,6 +4957,7 @@ def kill_switch_state():
 
 @app.route('/api/kill-switch/activate', methods=['POST'])
 @require_auth
+@csrf_required
 def kill_switch_activate():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.kill_switch import activate_kill_switch
@@ -4690,6 +4967,7 @@ def kill_switch_activate():
 
 @app.route('/api/kill-switch/deactivate', methods=['POST'])
 @require_auth
+@csrf_required
 def kill_switch_deactivate():
     import sys; sys.path.insert(0, str(BASE_DIR))
     from bot.kill_switch import deactivate_kill_switch
@@ -4714,6 +4992,7 @@ def strategy_get():
 
 @app.route('/api/strategy/save', methods=['POST'])
 @require_auth
+@csrf_required
 def strategy_save():
     import sys
     sys.path.insert(0, str(BASE_DIR))
@@ -4735,6 +5014,7 @@ def strategy_save():
 
 @app.route('/api/strategy/reset', methods=['POST'])
 @require_auth
+@csrf_required
 def strategy_reset():
     import sys
     sys.path.insert(0, str(BASE_DIR))

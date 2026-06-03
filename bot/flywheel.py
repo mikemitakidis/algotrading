@@ -606,6 +606,44 @@ def init_flywheel_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_auth_events_migration(conn: sqlite3.Connection) -> dict:
+    """M15.3.A — additive append-only dashboard-auth audit log.
+
+    Schema approved per Q-A.8:
+      id, ts_utc, kind, client_ip, user_agent (truncated),
+      session_id (sha256-hashed, never raw), success, extras_json.
+
+    Idempotent (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS).
+    The DAO (dashboard/auth/audit.py) owns the actual schema string and
+    the closed kind-set; this helper exists so flywheel-driven migration
+    paths can also create the table without importing the Flask app.
+    """
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS auth_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_utc      TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            client_ip   TEXT,
+            user_agent  TEXT,
+            session_id  TEXT,
+            success     INTEGER NOT NULL,
+            extras_json TEXT,
+            CHECK (ts_utc <> ''),
+            CHECK (success IN (0, 1))
+        )
+        '''
+    )
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_auth_events_ts '
+                 'ON auth_events(ts_utc DESC)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_auth_events_client_ip '
+                 'ON auth_events(client_ip)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_auth_events_kind '
+                 'ON auth_events(kind)')
+    conn.commit()
+    return {"applied": True, "table": "auth_events"}
+
+
 def ensure_execution_intents_migrations(conn: sqlite3.Connection) -> list:
     """
     M15 schema hardening — idempotent ALTER TABLE for M12 lifecycle columns.
