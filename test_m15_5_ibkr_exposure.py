@@ -321,6 +321,57 @@ class TestHealthGate(unittest.TestCase):
             _check_gateway_ready(scope="ibkr_live",
                                   health_checker=_healthy_paper_health)
 
+    def test_login_error_detected_raises_via_ready_for_ibkr_trading(self):
+        """Normal path post-56bb5ce-patch: M15.4 sets ready_for_ibkr_
+        trading=False whenever login_error_detected=True. _check_gateway_
+        ready therefore raises GatewayNotReadyError at the
+        ready_for_ibkr_trading check. This is the expected runtime
+        path on the user's VPS scenario."""
+        def login_error_health():
+            return {
+                "ready_for_ibkr_trading": False,
+                "mode":                   "paper",
+                "expected_port":          IBKR_PAPER_PORT,
+                "status":                 "service_active_login_error",
+                "systemd_active":         True,
+                "tcp_reachable":          True,     # port WAS open
+                "login_error_detected":   True,
+            }
+        with self.assertRaises(GatewayNotReadyError) as ctx:
+            _check_gateway_ready(scope="ibkr_paper",
+                                  health_checker=login_error_health)
+        self.assertIn("gateway_not_ready", str(ctx.exception))
+        # Error message must surface the login_error_detected=True
+        # signal so operators see WHY it's not ready.
+        self.assertIn("login_error_detected=True", str(ctx.exception))
+
+    def test_login_error_detected_defense_in_depth_when_ready_leaks_true(self):
+        """Defense-in-depth: if some future M15.4 regression lets
+        ready_for_ibkr_trading=True leak through alongside
+        login_error_detected=True, M15.5's gateway gate STILL refuses.
+        This is the backstop. It exists so the M15.5 path can't be
+        bypassed by a single-line M15.4 regression."""
+        def leaked_health():
+            return {
+                # Inconsistent — should be impossible post-56bb5ce-patch
+                # but we exercise it to prove M15.5 still fails closed.
+                "ready_for_ibkr_trading": True,
+                "mode":                   "paper",
+                "expected_port":          IBKR_PAPER_PORT,
+                "status":                 "service_active_api_port_open",
+                "systemd_active":         True,
+                "tcp_reachable":          True,
+                "login_error_detected":   True,    # the contradictory signal
+            }
+        with self.assertRaises(GatewayNotReadyError) as ctx:
+            _check_gateway_ready(scope="ibkr_paper",
+                                  health_checker=leaked_health)
+        self.assertIn("gateway_login_error_detected",
+                       str(ctx.exception),
+            "Defense-in-depth check must surface a distinct reason code "
+            "so the regression is visible. Got: "
+            f"{ctx.exception!r}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Group 3 — Reader: connects to 4002, readonly=True, disconnects always
@@ -1197,6 +1248,101 @@ class TestDryRunPhasedObservability(unittest.TestCase):
                 f"_MockIB has {forbidden!r} — fixture must NOT define "
                 f"order-related methods")
 
+    def test_dryrun_refuses_when_login_error_detected_True(self):
+        """The user's exact VPS scenario. M15.4 health reports
+        login_error_detected=True; M15.5 dry-run MUST stop at the
+        gateway_health phase and MUST NOT attempt connect.
+
+        Critical post-fix invariants:
+          gateway_ready          = False
+          ib_connect_ok          = False
+          error_phase            = 'gateway_health'
+          error                  contains 'gateway_not_ready' and
+                                  'login_error_detected=True'
+          ib_factory NEVER invoked (factory_called == False)
+          disconnect_attempted   = False (no IB object exists)
+        """
+        factory_called = {"hit": False}
+
+        def _spy_factory():
+            factory_called["hit"] = True
+            return _MockIB()
+
+        def login_error_health():
+            return {
+                "ready_for_ibkr_trading": False,
+                "mode":                   "paper",
+                "expected_port":          IBKR_PAPER_PORT,
+                "status":                 "service_active_login_error",
+                "systemd_active":         True,
+                "tcp_reachable":          True,   # the VPS scenario
+                "login_error_detected":   True,
+            }
+
+        summary = run_paper_dryrun(
+            health_checker=login_error_health,
+            ib_factory=_spy_factory,
+        )
+
+        self.assertFalse(summary["gateway_ready"])
+        self.assertFalse(summary["ib_connect_ok"])
+        self.assertFalse(summary["snapshot_ready"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertEqual(summary["error_phase"], "gateway_health",
+            "dry-run must stop at gateway_health phase when "
+            "login_error_detected=True — NOT proceed to connect.")
+        self.assertIn("gateway_not_ready", summary["error"])
+        self.assertIn("login_error_detected=True", summary["error"])
+        # The whole point: NO IB API connect was attempted.
+        self.assertFalse(factory_called["hit"],
+            "ib_factory was invoked despite login_error_detected=True "
+            "— the gateway gate failed to block the attempt.")
+        # No IB object exists, so disconnect was not attempted.
+        self.assertFalse(summary["disconnect_attempted"])
+        # elapsed_ms recorded only the gateway_health phase + total.
+        self.assertIn("gateway_health", summary["elapsed_ms"])
+        self.assertNotIn("connect", summary["elapsed_ms"])
+        self.assertNotIn("snapshot", summary["elapsed_ms"])
+        self.assertNotIn("portfolio", summary["elapsed_ms"])
+        self.assertNotIn("positions", summary["elapsed_ms"])
+
+    def test_dryrun_refuses_via_defense_in_depth_login_check(self):
+        """If a regression somehow let ready_for_ibkr_trading=True
+        leak through alongside login_error_detected=True, the dry-run
+        STILL refuses via the M15.5 defense-in-depth check.
+        error_phase is gateway_health; error references the
+        gateway_login_error_detected backstop."""
+        factory_called = {"hit": False}
+
+        def _spy_factory():
+            factory_called["hit"] = True
+            return _MockIB()
+
+        def leaked_health():
+            return {
+                "ready_for_ibkr_trading": True,    # contradictory
+                "mode":                   "paper",
+                "expected_port":          IBKR_PAPER_PORT,
+                "status":                 "service_active_api_port_open",
+                "systemd_active":         True,
+                "tcp_reachable":          True,
+                "login_error_detected":   True,
+            }
+
+        summary = run_paper_dryrun(
+            health_checker=leaked_health,
+            ib_factory=_spy_factory,
+        )
+
+        self.assertFalse(summary["gateway_ready"])
+        self.assertEqual(summary["error_phase"], "gateway_health")
+        self.assertIn("gateway_login_error_detected", summary["error"])
+        self.assertFalse(factory_called["hit"],
+            "Defense-in-depth check must still prevent the IB factory "
+            "from being invoked even when ready_for_ibkr_trading "
+            "leaked True.")
+        self.assertFalse(summary["disconnect_attempted"])
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Group 7 — AST: no forbidden surface
@@ -1420,7 +1566,17 @@ class TestProtectedFilesUntouched(unittest.TestCase):
         "bot/etoro/live_broker.py",
         "tools/etoro_live_write.py",
         "bot/gateway_watchdog.py",
-        "bot/gateway_health.py",
+        # NOTE: bot/gateway_health.py is INTENTIONALLY OMITTED from the
+        # M15.5 protected list as of the post-56bb5ce coordinated patch.
+        # The user diagnosed a bug in M15.4's _classify: it treated
+        # tcp_reachable=True as winning over login_error_detected=True,
+        # incorrectly returning service_active_api_port_open + ready_
+        # for_ibkr_trading=True when an auth dialog was blocking the
+        # session. The patch demotes that case to service_active_login_
+        # error. Future M15.5 commits must NOT modify bot/gateway_health.py
+        # without explicit operator approval; the M15.4 test suite
+        # (test_m15_4_gateway_health.py, 50 tests as of post-56bb5ce)
+        # is the authoritative ongoing protection for that module.
         "infra/systemd/algo-trader.service",
         "infra/systemd/algo-trader-dashboard.service",
         "infra/systemd/ibgateway.service.documented",

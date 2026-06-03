@@ -50,18 +50,21 @@ The `status` field is one of:
 | Status | Meaning |
 |---|---|
 | `service_down` | systemd reports inactive / failed / activating / deactivating |
-| `service_active_port_closed` | systemd active, expected port not listening, no login error matched in log |
-| `service_active_login_error` | systemd active, port closed, log tail matches a credential-failure pattern |
-| `service_active_api_port_open` | systemd active, expected port has a TCP listener |
+| `service_active_port_closed` | systemd active, no login error in log, expected port not listening |
+| `service_active_login_error` | systemd active, log tail matches a credential-failure pattern. **Returned regardless of TCP port state** — see precedence note below. |
+| `service_active_api_port_open` | systemd active, expected port has a TCP listener, AND no login error in log |
 | `unknown` | one or more required sources were unreadable |
+
+**Login-error precedence (post-56bb5ce patch).** When `login_error_detected=True`, `_classify` returns `service_active_login_error` regardless of whether the TCP listener is accepting connections. Rationale: VPS evidence showed that the gateway can simultaneously (a) leave the TCP socket on 4002 listening AND (b) display a blocking "Unrecognized Username or Password" dialog. In that state, `ib_insync.connect(readonly=True)` times out at the API handshake even though raw TCP works. The earlier behaviour — where port-open won over login-error — produced false `ready_for_ibkr_trading=True` readings and allowed M15.5 to attempt connects that would time out 10+ seconds later. The new behaviour fails closed: `ready_for_ibkr_trading=False` whenever any login-error pattern matches the log tail.
 
 The boolean `ready_for_ibkr_trading` is **true only** when status is
 `service_active_api_port_open`. **Even then, the bot must still do its
 own IB API negotiation before any order is placed** — M15.4 confirms
-the port accepts TCP, not that the API session is logged in or healthy.
-For that, the M15.1 watchdog (`bot/gateway_watchdog.py`) does an actual
-`reqCurrentTime` ping in a separate background loop; that's the
-authoritative "API is up" signal and lives in `/api/gateway/state`.
+the port accepts TCP and no auth dialog is showing, not that the API
+session is logged in or healthy. For full session health, the M15.1
+watchdog (`bot/gateway_watchdog.py`) does an actual `reqCurrentTime`
+ping in a separate background loop; that's the authoritative "API is
+up" signal and lives in `/api/gateway/state`.
 
 ---
 

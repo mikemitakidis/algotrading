@@ -366,18 +366,30 @@ def _classify(
     tcp_reachable: Optional[bool],
     login_error_detected: bool,
 ) -> str:
-    """Map (systemd, tcp, login) -> closed-set status. See STATUSES."""
+    """Map (systemd, tcp, login) -> closed-set status. See STATUSES.
+
+    Login-error precedence (added in the post-56bb5ce patch after VPS
+    evidence that the gateway can have TCP port 4002 open AND an active
+    "Unrecognized Username or Password" dialog simultaneously — port-
+    open does NOT prove the API is usable. When login_error_detected
+    is True, we downgrade to service_active_login_error regardless of
+    port state. This keeps ready_for_ibkr_trading=False and prevents
+    M15.5 from attempting to connect to a session that will silently
+    refuse the API handshake."""
     active = systemd.get("active")
     if active in ("inactive", "failed", "deactivating", "activating"):
         return "service_down"
     if active != "active":
         return "unknown"
     # active==active from here.
+    # Login error wins over port state. A blocking auth dialog means
+    # the IB API socket may accept TCP connects but will not complete
+    # the handshake — the session is not API-ready.
+    if login_error_detected:
+        return "service_active_login_error"
     if tcp_reachable is True:
         return "service_active_api_port_open"
     if tcp_reachable is False:
-        if login_error_detected:
-            return "service_active_login_error"
         return "service_active_port_closed"
     # tcp_reachable is None (probe failed unrelated to refusal).
     return "unknown"

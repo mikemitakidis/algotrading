@@ -137,6 +137,17 @@ def _check_gateway_ready(*, scope: str, health_checker: Optional[Callable]) -> N
             f"tcp_reachable={h.get('tcp_reachable')!r} "
             f"login_error_detected={h.get('login_error_detected')!r}"
         )
+    # Defense-in-depth: even if some future M15.4 regression let
+    # ready_for_ibkr_trading leak True with login_error_detected=True,
+    # the M15.5 path still refuses. The post-56bb5ce M15.4 patch
+    # already classifies login_error_detected=True as
+    # service_active_login_error (which sets ready_for_ibkr_trading=
+    # False), so this branch is normally unreachable — it exists as
+    # a backstop that fails closed if the M15.4 contract changes.
+    if h.get("login_error_detected"):
+        raise GatewayNotReadyError(
+            f"gateway_login_error_detected:status={h.get('status')!r}"
+        )
     if h.get("mode") != "paper":
         raise GatewayNotReadyError(
             f"gateway_mode_not_paper: mode={h.get('mode')!r}"

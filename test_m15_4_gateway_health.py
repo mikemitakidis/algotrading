@@ -340,12 +340,31 @@ class TestClassification(unittest.TestCase):
                       tcp_reachable=True, login_error_detected=False)
         self.assertEqual(s, "unknown")
 
-    def test_login_error_does_not_falsely_promote_port_open(self):
-        """Login-error patterns never matter when the port is actually
-        open — the port being open wins."""
+    def test_login_error_overrides_port_open(self):
+        """Post-56bb5ce patch: when an auth dialog is blocking the
+        session, TCP port-open does NOT mean the API is usable. VPS
+        evidence: gateway log shows "Unrecognized Username or Password"
+        AND port 4002 is listening AND ib_insync.connect(clientId=15,
+        readonly=True) times out at the API handshake. _classify must
+        therefore demote to service_active_login_error.
+
+        This test inverts the old (buggy)
+        test_login_error_does_not_falsely_promote_port_open assertion."""
         s = _classify({"active": "active"},
                       tcp_reachable=True, login_error_detected=True)
-        self.assertEqual(s, "service_active_api_port_open")
+        self.assertEqual(s, "service_active_login_error",
+            "login_error_detected=True with tcp_reachable=True MUST "
+            "downgrade to service_active_login_error — a blocking auth "
+            "dialog means the API session is not usable even though "
+            "the TCP listener accepts connects.")
+
+    def test_login_error_still_dominates_when_tcp_probe_failed(self):
+        """tcp_reachable=None + login_error_detected=True still resolves
+        to service_active_login_error (not unknown). The login error
+        is the more specific failure mode and dominates."""
+        s = _classify({"active": "active"},
+                      tcp_reachable=None, login_error_detected=True)
+        self.assertEqual(s, "service_active_login_error")
 
     def test_status_value_belongs_to_closed_set(self):
         """No combination of inputs may produce a status outside STATUSES."""
@@ -429,6 +448,132 @@ class TestAssembleHealthCurrentAuditScenario(unittest.TestCase):
         self.assertTrue(health["login_error_detected"])
         self.assertEqual(health["status"], "service_active_login_error")
         self.assertFalse(health["ready_for_ibkr_trading"])
+
+
+class TestAssembleHealthPortOpenWithLoginError(unittest.TestCase):
+    """Post-56bb5ce patch reproduction. The user reported on the VPS:
+       * systemd active=active, mode=paper, expected_port=4002
+       * TCP port 4002 listening (raw connect succeeds in 0.5s)
+       * Gateway log shows 'Unrecognized Username or Password' AND
+         'Re-login is required'
+       * DISPLAY=:99 window list shows an active auth dialog
+       * ib_insync connect probes with clientIds 15, 17, 18 all
+         time out — port-open does NOT mean API-usable
+
+    Expected behaviour after the patch:
+       status                  = service_active_login_error
+       ready_for_ibkr_trading  = False    ← was True before patch
+       tcp_reachable           = True
+       login_error_detected    = True
+
+    Before the patch, the helper would have returned status=
+    service_active_api_port_open and ready_for_ibkr_trading=True,
+    which is what allowed the M15.5 dry-run to proceed to the
+    connect phase only to time out 10s later. This test pins the
+    fix."""
+
+    def test_port_open_plus_login_error_is_not_ready(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            sh = Path(tmp) / "start_ibgateway.sh"
+            sh.write_text("TRADING_MODE=paper\nexec ibcalpha --mode=paper\n")
+            cfg_dir = Path(tmp) / "ibc"
+            cfg_dir.mkdir()
+            (cfg_dir / "config.ini").write_text("TradingMode=paper\n")
+            log = Path(tmp) / "ibgateway.log"
+            log.write_text(
+                "Gateway started\n"
+                "API server listening on 4002\n"
+                "Re-login is required\n"
+                "Dialog: Unrecognized Username or Password\n"
+                "remove Client 15\n"
+                "remove Client 17\n"
+            )
+
+            with patch("bot.gateway_health.subprocess.run") as mock_run:
+                # is-active, is-enabled, show, journalctl
+                mock_run.side_effect = [
+                    MagicMock(returncode=0, stdout="active\n", stderr=""),
+                    MagicMock(returncode=0, stdout="enabled\n", stderr=""),
+                    MagicMock(returncode=0, stdout=(
+                        "SubState=running\nMainPID=3637174\n"
+                        "ActiveEnterTimestamp=Sat 2026-05-30 06:56:35 UTC\n"
+                        "NRestarts=0\n"
+                        "FragmentPath=/etc/systemd/system/ibgateway.service\n"
+                    ), stderr=""),
+                    MagicMock(returncode=0, stdout=(
+                        "2026-05-30T06:56:35 host systemd[1]: Started IB Gateway.\n"
+                    ), stderr=""),
+                ]
+                with patch("bot.gateway_health.socket.create_connection") as mock_cc:
+                    # CRITICAL: TCP socket DOES accept the probe —
+                    # this is the new VPS scenario. The mock returns
+                    # successfully so probe_tcp_listening returns True.
+                    mock_socket = MagicMock()
+                    mock_cc.return_value = mock_socket
+                    health = assemble_health(
+                        start_script=sh,
+                        ibc_config_dir=cfg_dir,
+                        log_path=log,
+                    )
+
+        # Pre-fix invariants that should still hold.
+        self.assertTrue(health["systemd_active"])
+        self.assertEqual(health["mode"], "paper")
+        self.assertEqual(health["expected_port"], PORT_PAPER)
+        self.assertTrue(health["tcp_reachable"],
+            "TCP probe accepted the connect — must be True")
+        self.assertTrue(health["login_error_detected"],
+            "log tail contains 'Unrecognized Username or Password' — "
+            "login_error_detected must be True")
+
+        # Post-fix acceptance assertions (the bug fix).
+        self.assertEqual(health["status"], "service_active_login_error",
+            "VPS scenario: TCP open + login error must classify as "
+            "service_active_login_error, NOT service_active_api_port_open. "
+            f"got status={health['status']!r}")
+        self.assertFalse(health["ready_for_ibkr_trading"],
+            "ready_for_ibkr_trading MUST be False when login_error_detected "
+            "is True, regardless of port state. Pre-fix this leaked True "
+            "and allowed M15.5 to attempt a connect that timed out.")
+
+    def test_port_open_no_login_error_still_ready(self):
+        """Sanity check: the happy path is unchanged. Port open, no
+        login error, mode=paper → ready_for_ibkr_trading=True."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            sh = Path(tmp) / "start_ibgateway.sh"
+            sh.write_text("TRADING_MODE=paper\n")
+            cfg_dir = Path(tmp) / "ibc"
+            cfg_dir.mkdir()
+            (cfg_dir / "config.ini").write_text("TradingMode=paper\n")
+            log = Path(tmp) / "ibgateway.log"
+            log.write_text("Gateway started\nAPI server listening on 4002\n")
+
+            with patch("bot.gateway_health.subprocess.run") as mock_run:
+                mock_run.side_effect = [
+                    MagicMock(returncode=0, stdout="active\n", stderr=""),
+                    MagicMock(returncode=0, stdout="enabled\n", stderr=""),
+                    MagicMock(returncode=0, stdout=(
+                        "SubState=running\nMainPID=999\n"
+                        "ActiveEnterTimestamp=Mon 2026-06-03 10:00:00 UTC\n"
+                        "NRestarts=0\nFragmentPath=/etc/systemd/system/ibgateway.service\n"
+                    ), stderr=""),
+                    MagicMock(returncode=0, stdout="", stderr=""),
+                ]
+                with patch("bot.gateway_health.socket.create_connection") as mock_cc:
+                    mock_cc.return_value = MagicMock()
+                    health = assemble_health(
+                        start_script=sh,
+                        ibc_config_dir=cfg_dir,
+                        log_path=log,
+                    )
+
+        self.assertTrue(health["tcp_reachable"])
+        self.assertFalse(health["login_error_detected"])
+        self.assertEqual(health["status"], "service_active_api_port_open")
+        self.assertTrue(health["ready_for_ibkr_trading"],
+            "Happy path: port open + no login error must remain ready")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
