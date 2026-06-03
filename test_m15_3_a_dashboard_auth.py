@@ -1266,6 +1266,61 @@ class TestRealHTTPCookieFlags(unittest.TestCase):
             f"Secure flag expected with HTTPS_MODE: {combined!r}")
 
 
+class TestScriptModeInvocation(unittest.TestCase):
+    """Regression test for the M15.3.A first-deploy systemd crash.
+
+    The systemd unit runs `python3 /opt/algo-trader/dashboard/app.py`
+    directly — i.e. script mode, not module mode. Before the
+    M15.3.A sys.path bootstrap, script-mode invocation crashed
+    immediately with `ModuleNotFoundError: No module named
+    'dashboard'` because Python's script-mode sys.path only includes
+    the script's directory (not the repo root).
+
+    Tests that imported dashboard.app via `python3 -m unittest` did
+    NOT exercise this code path because `-m` puts cwd on sys.path,
+    masking the bug. This test invokes the script the same way
+    systemd does — as a subprocess — and confirms it does NOT exit
+    with status=1 in the first 1.5 seconds. If imports fail, the
+    process exits within milliseconds with the ImportError on stderr.
+    If imports succeed, the process hangs on app.run() and we kill
+    it via timeout."""
+
+    def test_dashboard_app_py_starts_in_script_mode(self):
+        env = os.environ.copy()
+        env["DASHBOARD_PASSWORD"] = "regression-test-pw"
+        env["DASHBOARD_SECRET_KEY"] = "regression-test-secret-key-xxxx"
+        env["DASHBOARD_PORT"] = "0"  # OS-assigned ephemeral port
+        # Ensure cwd-on-sys.path doesn't mask the bug — clear
+        # PYTHONPATH so the test is honest about systemd's regime.
+        env.pop("PYTHONPATH", None)
+        proc = subprocess.Popen(
+            [sys.executable, "dashboard/app.py"],
+            cwd=_REPO,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=1.5)
+            # If we got here, the process exited within 1.5s — which
+            # for a Flask app means it crashed at import time.
+            err_text = stderr.decode("utf-8", errors="replace")
+            out_text = stdout.decode("utf-8", errors="replace")
+            self.fail(
+                f"dashboard/app.py exited (rc={proc.returncode}) in "
+                f"script mode within 1.5s — imports likely failed.\n"
+                f"STDERR (first 800 chars):\n{err_text[:800]}\n"
+                f"STDOUT (first 200 chars):\n{out_text[:200]}"
+            )
+        except subprocess.TimeoutExpired:
+            # Process still running — imports succeeded, Flask is
+            # listening (or about to). That's pass.
+            proc.kill()
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+
+
 class TestSetPasswordToolSubprocess(unittest.TestCase):
     """tools/set_dashboard_password.py — invoked as a subprocess.
     Verifies it never prints the password, preserves unrelated .env
@@ -1293,11 +1348,19 @@ class TestSetPasswordToolSubprocess(unittest.TestCase):
     def _run_setpw(self, *extra_args, stdin_input):
         """Run tools/set_dashboard_password.py as a subprocess with the
         repo on PYTHONPATH so it can `from dashboard.auth.passwords
-        import hash_password`."""
+        import hash_password`.
+
+        Always passes --stdin so the tool reads the password from the
+        piped sys.stdin instead of getpass()/dev/tty. Without this,
+        getpass blocks forever on a VPS where the parent shell still
+        has a controlling TTY (sudo chain etc.) — see the M15.3.A VPS
+        verification run on 2026-06-03 for the symptom.
+        """
         env = os.environ.copy()
         env["PYTHONPATH"] = _REPO + os.pathsep + env.get("PYTHONPATH", "")
         return subprocess.run(
             [sys.executable, "tools/set_dashboard_password.py",
+              "--stdin",
               "--env-path", self.tmp_env.name, *extra_args],
             cwd=_REPO, env=env,
             input=stdin_input,

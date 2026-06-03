@@ -128,8 +128,37 @@ def _write_env_safely(p: Path, lines: list[str]) -> None:
         _err(f"could not write {p}: {e}", code=3)
 
 
-def _prompt_password_twice() -> str:
-    """getpass twice, confirm match. Never echoes or returns to stdout."""
+def _prompt_password_twice(*, use_stdin: bool = False) -> str:
+    """Prompt for password twice, confirm match. Never echoes or
+    returns secret material to stdout.
+
+    Two modes:
+      * Default (use_stdin=False): use getpass.getpass(), which reads
+        from the controlling TTY (`/dev/tty` on POSIX) — the normal
+        interactive operator path. Secure: nothing is echoed and
+        piped stdin is ignored.
+      * use_stdin=True: read two lines from sys.stdin (no echo
+        suppression — caller is responsible for not displaying them).
+        This is needed for non-interactive automation paths (CI,
+        subprocess tests) where the controlling TTY is unavailable
+        AND the piped stdin must be honoured. Default behaviour
+        for an unattended operator is NOT this mode — it's only
+        triggered by an explicit --stdin flag.
+    """
+    if use_stdin:
+        # Non-interactive: read from sys.stdin. The caller pipes
+        # password\npassword\n on the subprocess stdin.
+        try:
+            a = sys.stdin.readline().rstrip("\n")
+            b = sys.stdin.readline().rstrip("\n")
+        except (KeyboardInterrupt, EOFError):
+            _err("aborted", code=1)
+        if not a or len(a) < 8:
+            _err("password must be at least 8 characters", code=1)
+        if a != b:
+            _err("passwords did not match", code=1)
+        return a
+    # Interactive (default): getpass reads from /dev/tty.
     try:
         a = getpass.getpass("New dashboard password: ")
     except (KeyboardInterrupt, EOFError):
@@ -158,6 +187,12 @@ def main(argv: list[str] | None = None) -> int:
                           "generate one if missing.")
     ap.add_argument("--env-path", default=str(REPO_ROOT / ".env"),
                      help="Path to .env file (default: <repo>/.env)")
+    ap.add_argument("--stdin", action="store_true",
+                     help="Read password and confirmation from sys.stdin "
+                          "instead of the controlling TTY. For tests + "
+                          "automation only. Default uses getpass (TTY-only) "
+                          "so an interactive operator session NEVER reads "
+                          "a piped password by accident.")
     args = ap.parse_args(argv)
 
     # Import bcrypt early so we fail before prompting if missing.
@@ -174,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("(.env does not exist yet — will be created)")
 
-    plaintext = _prompt_password_twice()
+    plaintext = _prompt_password_twice(use_stdin=args.stdin)
 
     print("Hashing with bcrypt cost factor 12 (this takes ~250ms)...")
     try:

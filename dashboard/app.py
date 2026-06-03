@@ -14,6 +14,19 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
+# M15.3.A — sys.path bootstrap for script-mode invocation.
+# When this file is run directly (e.g. by systemd `ExecStart=python3
+# /opt/algo-trader/dashboard/app.py`), Python only puts the script's
+# directory on sys.path — not the repo root. That makes the
+# `from dashboard.auth import ...` lines below fail with
+# ModuleNotFoundError. When imported (tests, `-m`, `-c`), cwd is on
+# sys.path and the imports work. To make BOTH paths work, prepend
+# the repo root here, before any dashboard.* imports.
+import sys
+_M153A_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_M153A_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_M153A_REPO_ROOT))
+
 from flask import Flask, request, jsonify, session
 from dotenv import load_dotenv
 
