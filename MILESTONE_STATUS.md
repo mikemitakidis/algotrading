@@ -45,7 +45,7 @@ project-wide reconciliation narrative lives in
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
-| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4 CLOSED; M15.3 PENDING) | See M15 detail below |
+| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4/.5 CLOSED; M15.3 PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
 ---
@@ -171,8 +171,25 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 | M15.1 — Gateway state + reconciliation | CLOSED | `test_m15_gateway.py` 33/33 |
 | M15.2 — Health endpoint + external monitoring | CLOSED | `test_m15_2_health.py` 28/28; `docs/M15_2_external_monitoring.md` |
 | M15.0 — Scanner / systemd reliability + production process clarity | CLOSED | `597635d` (chain `57dc200` → `597635d`); `test_m15_0_service.py` 40/40; VPS-verified 2026-06-02 |
-| M15.4 — IB Gateway reliability + broker connectivity health (visibility/truth layer) | CLOSED | `073a8bd`; `test_m15_4_gateway_health.py` 47/47; VPS-verified 2026-06-02 |
+| M15.4 — IB Gateway reliability + broker connectivity health (visibility/truth layer) | CLOSED | `073a8bd`; `test_m15_4_gateway_health.py` 47/47; VPS-verified 2026-06-02. Login-error precedence hardened in post-VPS patch `2446df6` (`test_m15_4_gateway_health.py` 50/50). |
+| M15.5 — IBKR exposure reader wiring (paper mode) | CLOSED | `138df9e` → `2446df6` (cross-confirm + phased dry-run + login-error gate hardening); `test_m15_5_ibkr_exposure.py` 78/78; VPS-verified 2026-06-03 with real paper ingest succeeded. |
 | M15.3 — Infra recovery (dashboard auth + manual_reset + compliance audit/export) | PENDING | — |
+
+**M15.5 closeout (IBKR paper exposure reader wired)** — VPS-verified 2026-06-03:
+- The `NotImplementedError` stub at `tools/ingest_exposure_state.py::_build_ibkr_exposure_adapter` for `ibkr_paper` is replaced by a real read-only IB API positions reader at `bot/risk_authority/ibkr_paper_reader.py`. The reader connects to `127.0.0.1:4002` with `clientId=15`, `readonly=True`, waits for the account-update snapshot to be ready (bounded by `api_timeout`), reads both `ib.portfolio()` and `ib.positions()` for cross-confirmation, then disconnects in a `finally` block. The M14.D `IBKRExposureAdapter` is byte-identical — M15.5 only supplies a real `positions_reader` callable.
+- **`ibkr_live` remains intentionally unwired** and continues to raise `NotImplementedError` from the CLI path. Live wiring requires a separately approved milestone.
+- Live VPS evidence on closeout day: real ingest connected to IBKR paper, server version 176, synchronization complete, disconnected cleanly. Confirmed zero open positions: `open_positions=0`, `capital_deployed_usd=0.0`, `positions_written=0`. Exit code 0. No orders placed, no broker writes, no live mode exercised.
+- Latest `daily_state_per_broker` row for `(2026-06-03, ibkr_paper)`: `exposure_status=exposure_partial`, `exposure_fresh_reads_count=1`, `source=ingested`, `exposure_missing_fields=["current_equity_usd", "peak_equity_usd"]`.
+- **Risk Authority verification** all three surfaces report `ibkr_paper.exposure_known=True` (DB lookup, snapshot ScopeView, M14.G dashboard helper). The pre-M15.5 fail-closed behaviour on `exposure_unknown` for `ibkr_paper` is now resolved on real paper data.
+- **`exposure_partial` is by design** and accepted as "known exposure" by both M14.E engine (`snapshot.py:77-80` `is_exposure_known()` returns True for both `exposure_fresh` and `exposure_partial`; every engine gate consults this predicate) and M14.G dashboard (`dashboard_read.py:211`). Missing fields are `current_equity_usd` and `peak_equity_usd` — both classified as `OPPORTUNISTIC_EXPOSURE` in `bot/risk_authority/exposure_reading.py:52-56`, not `REQUIRED_FOR_FRESH_EXPOSURE`. The `current_equity_usd` polish (via `ib.accountSummary()`) was offered as a path-B option and explicitly declined; M15.5 closes at the path-A boundary.
+- **The `exposure_stale` warning remains expected** while `exposure_fresh_reads_count < 3` (current value 1). This is a UI-only badge in `bot/risk_authority/dashboard_read.py:148-150`; the engine gate threshold is `< 1` (`engine.py:678`), already cleared. The warning will resolve after two additional successful ingests.
+- **`pnl_unknown` is separate and out of M15.5 scope.** It tracks PnL ingestion for `ibkr_paper` (M14.C surface) and is independent of exposure wiring. Resolving it is a future-work item.
+- Hard-constraint evidence: M14.D adapter byte-identical vs `d73a04a`; M14 engine/governor/snapshot/audit/preflight modules untouched; AST scan rejects every order method (`placeOrder/cancelOrder/modifyOrder/reqGlobalCancel/reqMktData/reqHistoricalData/reqOpenOrders/reqExecutions`) on every commit; `readonly=True` AST-asserted on every `connect()` call; `ibkr_live` CLI path still raises `NotImplementedError`.
+- Authoritative operator reference: [`docs/M15_5_ibkr_exposure_reader.md`](docs/M15_5_ibkr_exposure_reader.md). Dry-run-first workflow remains required before any real ingest (`run_paper_dryrun()` with phased observability: `error_phase`, `elapsed_ms`, per-step booleans).
+
+**M15.3 open items** (carry-forwards remaining after M15.0, M15.4, M15.5 — process-manager identification CLOSED via M15.0; IB Gateway visibility CLOSED via M15.4; IBKR paper exposure wiring CLOSED via M15.5):
+- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
+- **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
 
 **M15.4 closeout (IB Gateway visibility/truth layer)** — VPS-verified 2026-06-02:
 - New read-only helper `bot/gateway_health.py` combines five sources (`systemctl is-active/is-enabled/show`, TCP connect-and-close probe on 4001/4002, trading-mode discovery from `start_ibgateway.sh` + IBC config, `/var/log/ibgateway/ibgateway.log` tail, `journalctl -u ibgateway.service`) into a single point-in-time classification.
@@ -180,12 +197,7 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 - Live VPS classification on the day of closeout: `ibgateway.service` reports active/enabled, but **no listener on either 4001 or 4002**, and the gateway log shows a `Unrecognized Username or Password` style entry. The truth layer therefore classifies the state as `status = service_active_login_error` and `ready_for_ibkr_trading = False`. This is the headline value of M15.4: systemd "active" is no longer mistaken for "IBKR trading is ready".
 - **No IB API call was added.** M15.4 explicitly does not call `reqCurrentTime`, `ib.connect`, `placeOrder`, `cancelOrder`, or any other IB API method; AST-asserted on every commit. The pre-existing M15.1 `bot/gateway_watchdog.py` (which does run a background `reqCurrentTime` ping) is unchanged.
 - Authoritative operator reference: [`docs/M15_4_ib_gateway_runbook.md`](docs/M15_4_ib_gateway_runbook.md) — includes status classification table, three known failure-mode recovery procedures, and a drift-detection checklist against the reference mirror at `infra/systemd/ibgateway.service.documented` (mirror is **not** installed by any script).
-- Closing M15.4 does NOT close the carry-forward of automated IBKR exposure ingestion. `ingest_ibkr_exposure.py` remains a `NotImplementedError` stub; the engine continues to return `exposure_unknown` for IBKR scopes. Wiring it depends on a healthy IB Gateway, which currently is in the `service_active_login_error` state — the operator action listed in the M15.4 runbook §3 must be taken first.
-
-**M15.3 open items** (carry-forwards from prior milestones — process-manager identification is CLOSED via M15.0; IB Gateway **visibility** is CLOSED via M15.4; remaining items below are about active remediation and operator-action surfaces):
-- **`ingest_ibkr_exposure.py` wiring.** Stub today; requires a healthy IB Gateway. Blocked by the live login-error state surfaced by M15.4 until operator fixes credentials per the runbook.
-- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
-- **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
+- Closing M15.4 did NOT itself close the carry-forward of automated IBKR exposure ingestion. That carry-forward was subsequently closed by M15.5 (see the M15.5 closeout block above). The runbook's failure-mode procedures remain authoritative for handling subsequent IB Gateway login outages.
 
 **M15.0 closeout (production process clarity)** — VPS-verified 2026-06-02:
 - Canonical systemd units installed and active: `algo-trader.service` (runs `main.py`) and `algo-trader-dashboard.service` (runs `dashboard/app.py`).

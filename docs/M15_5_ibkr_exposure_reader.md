@@ -1,7 +1,23 @@
 # M15.5 — IBKR Exposure Reader Wiring (Paper Mode)
 
-**Status:** Implementation shipped; awaiting VPS verification.
+**Status:** ✅ M15.5 CLOSED — VPS-verified 2026-06-03 at commit `2446df6`.
+**Test count on closeout:** `test_m15_5_ibkr_exposure.py` 78/78 (with the post-77a7db1 phased dry-run patch and the post-56bb5ce login-error precedence patch).
 **Scope:** Paper-only. Live IBKR scope (`ibkr_live`) remains intentionally unwired and continues to raise `NotImplementedError` from the CLI path.
+
+**Live VPS evidence on closeout day** (recorded for future drift checks):
+- Pre-ingest gateway health: `status=service_active_api_port_open`, `ready_for_ibkr_trading=True`, `mode=paper`, `expected_port=4002`, `tcp_reachable=True`, `login_error_detected=False`.
+- Real ingest connected to `127.0.0.1:4002` with `clientId=15`, IB server version 176, API connection ready, synchronization complete, disconnected cleanly. Ingest exit code 0.
+- Confirmed zero open positions: `open_positions=0`, `capital_deployed_usd=0.0`, `positions_written=0`. **No orders placed, no broker writes, no live mode exercised.**
+- Latest `daily_state_per_broker` row for `(2026-06-03, ibkr_paper)`: `exposure_status=exposure_partial`, `exposure_fresh_reads_count=1`, `source=ingested`, `exposure_missing_fields=["current_equity_usd", "peak_equity_usd"]`, `exposure_known_zero=True`.
+- Risk Authority verification — all three surfaces report `ibkr_paper.exposure_known=True` (DB lookup, snapshot ScopeView, M14.G dashboard helper `get_scope_status`).
+- Post-ingest gateway health unchanged from pre-ingest. `/api/health` HTTP 200.
+
+**Why `exposure_partial` is the accepted closeout state:**
+`exposure_partial` is a deliberate design state in M14.D. The two missing fields (`current_equity_usd`, `peak_equity_usd`) are classified as `OPPORTUNISTIC_EXPOSURE` in `bot/risk_authority/exposure_reading.py:52-56` — **not** `REQUIRED_FOR_FRESH_EXPOSURE`. The M14.E engine's `is_exposure_known()` predicate (`bot/risk_authority/snapshot.py:77-80`) returns `True` for both `exposure_fresh` and `exposure_partial`, and every engine gate consults this predicate (`engine.py:538, 577, 625, 670`). The M14.G dashboard (`dashboard_read.py:211`) considers both as `exposure_known=True`. The optional `current_equity_usd` polish (via `ib.accountSummary()`) was offered as path B and explicitly declined; M15.5 closes at the path-A boundary.
+
+**Expected residual warnings** (NOT blockers):
+- `exposure_stale` UI badge while `exposure_fresh_reads_count < 3` (current value 1). UI-only badge in `dashboard_read.py:148-150`; engine gate threshold is `< 1` (`engine.py:678`), already cleared. Resolves after two more successful ingests.
+- `pnl_unknown` is independent of M15.5 (M14.C PnL ingestion surface for `ibkr_paper`, out of scope here).
 
 For project-wide status, see [`../MILESTONE_STATUS.md`](../MILESTONE_STATUS.md). For the truth-layer that gates M15.5 readiness, see [`M15_4_ib_gateway_runbook.md`](M15_4_ib_gateway_runbook.md).
 

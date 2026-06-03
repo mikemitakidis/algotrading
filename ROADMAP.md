@@ -209,33 +209,64 @@ core + governor, eToro preflight integration, dashboard, closeout.
   This is the headline value: systemd "active" is no longer
   conflated with "IBKR trading is ready". Authoritative reference:
   `docs/M15_4_ib_gateway_runbook.md`.
-- **M15.3** Infra recovery — remaining scope (after M15.0 and M15.4):
-  dashboard auth / TLS / IP-allowlist hardening, `manual_reset`
-  operator flow, compliance-grade audit log + regulatory export,
-  `ingest_ibkr_exposure.py` wiring (blocked on a healthy IB Gateway —
-  currently in `service_active_login_error` state per M15.4; operator
-  must fix credentials per `docs/M15_4_ib_gateway_runbook.md` §3
-  before this can proceed). PENDING.
+- **M15.5** ✅ CLOSED — IBKR exposure reader wiring (paper mode)
+  (commits `138df9e` → `2446df6`, `test_m15_5_ibkr_exposure.py`
+  78/78). The `NotImplementedError` stub at
+  `tools/ingest_exposure_state.py::_build_ibkr_exposure_adapter`
+  for `ibkr_paper` is replaced by a real read-only IB API positions
+  reader at `bot/risk_authority/ibkr_paper_reader.py`. The reader
+  connects to `127.0.0.1:4002` with `clientId=15`, `readonly=True`,
+  waits for the account-update snapshot to be ready (bounded by
+  `api_timeout`), cross-confirms `ib.portfolio()` against
+  `ib.positions()`, then disconnects in a `finally` block. The
+  M14.D `IBKRExposureAdapter` is byte-identical — M15.5 only
+  supplies a real `positions_reader` callable. `ibkr_live`
+  continues to raise `NotImplementedError` from the CLI path by
+  design. Phased dry-run with per-step observability
+  (`error_phase`, `elapsed_ms`, per-step booleans) added in
+  `56bb5ce`; login-error precedence gate hardening added in
+  `2446df6` (also fixed an M15.4 bug where TCP port-open won
+  over login-error). Live VPS evidence on closeout day:
+  connected to IBKR paper, server version 176, synchronization
+  complete, disconnected cleanly. Confirmed zero open positions:
+  `open_positions=0`, `capital_deployed_usd=0.0`, no orders, no
+  broker writes, no live mode. Risk Authority verification:
+  `ibkr_paper.exposure_known=True` on all three surfaces (DB,
+  snapshot ScopeView, M14.G dashboard). Status is
+  `exposure_partial` by design — `current_equity_usd` and
+  `peak_equity_usd` are classified as `OPPORTUNISTIC_EXPOSURE`
+  (not required for known exposure); M14.E/M14.G accept both
+  `exposure_fresh` and `exposure_partial` as known. The
+  `exposure_stale` UI badge remains until 3 successful reads
+  (current count 1) — UI-only, engine gate already cleared.
+  `pnl_unknown` is separate (M14.C PnL ingestion surface) and out
+  of M15.5 scope. Authoritative reference:
+  `docs/M15_5_ibkr_exposure_reader.md`.
+- **M15.3** Infra recovery — remaining scope after M15.0, M15.4,
+  and M15.5: dashboard auth / TLS / IP-allowlist hardening,
+  `manual_reset` operator flow, compliance-grade audit log +
+  regulatory export. PENDING.
   *(Process-manager / systemd unit-name mismatch is no longer a
-  carry-forward — it was the substance of M15.0 and is now CLOSED.
-  IB Gateway visibility / truth reporting is no longer a
-  carry-forward either — it was the substance of M15.4 and is now
-  CLOSED. M15.3 is now purely about active remediation surfaces and
-  operator-action layers.)*
+  carry-forward — closed in M15.0. IB Gateway visibility / truth
+  reporting is no longer a carry-forward — closed in M15.4.
+  IBKR paper exposure ingestion is no longer a carry-forward —
+  closed in M15.5. M15.3 is now purely about active remediation
+  surfaces and operator-action layers.)*
 
-> **Next concrete unit of work after M15.4:** TBD per operator
+> **Next concrete unit of work after M15.5:** TBD per operator
 > direction. Candidates, in rough priority order:
-> 1. Operator credential fix on `/opt/ibc/config*.ini` so IB Gateway
->    transitions out of `service_active_login_error`. **This is an
->    operator action, not a milestone** — it does not require any
->    code change.
-> 2. `ingest_ibkr_exposure.py` wiring (unblocks IBKR exposure
->    reporting in the engine; depends on prerequisite #1).
-> 3. M15.3 dashboard auth/security hardening + `manual_reset`
->    operator flow + compliance audit/export.
+> 1. M15.3 dashboard auth/security hardening + `manual_reset`
+>    operator flow + compliance audit/export. Closes the
+>    remaining M15.3 scope.
+> 2. Optional M15.5.A polish: populate `current_equity_usd` via
+>    `ib.accountSummary()` to lift exposure from `exposure_partial`
+>    to `exposure_fresh` and remove the `exposure_stale` UI badge.
+>    Pure observability — engine semantics unchanged.
+> 3. M14.C PnL ingestion wiring for IBKR paper (resolves the
+>    `pnl_unknown` warning surfaced by M14.G).
 >
-> The roadmap order is unchanged; M16+ intelligence does not start
-> until M15 is closed.
+> The roadmap order is unchanged; M16+ intelligence does not
+> start until M15 closes (which requires M15.3 to ship).
 
 ---
 
