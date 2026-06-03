@@ -102,6 +102,28 @@ def _unhealthy_login_error_health():
     }
 
 
+def _factory_result(*, portfolio_items=None, position_records=None,
+                    snapshot_ready=True, account_values_count=5):
+    """Build the dict shape the new _read_portfolio_via_ib returns.
+    Tests inject a fake `ib_session_factory` that returns this dict."""
+    return {
+        "portfolio_items":      list(portfolio_items or []),
+        "position_records":     list(position_records or []),
+        "snapshot_ready":       snapshot_ready,
+        "account_values_count": account_values_count,
+        "snapshot_waited_sec":  0.2,
+    }
+
+
+class _FakePosition:
+    """Mimics ib_insync.Position for cross-confirm tests. Position has
+    a `contract` attribute (which has .symbol) and a `position`
+    attribute (the quantity)."""
+    def __init__(self, *, symbol="AAPL", position=10.0):
+        self.contract = _FakeContract(symbol=symbol)
+        self.position = position
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Group 1 — Client ID is reserved + non-conflicting
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,14 +238,16 @@ class TestHealthGate(unittest.TestCase):
 
 class TestReaderReadOnlySession(unittest.TestCase):
 
-    def _make_reader(self, *, factory_side_effect=None, factory_return=None):
+    def _make_reader(self, *, factory_result=None,
+                     factory_side_effect=None):
         calls = {"factory_kwargs": None}
 
         def fake_factory(**kw):
             calls["factory_kwargs"] = kw
             if factory_side_effect is not None:
                 raise factory_side_effect
-            return factory_return if factory_return is not None else []
+            return factory_result if factory_result is not None \
+                else _factory_result()
 
         reader = make_ibkr_paper_positions_reader(
             health_checker=_healthy_paper_health,
@@ -231,19 +255,22 @@ class TestReaderReadOnlySession(unittest.TestCase):
         )
         return reader, calls
 
-    def test_reader_returns_empty_list_when_no_positions(self):
-        reader, _ = self._make_reader(factory_return=[])
+    def test_reader_returns_empty_list_when_snapshot_ready_and_both_empty(self):
+        # Critical: snapshot_ready=True + both empty → []. Adapter
+        # treats this as known-zero.
+        reader, _ = self._make_reader(
+            factory_result=_factory_result(snapshot_ready=True))
         self.assertEqual(reader(), [])
 
     def test_reader_forwards_port_4002(self):
-        reader, calls = self._make_reader(factory_return=[])
+        reader, calls = self._make_reader()
         reader()
         self.assertEqual(calls["factory_kwargs"]["port"], 4002)
         self.assertEqual(calls["factory_kwargs"]["host"], "127.0.0.1")
         self.assertEqual(calls["factory_kwargs"]["client_id"], M15_5_CLIENT_ID)
 
     def test_reader_does_not_route_to_4001(self):
-        reader, calls = self._make_reader(factory_return=[])
+        reader, calls = self._make_reader()
         reader()
         self.assertNotEqual(calls["factory_kwargs"]["port"], 4001)
 
@@ -254,13 +281,32 @@ class TestReaderReadOnlySession(unittest.TestCase):
             reader()
         self.assertIn("ib_portfolio_read_failed", str(ctx.exception))
 
+    def test_factory_returning_non_dict_raises(self):
+        """If a factory returns a list (old shape), the reader must
+        reject it rather than silently report known-zero."""
+        reader, _ = self._make_reader(factory_result=[])  # legacy shape
+        with self.assertRaises(IBPaperReadError) as ctx:
+            reader()
+        self.assertIn("ib_factory_returned_non_dict", str(ctx.exception))
+
+    def test_snapshot_not_ready_raises_ib_paper_read_error(self):
+        """Empty portfolio + snapshot_ready=False MUST raise; the
+        adapter then classifies the reading as UNKNOWN. NOT known-zero."""
+        reader, _ = self._make_reader(
+            factory_result=_factory_result(snapshot_ready=False,
+                                            account_values_count=0))
+        with self.assertRaises(IBPaperReadError) as ctx:
+            reader()
+        self.assertIn("account_snapshot_not_ready_within_timeout",
+                       str(ctx.exception))
+
     def test_gateway_not_ready_propagates_before_factory(self):
         # Health checker fails the gate → factory NEVER invoked.
         called = {"factory_invoked": False}
 
         def fake_factory(**kw):
             called["factory_invoked"] = True
-            return []
+            return _factory_result()
 
         reader = make_ibkr_paper_positions_reader(
             health_checker=_unhealthy_login_error_health,
@@ -272,18 +318,22 @@ class TestReaderReadOnlySession(unittest.TestCase):
             "IB factory was invoked despite unhealthy gateway — gate broken")
 
     def test_reader_with_mocked_ib_call_uses_readonly_true(self):
-        """Use the REAL _read_portfolio_via_ib via a patched ib_insync.IB.
-        Confirms readonly=True is passed on every connect."""
+        """Patch ib_insync.IB at sys.modules and confirm the real
+        _read_portfolio_via_ib calls connect(readonly=True), reads BOTH
+        portfolio() and positions(), waits for accountValues to be
+        non-empty, and never touches order methods."""
         mock_ib = MagicMock()
         mock_ib.isConnected.return_value = True
         mock_ib.portfolio.return_value = []
+        mock_ib.positions.return_value = []
+        # accountValues non-empty on the first poll — proves snapshot
+        # readiness without us needing to spin.
+        mock_ib.accountValues.return_value = [object(), object(), object()]
 
         class _FakeIB:
             def __new__(cls):
                 return mock_ib
 
-        # Ensure parent module exists with an 'IB' attribute the
-        # lazy `from ib_insync import IB` can resolve.
         fake_module = type(sys)("ib_insync")
         fake_module.IB = _FakeIB
         with patch.dict(sys.modules, {"ib_insync": fake_module}):
@@ -296,7 +346,6 @@ class TestReaderReadOnlySession(unittest.TestCase):
         self.assertTrue(mock_ib.connect.called,
             "ib.connect was never called")
         ca = mock_ib.connect.call_args
-        # Positional: (host, port). Keyword must include readonly=True.
         self.assertEqual(ca.args[0], IBKR_PAPER_HOST)
         self.assertEqual(ca.args[1], IBKR_PAPER_PORT)
         self.assertIn("readonly", ca.kwargs,
@@ -305,6 +354,14 @@ class TestReaderReadOnlySession(unittest.TestCase):
             f"ib.connect was called with readonly={ca.kwargs.get('readonly')!r} "
             f"— must be True")
         self.assertEqual(ca.kwargs["clientId"], M15_5_CLIENT_ID)
+        # BOTH portfolio() AND positions() must have been called.
+        self.assertTrue(mock_ib.portfolio.called,
+            "ib.portfolio() was not called — cross-confirm requires both reads")
+        self.assertTrue(mock_ib.positions.called,
+            "ib.positions() was not called — cross-confirm requires both reads")
+        # accountValues must have been called (snapshot-ready check).
+        self.assertTrue(mock_ib.accountValues.called,
+            "ib.accountValues() was not called — snapshot-ready gate missing")
         # Forbidden methods MUST NOT be called.
         for forbidden in ("placeOrder", "cancelOrder", "modifyOrder",
                            "reqGlobalCancel", "reqMktData",
@@ -322,6 +379,7 @@ class TestReaderReadOnlySession(unittest.TestCase):
         portfolio() raises."""
         mock_ib = MagicMock()
         mock_ib.isConnected.return_value = True
+        mock_ib.accountValues.return_value = [object()]
         mock_ib.portfolio.side_effect = TimeoutError("api timeout")
 
         class _FakeIB:
@@ -413,69 +471,143 @@ class TestKnownZeroVsUnknown(unittest.TestCase):
     produces an OK reading with capital_deployed_usd=0). If IBKR returns
     malformed/non-USD positions, the whole reading must be UNKNOWN.
 
+    Plus the cross-confirm cases the user added in the post-138df9e
+    review:
+      * portfolio empty + positions empty + snapshot_ready=True → known-zero
+      * portfolio empty + positions non-empty                   → UNKNOWN
+      * portfolio non-empty + positions empty                   → UNKNOWN
+      * portfolio non-empty + positions non-empty same symbols  → fresh
+      * snapshot_ready=False                                    → UNKNOWN
+
     Both classifications are produced by the existing M14.D
-    IBKRExposureAdapter; M15.5 just needs to feed it the right raw data."""
+    IBKRExposureAdapter via the IBPaperReadError → adapter UNKNOWN
+    conversion path; M15.5 supplies the upstream signal."""
 
     def setUp(self):
         from bot.risk_authority.ingest_ibkr_exposure import IBKRExposureAdapter
         self.Adapter = IBKRExposureAdapter
 
-    def test_empty_paper_account_is_known_zero(self):
-        """Empty positions list → quality() FRESH (capital_deployed=0.0,
-        peak_equity=None means PARTIAL is also acceptable; the
-        is_known_zero_exposure() predicate is the authoritative check)."""
+    def _build_adapter(self, *, factory_result):
         reader = make_ibkr_paper_positions_reader(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: [],
+            ib_session_factory=lambda **kw: factory_result,
         )
-        adapter = self.Adapter(broker_scope="ibkr_paper",
-                                positions_reader=reader)
+        return self.Adapter(broker_scope="ibkr_paper",
+                             positions_reader=reader)
+
+    def test_portfolio_empty_AND_positions_empty_AND_snapshot_ready_is_known_zero(self):
+        """The headline acceptance case from the user's correction:
+        empty exposure marked known-zero ONLY when (a) portfolio empty,
+        (b) positions empty, (c) snapshot_ready=True."""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[],
+                position_records=[],
+                snapshot_ready=True,
+                account_values_count=7,
+            ))
         reading = adapter.read(today="2026-06-02")
-        # The headline assertion: known-zero, NOT unknown.
         self.assertTrue(reading.is_known_zero_exposure(),
-            f"empty paper account must be known-zero, not unknown. "
+            f"empty + empty + snapshot_ready must be known-zero. "
             f"quality={reading.quality()}, error={reading.error!r}")
-        self.assertFalse(reading.is_exposure_unknown(),
-            "empty paper account must NOT be classified as unknown")
+        self.assertFalse(reading.is_exposure_unknown())
         self.assertEqual(reading.open_positions_count, 0)
         self.assertEqual(reading.capital_deployed_usd, 0.0)
 
-    def test_well_formed_usd_position_is_known_nonzero(self):
-        reader = make_ibkr_paper_positions_reader(
-            health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: [
-                _FakePortfolioItem(symbol="AAPL", position=10.0,
-                                    marketValue=1900.0),
-            ],
-        )
-        adapter = self.Adapter(broker_scope="ibkr_paper",
-                                positions_reader=reader)
+    def test_portfolio_empty_BUT_positions_nonempty_is_UNKNOWN(self):
+        """Disagreement case A: portfolio() empty but positions() non-empty.
+        Must NOT be reported as known-zero. Must be UNKNOWN."""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[],
+                position_records=[_FakePosition(symbol="AAPL", position=10.0)],
+                snapshot_ready=True,
+            ))
+        reading = adapter.read(today="2026-06-02")
+        self.assertTrue(reading.is_exposure_unknown(),
+            "portfolio empty + positions non-empty MUST be UNKNOWN, "
+            "never known-zero")
+        # capital_deployed_usd MUST NOT be a fake 0.0.
+        self.assertIsNone(reading.capital_deployed_usd,
+            f"capital_deployed_usd must be None on disagreement; "
+            f"got {reading.capital_deployed_usd!r}")
+        # Error must mention disagreement so engine sees a real reason.
+        self.assertIn("portfolio_positions_disagreement",
+                       (reading.error or "").lower())
+
+    def test_portfolio_nonempty_BUT_positions_empty_is_UNKNOWN(self):
+        """Disagreement case B: portfolio() has data but positions()
+        is empty. Must be UNKNOWN."""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[_FakePortfolioItem(symbol="AAPL",
+                                                     position=10.0,
+                                                     marketValue=1900.0)],
+                position_records=[],
+                snapshot_ready=True,
+            ))
+        reading = adapter.read(today="2026-06-02")
+        self.assertTrue(reading.is_exposure_unknown())
+        self.assertIsNone(reading.capital_deployed_usd)
+        self.assertIn("portfolio_positions_disagreement",
+                       (reading.error or "").lower())
+
+    def test_portfolio_nonempty_AND_positions_agree_is_fresh(self):
+        """Cross-confirm pass: both sources see the same symbol set.
+        Adapter produces a fresh/partial reading."""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[_FakePortfolioItem(symbol="AAPL",
+                                                     position=10.0,
+                                                     marketValue=1900.0)],
+                position_records=[_FakePosition(symbol="AAPL", position=10.0)],
+                snapshot_ready=True,
+            ))
         reading = adapter.read(today="2026-06-02")
         self.assertFalse(reading.is_exposure_unknown(),
-            "well-formed USD position must NOT be unknown")
-        self.assertTrue(reading.has_fresh_exposure(),
-            "well-formed USD position must satisfy has_fresh_exposure()")
+            "agreeing reads must NOT be UNKNOWN")
+        self.assertTrue(reading.has_fresh_exposure())
         self.assertEqual(reading.open_positions_count, 1)
         self.assertEqual(reading.capital_deployed_usd, 1900.0)
 
+    def test_snapshot_not_ready_is_UNKNOWN_even_with_empty_lists(self):
+        """The critical user-mandated case: empty + empty must NOT be
+        known-zero when the snapshot is not ready. The account-update
+        subscription may simply not have delivered data yet."""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[],
+                position_records=[],
+                snapshot_ready=False,
+                account_values_count=0,
+            ))
+        reading = adapter.read(today="2026-06-02")
+        self.assertTrue(reading.is_exposure_unknown(),
+            "snapshot_ready=False MUST be UNKNOWN, never known-zero, "
+            "even when both lists are empty")
+        self.assertIsNone(reading.capital_deployed_usd)
+        self.assertIn("account_snapshot_not_ready",
+                       (reading.error or "").lower())
+
     def test_non_usd_position_makes_reading_unknown(self):
-        """Adapter must reject non-USD without broker USD notional."""
-        reader = make_ibkr_paper_positions_reader(
-            health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: [
-                _FakePortfolioItem(symbol="VOD", currency="GBP",
-                                    position=100.0, marketValue=20000.0),
-            ],
-        )
-        adapter = self.Adapter(broker_scope="ibkr_paper",
-                                positions_reader=reader)
+        """Adapter must reject non-USD without broker USD notional.
+        (The reader passes cross-confirm because both lists have AAPL/VOD
+        with non-zero size, but the adapter rejects the GBP currency.)"""
+        adapter = self._build_adapter(
+            factory_result=_factory_result(
+                portfolio_items=[_FakePortfolioItem(symbol="VOD",
+                                                     currency="GBP",
+                                                     position=100.0,
+                                                     marketValue=20000.0)],
+                position_records=[_FakePosition(symbol="VOD", position=100.0)],
+                snapshot_ready=True,
+            ))
         reading = adapter.read(today="2026-06-02")
         self.assertTrue(reading.is_exposure_unknown(),
             "Non-USD without broker-provided USD notional must classify "
             "the WHOLE reading as UNKNOWN (no fake FX)")
-        # capital_deployed_usd is None on UNKNOWN (not a fake 0.0).
         self.assertIsNone(reading.capital_deployed_usd,
-            f"capital_deployed_usd must be None on UNKNOWN (not fake 0.0); "
+            f"capital_deployed_usd must be None on UNKNOWN; "
             f"got {reading.capital_deployed_usd!r}")
         self.assertIsNone(reading.open_positions_count)
 
@@ -484,24 +616,41 @@ class TestKnownZeroVsUnknown(unittest.TestCase):
         produces UNKNOWN with the error reason. Engine then fails closed."""
         reader = make_ibkr_paper_positions_reader(
             health_checker=_unhealthy_login_error_health,
-            ib_session_factory=lambda **kw: [
-                _FakePortfolioItem(symbol="AAPL", position=10.0,
-                                    marketValue=1900.0),
-            ],
+            ib_session_factory=lambda **kw: _factory_result(
+                portfolio_items=[_FakePortfolioItem(symbol="AAPL",
+                                                     position=10.0,
+                                                     marketValue=1900.0)],
+                position_records=[_FakePosition(symbol="AAPL", position=10.0)],
+            ),
         )
         adapter = self.Adapter(broker_scope="ibkr_paper",
                                 positions_reader=reader)
         reading = adapter.read(today="2026-06-02")
         self.assertTrue(reading.is_exposure_unknown(),
             "gateway-not-ready reading must be UNKNOWN")
-        # The adapter records the error string in `error`. Verify it
-        # surfaces the gateway not-ready reason rather than being silent.
         err = (reading.error or "").lower()
         self.assertIn("gateway_not_ready", err,
             f"unknown reading must carry the gateway_not_ready reason; "
             f"got error={reading.error!r}")
-        # capital_deployed_usd must be None (not fake 0.0).
         self.assertIsNone(reading.capital_deployed_usd)
+
+    def test_failed_positions_read_is_UNKNOWN_not_zero(self):
+        """Factory raises after a successful gateway-ready check.
+        Adapter must classify as UNKNOWN with the error reason,
+        capital_deployed_usd=None — NOT zero."""
+        reader = make_ibkr_paper_positions_reader(
+            health_checker=_healthy_paper_health,
+            ib_session_factory=MagicMock(
+                side_effect=TimeoutError("portfolio() timed out")),
+        )
+        adapter = self.Adapter(broker_scope="ibkr_paper",
+                                positions_reader=reader)
+        reading = adapter.read(today="2026-06-02")
+        self.assertTrue(reading.is_exposure_unknown())
+        self.assertIsNone(reading.capital_deployed_usd,
+            "timeout must NOT yield a fake 0.0 exposure")
+        self.assertIn("ib_portfolio_read_failed",
+                       (reading.error or "").lower())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -509,7 +658,93 @@ class TestKnownZeroVsUnknown(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestDryRun(unittest.TestCase):
+class TestSnapshotReadyAndSymbolHelpers(unittest.TestCase):
+    """Direct tests for the two new helpers added in the cross-confirm
+    patch: _wait_for_snapshot_ready (snapshot gate) and
+    _symbols_with_position (cross-confirm set extractor)."""
+
+    def test_wait_for_snapshot_ready_returns_immediately_when_populated(self):
+        from bot.risk_authority.ibkr_paper_reader import _wait_for_snapshot_ready
+        mock_ib = MagicMock()
+        # Already populated — the helper should not enter the poll loop
+        # at all (or should exit on the first iteration).
+        mock_ib.accountValues.return_value = [object(), object()]
+        out = _wait_for_snapshot_ready(mock_ib, timeout=5.0)
+        self.assertTrue(out["ready"])
+        self.assertEqual(out["account_values_count"], 2)
+
+    def test_wait_for_snapshot_ready_times_out_when_empty(self):
+        from bot.risk_authority.ibkr_paper_reader import _wait_for_snapshot_ready
+        mock_ib = MagicMock()
+        mock_ib.accountValues.return_value = []
+        # Very short timeout so the test finishes quickly.
+        out = _wait_for_snapshot_ready(mock_ib, timeout=0.4)
+        self.assertFalse(out["ready"])
+        self.assertEqual(out["account_values_count"], 0)
+
+    def test_wait_for_snapshot_ready_returns_true_when_values_arrive_late(self):
+        from bot.risk_authority.ibkr_paper_reader import _wait_for_snapshot_ready
+        mock_ib = MagicMock()
+        # Start empty, then turn non-empty after one poll iteration.
+        sequence = [[], [object(), object()]]
+        mock_ib.accountValues.side_effect = lambda: sequence.pop(0) \
+            if sequence else [object()]
+        # waitOnUpdate is a no-op for this test; we just need the
+        # polling loop to call accountValues twice.
+        mock_ib.waitOnUpdate.return_value = None
+        out = _wait_for_snapshot_ready(mock_ib, timeout=2.0)
+        self.assertTrue(out["ready"])
+        self.assertEqual(out["account_values_count"], 2)
+
+    def test_wait_for_snapshot_ready_handles_account_values_exception(self):
+        """If accountValues() raises, we treat it as empty (defensive)
+        and continue polling until timeout."""
+        from bot.risk_authority.ibkr_paper_reader import _wait_for_snapshot_ready
+        mock_ib = MagicMock()
+        mock_ib.accountValues.side_effect = RuntimeError("transient")
+        out = _wait_for_snapshot_ready(mock_ib, timeout=0.4)
+        self.assertFalse(out["ready"])
+
+    def test_symbols_with_position_extracts_nonzero(self):
+        from bot.risk_authority.ibkr_paper_reader import _symbols_with_position
+        items = [
+            _FakePortfolioItem(symbol="AAPL", position=10.0),
+            _FakePortfolioItem(symbol="MSFT", position=-5.0),
+            _FakePortfolioItem(symbol="GOOG", position=0.0),  # zero → skip
+        ]
+        syms = _symbols_with_position(items)
+        self.assertEqual(syms, {"AAPL", "MSFT"})
+
+    def test_symbols_with_position_works_for_position_records_too(self):
+        from bot.risk_authority.ibkr_paper_reader import _symbols_with_position
+        records = [
+            _FakePosition(symbol="AAPL", position=10.0),
+            _FakePosition(symbol="VOD",  position=100.0),
+        ]
+        self.assertEqual(_symbols_with_position(records), {"AAPL", "VOD"})
+
+    def test_symbols_with_position_skips_malformed_items(self):
+        from bot.risk_authority.ibkr_paper_reader import _symbols_with_position
+        # Item missing .contract entirely.
+        class _Broken: pass
+        broken = _Broken()
+        items = [
+            _FakePortfolioItem(symbol="AAPL", position=10.0),
+            broken,
+        ]
+        # Malformed items must NOT cause the set to grow OR raise.
+        syms = _symbols_with_position(items)
+        self.assertEqual(syms, {"AAPL"})
+
+    def test_symbols_with_position_handles_bool_quantity(self):
+        from bot.risk_authority.ibkr_paper_reader import _symbols_with_position
+        class _Item:
+            contract = _FakeContract("AAPL")
+            position = True   # Python: bool ⊂ int; must be rejected
+        # bool MUST be treated as malformed → skipped.
+        self.assertEqual(_symbols_with_position([_Item()]), set())
+
+
 
     def test_dryrun_happy_path(self):
         items = [
@@ -518,23 +753,85 @@ class TestDryRun(unittest.TestCase):
             _FakePortfolioItem(symbol="MSFT", position=5.0,
                                 marketValue=2100.0),
         ]
+        positions_records = [
+            _FakePosition(symbol="AAPL", position=10.0),
+            _FakePosition(symbol="MSFT", position=5.0),
+        ]
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: items,
+            ib_session_factory=lambda **kw: _factory_result(
+                portfolio_items=items,
+                position_records=positions_records,
+                snapshot_ready=True,
+                account_values_count=7,
+            ),
         )
         self.assertTrue(summary["dry_run"])
         self.assertTrue(summary["gateway_ready"])
         self.assertEqual(summary["mode"], "paper")
         self.assertEqual(summary["expected_port"], IBKR_PAPER_PORT)
         self.assertTrue(summary["ib_connect_ok"])
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertEqual(summary["account_values_count"], 7)
         self.assertTrue(summary["positions_read_ok"])
+        self.assertEqual(summary["portfolio_count"], 2)
         self.assertEqual(summary["positions_count"], 2)
+        self.assertTrue(summary["cross_confirm_ok"])
         self.assertIsNone(summary["error"])
+
+    def test_dryrun_empty_paper_account_reports_cross_confirm_ok(self):
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_session_factory=lambda **kw: _factory_result(
+                portfolio_items=[],
+                position_records=[],
+                snapshot_ready=True,
+                account_values_count=5,
+            ),
+        )
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertEqual(summary["portfolio_count"], 0)
+        self.assertEqual(summary["positions_count"], 0)
+        self.assertTrue(summary["cross_confirm_ok"],
+            "empty + empty + snapshot_ready must agree → cross_confirm_ok=True")
+        self.assertIsNone(summary["error"])
+
+    def test_dryrun_reports_snapshot_not_ready(self):
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_session_factory=lambda **kw: _factory_result(
+                portfolio_items=[],
+                position_records=[],
+                snapshot_ready=False,
+                account_values_count=0,
+            ),
+        )
+        self.assertTrue(summary["ib_connect_ok"])
+        self.assertFalse(summary["snapshot_ready"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertIn("account_snapshot_not_ready_within_timeout",
+                       summary["error"])
+
+    def test_dryrun_reports_cross_confirm_failure(self):
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_session_factory=lambda **kw: _factory_result(
+                portfolio_items=[_FakePortfolioItem(symbol="AAPL",
+                                                     position=10.0)],
+                position_records=[],
+                snapshot_ready=True,
+                account_values_count=5,
+            ),
+        )
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertTrue(summary["positions_read_ok"])
+        self.assertFalse(summary["cross_confirm_ok"])
+        self.assertIn("portfolio_positions_disagreement", summary["error"])
 
     def test_dryrun_refuses_unhealthy_gateway(self):
         summary = run_paper_dryrun(
             health_checker=_unhealthy_login_error_health,
-            ib_session_factory=lambda **kw: [],
+            ib_session_factory=lambda **kw: _factory_result(),
         )
         self.assertFalse(summary["gateway_ready"])
         self.assertFalse(summary["ib_connect_ok"])
@@ -557,7 +854,7 @@ class TestDryRun(unittest.TestCase):
         with patch("sqlite3.connect") as mock_connect:
             run_paper_dryrun(
                 health_checker=_healthy_paper_health,
-                ib_session_factory=lambda **kw: [],
+                ib_session_factory=lambda **kw: _factory_result(),
             )
         self.assertFalse(mock_connect.called,
             "dry-run touched sqlite3.connect — must not write to DB")

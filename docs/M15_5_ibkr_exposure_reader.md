@@ -13,11 +13,13 @@ M14.D shipped the `IBKRExposureAdapter` with an injected `positions_reader` call
 
 1. Calls `bot.gateway_health.assemble_health` first (the M15.4 gate). If the gateway is not `ready_for_ibkr_trading` with `mode='paper'` and `expected_port=4002`, the reader raises `GatewayNotReadyError` and the adapter produces a fail-closed `EXPOSURE_UNKNOWN` reading. No IB API call happens.
 2. Opens an `ib_insync.IB()` session with `connect(host='127.0.0.1', port=4002, clientId=15, readonly=True, timeout=5.0)`.
-3. Reads `ib.portfolio()`. We use `portfolio()` (not `positions()`) because it carries `marketValue`, `marketPrice`, `averageCost`, and `unrealizedPNL` — the fields the M14.D adapter needs to classify a reading as `exposure_fresh` rather than `exposure_partial`.
-4. Calls `ib.disconnect()` in a `finally` block — runs even when `portfolio()` raises.
-5. Forwards what IB returned to the existing adapter, which decides known-zero / known-nonzero / partial / unknown. M15.5 itself never invents a value, never substitutes a zero for unknown, never fabricates FX rates.
+3. **Waits for the account-update snapshot to be ready**, bounded by `api_timeout` (default 5 s). We poll `ib.accountValues()` via `ib.waitOnUpdate(timeout=0.25)` in a loop until either the list is non-empty (snapshot delivered) or the timeout elapses. If it elapses, the reader raises `IBPaperReadError(account_snapshot_not_ready_within_timeout:...)`; the adapter converts to `EXPOSURE_UNKNOWN`. **Empty positions are never reported as known-zero until the snapshot is confirmed ready.**
+4. Reads BOTH `ib.portfolio()` AND `ib.positions()`. Both are synchronous cache reads from the account-update subscription; they do NOT accept a timeout. The `api_timeout` above is the wall-clock bound on the wait for the cache to populate, not on the cache read itself.
+5. **Cross-confirms** the two reads. We extract the symbol set of non-zero positions from each. If the sets disagree (`portfolio` shows AAPL but `positions` doesn't, or vice versa), the reader raises `IBPaperReadError(portfolio_positions_disagreement:...)`. The adapter converts to UNKNOWN. We NEVER report `known-zero` when the two views disagree.
+6. Calls `ib.disconnect()` in a `finally` block — runs even when `portfolio()` raises.
+7. Forwards what IB returned to the existing adapter, which decides known-zero / known-nonzero / partial / unknown. M15.5 itself never invents a value, never substitutes a zero for unknown, never fabricates FX rates.
 
-The IBKR exposure surface in the M14 Risk Authority engine now sees real data instead of `exposure_unknown` for `ibkr_paper`.
+The IBKR exposure surface in the M14 Risk Authority engine now sees real data instead of `exposure_unknown` for `ibkr_paper`, **and only when three independent IB API signals agree**: (a) `accountValues()` non-empty, (b) `portfolio()` content, (c) `positions()` content matching (b).
 
 ---
 
@@ -131,19 +133,21 @@ The `ibkr_paper` entry should now show `exposure_known=true` and the appropriate
 
 ## §5 — Known-zero vs unknown vs partial — fail-closed by construction
 
-The adapter (M14.D, unchanged) decides:
+The reader's cross-confirm layer combines with the M14.D adapter (unchanged) to produce these outcomes:
 
-| IB returns | Adapter quality | Engine consequence |
-|---|---|---|
-| empty list, healthy gateway | `FRESH` + `is_known_zero_exposure() == True` | engine knows IBKR paper is flat |
-| well-formed USD positions with `marketValue` | `FRESH` | engine sees real exposure |
-| well-formed USD positions, missing `mark_price` | `FRESH` via `avg_cost_fallback` | engine sees cost-basis exposure |
-| any malformed position (missing symbol/side/qty) | `UNKNOWN` | engine fails closed on `exposure_unknown` |
-| any non-USD position without broker USD notional | `UNKNOWN` | engine fails closed (no fake FX) |
-| reader raises `GatewayNotReadyError` | `UNKNOWN` with `error=gateway_not_ready:...` | engine fails closed |
-| reader raises `IBPaperReadError` (timeout, OS error) | `UNKNOWN` with `error=positions_reader_failed:...` | engine fails closed |
+| IB API state | Reader output | Adapter quality | `is_known_zero_exposure()` | Engine consequence |
+|---|---|---|---|---|
+| `accountValues()` empty after `api_timeout` | raises `IBPaperReadError(account_snapshot_not_ready_within_timeout:...)` | `UNKNOWN` with that error | **False** | engine fails closed on `exposure_unknown` |
+| Snapshot ready; `portfolio()` empty; `positions()` empty | empty list | `FRESH` (or `PARTIAL`) | **True** | engine knows IBKR paper is flat |
+| Snapshot ready; `portfolio()` non-empty USD with `marketValue`; `positions()` matches symbols | per-item dicts | `FRESH` | False | engine sees real exposure |
+| Snapshot ready; `portfolio()` empty BUT `positions()` non-empty | raises `IBPaperReadError(portfolio_positions_disagreement:...)` | `UNKNOWN` | **False** | engine fails closed |
+| Snapshot ready; `portfolio()` non-empty BUT `positions()` empty | raises `IBPaperReadError(portfolio_positions_disagreement:...)` | `UNKNOWN` | **False** | engine fails closed |
+| Snapshot ready; symbols agree; any malformed position (missing symbol/side/qty) | per-item dict with bad field | `UNKNOWN` | False | engine fails closed |
+| Snapshot ready; any non-USD position without broker USD notional | per-item dict | `UNKNOWN` (no fake FX) | False | engine fails closed |
+| Gateway not ready (M15.4 gate fail) | raises `GatewayNotReadyError(...)` | `UNKNOWN` | False | engine fails closed |
+| `portfolio()` or `positions()` raises (timeout, OS error) | raises `IBPaperReadError(ib_portfolio_read_failed:...)` | `UNKNOWN` | False | engine fails closed |
 
-M15.5 itself never substitutes `0.0` for an unknown exposure value. The `capital_deployed_usd` field is either a real number from `portfolio()`, or `None` (which the engine treats as `exposure_unknown`).
+M15.5 itself never substitutes `0.0` for an unknown exposure value, and never marks a reading known-zero unless three independent signals all agree: accountValues populated, portfolio empty, positions empty.
 
 ---
 
