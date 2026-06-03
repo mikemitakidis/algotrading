@@ -124,6 +124,97 @@ class _FakePosition:
         self.position = position
 
 
+class _MockIB:
+    """Mimics ib_insync.IB for phased dry-run tests. Each phase
+    accepts an optional `*_raises` argument; tests inject exceptions
+    to simulate failures at specific phases."""
+
+    def __init__(self, *,
+                 connect_raises=None,
+                 account_values=None,
+                 wait_on_update_raises=None,
+                 portfolio_items=None,
+                 portfolio_raises=None,
+                 positions_records=None,
+                 positions_raises=None,
+                 disconnect_raises=None,
+                 is_connected_after_connect=True):
+        self._connect_raises = connect_raises
+        # account_values: if a list, returned every time. If a list of
+        # lists, returned in sequence (for late-arrival tests). If
+        # None, defaults to a non-empty list so snapshot is ready
+        # immediately.
+        if account_values is None:
+            account_values = [object(), object(), object()]
+        self._account_values_spec = account_values
+        self._wait_on_update_raises = wait_on_update_raises
+        self._portfolio_items = portfolio_items or []
+        self._portfolio_raises = portfolio_raises
+        self._positions_records = positions_records or []
+        self._positions_raises = positions_raises
+        self._disconnect_raises = disconnect_raises
+        self._is_connected_after_connect = is_connected_after_connect
+        # State tracking — what the test assertions inspect.
+        self.connect_call_args = None
+        self.disconnect_called = False
+        self.portfolio_called = False
+        self.positions_called = False
+        self._connected = False
+        # Forbidden methods — if any test code accidentally calls
+        # them, an AttributeError surfaces immediately.
+        # (We intentionally don't define them at all.)
+
+    # Phase 2
+    def connect(self, host, port, *, clientId, readonly, timeout):
+        self.connect_call_args = {
+            "host": host, "port": port, "clientId": clientId,
+            "readonly": readonly, "timeout": timeout,
+        }
+        if self._connect_raises:
+            raise self._connect_raises
+        self._connected = self._is_connected_after_connect
+
+    def isConnected(self):
+        return self._connected
+
+    # Phase 3 — snapshot readiness via accountValues + waitOnUpdate
+    def waitOnUpdate(self, timeout=None):
+        if self._wait_on_update_raises:
+            raise self._wait_on_update_raises
+        return None
+
+    def accountValues(self):
+        # If account_values is a list of lists, pop the next batch.
+        # If account_values is a flat list, return it every time.
+        spec = self._account_values_spec
+        if (isinstance(spec, list) and spec
+                and all(isinstance(b, list) for b in spec)):
+            return spec.pop(0) if len(spec) > 1 else spec[0]
+        return spec if isinstance(spec, list) else []
+
+    # Phase 4
+    def portfolio(self):
+        self.portfolio_called = True
+        if self._portfolio_raises:
+            raise self._portfolio_raises
+        return list(self._portfolio_items)
+
+    # Phase 5
+    def positions(self):
+        self.positions_called = True
+        if self._positions_raises:
+            raise self._positions_raises
+        return list(self._positions_records)
+
+    # Phase 7 — disconnect; never raises out of run_paper_dryrun
+    # because _safe_disconnect wraps it
+    def disconnect(self):
+        self.disconnect_called = True
+        self._connected = False
+        if self._disconnect_raises:
+            raise self._disconnect_raises
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Group 1 — Client ID is reserved + non-conflicting
 # ─────────────────────────────────────────────────────────────────────────────
@@ -745,9 +836,19 @@ class TestSnapshotReadyAndSymbolHelpers(unittest.TestCase):
         self.assertEqual(_symbols_with_position([_Item()]), set())
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Group 6 — Dry-run path exists and proves preconditions without DB writes
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDryRun(unittest.TestCase):
+    """Existing dry-run behaviour now exercised against the phased
+    orchestration with a _MockIB injected via `ib_factory`. The
+    summary shape gains `error_phase`, `elapsed_ms`,
+    `disconnect_attempted`, `disconnect_ok` fields."""
 
     def test_dryrun_happy_path(self):
-        items = [
+        portfolio_items = [
             _FakePortfolioItem(symbol="AAPL", position=10.0,
                                 marketValue=1900.0),
             _FakePortfolioItem(symbol="MSFT", position=5.0,
@@ -757,14 +858,11 @@ class TestSnapshotReadyAndSymbolHelpers(unittest.TestCase):
             _FakePosition(symbol="AAPL", position=10.0),
             _FakePosition(symbol="MSFT", position=5.0),
         ]
+        mock = _MockIB(portfolio_items=portfolio_items,
+                        positions_records=positions_records)
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: _factory_result(
-                portfolio_items=items,
-                position_records=positions_records,
-                snapshot_ready=True,
-                account_values_count=7,
-            ),
+            ib_factory=lambda: mock,
         )
         self.assertTrue(summary["dry_run"])
         self.assertTrue(summary["gateway_ready"])
@@ -772,92 +870,332 @@ class TestSnapshotReadyAndSymbolHelpers(unittest.TestCase):
         self.assertEqual(summary["expected_port"], IBKR_PAPER_PORT)
         self.assertTrue(summary["ib_connect_ok"])
         self.assertTrue(summary["snapshot_ready"])
-        self.assertEqual(summary["account_values_count"], 7)
+        self.assertEqual(summary["account_values_count"], 3)
         self.assertTrue(summary["positions_read_ok"])
         self.assertEqual(summary["portfolio_count"], 2)
         self.assertEqual(summary["positions_count"], 2)
         self.assertTrue(summary["cross_confirm_ok"])
+        self.assertIsNone(summary["error_phase"])
         self.assertIsNone(summary["error"])
+        self.assertTrue(summary["disconnect_attempted"])
+        self.assertTrue(summary["disconnect_ok"])
+        for phase in ("gateway_health", "connect", "snapshot",
+                       "portfolio", "positions", "cross_confirm",
+                       "disconnect", "total"):
+            self.assertIn(phase, summary["elapsed_ms"],
+                f"elapsed_ms missing {phase!r}")
 
     def test_dryrun_empty_paper_account_reports_cross_confirm_ok(self):
+        mock = _MockIB(portfolio_items=[], positions_records=[])
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: _factory_result(
-                portfolio_items=[],
-                position_records=[],
-                snapshot_ready=True,
-                account_values_count=5,
-            ),
+            ib_factory=lambda: mock,
         )
         self.assertTrue(summary["snapshot_ready"])
         self.assertEqual(summary["portfolio_count"], 0)
         self.assertEqual(summary["positions_count"], 0)
-        self.assertTrue(summary["cross_confirm_ok"],
-            "empty + empty + snapshot_ready must agree → cross_confirm_ok=True")
+        self.assertTrue(summary["cross_confirm_ok"])
+        self.assertIsNone(summary["error_phase"])
         self.assertIsNone(summary["error"])
 
     def test_dryrun_reports_snapshot_not_ready(self):
+        mock = _MockIB(account_values=[])
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: _factory_result(
-                portfolio_items=[],
-                position_records=[],
-                snapshot_ready=False,
-                account_values_count=0,
-            ),
+            ib_factory=lambda: mock,
+            api_timeout=0.3,
         )
         self.assertTrue(summary["ib_connect_ok"])
         self.assertFalse(summary["snapshot_ready"])
         self.assertFalse(summary["positions_read_ok"])
+        self.assertEqual(summary["error_phase"], "snapshot")
         self.assertIn("account_snapshot_not_ready_within_timeout",
                        summary["error"])
+        self.assertTrue(summary["disconnect_attempted"])
 
     def test_dryrun_reports_cross_confirm_failure(self):
+        portfolio_items = [_FakePortfolioItem(symbol="AAPL",
+                                                position=10.0,
+                                                marketValue=1900.0)]
+        mock = _MockIB(portfolio_items=portfolio_items,
+                        positions_records=[])
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=lambda **kw: _factory_result(
-                portfolio_items=[_FakePortfolioItem(symbol="AAPL",
-                                                     position=10.0)],
-                position_records=[],
-                snapshot_ready=True,
-                account_values_count=5,
-            ),
+            ib_factory=lambda: mock,
         )
         self.assertTrue(summary["snapshot_ready"])
         self.assertTrue(summary["positions_read_ok"])
         self.assertFalse(summary["cross_confirm_ok"])
+        self.assertEqual(summary["error_phase"], "cross_confirm")
         self.assertIn("portfolio_positions_disagreement", summary["error"])
+        self.assertTrue(summary["disconnect_attempted"])
+        self.assertTrue(summary["disconnect_ok"])
 
     def test_dryrun_refuses_unhealthy_gateway(self):
+        called = {"factory": False}
+
+        def _factory():
+            called["factory"] = True
+            return _MockIB()
+
         summary = run_paper_dryrun(
             health_checker=_unhealthy_login_error_health,
-            ib_session_factory=lambda **kw: _factory_result(),
+            ib_factory=_factory,
         )
         self.assertFalse(summary["gateway_ready"])
         self.assertFalse(summary["ib_connect_ok"])
-        self.assertIsNotNone(summary["error"])
+        self.assertEqual(summary["error_phase"], "gateway_health")
         self.assertIn("GatewayNotReadyError", summary["error"])
+        self.assertFalse(called["factory"])
+        self.assertFalse(summary["disconnect_attempted"])
 
     def test_dryrun_reports_factory_failure(self):
+        # ib_factory itself raises before any IB call — classified as
+        # the connect phase since that's where we tried to construct/use
+        # the IB instance.
         summary = run_paper_dryrun(
             health_checker=_healthy_paper_health,
-            ib_session_factory=MagicMock(side_effect=TimeoutError("api timeout")),
+            ib_factory=MagicMock(side_effect=TimeoutError("api timeout")),
         )
         self.assertTrue(summary["gateway_ready"])
         self.assertFalse(summary["ib_connect_ok"])
-        self.assertIsNotNone(summary["error"])
+        self.assertEqual(summary["error_phase"], "connect")
         self.assertIn("TimeoutError", summary["error"])
+        self.assertFalse(summary["disconnect_attempted"])
 
     def test_dryrun_does_not_write_db(self):
-        """run_paper_dryrun must NOT open any DB connection. Mock
-        sqlite3.connect and assert it is never called."""
         with patch("sqlite3.connect") as mock_connect:
             run_paper_dryrun(
                 health_checker=_healthy_paper_health,
-                ib_session_factory=lambda **kw: _factory_result(),
+                ib_factory=lambda: _MockIB(),
             )
-        self.assertFalse(mock_connect.called,
-            "dry-run touched sqlite3.connect — must not write to DB")
+        self.assertFalse(mock_connect.called)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Group 6b — Phased dry-run observability (added in the post-77a7db1 patch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestDryRunPhasedObservability(unittest.TestCase):
+    """The post-77a7db1 patch suite. The VPS dry-run reported
+    ib_connect_ok=False and snapshot_ready=False even though the
+    actual timeout was in ib.positions() — the operator could not
+    tell which phase failed. These tests pin the new phase-level
+    behaviour."""
+
+    def test_connect_timeout_classifies_as_connect_phase(self):
+        mock = _MockIB(connect_raises=TimeoutError("connect timed out"))
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(summary["gateway_ready"])
+        self.assertFalse(summary["ib_connect_ok"])
+        self.assertFalse(summary["snapshot_ready"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertEqual(summary["error_phase"], "connect")
+        self.assertIn("TimeoutError", summary["error"])
+        self.assertNotIn("snapshot", summary["elapsed_ms"])
+        self.assertNotIn("portfolio", summary["elapsed_ms"])
+        self.assertNotIn("positions", summary["elapsed_ms"])
+        self.assertFalse(mock.portfolio_called)
+        self.assertFalse(mock.positions_called)
+
+    def test_snapshot_timeout_classifies_as_snapshot_phase(self):
+        """connect() succeeds, accountValues stays empty within
+        api_timeout → error_phase='snapshot'.
+        Critical: ib_connect_ok=True (connect itself succeeded)."""
+        mock = _MockIB(account_values=[])
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+            api_timeout=0.3,
+        )
+        self.assertTrue(summary["ib_connect_ok"],
+            "connect succeeded — ib_connect_ok MUST be True")
+        self.assertFalse(summary["snapshot_ready"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertEqual(summary["error_phase"], "snapshot")
+        self.assertIn("account_snapshot_not_ready_within_timeout",
+                       summary["error"])
+        self.assertNotIn("portfolio", summary["elapsed_ms"])
+        self.assertNotIn("positions", summary["elapsed_ms"])
+        self.assertIn("connect", summary["elapsed_ms"])
+        self.assertIn("snapshot", summary["elapsed_ms"])
+        self.assertTrue(summary["disconnect_attempted"])
+
+    def test_portfolio_timeout_classifies_as_portfolio_phase(self):
+        """portfolio() raises → error_phase='portfolio'.
+        Critical: ib_connect_ok=True AND snapshot_ready=True."""
+        mock = _MockIB(portfolio_raises=TimeoutError("portfolio timed out"))
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(summary["ib_connect_ok"])
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertIsNone(summary["portfolio_count"])
+        self.assertEqual(summary["error_phase"], "portfolio")
+        self.assertIn("TimeoutError", summary["error"])
+        self.assertFalse(mock.positions_called,
+            "positions() called after portfolio() failed — order broken")
+        self.assertNotIn("positions", summary["elapsed_ms"])
+        self.assertTrue(summary["disconnect_attempted"])
+
+    def test_positions_timeout_classifies_as_positions_phase(self):
+        """The exact VPS scenario the operator reported.
+        positions() raises → error_phase='positions'.
+        Critical post-fix invariants:
+          ib_connect_ok      = True
+          snapshot_ready     = True
+          portfolio_count    = <actual int> (portfolio succeeded)
+          positions_count    = None         (positions failed)
+          positions_read_ok  = False
+        Pre-patch summary would have shown ib_connect_ok=False and
+        snapshot_ready=False — that's the bug this test pins."""
+        mock = _MockIB(
+            portfolio_items=[],
+            positions_raises=TimeoutError(),
+        )
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(summary["ib_connect_ok"])
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertEqual(summary["portfolio_count"], 0)
+        self.assertIsNone(summary["positions_count"])
+        self.assertFalse(summary["positions_read_ok"])
+        self.assertEqual(summary["error_phase"], "positions")
+        self.assertIn("TimeoutError", summary["error"])
+        self.assertTrue(summary["disconnect_attempted"])
+        self.assertTrue(summary["disconnect_ok"])
+        for phase in ("gateway_health", "connect", "snapshot",
+                       "portfolio", "positions", "disconnect", "total"):
+            self.assertIn(phase, summary["elapsed_ms"])
+        self.assertNotIn("cross_confirm", summary["elapsed_ms"])
+
+    def test_disconnect_runs_even_when_positions_failed(self):
+        mock = _MockIB(positions_raises=TimeoutError())
+        run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(mock.disconnect_called,
+            "ib.disconnect() must be called even when positions() raised")
+
+    def test_disconnect_runs_when_portfolio_failed(self):
+        mock = _MockIB(portfolio_raises=TimeoutError())
+        run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(mock.disconnect_called)
+
+    def test_disconnect_runs_when_snapshot_failed(self):
+        mock = _MockIB(account_values=[])
+        run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+            api_timeout=0.3,
+        )
+        self.assertTrue(mock.disconnect_called)
+
+    def test_disconnect_failure_does_not_overwrite_earlier_error(self):
+        """If portfolio() failed AND disconnect() also failed, the
+        summary's error_phase must still be 'portfolio' — not
+        'disconnect'. The disconnect failure is recorded in
+        disconnect_error so it's not silent."""
+        mock = _MockIB(
+            portfolio_raises=TimeoutError("portfolio slow"),
+            disconnect_raises=RuntimeError("disconnect oops"),
+        )
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertEqual(summary["error_phase"], "portfolio")
+        self.assertIn("TimeoutError", summary["error"])
+        self.assertTrue(summary["disconnect_attempted"])
+        self.assertFalse(summary["disconnect_ok"])
+        self.assertIn("RuntimeError", summary["disconnect_error"])
+
+    def test_disconnect_only_failure_uses_disconnect_phase(self):
+        mock = _MockIB(disconnect_raises=RuntimeError("disconnect oops"))
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertTrue(summary["snapshot_ready"])
+        self.assertTrue(summary["positions_read_ok"])
+        self.assertTrue(summary["cross_confirm_ok"])
+        self.assertTrue(summary["disconnect_attempted"])
+        self.assertFalse(summary["disconnect_ok"])
+        self.assertEqual(summary["error_phase"], "disconnect")
+        self.assertIn("RuntimeError", summary["error"])
+
+    def test_elapsed_ms_keys_match_DRYRUN_PHASES(self):
+        from bot.risk_authority.ibkr_paper_reader import DRYRUN_PHASES
+        valid = set(DRYRUN_PHASES) | {"total"}
+        mock = _MockIB()
+        summary = run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        for k in summary["elapsed_ms"]:
+            self.assertIn(k, valid,
+                f"elapsed_ms key {k!r} not in DRYRUN_PHASES + total")
+
+    def test_error_phase_values_match_DRYRUN_PHASES_or_None(self):
+        from bot.risk_authority.ibkr_paper_reader import DRYRUN_PHASES
+        valid = set(DRYRUN_PHASES) | {None}
+        scenarios = [
+            (_MockIB(),                                None),
+            (_MockIB(connect_raises=TimeoutError()),   "connect"),
+            (_MockIB(account_values=[]),               "snapshot"),
+            (_MockIB(portfolio_raises=TimeoutError()), "portfolio"),
+            (_MockIB(positions_raises=TimeoutError()), "positions"),
+        ]
+        for mock, expected in scenarios:
+            summary = run_paper_dryrun(
+                health_checker=_healthy_paper_health,
+                ib_factory=lambda m=mock: m,
+                api_timeout=0.3,
+            )
+            self.assertIn(summary["error_phase"], valid)
+            self.assertEqual(summary["error_phase"], expected)
+
+    def test_dryrun_uses_readonly_true_on_connect(self):
+        mock = _MockIB()
+        run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        self.assertIsNotNone(mock.connect_call_args)
+        self.assertTrue(mock.connect_call_args["readonly"],
+            f"connect() called with readonly="
+            f"{mock.connect_call_args.get('readonly')!r} — must be True")
+        self.assertEqual(mock.connect_call_args["port"], 4002)
+        self.assertEqual(mock.connect_call_args["clientId"], M15_5_CLIENT_ID)
+
+    def test_dryrun_never_calls_forbidden_methods(self):
+        """_MockIB intentionally does NOT define placeOrder/cancelOrder/
+        etc. If the dry-run code path called any, getattr would
+        AttributeError; verify the attributes remain undefined."""
+        mock = _MockIB()
+        run_paper_dryrun(
+            health_checker=_healthy_paper_health,
+            ib_factory=lambda: mock,
+        )
+        for forbidden in ("placeOrder", "cancelOrder", "modifyOrder",
+                           "reqGlobalCancel", "reqMktData",
+                           "reqHistoricalData", "reqOpenOrders",
+                           "reqExecutions"):
+            self.assertFalse(hasattr(mock, forbidden),
+                f"_MockIB has {forbidden!r} — fixture must NOT define "
+                f"order-related methods")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -56,14 +56,13 @@ Scanner-isolation invariant carries forward: importing `bot.scanner` / `bot.stra
 
 ### 4.1. Dry-run first (REQUIRED before any real DB update)
 
-The dry-run proves all preconditions are met without writing to the DB:
+The dry-run proves all preconditions are met without writing to the DB. **Phased orchestration**: each phase is timed and tracked individually so the operator can see exactly which gate failed if any did.
 
 ```python
 sudo /opt/algo-trader/venv/bin/python3 -c "
 import json
 from bot.risk_authority.ibkr_paper_reader import run_paper_dryrun
 summary = run_paper_dryrun()
-# Redact positions_count if you don't want to surface it in a paste-back.
 print(json.dumps(summary, indent=2, default=str))
 "
 ```
@@ -77,14 +76,35 @@ A successful dry-run reports:
   "mode":                     "paper",
   "expected_port":            4002,
   "ib_connect_ok":            true,
+  "snapshot_ready":           true,
+  "account_values_count":     <int>,
   "positions_read_ok":        true,
-  "positions_count":          <integer>,
-  "forbidden_calls_detected": [],
-  "error":                    null
+  "portfolio_count":          <int>,
+  "positions_count":          <int>,
+  "cross_confirm_ok":         true,
+  "disconnect_attempted":     true,
+  "disconnect_ok":            true,
+  "disconnect_error":         null,
+  "error_phase":              null,
+  "error":                    null,
+  "elapsed_ms": {
+    "gateway_health":  <int>,
+    "connect":         <int>,
+    "snapshot":        <int>,
+    "portfolio":       <int>,
+    "positions":       <int>,
+    "cross_confirm":   <int>,
+    "disconnect":      <int>,
+    "total":           <int>
+  }
 }
 ```
 
-If any of those is `false`/non-empty, **do not proceed to the real ingest.** Investigate using M15.4's `/api/gateway/health` first.
+**Phase identifiers** (closed-set, see `DRYRUN_PHASES` in the module): `gateway_health`, `connect`, `snapshot`, `portfolio`, `positions`, `cross_confirm`, `disconnect`. When any phase fails, `error_phase` is set to the first failing phase and later phases are skipped (except `disconnect`, which always runs). `elapsed_ms` carries entries only for phases that actually ran — absence is meaningful (e.g., if `error_phase='connect'`, `elapsed_ms` will not contain `snapshot`/`portfolio`/`positions`).
+
+**Critical invariant the phased orchestration enforces:** `ib_connect_ok` is True iff `ib.connect(...)` itself returned. A subsequent failure in `snapshot`/`portfolio`/`positions` does NOT flip `ib_connect_ok` back to False. The operator can therefore distinguish a connect failure from a later read failure.
+
+If any of `gateway_ready`/`ib_connect_ok`/`snapshot_ready`/`positions_read_ok`/`cross_confirm_ok` is `false`, or `error_phase` is non-null, **do not proceed to the real ingest.** The `error_phase` and `elapsed_ms` fields tell you which gate failed and how long it took to fail.
 
 ### 4.2. Real ingest (writes to `signals.db`)
 

@@ -339,6 +339,65 @@ def _read_portfolio_via_ib(
             log.warning("ib.disconnect() raised; suppressing")
 
 
+def _default_ib_factory():
+    """Default factory used by run_paper_dryrun when no ib_factory is
+    injected. Returns a fresh `ib_insync.IB()` instance. Lazy import
+    keeps the scanner-isolation subprocess test passing — `ib_insync`
+    is never loaded merely by importing this module."""
+    from ib_insync import IB   # noqa: F401 — narrow import surface
+    return IB()
+
+
+def _ms(t0: float) -> int:
+    return int((time.monotonic() - t0) * 1000)
+
+
+# Closed-set phase identifiers used in `error_phase` and `elapsed_ms`.
+DRYRUN_PHASES = (
+    "gateway_health",
+    "connect",
+    "snapshot",
+    "portfolio",
+    "positions",
+    "cross_confirm",
+    "disconnect",
+)
+
+
+def _safe_disconnect(ib: Any, summary: Dict[str, Any]) -> None:
+    """Always-attempt disconnect; never raises. Records:
+      * disconnect_attempted  — True iff we owned an IB object
+      * disconnect_ok          — True/False/None
+      * disconnect_error       — str (only on failure)
+      * elapsed_ms['disconnect']
+    Disconnect failures do NOT overwrite an earlier-phase `error`,
+    so the operator still sees which phase actually broke the read."""
+    if ib is None:
+        summary["disconnect_attempted"] = False
+        summary["disconnect_ok"] = None
+        summary["elapsed_ms"]["disconnect"] = 0
+        return
+    summary["disconnect_attempted"] = True
+    t0 = time.monotonic()
+    try:
+        connected = False
+        try:
+            connected = bool(ib.isConnected())
+        except Exception:
+            connected = False
+        if connected:
+            ib.disconnect()
+        summary["disconnect_ok"] = True
+    except Exception as e:
+        summary["disconnect_ok"] = False
+        summary["disconnect_error"] = f"{type(e).__name__}: {e}"
+        # Only set error_phase=disconnect when nothing earlier failed.
+        if summary["error_phase"] is None:
+            summary["error_phase"] = "disconnect"
+            summary["error"] = summary["disconnect_error"]
+    summary["elapsed_ms"]["disconnect"] = _ms(t0)
+
+
 def make_ibkr_paper_positions_reader(
     *,
     health_checker: Optional[Callable] = None,
@@ -421,30 +480,48 @@ def make_ibkr_paper_positions_reader(
 def run_paper_dryrun(
     *,
     health_checker: Optional[Callable] = None,
-    ib_session_factory: Optional[Callable] = None,
+    ib_factory: Optional[Callable[[], Any]] = None,
     client_id: int = M15_5_CLIENT_ID,
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_SEC,
     api_timeout: float = DEFAULT_API_TIMEOUT_SEC,
 ) -> Dict[str, Any]:
-    """M15.5 dry-run: prove the gateway is healthy, prove the IB
-    connection works read-only, prove the snapshot becomes ready,
-    prove portfolio() AND positions() can be read AND cross-confirm
-    agree. NO DB writes. The operator runs this before the real ingest.
+    """M15.5 dry-run with phase-level observability.
 
-    Returns a structured summary:
-      * gateway_ready
-      * mode
-      * expected_port
-      * ib_connect_ok
-      * snapshot_ready
-      * account_values_count
-      * positions_read_ok
-      * portfolio_count, positions_count
-      * cross_confirm_ok       (True iff symbol sets agree)
-      * forbidden_calls_detected
-      * error                  (None on success)
+    The dry-run does NOT reuse `_read_portfolio_via_ib` because that
+    helper is atomic — it returns the full result or raises, leaving
+    the operator unable to see which phase actually failed. Instead,
+    the dry-run orchestrates each phase itself with per-step timing
+    and pass/fail tracking. Critically:
 
-    No DB write, no order, no schema change.
+      * `ib_connect_ok` is True iff `ib.connect(...)` itself returned.
+        A subsequent failure in snapshot/portfolio/positions does NOT
+        flip it back to False.
+      * `snapshot_ready` is True iff `_wait_for_snapshot_ready` reports
+        the account-update subscription has delivered data within
+        `api_timeout`.
+      * `positions_read_ok` is True iff BOTH `portfolio()` and
+        `positions()` returned without raising.
+      * `cross_confirm_ok` is True iff symbol sets agree.
+      * `disconnect_attempted` / `disconnect_ok` track the always-
+        attempted disconnect; failures there do NOT overwrite an
+        earlier-phase `error` field.
+
+    Closed-set phases (see DRYRUN_PHASES): gateway_health, connect,
+    snapshot, portfolio, positions, cross_confirm, disconnect.
+    `error_phase` is set to the FIRST failing phase; subsequent
+    phases are skipped (except disconnect, which always runs).
+
+    `elapsed_ms` is a dict keyed by phase name with elapsed
+    milliseconds, plus a `total` key. Phases that did not run are
+    absent from the dict (not zero — absence is the truth).
+
+    NO DB write. NO order. NO real ingest. Pure read-only probe.
+
+    Injection points (used by tests):
+      * health_checker — replaces bot.gateway_health.assemble_health
+      * ib_factory     — returns an IB() instance (real or mock).
+                          Default: bot.risk_authority.ibkr_paper_reader.
+                          _default_ib_factory (lazy ib_insync import).
     """
     summary: Dict[str, Any] = {
         "dry_run":                    True,
@@ -458,16 +535,29 @@ def run_paper_dryrun(
         "portfolio_count":            None,
         "positions_count":            None,
         "cross_confirm_ok":           False,
-        "forbidden_calls_detected":   [],
+        "disconnect_attempted":       False,
+        "disconnect_ok":              None,
+        "disconnect_error":           None,
+        "error_phase":                None,
         "error":                      None,
+        "elapsed_ms":                 {},
+        "forbidden_calls_detected":   [],
     }
-    # Gate 1: gateway health
+    overall_start = time.monotonic()
+
+    # ── Phase 1: gateway_health ────────────────────────────────────
+    t0 = time.monotonic()
     try:
-        _check_gateway_ready(scope="ibkr_paper", health_checker=health_checker)
+        _check_gateway_ready(scope="ibkr_paper",
+                              health_checker=health_checker)
         summary["gateway_ready"] = True
     except (GatewayNotReadyError, NotImplementedError) as e:
+        summary["error_phase"] = "gateway_health"
         summary["error"] = f"{type(e).__name__}: {e}"
+        summary["elapsed_ms"]["gateway_health"] = _ms(t0)
+        summary["elapsed_ms"]["total"] = _ms(overall_start)
         return summary
+    summary["elapsed_ms"]["gateway_health"] = _ms(t0)
 
     # Reflect the latest health snapshot for transparency.
     try:
@@ -478,46 +568,105 @@ def run_paper_dryrun(
     except Exception:  # pragma: no cover — health already passed gate 1
         pass
 
-    # Gate 2: read-only IB session + snapshot wait + portfolio + positions.
-    factory = ib_session_factory or _read_portfolio_via_ib
+    factory = ib_factory or _default_ib_factory
+    ib: Any = None
+
+    # ── Phase 2: connect ───────────────────────────────────────────
+    t0 = time.monotonic()
     try:
-        result = factory(
-            host=IBKR_PAPER_HOST,
-            port=IBKR_PAPER_PORT,
-            client_id=client_id,
-            connect_timeout=connect_timeout,
-            api_timeout=api_timeout,
+        ib = factory()
+        ib.connect(
+            IBKR_PAPER_HOST, IBKR_PAPER_PORT,
+            clientId=client_id,
+            readonly=True,
+            timeout=connect_timeout,
         )
         summary["ib_connect_ok"] = True
-        if not isinstance(result, dict):
-            summary["error"] = (
-                f"ib_factory_returned_non_dict:"
-                f"type={type(result).__name__}"
-            )
-            return summary
-        summary["snapshot_ready"]       = bool(result.get("snapshot_ready"))
-        summary["account_values_count"] = result.get("account_values_count")
-        if not summary["snapshot_ready"]:
-            summary["error"] = (
-                "account_snapshot_not_ready_within_timeout: "
-                f"account_values_count={summary['account_values_count']}"
-            )
-            return summary
-        portfolio_items  = result.get("portfolio_items")  or []
-        position_records = result.get("position_records") or []
-        summary["positions_read_ok"] = True
-        summary["portfolio_count"]   = len(portfolio_items)
-        summary["positions_count"]   = len(position_records)
-        psyms = _symbols_with_position(portfolio_items)
-        qsyms = _symbols_with_position(position_records)
-        summary["cross_confirm_ok"] = (psyms == qsyms)
-        if not summary["cross_confirm_ok"]:
-            summary["error"] = (
-                f"portfolio_positions_disagreement:"
-                f"portfolio={sorted(psyms)},positions={sorted(qsyms)}"
-            )
     except Exception as e:
+        summary["error_phase"] = "connect"
         summary["error"] = f"{type(e).__name__}: {e}"
+        summary["elapsed_ms"]["connect"] = _ms(t0)
+        # Disconnect is still attempted in case the IB object exists
+        # in a half-connected state. _safe_disconnect handles ib=None.
+        _safe_disconnect(ib, summary)
+        summary["elapsed_ms"]["total"] = _ms(overall_start)
+        return summary
+    summary["elapsed_ms"]["connect"] = _ms(t0)
+
+    # ── Phase 3: snapshot_ready ────────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        snap = _wait_for_snapshot_ready(ib, timeout=api_timeout)
+        summary["account_values_count"] = snap["account_values_count"]
+        if not snap["ready"]:
+            summary["error_phase"] = "snapshot"
+            summary["error"] = (
+                f"account_snapshot_not_ready_within_timeout: "
+                f"waited_sec={snap['waited_sec']}, "
+                f"account_values_count={snap['account_values_count']}"
+            )
+            summary["elapsed_ms"]["snapshot"] = _ms(t0)
+            _safe_disconnect(ib, summary)
+            summary["elapsed_ms"]["total"] = _ms(overall_start)
+            return summary
+        summary["snapshot_ready"] = True
+    except Exception as e:
+        summary["error_phase"] = "snapshot"
+        summary["error"] = f"{type(e).__name__}: {e}"
+        summary["elapsed_ms"]["snapshot"] = _ms(t0)
+        _safe_disconnect(ib, summary)
+        summary["elapsed_ms"]["total"] = _ms(overall_start)
+        return summary
+    summary["elapsed_ms"]["snapshot"] = _ms(t0)
+
+    # ── Phase 4: portfolio ─────────────────────────────────────────
+    portfolio_items: List[Any] = []
+    t0 = time.monotonic()
+    try:
+        portfolio_items = list(ib.portfolio())
+        summary["portfolio_count"] = len(portfolio_items)
+    except Exception as e:
+        summary["error_phase"] = "portfolio"
+        summary["error"] = f"{type(e).__name__}: {e}"
+        summary["elapsed_ms"]["portfolio"] = _ms(t0)
+        _safe_disconnect(ib, summary)
+        summary["elapsed_ms"]["total"] = _ms(overall_start)
+        return summary
+    summary["elapsed_ms"]["portfolio"] = _ms(t0)
+
+    # ── Phase 5: positions ─────────────────────────────────────────
+    position_records: List[Any] = []
+    t0 = time.monotonic()
+    try:
+        position_records = list(ib.positions())
+        summary["positions_count"] = len(position_records)
+        summary["positions_read_ok"] = True
+    except Exception as e:
+        summary["error_phase"] = "positions"
+        summary["error"] = f"{type(e).__name__}: {e}"
+        summary["elapsed_ms"]["positions"] = _ms(t0)
+        _safe_disconnect(ib, summary)
+        summary["elapsed_ms"]["total"] = _ms(overall_start)
+        return summary
+    summary["elapsed_ms"]["positions"] = _ms(t0)
+
+    # ── Phase 6: cross_confirm (pure-Python, no IB call) ───────────
+    t0 = time.monotonic()
+    psyms = _symbols_with_position(portfolio_items)
+    qsyms = _symbols_with_position(position_records)
+    summary["cross_confirm_ok"] = (psyms == qsyms)
+    summary["elapsed_ms"]["cross_confirm"] = _ms(t0)
+    if not summary["cross_confirm_ok"]:
+        summary["error_phase"] = "cross_confirm"
+        summary["error"] = (
+            f"portfolio_positions_disagreement:"
+            f"portfolio={sorted(psyms)},positions={sorted(qsyms)}"
+        )
+        # fall through to disconnect — we still want to release IB
+
+    # ── Phase 7: disconnect (always; never raises out of dry-run) ──
+    _safe_disconnect(ib, summary)
+    summary["elapsed_ms"]["total"] = _ms(overall_start)
     return summary
 
 
@@ -525,8 +674,10 @@ __all__ = [
     "M15_5_CLIENT_ID",
     "IBKR_PAPER_HOST", "IBKR_PAPER_PORT",
     "DEFAULT_CONNECT_TIMEOUT_SEC", "DEFAULT_API_TIMEOUT_SEC",
+    "DRYRUN_PHASES",
     "GatewayNotReadyError", "IBPaperReadError",
     "make_ibkr_paper_positions_reader",
     "run_paper_dryrun",
     "_wait_for_snapshot_ready", "_symbols_with_position",
+    "_safe_disconnect", "_default_ib_factory",
 ]
