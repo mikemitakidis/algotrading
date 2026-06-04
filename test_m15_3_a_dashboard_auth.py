@@ -1415,6 +1415,47 @@ class TestSetPasswordToolSubprocess(unittest.TestCase):
         content = Path(self.tmp_env.name).read_text()
         self.assertNotIn("DASHBOARD_PASSWORD_HASH=", content)
 
+    def test_subprocess_works_without_PYTHONPATH_from_non_repo_cwd(self):
+        """Regression test for the M15.3.A.fix-2 bug.
+
+        When the operator runs `sudo python tools/set_dashboard_password.py`
+        on the VPS, sys.path only contains the script's directory
+        (tools/), NOT the repo root — so `from dashboard.auth.passwords
+        import hash_password` fails with `ModuleNotFoundError: No module
+        named 'dashboard'`. The user worked around it by setting
+        PYTHONPATH=/opt/algo-trader manually. The fix is the same
+        sys.path bootstrap added to dashboard/app.py.
+
+        This test runs the tool from /tmp with PYTHONPATH explicitly
+        cleared, so the only way it succeeds is via the sys.path
+        bootstrap inside the tool itself."""
+        new_pw = "non-repo-cwd-test-1234"
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)  # explicitly clear
+        env["HOME"] = "/tmp"
+        # Run from /tmp — explicitly NOT from the repo root.
+        proc = subprocess.run(
+            [sys.executable,
+              str(Path(_REPO) / "tools" / "set_dashboard_password.py"),
+              "--stdin",
+              "--env-path", self.tmp_env.name],
+            cwd="/tmp",  # NOT the repo root
+            env=env,
+            input=f"{new_pw}\n{new_pw}\n",
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0,
+            f"set_dashboard_password.py must work from non-repo cwd "
+            f"without PYTHONPATH. Got rc={proc.returncode}\n"
+            f"STDERR: {proc.stderr!r}\nSTDOUT: {proc.stdout!r}")
+        # And the hash was actually written:
+        content = Path(self.tmp_env.name).read_text()
+        self.assertIn("DASHBOARD_PASSWORD_HASH=$2", content,
+            "tool ran but no bcrypt hash was written")
+        # And password material never appears in stdout/stderr.
+        self.assertNotIn(new_pw, proc.stdout)
+        self.assertNotIn(new_pw, proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

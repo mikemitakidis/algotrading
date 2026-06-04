@@ -44,6 +44,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# M15.3.A.fix — sys.path bootstrap for script-mode invocation.
+# When this file is run directly (e.g. `python3 tools/set_dashboard_password.py`
+# from any cwd), Python only puts the script's directory (tools/) on
+# sys.path — not the repo root. That makes `from dashboard.auth.passwords
+# import hash_password` fail with ModuleNotFoundError. Identical issue to
+# the one fixed in dashboard/app.py for systemd script-mode invocation.
+# Adding the repo root here makes the tool work from any cwd without
+# requiring the operator to set PYTHONPATH manually.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 def _err(msg: str, code: int = 1) -> "noreturn":  # type: ignore
     print(f"ERROR: {msg}", file=sys.stderr)
