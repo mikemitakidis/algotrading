@@ -10,18 +10,18 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 
 ## Active items
 
-### M15.3.A.cutover — Switch dashboard to 127.0.0.1 + Caddy/TLS (DEFERRED, operator action)
-- **Status:** Soft-cutover landed in M15.3.A. Default bind remains `0.0.0.0` with an explicit startup warning. The operator must complete the hard cutover.
-- **TOTP does not substitute for HTTPS** (added 2026-06-04 alongside M15.3.A.2 closeout-prep). Even with `M15.3.A.2` TOTP enabled, an on-path attacker over plain HTTP can still steal a valid session cookie *after* a successful 2FA login (the cookie is plaintext in network bytes without TLS — `Secure` flag is off pre-cutover by design, since browsers would otherwise refuse to send it). TOTP defends against credential theft alone; it does not defend against active MITM / session theft. This cutover therefore remains a real prerequisite for state-changing operator actions like `M15.3.B` manual_reset.
-- **Why deferred:** Required Caddy install on the Hetzner VPS, which is an operator action (root-level package install) outside the M15.3.A code scope. M15.3.A intentionally does not install Caddy automatically — see Q-A.3 / correction #3.
-- **Acceptance criteria when complete:**
-  - Caddy (or other HTTPS reverse-proxy) is installed and reverse-proxying `:443 → 127.0.0.1:8080`.
-  - `/opt/algo-trader/.env` sets `DASHBOARD_BIND_HOST=127.0.0.1` and `DASHBOARD_HTTPS_MODE=true` (or `DASHBOARD_COOKIE_SECURE=true`).
-  - `algo-trader-dashboard.service` restarted; dashboard reachable only through HTTPS via the reverse proxy.
-  - `curl -s http://<external-ip>:8080/api/health` from outside the VPS returns connection refused.
-  - The M15.3.A startup "exposed on plaintext" warning is no longer present in the journal.
-- **Estimated effort:** 1-2 hours of operator action, no code changes. Procedure documented in `docs/M15_3_A_dashboard_auth.md` §3.
-- **Owner:** operator (Mike).
+### M15.3.A.cutover.perf — Dashboard login latency follow-up (DEFERRED, non-blocking)
+- **Status:** Recorded 2026-06-04 at M15.3.A.cutover closeout. Not blocking the cutover (cutover is CLOSED).
+- **Symptom:** Operator observed browser login felt slow (~7-10 seconds end-to-end) after the HTTPS cutover landed. Expected order of magnitude is ~1-2 seconds (bcrypt verify at cost factor 12 is ~250ms; the rest of the chain should be sub-second).
+- **Why deferred:** No safety-critical impact; login works correctly. The cause is unknown. Investigation requires measurement before any code change.
+- **Suggested first investigation steps when the operator picks this up:**
+  - Measure `/api/login` raw server response time via `curl -w '%{time_total}' -o /dev/null -s ...` (separates server-side from client-side).
+  - Check Caddy access logs (`/var/log/caddy/access.log`) for outlier latencies; format is JSON so it greps cleanly.
+  - Check the dashboard `journalctl -u algo-trader-dashboard.service` for any slow-query warnings during login.
+  - If server-side is fast (<1s) and total feels slow, the latency is client-side: browser fetching the dashboard's inline HTML/CSS/JS bundle, image search calls, etc.
+  - Note: bcrypt cost factor is 12; reducing it would speed login but at a security cost. Don't change without explicit reason.
+- **Acceptance when complete:** measured baseline + either an accepted explanation or a targeted fix.
+- **Hard constraints:** no code changes for this entry; pure investigation/measurement. Any subsequent code change to address slowness would be a fresh sub-milestone with its own pre-code checklist.
 
 ### M15.3.A.persist — Persist login rate-limit state across restarts (DEFERRED)
 - **Status:** Not started. In-memory rate-limiter shipped in M15.3.A per Q-A.1 approval.
@@ -59,21 +59,25 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Estimated effort:** 1 sub-milestone, ~300-500 LOC including tests.
 - **Owner:** TBD.
 
-### M15.3.B — manual_reset operator flow (PENDING M15.3 SEQUENCE — blocked on HTTPS decision)
-- **Status:** Plan approved (in M15.3 plan). M15.3.A.2 (TOTP 2FA) closed on 2026-06-04 — that blocker is cleared. The remaining blocker is an explicit HTTPS-exposure decision per Correction 1.
-- **Blocker (must clear before coding starts):** Either `M15.3.A.cutover` (Caddy/TLS) is complete, **or** the operator records an explicit acceptance that `manual_reset` will be exposed on plain HTTP. Reason: `manual_reset` clears engine state; without HTTPS, a network attacker who observes a valid 2FA login can hijack the session cookie and invoke it. TOTP defends credential theft, not session theft over an unencrypted channel.
-- **Why deferred:** Sequenced after M15.3.A because B uses A's CSRF + auth primitives. Now further sequenced after M15.3.A.2 because `manual_reset` is the kind of state-clearing operator action that 2FA materially protects — but TOTP alone is not sufficient over plain HTTP.
+### M15.3.B — manual_reset operator flow (PENDING M15.3 SEQUENCE — HTTPS blocker CLEARED 2026-06-04)
+- **Status:** Plan approved (in M15.3 plan). All blockers now cleared:
+  - M15.3.A.2 (TOTP 2FA) CLOSED 2026-06-04 — credential-theft defence in place.
+  - M15.3.A.cutover (Caddy/TLS + 127.0.0.1 bind) CLOSED 2026-06-04 — session-theft defence in place.
+- **Next step:** pre-code Q-style checklist required before any code starts. Same process used for M15.3.A and M15.3.A.2. The operator must approve the checklist (with corrections) before implementation begins. This is intentional sequencing discipline — `manual_reset` clears engine state and is high-impact.
+- **Why this sequencing:** `manual_reset` is a state-clearing operator action protected by all the M15.3.A/.A.2/.A.cutover defences working together: HTTPS for transport, TOTP for credential, CSRF for cross-site, rate-limit for brute-force, audit-log for post-incident review.
 - **Acceptance criteria:** see §5 of the M15.3 plan and the M15.3 closeout discussion.
+- **Post-M15 direction note (added 2026-06-04 on M15.3.A.cutover closeout):** `M15.3.B` (operator-action safety surface) and `M15.3.C` (compliance audit/export) are explicitly preserved on the active path because they fit the "safety/compliance" exception to the post-M15 dashboard freeze. Other dashboard work (e.g. `M15.3.D` multi-user roles) is now deferred indefinitely.
 
 ### M15.3.C — Compliance audit + export (PENDING M15.3 SEQUENCE)
 - **Status:** Plan approved (in M15.3 plan), scheduled after M15.3.B.
 - **Why deferred:** Sequenced last because C reads B's `manual_reset_audit` and A's `auth_events`.
 - **Acceptance criteria:** see §6 of the M15.3 plan.
+- **Post-M15 direction note:** kept on the active path as a compliance/audit deliverable. After M15.3.C ships, M15 closes and the focus shifts entirely to bot intelligence (M16+).
 
-### M15.3.D or later — Multi-user / read-only dashboard roles (PROPOSED, NOT URGENT)
-- **Status:** Not started. Recorded 2026-06-04 to ensure the idea isn't lost. Explicitly NOT scheduled for the immediate next milestone — the single-operator model continues until there is a concrete need for a second human or for a read-only viewer (e.g. an external compliance reader, a non-technical co-operator).
-- **Why proposed:** The current dashboard authenticates a single operator with one password and grants full read/write. Once 2FA (M15.3.A.2) and `manual_reset` (M15.3.B) ship, the natural next axis of access-control is splitting the principal into roles. Two roles cover ~95% of realistic needs: `operator` (current behaviour: full read + state-changing actions) and `viewer` (read-only — sees the dashboard, signals, exposure, audit log, but cannot POST to any state-changing endpoint).
-- **Why deferred:** No second human is involved in the current operation. Multi-user adds attack surface (user-management endpoints, role-storage table, role-check decorator on every endpoint) for zero current benefit. Better to keep the surface tight until there's a genuine use case.
+### M15.3.D or later — Multi-user / read-only dashboard roles (DEFERRED INDEFINITELY)
+- **Status:** Not started. Recorded 2026-06-04 to ensure the idea isn't lost. **Updated 2026-06-04 on M15.3.A.cutover closeout: DEFERRED INDEFINITELY under the post-M15 strategic direction.** The dashboard work is frozen post-M15 unless safety- or compliance-driven; multi-user is neither.
+- **Why proposed (originally):** The current dashboard authenticates a single operator with one password and grants full read/write. Once 2FA (M15.3.A.2) and `manual_reset` (M15.3.B) ship, the natural next axis of access-control is splitting the principal into roles. Two roles cover ~95% of realistic needs: `operator` (current behaviour: full read + state-changing actions) and `viewer` (read-only — sees the dashboard, signals, exposure, audit log, but cannot POST to any state-changing endpoint).
+- **Why now deferred indefinitely:** No second human is involved in the current operation. Multi-user adds attack surface for zero current benefit. The post-M15 direction reaffirms this: dashboard expansion stops unless safety- or compliance-driven, and multi-user roles are neither. Re-evaluate only when a concrete need materialises (e.g. an external compliance reader, a non-technical co-operator).
 - **Acceptance criteria when undeferred (sketch — to be expanded into a pre-code checklist at the time):**
   - New `dashboard_users` SQLite table (or equivalent in `.env`/`users.json`) with `username`, `password_hash`, `role`, `totp_secret_optional`, `created_at`. Single-row legacy mode preserved as a fallback when the table is empty (operator-only).
   - `role` is a closed set: at least `operator` and `viewer`. No free-form roles.
@@ -83,27 +87,77 @@ This file is updated by every milestone closeout. Each item has: **status, why d
   - Test surface: role-based access matrix (operator can POST `/api/kill-switch/activate`; viewer cannot; both can GET `/api/health`), session-cookie correctly identifies the user, CSRF still enforced per-role.
   - Hard constraints unchanged: no orders, no broker writes, no live mode, no scanner/strategy/M14 engine/eToro changes.
 - **Estimated effort:** ~500-700 LOC including tests + docs. Self-contained milestone.
-- **Why "or later" in the name:** the sequencing is intentionally loose — this could land as M15.3.D, or as a deferred future-work item that gets a fresh number after M15.3.C closes, depending on whether the use case has materialised by then.
-- **Reference:** Mike's request 2026-06-04 at M15.3.A closeout. Explicit instruction: "do not implement multi-user now."
+- **Reference:** Mike's request 2026-06-04 at M15.3.A closeout. Explicit instruction: "do not implement multi-user now." Updated 2026-06-04 on M15.3.A.cutover closeout: "After M15, stop expanding the dashboard unless needed for safety."
 
-### M16+ — Intelligence / self-learning roadmap items (NOT STARTED)
-Per `ROADMAP.md`, M16+ begins after M15 closes (i.e. after M15.3.C ships). Items listed in the project roadmap include:
+### M16 — Historical data + first signal engine (3-7 days; PROPOSED, NEXT IN SEQUENCE AFTER M15.3 CLOSES)
+- **Status:** Not started. Recorded 2026-06-04 at M15.3.A.cutover closeout. **This is the next major work after M15 closes** (i.e. after M15.3.B + M15.3.C ship). Pre-code Q-style checklist required before code starts.
+- **Why now:** Per the post-M15 strategic direction recorded 2026-06-04: dashboard expansion stops; the priority is the advanced trading bot. Step 1 is reliable historical data + a first concrete signal engine.
+- **Scope sketch (to be confirmed in pre-code checklist):**
+  - Historical OHLCV data across the ~1,200 US equity universe at multiple timeframes (15m, 1H, 4H, Daily) using the existing `yfinance` data path established in earlier milestones.
+  - Local cache with deduplication, gap-detection, and re-fetch logic.
+  - A concrete first signal engine — initial implementation aligned with the existing M4 strategy logic (do NOT change strategy thresholds to manufacture signals; this is a hard constraint).
+  - End-to-end: data ingest → signal engine → signal rows persisted to the existing schema → visible in the M15.3 dashboard.
+- **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 3-7 days.
 
-- News/sentiment module
-- ML pipeline expansion beyond M9 baseline
-- Broker execution architecture for live (vs. paper) flows
-- IBKR live trading wiring
-- eToro live integration / manual bridge if needed
-- Portfolio/risk layer enrichment
-- Production hardening (M15 itself — closes when M15.3 completes)
+### M17 — Backtesting + parameter rules (1-2 weeks; PROPOSED, AFTER M16)
+- **Status:** Not started. Sequenced after M16. Pre-code Q-style checklist required.
+- **Scope sketch:** backtest harness that uses the EXACT live strategy (no parallel implementation that drifts); parameter rules + sweep infrastructure; per-regime / per-symbol breakdown of results; reproducibility (same seed → same outputs).
+- **Hard constraint:** matches the project's permanent rule "Backtesting using the same live strategy". Any backtest-only forking of strategy logic is a P0 bug.
+- **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 1-2 weeks.
 
-**Why deferred:** Project rule — "Do not move to the next milestone until the current one is verified." M15.3.A → B → C must ship and verify before any M16 work starts.
+### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17)
+- **Status:** Not started. Sequenced after M17. Pre-code Q-style checklist required.
+- **Scope sketch:** ranked signal scoring (multi-factor); automated paper-trade execution on IBKR paper (M11 path already wired); flywheel data accumulation accelerated; integration with the M14 risk authority engine for sizing/gating.
+- **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 2-4 weeks.
 
-**Acceptance criteria when each is undeferred:** per its line in `ROADMAP.md`. Each gets its own M16.x sub-milestone plan when authorized.
+### M19+ — Optimisation, news/sentiment, universe diagnostics, controlled live, fully autonomous (DEFERRED, sequencing tbd)
+- **Status:** Not started. Listed here so scope is not lost between M18 closeout and the next planning session.
+- **Approximate timing (per operator direction 2026-06-04):**
+  - **Controlled live trading readiness**: 2-3+ months minimum from M15 closeout.
+  - **Fully autonomous advanced live bot**: 3-6+ months minimum from M15 closeout.
+- **Existing content in `ROADMAP.md`** (some of which has been folded into M16-M18 above): optimiser / adaptive sizing; news / sentiment / macro overlay; universe diagnostics & discovery; per-regime sizing curves; controlled live (operator-in-the-loop); semi-automated live; fully autonomous; correlation-aware sizing; automated broker failover.
+- **Acceptance criteria when each is undeferred:** per its line in `ROADMAP.md` (M16+ section restructured 2026-06-04). Each gets its own pre-code checklist when authorised.
+
+---
+
+## Post-M15 strategic direction (recorded 2026-06-04 at M15.3.A.cutover closeout)
+
+**After M15 closes, dashboard work stops unless safety- or compliance-driven.** The priority becomes the advanced trading bot: historical data → strategy criteria & parameters → backtesting → signal scoring → paper-trade automation → optimisation → controlled live trading → fully autonomous.
+
+What stays "dashboard work" on the active path: M15.3.B (manual_reset — safety surface) and M15.3.C (compliance audit/export). Both fit the safety/compliance exception.
+
+What is now deferred indefinitely on the dashboard side: M15.3.D (multi-user roles), M15.3.A.persist (DB-backed rate-limit; only revisit on real incident), M15.3.A.cutover.perf (login latency follow-up; non-blocking).
+
+What is the next major work after M15.3.B + M15.3.C ship: **M16 (historical data + first signal engine)**. See above for the M16/M17/M18 breakdown with concrete timing estimates and `ROADMAP.md` for the full forward sequence.
 
 ---
 
 ## Closed items
+
+### M15.3.A.cutover — Caddy/TLS + 127.0.0.1 bind (CLOSED 2026-06-04)
+- **Closing chain:** Caddy install + `/etc/caddy/Caddyfile` + ACME issuance for `algotrading.marketwarrior.club` → `224e8a3` (production-code bind-host fix: `app.run(host=_m153a_bind_host, ...)` replaces hardcoded `'0.0.0.0'`) → `383bec0` (test-fixture dotenv-isolation against post-cutover VPS `.env`, mirrors M15.3.A.2 fix-1 `7ab7555` and proactively fixes `test_m13_4a_allocation.py` with the same pattern).
+- **Acceptance criteria met:**
+  - Caddy (latest stable) installed via the official Cloudsmith apt repo on Ubuntu 24.04. `caddy.service` `active` and `enabled` (survives reboot).
+  - `/etc/caddy/Caddyfile` declares `algotrading.marketwarrior.club` reverse-proxying to `127.0.0.1:8080`, with gzip + `X-Real-IP`/`X-Forwarded-For` headers + access log to `/var/log/caddy/access.log` (50 MB × 5 rotation).
+  - ACME / Let's Encrypt cert obtained automatically (HTTP-01 challenge). Auto-renewal handled by Caddy internally — no cron.
+  - `/opt/algo-trader/.env`: `DASHBOARD_BIND_HOST=127.0.0.1`, `DASHBOARD_HTTPS_MODE=true`. Permissions `0o600` preserved.
+  - `app.run()` now passes the env-controlled `_m153a_bind_host` variable (fixed in `224e8a3` — was previously hardcoded `'0.0.0.0'` and ignored the env var).
+  - Test fixtures (`test_m15_3_a_dashboard_auth.py` + `test_m13_4a_allocation.py`) now isolate cleanly from the post-cutover VPS `.env` regardless of which dashboard env vars dotenv loads (fixed in `383bec0` — test-only patch, no production-code change).
+- **VPS verification on closeout day (2026-06-04, HEAD `383bec0`):**
+  - `test_m15_3_a_dashboard_auth.py` 101/101 OK. Regression sweep on VPS all green: `test_m13_4a_allocation` 61/61, `test_m15_3_a_2_totp` 52/52, `test_m15_5_ibkr_exposure` 78/78, `test_m15_4_gateway_health` 50/50, `test_m14_g_dashboard` 51/51, `test_m14_e_engine` 105/105.
+  - `algo-trader-dashboard.service` and `caddy.service` both `active`.
+  - `ss -ltnp 'sport = :8080'` shows `127.0.0.1:8080` — the critical evidence of backend lockdown. External `:8080` from operator laptop returns connection refused.
+  - Caddy listens on `*:80` and `*:443`.
+  - `https://algotrading.marketwarrior.club/api/health` → HTTP/2 200 with `via: 1.1 Caddy` header.
+  - `http://algotrading.marketwarrior.club` → `HTTP/1.1 308 Permanent Redirect` to HTTPS.
+  - **Operator authenticated against the dashboard in a real browser session over HTTPS** with password + 6-digit Google Authenticator code — full chain works (HTTPS → Caddy → loopback → dashboard → password → TOTP → session rotation → CSRF token → state-changing POSTs accepted).
+- **Two real bugs caught + fixed during the cutover** (honestly recorded in the commit messages):
+  1. **`224e8a3`** — production-code bind-host bug. `dashboard/app.py` line 103 correctly read `DASHBOARD_BIND_HOST` into `_m153a_bind_host`, but the `app.run()` call at the bottom passed a hardcoded `'0.0.0.0'`. After writing `DASHBOARD_BIND_HOST=127.0.0.1` to `.env`, `ss` still showed `0.0.0.0:8080`. Fix: 1 functional line + 5 comment lines. Three regression tests added (AST scan + two subprocess env→variable tests). Negative-verified.
+  2. **`383bec0`** — test-fixture dotenv pollution after cutover. M15.3.A tests failed 21/100 on the VPS because `dotenv` repopulated the polluted env vars after the fixture's cleanup. Fix: same import-first-then-clean pattern as M15.3.A.2 fix-1; extended `_AUTH_ENV_KEYS` with `DASHBOARD_TOTP_SECRET` + `DASHBOARD_PORT`; seeded empty env vars in tests that reload dashboard.app; added `test_fixture_isolates_password_only_login_from_vps_totp_dotenv` regression. Same fix applied to `test_m13_4a_allocation.py`. **Test-only patch; production code in `dashboard/app.py` not touched in fix-2; production VPS `.env` not touched.**
+- **Hard-constraint evidence:** protected files modified across `224e8a3` + `383bec0` vs `274f12e` (pre-cutover baseline): **0 / 24**. No trading code, scanner, strategy, M14 engine/governor/snapshot/preflight, eToro, IBKR-reader, broker, order-path, live-mode, sync.sh, deploy.sh, or systemd-unit changes. Caddy is a new OS-package systemd service outside the project repo.
+- **Authoritative operator reference:** [`M15_3_A_dashboard_auth.md`](M15_3_A_dashboard_auth.md) §3 (Caddy install runbook) and §13 (cutover closeout evidence).
+- **Honest residual exposure / follow-up (non-blocking):** browser login felt slow (~7-10 seconds) on closeout day. Recorded as `M15.3.A.cutover.perf` in Active items above. Not a security issue; investigation queued.
+- **Strategic note (recorded at this closeout):** with HTTPS + 2FA both in place, the cutover unblocks `M15.3.B` (manual_reset). Beyond M15.3, dashboard work stops unless safety/compliance-driven. See "Post-M15 strategic direction" below.
 
 ### M15.3.A.2 — Dashboard TOTP / Google Authenticator 2FA (CLOSED 2026-06-04)
 - **Closing commits:** `723b963` (initial implementation per pre-code checklist Q-A.1..Q-A.11 + Corrections 1–9) → `7ab7555` (test-fixture VPS regression fix — test-only patch, no production code changes; covers the dotenv-pollution issue surfaced during VPS verification).

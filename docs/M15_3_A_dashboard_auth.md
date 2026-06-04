@@ -345,3 +345,43 @@ The M15.3.A.2 sub-milestone was VPS-verified and closed on 2026-06-04. No secret
 - **`git status`:** clean on both repo and VPS working copy.
 
 The M15.3.A.2 sub-milestone is closed. The next M15.3 sub-milestone in sequence is `M15.3.B` (manual_reset), tracked in [`NEXT_WORK_REGISTER.md`](NEXT_WORK_REGISTER.md). **`M15.3.B` is now blocked on either `M15.3.A.cutover` (Caddy/TLS) OR an explicit operator decision to expose `manual_reset` over plain HTTP** — TOTP defends credential theft but not session theft over an unencrypted channel, and `manual_reset` is a state-clearing operator action. No code for `M15.3.B` has been written yet; it awaits an explicit pre-code Q-style approval, same process as M15.3.A and M15.3.A.2.
+
+## §13 — M15.3.A.cutover (HTTPS via Caddy + 127.0.0.1 bind)
+
+**Status: CLOSED — VPS-verified 2026-06-04.** Cutover chain: Caddy install + Caddyfile + ACME issuance → production-code bind-host fix at `224e8a3` → test-fixture dotenv-isolation fix at `383bec0`. Domain `algotrading.marketwarrior.club` is now the canonical entrypoint; external `:8080` is no longer reachable.
+
+### §13.1 — What's in place
+
+- **Caddy** installed via the official Cloudsmith apt repo on Ubuntu 24.04. Service: `caddy.service` (independent of `algo-trader-dashboard.service`; survives reboot via `systemctl enable caddy`).
+- **`/etc/caddy/Caddyfile`** declares a single virtual host `algotrading.marketwarrior.club`, reverse-proxies to `127.0.0.1:8080`, sets `X-Real-IP` and `X-Forwarded-For` headers, gzips responses, and logs to `/var/log/caddy/access.log` (rotated at 50 MB × 5 keeps). HTTP→HTTPS redirect is automatic. ACME / Let's Encrypt cert issuance + renewal is automatic; no cron jobs required.
+- **Dashboard bind**: `DASHBOARD_BIND_HOST=127.0.0.1` in `/opt/algo-trader/.env`. The dashboard listens only on the loopback interface. The single source of truth is `app.run(host=_m153a_bind_host, port=port, debug=False)` in the `__main__` block (commit `224e8a3` — was previously hardcoded `'0.0.0.0'` and ignored the env var).
+- **Secure cookie flag**: `DASHBOARD_HTTPS_MODE=true` in `.env`. Session cookies now carry `Secure; HttpOnly; SameSite=Strict; Path=/`. Plain-HTTP access to the loopback would not receive the session cookie — but loopback is internal only, so this is fine.
+
+### §13.2 — Verified end-to-end on closeout day (2026-06-04, HEAD `383bec0`)
+
+- `algo-trader-dashboard.service` and `caddy.service` both `active`.
+- `ss -ltnp 'sport = :8080'` shows `127.0.0.1:8080` (NOT `0.0.0.0:8080`). External `:8080` from the operator laptop returns connection refused.
+- Caddy listens on `*:80` and `*:443`.
+- `https://algotrading.marketwarrior.club/api/health` → HTTP/2 200 with `via: 1.1 Caddy` response header.
+- `http://algotrading.marketwarrior.club` → `HTTP/1.1 308 Permanent Redirect` to HTTPS.
+- `test_m15_3_a_dashboard_auth.py` 101/101 OK. Regression sweep: `test_m13_4a_allocation` 61/61, `test_m15_3_a_2_totp` 52/52, `test_m15_5_ibkr_exposure` 78/78, `test_m15_4_gateway_health` 50/50, `test_m14_g_dashboard` 51/51, `test_m14_e_engine` 105/105 — all green on VPS.
+- **Operator browser login** at `https://algotrading.marketwarrior.club` with password + 6-digit Google Authenticator code succeeded. The full chain works: HTTPS → Caddy → loopback → dashboard → password verify → TOTP verify → session rotation → CSRF token → state-changing POSTs accepted.
+
+### §13.3 — Two real bugs caught during cutover (honestly recorded)
+
+1. **`224e8a3` — production-code bind-host bug.** The dashboard's `_m153a_bind_host = os.getenv('DASHBOARD_BIND_HOST', '0.0.0.0').strip() or '0.0.0.0'` was computed correctly at module top (line 103), but the `if __name__ == '__main__':` block at the bottom of the file hardcoded `app.run(host='0.0.0.0', ...)` — the env-controlled variable was computed and then ignored. After writing `DASHBOARD_BIND_HOST=127.0.0.1` to `.env`, `ss` still showed the dashboard on `0.0.0.0:8080`. Fix is 1 functional line. Three regression tests added (AST scan of the `app.run()` call + two subprocess env→variable tests).
+2. **`383bec0` — test-fixture dotenv-pollution bug.** Production cutover landed correctly, but `test_m15_3_a_dashboard_auth.py` failed 21/100 on the VPS afterwards. Same class as M15.3.A.2 fix-1 (`7ab7555`): the operator's `/opt/algo-trader/.env` now carries `DASHBOARD_PASSWORD_HASH` + `DASHBOARD_TOTP_SECRET` + `DASHBOARD_BIND_HOST=127.0.0.1` + `DASHBOARD_HTTPS_MODE=true`, and `dotenv` re-populated all of these AFTER the test fixture cleaned `os.environ`. Password-only login tests returned `totp_required`; bind-host default test saw `127.0.0.1` instead of `0.0.0.0`. Fix is test-only: reordered `_make_test_app` to import-first-then-clean, extended `_AUTH_ENV_KEYS` with the new env vars, seeded empty values before module reloads. Same fix applied proactively to `test_m13_4a_allocation.py`. **No production-code change in fix-2; no real `.env` change.**
+
+Both fixes are negative-verified — reverting them locally reproduces the exact failure modes.
+
+### §13.4 — Carry-forward (non-blocking)
+
+- **Login latency follow-up** (`M15.3.A.cutover.perf` in `NEXT_WORK_REGISTER.md`): operator noted browser login felt slow (~7-10 seconds end-to-end on closeout day). Not blocking the closeout. Investigation is queued: measure `/api/login` raw response time (server-side) vs. browser TTI (client-side), check Caddy access logs for outlier latencies, profile the dashboard's request handler if needed. Expected order of magnitude is ~1-2 seconds (bcrypt verify at cost 12 is ~250ms; everything else should be sub-second).
+
+### §13.5 — What this cutover does NOT change
+
+- The TOTP defence against credential theft is unchanged. The two layers (TLS for transport, TOTP for credential) now stack: an attacker would need to compromise both to gain access.
+- The dashboard's M15.3.A.2 audit-events invariant (`extras_json` never contains secret material) is unchanged.
+- The trading bot, scanner, strategy, M14 engine/governor/snapshot/preflight, eToro/IBKR readers, and broker code are all untouched by this cutover and across the entire fix chain.
+- The real `/opt/algo-trader/.env` file's TOTP secret + password hash + secret key are preserved unchanged.
+- The dashboard service did not require a restart for fix-2 (`383bec0`) — that commit changed only test code.

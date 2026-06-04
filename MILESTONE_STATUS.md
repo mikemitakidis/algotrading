@@ -45,7 +45,7 @@ project-wide reconciliation narrative lives in
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
-| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2 CLOSED; M15.3.B/.C PENDING) | See M15 detail below |
+| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2/.3.A.cutover CLOSED; M15.3.B/.C PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
 ---
@@ -175,7 +175,8 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 | M15.5 — IBKR exposure reader wiring (paper mode) | CLOSED | `138df9e` → `2446df6` (cross-confirm + phased dry-run + login-error gate hardening); `test_m15_5_ibkr_exposure.py` 78/78; VPS-verified 2026-06-03 with real paper ingest succeeded. |
 | M15.3.A — Dashboard auth/security hardening | CLOSED | `34fc157` → `c280a83` (script-mode sys.path bootstrap + `--stdin` for setpw tool) → `f26407f` (setpw sys.path bootstrap + M15.3.A.2 carry-forward); `test_m15_3_a_dashboard_auth.py` 97/97; VPS-verified 2026-06-04 with real operator browser login succeeded. |
 | M15.3.A.2 — Dashboard TOTP / Google Authenticator 2FA | CLOSED | `723b963` (implementation) → `7ab7555` (test-fixture VPS fix); `test_m15_3_a_2_totp.py` 52/52; VPS-verified 2026-06-04 with real operator end-to-end login via password + Google Authenticator code; `auth_events` recorded `totp_setup`, `totp_success`, `login_success`; secret-material audit invariant verified (no secret/code/URI/password in `extras_json`). |
-| M15.3.B — `manual_reset` operator flow | PENDING (blocked on Caddy/TLS cutover OR explicit plain-HTTP exposure decision) | — |
+| M15.3.A.cutover — Caddy/TLS + 127.0.0.1 bind | CLOSED | Caddy install + Caddyfile + ACME issuance for `algotrading.marketwarrior.club` → `224e8a3` (production fix: `app.run(host=_m153a_bind_host)` replaces hardcoded `'0.0.0.0'`) → `383bec0` (test-fixture dotenv isolation against post-cutover VPS .env); `test_m15_3_a_dashboard_auth.py` 101/101; VPS-verified 2026-06-04: `ss` shows `127.0.0.1:8080`, HTTPS HTTP/2 via Caddy, HTTP→308→HTTPS redirect, browser login via password + Google Authenticator over `https://algotrading.marketwarrior.club`. |
+| M15.3.B — `manual_reset` operator flow | PENDING (HTTPS blocker cleared 2026-06-04; awaiting pre-code checklist approval) | — |
 | M15.3.C — Compliance audit + export | PENDING | — |
 
 **M15.5 closeout (IBKR paper exposure reader wired)** — VPS-verified 2026-06-03:
@@ -230,11 +231,44 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - **`totp_required` is a small password-validity oracle** — rate-limit-capped at 5 probes / 15 min. Approved trade-off for legitimate-operator UX clarity.
   - **In-memory replay cache resets on dashboard restart** — same trade-off as M15.3.A rate-limiter. A DB-backed variant is deferable to `M15.3.A.2.persist` if a real incident materializes.
 
-**M15.3 open items** (carry-forwards remaining after M15.0, M15.4, M15.5, M15.3.A, M15.3.A.2 — process-manager identification CLOSED via M15.0; IB Gateway visibility CLOSED via M15.4; IBKR paper exposure wiring CLOSED via M15.5; dashboard auth/security hardening CLOSED via M15.3.A; dashboard 2FA CLOSED via M15.3.A.2):
-- **`manual_reset` operator flow** — `M15.3.B`, now blocked on **either** (a) `M15.3.A.cutover` Caddy/TLS lands, **or** (b) operator records an explicit acceptance that `manual_reset` will be exposed on plain HTTP. Reason: `manual_reset` clears engine state; over plain HTTP a network attacker who observes a valid 2FA login can hijack the session cookie and invoke it. TOTP protects credential theft, not session theft.
-- **Compliance-grade audit log + regulatory export** — explicit `M15.3.C` scope, sequenced after `M15.3.B`.
-- **Caddy / 127.0.0.1 final cutover** — `M15.3.A.cutover`, operator action. Remains important even with TOTP enabled.
-- **Multi-user / read-only dashboard roles** — `M15.3.D or later`, not urgent; single-operator model retained until concrete need.
+**M15.3.A.cutover closeout (Caddy/TLS + 127.0.0.1 bind)** — VPS-verified 2026-06-04:
+- **Status:** CLOSED. Operator runbook executed in three phases (Caddy install + Caddyfile + ACME cert issuance; production-code bind-host fix at `224e8a3`; test-fixture dotenv-isolation fix at `383bec0`). Domain `algotrading.marketwarrior.club` is now the canonical entrypoint.
+- **What shipped (operator config + 2 test-only commits):**
+  - **Caddy as HTTPS reverse-proxy** at `/etc/caddy/Caddyfile`: TLS via Let's Encrypt ACME (HTTP-01 challenge), automatic HTTP→HTTPS redirect, `X-Real-IP` + `X-Forwarded-For` propagation (the dashboard's M15.3.A `_m153a_client_ip()` honours these correctly, so audit rows and rate-limit buckets now reflect the real client IP behind Caddy). HTTP/2 enabled by default.
+  - **Production-code fix `224e8a3`**: `dashboard/app.py`'s `if __name__ == '__main__':` block now passes `host=_m153a_bind_host` (the env-controlled variable from line 103) instead of a hardcoded `'0.0.0.0'`. The bug was discovered during Phase 2 operator verification: after writing `DASHBOARD_BIND_HOST=127.0.0.1` to `.env`, `ss` still showed the dashboard on `0.0.0.0:8080`. Root cause: the env var was correctly READ at module top but IGNORED at the actual `app.run()` call site. Fix is 1 functional line + 5 comment lines. Three regression tests added (AST scan of the `app.run()` call + two subprocess env→variable tests).
+  - **Test-fixture fix `383bec0`**: the production cutover landed correctly, but `test_m15_3_a_dashboard_auth.py` failed 21/100 on the VPS afterwards. Same class of bug as M15.3.A.2 fix-1 (commit `7ab7555`): the operator's `/opt/algo-trader/.env` now carries `DASHBOARD_PASSWORD_HASH` + `DASHBOARD_TOTP_SECRET` + `DASHBOARD_BIND_HOST=127.0.0.1` + `DASHBOARD_HTTPS_MODE=true`, and dotenv re-populated all of these AFTER the test fixture's `_clean_auth_env()` had run. Password-only login tests returned `totp_required`; bind-host default test saw `127.0.0.1` instead of `0.0.0.0`. Fix-2 reorders `_make_test_app` to the same import-first-then-clean pattern as M15.3.A.2 fix-1, extends `_AUTH_ENV_KEYS` with `DASHBOARD_TOTP_SECRET` + `DASHBOARD_PORT`, seeds empty env vars in the two tests that reload dashboard.app (so dotenv's `override=False` leaves them empty), and adds a new regression test that explicitly simulates VPS dotenv pollution. Same fix applied proactively to `test_m13_4a_allocation.py` which had identical exposure (operator-verified clean on VPS post-fix). **Production code in `dashboard/app.py` not touched in fix-2; production VPS `.env` not touched.**
+  - **`.env` changes (operator-side, persistent):** `DASHBOARD_BIND_HOST=127.0.0.1`, `DASHBOARD_HTTPS_MODE=true`. The dashboard now listens only on the loopback interface; Caddy is the only thing facing the public network on ports 80/443.
+- **VPS verification facts (2026-06-04, HEAD `383bec0`):**
+  - `test_m15_3_a_dashboard_auth.py` 101/101 OK; full regression sweep on VPS all green (`test_m13_4a_allocation` 61/61, `test_m15_3_a_2_totp` 52/52, `test_m15_5_ibkr_exposure` 78/78, `test_m15_4_gateway_health` 50/50, `test_m14_g_dashboard` 51/51, `test_m14_e_engine` 105/105).
+  - `algo-trader-dashboard.service` and `caddy.service` both `active`.
+  - `ss -ltnp 'sport = :8080'` shows `127.0.0.1:8080` (NOT `0.0.0.0:8080`). External `:8080` is now unreachable from the internet — confirmed during cutover.
+  - `https://algotrading.marketwarrior.club/api/health` → HTTP/2 200 with `via: 1.1 Caddy` header.
+  - `http://algotrading.marketwarrior.club` → `HTTP/1.1 308 Permanent Redirect` to HTTPS.
+  - **Operator authenticated against the dashboard in a real browser session over HTTPS** with password + 6-digit Google Authenticator code — the full chain (HTTPS → Caddy → loopback → dashboard → password verify → TOTP verify → session rotation → CSRF token → state-changing POSTs accepted) works end-to-end.
+- **Carry-forward recorded**: operator noted browser login felt slow (~7-10 seconds end-to-end). Not blocking the closeout, but recorded as a performance follow-up under `M15.3.A.cutover.perf` in `NEXT_WORK_REGISTER.md` to be measured/investigated when convenient.
+- **Hard-constraint evidence**: protected files modified across the entire cutover chain (`224e8a3` + `383bec0`) vs `274f12e` (pre-cutover baseline): **0 / 24**. No trading code, scanner, strategy, M14 engine/governor/snapshot/preflight, eToro, IBKR-reader, broker, order-path, live-mode, sync.sh, deploy.sh, or systemd-unit changes. Caddy is a new systemd service installed via OS package (not a project-owned unit) and runs outside the algotrading repo.
+- **Authoritative operator reference**: [`docs/M15_3_A_dashboard_auth.md`](docs/M15_3_A_dashboard_auth.md) §3 (operator runbook for the Caddy/TLS install procedure) + §13 (cutover closeout evidence). Caddyfile content lives at `/etc/caddy/Caddyfile` on the VPS; a documented mirror could be added to `infra/caddy/` as a future drift-reference (not done today).
+- **Honest residual exposure (documented, not blocking):**
+  - The dashboard's session-cookie `Secure` flag is now ON. Plain-HTTP access via the VPS IP would not receive the cookie — operator MUST use `https://algotrading.marketwarrior.club`. Bookmarks pointing at `http://138.199.196.95:8080` are dead by design.
+  - Caddy auto-renews the TLS cert; manual renewal is never required. Cert expiry is monitored by Caddy internally.
+  - The TOTP defence against credential theft is now stacked on TLS defence against on-path session-cookie theft. The two layers protect different attack surfaces.
+
+**M15.3 open items** (carry-forwards remaining after M15.0, M15.4, M15.5, M15.3.A, M15.3.A.2, M15.3.A.cutover — process-manager identification CLOSED via M15.0; IB Gateway visibility CLOSED via M15.4; IBKR paper exposure wiring CLOSED via M15.5; dashboard auth/security hardening CLOSED via M15.3.A; dashboard 2FA CLOSED via M15.3.A.2; Caddy/TLS + 127.0.0.1 bind CLOSED via M15.3.A.cutover):
+- **`manual_reset` operator flow** — `M15.3.B`, HTTPS blocker now cleared. Pre-code Q-style checklist required before code starts, same process as M15.3.A and M15.3.A.2. Will be safety-gated by both TOTP (Correction 1 of M15.3.A.2) and HTTPS (now in place).
+- **Compliance-grade audit log + regulatory export** — `M15.3.C`, sequenced after `M15.3.B`. Reads `M15.3.B`'s `manual_reset_audit` rows + `M15.3.A`'s `auth_events`. Justifiable as a safety/compliance task and therefore consistent with the post-M15 direction (see below).
+- **Dashboard login latency follow-up** — `M15.3.A.cutover.perf`, non-blocking. Operator observed ~7-10s end-to-end browser login; expected closer to 1-2s (~250ms bcrypt + minimal Caddy overhead). Investigate when convenient.
+- **Multi-user / read-only dashboard roles** — `M15.3.D or later`, explicitly DEFERRED indefinitely under the post-M15 direction (not safety-critical; single-operator model retained).
+- **DB-backed rate-limit persistence** — `M15.3.A.persist`, DEFERRED (in-memory variant is the approved trade-off; only revisit on real incident).
+
+**Post-M15 strategic direction (recorded 2026-06-04 on closeout of M15.3.A.cutover):**
+After M15.3 closes (M15.3.B + M15.3.C remaining), **dashboard work stops unless safety- or compliance-driven**. The priority shifts to advanced trading-bot intelligence: historical data → strategy criteria & parameters → backtesting → signal scoring → paper-trade automation → optimisation → controlled live trading → fully autonomous. Concrete near-term timelines:
+- **M16 — Historical data + first signal engine**: 3-7 days.
+- **M17 — Backtesting + parameter rules**: 1-2 weeks.
+- **M18 — Advanced signal scoring + paper-trade automation**: 2-4 weeks.
+- **Controlled live trading readiness**: 2-3+ months minimum.
+- **Fully autonomous advanced live bot**: 3-6+ months.
+
+Detailed breakdown in [`ROADMAP.md`](ROADMAP.md) (M16+ section restructured 2026-06-04 to match this direction).
 
 **M15.4 closeout (IB Gateway visibility/truth layer)** — VPS-verified 2026-06-02:
 - New read-only helper `bot/gateway_health.py` combines five sources (`systemctl is-active/is-enabled/show`, TCP connect-and-close probe on 4001/4002, trading-mode discovery from `start_ibgateway.sh` + IBC config, `/var/log/ibgateway/ibgateway.log` tail, `journalctl -u ibgateway.service`) into a single point-in-time classification.

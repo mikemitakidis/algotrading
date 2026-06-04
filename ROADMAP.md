@@ -270,48 +270,81 @@ core + governor, eToro preflight integration, dashboard, closeout.
 
 ---
 
-## Future Roadmap (M16–M23)
+## Future Roadmap (M16+)
 
-Visible plan. None are started; they're listed so scope is never quietly
-lost during reviews.
+**Restructured 2026-06-04 at M15.3.A.cutover closeout** per operator direction. Pre-2026-06-04, this section had a generic "M16: Strategy/Historical Intelligence; M17: Outcome Learning Loop; M18: News/Sentiment" labeling. The actual sequencing the operator wants is data-first then engine then backtest then scoring, so M16-M18 has been re-aligned. Old M16/M17/M18 content (news/sentiment, closed-loop ML, multi-regime backtest harness) has been folded into the new structure where it fits or deferred to M19+ where it's a later concern.
 
-### Milestone 16 — Strategy / Historical Intelligence
-- Multi-regime backtest harness; bull/bear/range/vol clustering
-- Strategy versioning + A/B comparison against live shadow
-- Hyperparameter introspection per market regime
+### Strategic direction (post-M15)
 
-### Milestone 17 — Outcome Learning Loop / Closed-Loop ML
-- Live shadow scoring with the M9 model
-- Outcome → retraining pipeline
-- Drift detection + automatic model rollback
-- Reaches the "self-learning" bar that M9 does not currently meet
+After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safety- or compliance-driven**. The priority becomes the advanced trading bot. Sequence: historical data → strategy criteria & parameters → backtesting → signal scoring → paper-trade automation → optimisation → controlled live trading → fully autonomous.
 
-### Milestone 18 — News / Sentiment / Macro
-- Multi-source news aggregation
-- Macro overlay (rates, VIX, calendar events)
-- Confidence-weighted sentiment score replacing single-provider value
+### Near-term (concrete timing estimates per operator 2026-06-04)
 
-### Milestone 19 — Universe Diagnostics & Discovery
-- Symbol coverage analytics
-- Why-no-signal diagnostic per (symbol, TF, cycle)
-- Liquidity / spread / event filters as first-class universe inputs
+#### Milestone 16 — Historical data + first signal engine (3-7 days)
+- Historical OHLCV data across the ~1,200 US equity universe at multiple timeframes (15m, 1H, 4H, Daily) via the existing `yfinance` path.
+- Local cache: deduplicated, gap-detected, re-fetchable.
+- First concrete signal engine — initial implementation aligned with the existing M4 strategy. **Hard constraint** (permanent project rule): do NOT change strategy thresholds to manufacture signals.
+- End-to-end pipeline: data ingest → signal engine → signal rows persisted to existing schema → visible in the dashboard.
 
-### Milestone 20 — Optimiser / Adaptive Sizing
-- Confidence-adjusted position sizing (interface stub from M14.A → real)
-- Volatility-targeted exposure
-- Per-regime sizing curves
+#### Milestone 17 — Backtesting + parameter rules (1-2 weeks)
+- Backtest harness that uses the EXACT live strategy. Any backtest-only forking of strategy logic is a P0 bug (permanent rule: "Backtesting using the same live strategy").
+- Parameter rules + sweep infrastructure.
+- Per-regime / per-symbol breakdown.
+- Reproducibility (same seed → same outputs).
 
-### Milestone 21 — First Funded eToro Go-Live
-- The deferred go-live event (intentionally outside M13/M14)
-- Manual operator confirmation; daily-loss seam fed by M14.E/F
-- Funded account onboarding, capital allocation policy review
+#### Milestone 18 — Advanced signal scoring + paper-trade automation (2-4 weeks)
+- Ranked multi-factor signal scoring.
+- Automated paper-trade execution on IBKR paper (M11 path already wired).
+- Flywheel data accumulation accelerated.
+- Integration with the M14 risk authority engine for sizing/gating.
 
-### Milestone 22 — Semi-Automated Live Trading
-- Authority ladder reaches `AUTO_ALLOWED` for one broker at a time
-- Operator-in-the-loop override always available
-- Risk Authority Engine governs every order
+### Mid-term (timing approximate, dependent on M16-M18 results)
 
-### Milestone 23 — Full Advanced Intelligence
-- Correlation-aware sizing (M14.A design-only → real)
-- Automated broker failover (M14.A design-only → real, gated)
-- Compliance-grade audit log, regulatory artifact export
+#### Milestone 19 — Optimiser / adaptive sizing
+- Confidence-adjusted position sizing (M14.A interface stub → real).
+- Volatility-targeted exposure.
+- Per-regime sizing curves.
+- Was previously sketched as "M20 — Optimiser / Adaptive Sizing".
+
+#### Milestone 20 — News / sentiment / macro overlay
+- Multi-source news aggregation.
+- Macro overlay (rates, VIX, calendar events).
+- Confidence-weighted sentiment score replacing single-provider value.
+- Was previously sketched as "M18 — News / Sentiment / Macro" in the pre-2026-06-04 numbering.
+
+#### Milestone 21 — Universe diagnostics & discovery
+- Symbol coverage analytics.
+- Why-no-signal diagnostic per (symbol, TF, cycle).
+- Liquidity / spread / event filters as first-class universe inputs.
+- Was previously sketched as "M19 — Universe Diagnostics & Discovery".
+
+#### Milestone 22 — Outcome learning loop / closed-loop ML
+- Live shadow scoring with the M9 model.
+- Outcome → retraining pipeline.
+- Drift detection + automatic model rollback.
+- Was previously sketched as "M17 — Outcome Learning Loop / Closed-Loop ML".
+
+### Live-trading readiness (longer horizon)
+
+#### Controlled live trading (2-3+ months minimum from M15 closeout)
+- First funded live account onboarding (eToro or IBKR — operator's choice at that time).
+- Operator-in-the-loop confirmation on every order.
+- Daily-loss seam fed by M14.E/F.
+- Capital allocation policy review.
+- Was previously sketched as "M21 — First Funded eToro Go-Live" and "M22 — Semi-Automated Live Trading".
+
+#### Fully autonomous advanced live bot (3-6+ months minimum from M15 closeout)
+- Authority ladder reaches `AUTO_ALLOWED` for one broker at a time.
+- Operator-in-the-loop override always available.
+- Risk Authority Engine governs every order.
+- Correlation-aware sizing (M14.A design-only → real).
+- Automated broker failover (M14.A design-only → real, gated).
+- Compliance-grade audit log, regulatory artifact export (overlaps with M15.3.C).
+- Was previously sketched as "M22 — Semi-Automated Live Trading" + "M23 — Full Advanced Intelligence".
+
+### Notes on the restructure
+
+- The old M16/M17/M18 content has been preserved by being folded into M19-M22 above. No scope was lost in the renumbering.
+- The "Original 15-Milestone Plan (intact)" section earlier in this document is unchanged — that's the top-level project roadmap (items 1-15, ending with "Production Hardening") and remains the source of truth for the project's overall arc.
+- Timing estimates above come from the operator's direction recorded on 2026-06-04. They're estimates, not commitments — actual durations depend on what each milestone uncovers.
+- The post-M15 direction note in `MILESTONE_STATUS.md` and `NEXT_WORK_REGISTER.md` is the canonical record of the dashboard-freeze decision.
