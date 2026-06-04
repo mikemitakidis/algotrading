@@ -574,6 +574,132 @@ class TestBindHostBehaviour(unittest.TestCase):
         self.assertIn("DASHBOARD_BIND_HOST=0.0.0.0", out)
         self.assertIn("plaintext", out.lower())
 
+    # ─────────────────────────────────────────────────────────────────────
+    # M15.3.A.cutover regression — app.run() must use DASHBOARD_BIND_HOST
+    # ─────────────────────────────────────────────────────────────────────
+    # Bug surfaced on VPS 2026-06-04 during M15.3.A.cutover Phase 2:
+    # `.env` had DASHBOARD_BIND_HOST=127.0.0.1, but `ss -ltnp` showed the
+    # dashboard still listening on 0.0.0.0:8080. Root cause: line 103
+    # correctly read `_m153a_bind_host = os.getenv('DASHBOARD_BIND_HOST',
+    # '0.0.0.0')...`, but the `if __name__ == '__main__':` block at the
+    # bottom of the file passed `app.run(host='0.0.0.0', ...)` — a
+    # hardcoded literal that ignored the env-controlled variable.
+    # The three tests below lock the fix in place.
+
+    def test_app_run_passes_bind_host_variable_not_literal(self):
+        """AST scan: the `app.run(host=...)` call in the __main__ block
+        MUST reference the `_m153a_bind_host` variable, NOT a hardcoded
+        string. Catches future regressions where someone re-introduces
+        '0.0.0.0' as a literal."""
+        import ast
+        src = (Path(_REPO) / "dashboard" / "app.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(src)
+
+        # Find the `if __name__ == '__main__':` block.
+        main_blocks = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If):
+                t = node.test
+                if (isinstance(t, ast.Compare)
+                    and isinstance(t.left, ast.Name)
+                    and t.left.id == "__name__"):
+                    main_blocks.append(node)
+        self.assertEqual(len(main_blocks), 1,
+            f"expected exactly one `if __name__ == '__main__':` block, "
+            f"found {len(main_blocks)}")
+
+        # Find the app.run() call within it.
+        run_calls = []
+        for sub in ast.walk(main_blocks[0]):
+            if isinstance(sub, ast.Call):
+                f = sub.func
+                if (isinstance(f, ast.Attribute)
+                    and f.attr == "run"
+                    and isinstance(f.value, ast.Name)
+                    and f.value.id == "app"):
+                    run_calls.append(sub)
+        self.assertEqual(len(run_calls), 1,
+            f"expected exactly one app.run() in __main__, "
+            f"found {len(run_calls)}")
+
+        # Inspect host= kwarg.
+        host_kwarg = None
+        for kw in run_calls[0].keywords:
+            if kw.arg == "host":
+                host_kwarg = kw.value
+                break
+        self.assertIsNotNone(host_kwarg, "app.run() missing host= kwarg")
+
+        # MUST be a Name node, NOT a Constant. (ast.Constant covers
+        # str/int/None literals in Python 3.8+.)
+        self.assertNotIsInstance(host_kwarg, ast.Constant,
+            f"app.run(host=...) is hardcoded to a literal. "
+            f"Use _m153a_bind_host instead (the env-controlled var). "
+            f"This is the M15.3.A.cutover regression — see commit log.")
+        self.assertIsInstance(host_kwarg, ast.Name,
+            f"app.run(host=...) should be a variable reference, "
+            f"got AST node {type(host_kwarg).__name__}")
+        self.assertEqual(host_kwarg.id, "_m153a_bind_host",
+            f"app.run() host= should reference _m153a_bind_host, "
+            f"got {host_kwarg.id!r}")
+
+    def test_dashboard_bind_host_env_to_module_variable_127(self):
+        """Subprocess test: when DASHBOARD_BIND_HOST=127.0.0.1 in the
+        subprocess env, `dashboard.app._m153a_bind_host` reads as
+        '127.0.0.1'. Combined with the AST test above, this proves
+        the env-to-runtime wiring is intact end-to-end."""
+        import subprocess, sys as _sys
+        env = {k: v for k, v in os.environ.items()
+                if not k.startswith("DASHBOARD_")}
+        env["PYTHONPATH"] = _REPO
+        env["DASHBOARD_BIND_HOST"] = "127.0.0.1"
+        env["DASHBOARD_PASSWORD"] = "any-non-default-password"
+        env["DASHBOARD_SECRET_KEY"] = "x" * 64
+        env["DASHBOARD_HTTPS_MODE"] = "true"  # suppress startup warning
+        wrapper = (
+            "import sys; sys.path.insert(0, '.'); "
+            "import dashboard.app as a; "
+            "print(repr(a._m153a_bind_host))"
+        )
+        proc = subprocess.run(
+            [_sys.executable, "-c", wrapper],
+            capture_output=True, text=True, timeout=15,
+            env=env, cwd=_REPO,
+        )
+        self.assertEqual(proc.returncode, 0,
+            f"subprocess failed: stderr={proc.stderr!r}")
+        self.assertIn("'127.0.0.1'", proc.stdout,
+            f"expected _m153a_bind_host == '127.0.0.1', "
+            f"got stdout={proc.stdout!r}")
+
+    def test_dashboard_bind_host_env_to_module_variable_default(self):
+        """Subprocess test: when DASHBOARD_BIND_HOST is UNSET in the
+        subprocess env, `_m153a_bind_host` falls back to '0.0.0.0'.
+        Proves we don't break existing default behaviour."""
+        import subprocess, sys as _sys
+        env = {k: v for k, v in os.environ.items()
+                if not k.startswith("DASHBOARD_")}
+        env["PYTHONPATH"] = _REPO
+        env["DASHBOARD_PASSWORD"] = "any-non-default-password"
+        env["DASHBOARD_SECRET_KEY"] = "x" * 64
+        env["DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE"] = "yes"  # silence warn
+        wrapper = (
+            "import sys; sys.path.insert(0, '.'); "
+            "import dashboard.app as a; "
+            "print(repr(a._m153a_bind_host))"
+        )
+        proc = subprocess.run(
+            [_sys.executable, "-c", wrapper],
+            capture_output=True, text=True, timeout=15,
+            env=env, cwd=_REPO,
+        )
+        self.assertEqual(proc.returncode, 0,
+            f"subprocess failed: stderr={proc.stderr!r}")
+        self.assertIn("'0.0.0.0'", proc.stdout,
+            f"expected default _m153a_bind_host == '0.0.0.0', "
+            f"got stdout={proc.stdout!r}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Group 6 — auth_events DAO

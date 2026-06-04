@@ -5144,4 +5144,9 @@ def _write_env(updates: dict):
 
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # M15.3.A.cutover — bind to _m153a_bind_host (env-controlled via
+    # DASHBOARD_BIND_HOST), NOT a hardcoded '0.0.0.0'. The previous
+    # hardcoded value ignored the env var and left the dashboard
+    # listening on every interface even after the operator set
+    # DASHBOARD_BIND_HOST=127.0.0.1 for the Caddy/TLS cutover.
+    app.run(host=_m153a_bind_host, port=port, debug=False)
