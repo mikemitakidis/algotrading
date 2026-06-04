@@ -185,10 +185,224 @@ def _prompt_password_twice(*, use_stdin: bool = False) -> str:
     return a
 
 
+def _prompt_totp_code_once(*, use_stdin: bool = False) -> str:
+    """Prompt for ONE 6-digit TOTP code. Echoed (unlike password) —
+    the code is short-lived (30 sec window) and seeing what you typed
+    helps when fat-fingering. Validates format before returning."""
+    prompt = "Enter the 6-digit code from your authenticator: "
+    if use_stdin:
+        try:
+            code = sys.stdin.readline().rstrip("\n").strip()
+        except (KeyboardInterrupt, EOFError):
+            _err("aborted", code=1)
+    else:
+        try:
+            code = input(prompt).strip()
+        except (KeyboardInterrupt, EOFError):
+            _err("aborted", code=1)
+    if not code.isdigit() or len(code) != 6:
+        _err("code must be exactly 6 digits", code=1)
+    return code
+
+
+def _load_dotenv_for_totp(env_path: Path) -> None:
+    """Read .env and inject DASHBOARD_PASSWORD / DASHBOARD_PASSWORD_HASH
+    into os.environ so we can sanity-check that a password exists.
+    Only loads keys we need — does not overwrite already-set env vars."""
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k = k.strip()
+        if k in ("DASHBOARD_PASSWORD", "DASHBOARD_PASSWORD_HASH",
+                  "DASHBOARD_SECRET_KEY") and k not in os.environ:
+            os.environ[k] = v.strip()
+
+
+def _enable_totp_flow(args) -> int:
+    """M15.3.A.2 — interactive TOTP enable flow.
+
+    Sequence:
+      1. Sanity-check that a password is configured (TOTP without a
+         password is nonsensical — there's nothing for TOTP to be the
+         SECOND factor OF).
+      2. Refuse to overwrite an existing DASHBOARD_TOTP_SECRET unless
+         the operator explicitly removes it first via --disable-totp
+         (prevents lockout from a copy-paste accident).
+      3. Generate a fresh base32 secret.
+      4. Render a Unicode-block QR to stdout (operator's terminal).
+      5. Prompt for the first code from the authenticator app.
+      6. Verify the code against the new secret with pyotp.
+      7. Only on verify-success: backup .env, write
+         DASHBOARD_TOTP_SECRET=<secret>, restore 0600, write audit row.
+      8. On any failure (wrong code, Ctrl-C, etc.): .env is untouched.
+    """
+    try:
+        from dashboard.auth.totp import (
+            generate_secret, build_otpauth_uri, render_qr_terminal,
+            verify_code, ReplayCache,
+        )
+    except ImportError as e:
+        _err(f"could not import TOTP helper: {e}", code=2)
+
+    env_path = Path(args.env_path).resolve()
+    _load_dotenv_for_totp(env_path)
+
+    # 1. Sanity check.
+    has_pw = bool(os.getenv("DASHBOARD_PASSWORD_HASH", "").strip()) or \
+             (os.getenv("DASHBOARD_PASSWORD", "") not in ("", "changeme"))
+    if not has_pw:
+        _err("no password configured — run set_dashboard_password.py "
+             "WITHOUT --enable-totp first to set a password",
+             code=1)
+
+    # 2. Refuse to overwrite an existing TOTP secret.
+    existing_lines = _read_env_file(env_path)
+    if _has_key(existing_lines, "DASHBOARD_TOTP_SECRET"):
+        # Check if it's actually populated (not just present but empty).
+        for line in existing_lines:
+            if line.lstrip().startswith("DASHBOARD_TOTP_SECRET="):
+                value = line.split("=", 1)[1].strip()
+                if value:
+                    _err("DASHBOARD_TOTP_SECRET is already set in .env. "
+                         "Run --disable-totp first if you want to rotate "
+                         "to a new authenticator app.", code=1)
+
+    # 3. Generate secret.
+    secret = generate_secret()
+
+    # 4. Render QR. ONLY printed to stdout — never logged, never returned.
+    uri = build_otpauth_uri(secret, account_name="operator",
+                              issuer="Algo Trader")
+    print()
+    print("Scan this QR with your authenticator app (Google Authenticator,")
+    print("Authy, 1Password, Bitwarden, etc.):")
+    print()
+    print(render_qr_terminal(uri))
+    print()
+    print("If the QR doesn't render properly in your terminal, you can")
+    print("enter the secret manually into the app. The secret is shown")
+    print("ONCE below — do NOT screenshot or save it anywhere:")
+    print()
+    print(f"  Secret: {secret}")
+    print()
+
+    # 5. Prompt for first code.
+    print("Now enter the 6-digit code your authenticator app is showing")
+    print("RIGHT NOW. The .env file will NOT be modified unless this code")
+    print("verifies successfully.")
+    code = _prompt_totp_code_once(use_stdin=args.stdin)
+
+    # 6. Verify. Use a fresh ReplayCache so we don't poison the dashboard's
+    # cache (and so a verify-success in setup doesn't block the operator's
+    # very first login).
+    setup_cache = ReplayCache()
+    ok, info = verify_code(code, secret=secret, replay_cache=setup_cache)
+    # Wipe local code variable as defence-in-depth (memory hygiene).
+    code = "\0" * 8  # noqa: F841
+    del code
+    if not ok:
+        _err(f"code did not verify (reason: {info.get('reason')}). "
+             ".env was not modified. Re-run --enable-totp to try again.",
+             code=1)
+
+    # 7. Write to .env.
+    backup = _backup_env(env_path)
+    if backup != env_path:
+        print(f"Backup:  {backup}")
+    lines = _read_env_file(env_path)
+    lines = _replace_or_append(lines, "DASHBOARD_TOTP_SECRET", secret)
+    _write_env_safely(env_path, lines)
+    print(f"Wrote DASHBOARD_TOTP_SECRET to {env_path} (permissions 0o600).")
+
+    # Wipe local secret reference.
+    secret = "\0" * 32  # noqa: F841
+    del secret
+
+    # 8. Audit (best-effort — same resilience pattern as --disable-totp).
+    _try_audit("totp_setup", success=True,
+                extras={"via": "tool", "tool": "set_dashboard_password.py"})
+
+    print()
+    print("TOTP enabled. Restart the dashboard service to pick up:")
+    print("  sudo systemctl restart algo-trader-dashboard.service")
+    print()
+    print("Your NEXT login will require both the password AND a 6-digit")
+    print("code from the authenticator app.")
+    return 0
+
+
+def _disable_totp_flow(args) -> int:
+    """M15.3.A.2 — disable TOTP. Recovery path: must work even if DB
+    is broken (audit write is best-effort)."""
+    env_path = Path(args.env_path).resolve()
+    lines = _read_env_file(env_path)
+    if not _has_key(lines, "DASHBOARD_TOTP_SECRET"):
+        print("DASHBOARD_TOTP_SECRET is not set in .env — nothing to disable.")
+        return 0
+
+    backup = _backup_env(env_path)
+    if backup != env_path:
+        print(f"Backup:  {backup}")
+    lines = _remove_key(lines, "DASHBOARD_TOTP_SECRET")
+    _write_env_safely(env_path, lines)
+    print(f"Removed DASHBOARD_TOTP_SECRET from {env_path}. "
+          "TOTP is now disabled; the next login is password-only.")
+
+    _try_audit("totp_disabled", success=True,
+                extras={"via": "tool", "tool": "set_dashboard_password.py"})
+
+    print()
+    print("Restart the dashboard service to pick up the change:")
+    print("  sudo systemctl restart algo-trader-dashboard.service")
+    return 0
+
+
+def _try_audit(kind: str, *, success: bool, extras: dict | None = None) -> None:
+    """Best-effort auth_events row. If anything fails (no DB, locked,
+    schema mismatch, etc.) — warn to stderr but do NOT block the
+    operator action. The disable flow especially MUST NOT be blocked
+    by a broken DB; it's the recovery path."""
+    try:
+        import sqlite3
+        from dashboard.auth.audit import (
+            record_auth_event, ensure_auth_events_schema,
+        )
+        db_path = REPO_ROOT / "data" / "signals.db"
+        if not db_path.parent.exists():
+            print(f"  (audit skipped — {db_path.parent} not present)",
+                   file=sys.stderr)
+            return
+        conn = sqlite3.connect(str(db_path))
+        try:
+            ensure_auth_events_schema(conn)
+            record_auth_event(
+                conn,
+                kind=kind,
+                client_ip="local-tool",
+                user_agent="set_dashboard_password.py",
+                session_id="",  # no session — it's a CLI invocation
+                success=success,
+                extras=extras,
+            )
+        finally:
+            conn.close()
+    except Exception as e:
+        # NEVER include the value of any secret in the warning.
+        print(f"  (audit write failed for kind={kind}: "
+               f"{type(e).__name__}; tool action completed anyway)",
+               file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(
         "Set DASHBOARD_PASSWORD_HASH in .env via bcrypt. Never prints "
-        "the password. Backs up .env. Preserves unrelated lines."
+        "the password. Backs up .env. Preserves unrelated lines. "
+        "Also manages DASHBOARD_TOTP_SECRET via --enable-totp / "
+        "--disable-totp."
     ))
     ap.add_argument("--remove-plaintext", action="store_true",
                      help="Remove DASHBOARD_PASSWORD from .env "
@@ -204,7 +418,38 @@ def main(argv: list[str] | None = None) -> int:
                           "automation only. Default uses getpass (TTY-only) "
                           "so an interactive operator session NEVER reads "
                           "a piped password by accident.")
+    ap.add_argument("--enable-totp", action="store_true",
+                     help="M15.3.A.2 — Enable TOTP / Google Authenticator "
+                          "2FA. Generates a new TOTP secret, displays a "
+                          "QR code in the terminal, prompts for the first "
+                          "code to verify the operator has scanned it, "
+                          "and writes DASHBOARD_TOTP_SECRET to .env only "
+                          "if verification succeeds. NEVER writes the "
+                          "secret to disk before verification passes. "
+                          "Aborts cleanly on Ctrl-C without modifying .env. "
+                          "Requires DASHBOARD_PASSWORD or DASHBOARD_PASSWORD_HASH "
+                          "to already be set.")
+    ap.add_argument("--disable-totp", action="store_true",
+                     help="M15.3.A.2 — Disable TOTP. Removes "
+                          "DASHBOARD_TOTP_SECRET from .env. Preserves the "
+                          "password hash and secret key. Writes a "
+                          "totp_disabled audit event if possible. Continues "
+                          "(with warning) if audit-DB is unavailable — "
+                          "this is the recovery path and must not be "
+                          "blocked by a broken DB.")
     args = ap.parse_args(argv)
+
+    # M15.3.A.2 — dispatch to TOTP sub-flows BEFORE the password prompt.
+    # --enable-totp and --disable-totp are exclusive of each other AND of
+    # the default password-setting flow (no point combining a password
+    # change with a TOTP enable in one command; they are independent
+    # operator actions).
+    if args.enable_totp and args.disable_totp:
+        _err("--enable-totp and --disable-totp are mutually exclusive", code=1)
+    if args.enable_totp:
+        return _enable_totp_flow(args)
+    if args.disable_totp:
+        return _disable_totp_flow(args)
 
     # Import bcrypt early so we fail before prompting if missing.
     try:

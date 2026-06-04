@@ -38,6 +38,15 @@ from dashboard.auth.audit import (
     read_auth_events,
     hash_session_id,
 )
+from dashboard.auth.totp import (
+    totp_enabled,
+    generate_secret as totp_generate_secret,
+    build_otpauth_uri,
+    render_qr_terminal,
+    verify_code as totp_verify_code,
+    ReplayCache as TOTPReplayCache,
+    get_default_replay_cache as totp_get_default_replay_cache,
+)
 
 __all__ = [
     "verify_password",
@@ -48,4 +57,8 @@ __all__ = [
     "is_secure_cookie_mode",
     "ensure_auth_events_schema", "record_auth_event", "read_auth_events",
     "hash_session_id",
+    # M15.3.A.2 — TOTP:
+    "totp_enabled", "totp_generate_secret", "build_otpauth_uri",
+    "render_qr_terminal", "totp_verify_code",
+    "TOTPReplayCache", "totp_get_default_replay_cache",
 ]

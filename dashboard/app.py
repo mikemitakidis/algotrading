@@ -46,6 +46,9 @@ from dashboard.auth import (
     is_secure_cookie_mode as _m153a_is_secure_mode,
     ensure_auth_events_schema as _m153a_ensure_schema,
     record_auth_event as _m153a_record_event,
+    # M15.3.A.2 — TOTP second factor:
+    totp_enabled as _m153a_totp_enabled,
+    totp_verify_code as _m153a_totp_verify_code,
 )
 from dashboard.auth.passwords import password_configured as _m153a_pw_configured
 from dashboard.auth.sessions import (
@@ -301,6 +304,10 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
   <div style="font-size:21px;font-weight:700;color:#58a6ff;text-align:center;margin-bottom:6px">&#x1F916; Algo Trader</div>
   <div style="color:#8b949e;text-align:center;margin-bottom:26px">v1.0 &mdash; Shadow Mode</div>
   <input type="password" id="pw" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+  <input type="text" id="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+         autocomplete="one-time-code" placeholder="Authenticator code (if 2FA enabled)"
+         style="margin-top:10px;letter-spacing:4px;text-align:center;font-family:monospace"
+         onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">Login</button>
   <div id="lerr" style="color:#f85149;text-align:center;margin-top:9px;font-size:13px"></div>
 </div>
@@ -1024,8 +1031,14 @@ var _lastStatus  = {};
 function doLogin(){
   var pw = document.getElementById('pw').value;
   if(!pw){ document.getElementById('lerr').textContent='Enter a password'; return; }
+  // M15.3.A.2 — TOTP code is optional from the client's perspective.
+  // Server ignores it when TOTP is disabled, requires it when enabled.
+  var totpEl = document.getElementById('totp');
+  var totp = totpEl ? totpEl.value.trim() : '';
+  var body = {password: pw};
+  if (totp) { body.totp_code = totp; }
   document.getElementById('lerr').textContent = 'Checking...';
-  fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw})})
+  fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
   .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, status: r.status, body: d}; }); })
   .then(function(res){
     var d = res.body || {};
@@ -1040,8 +1053,12 @@ function doLogin(){
       document.getElementById('lerr').textContent = 'Too many failed attempts. Retry in ' + (d.retry_after_sec || '?') + 's.';
     } else if (res.status === 503 && d.error === 'no_password_configured') {
       document.getElementById('lerr').textContent = 'Dashboard has no password configured. Run tools/set_dashboard_password.py on the server.';
+    } else if (res.status === 401 && d.error === 'totp_required') {
+      // M15.3.A.2 — password verified but TOTP code missing.
+      document.getElementById('lerr').textContent = 'Authenticator code required.';
+      if (totpEl) { totpEl.focus(); totpEl.style.outline = '2px solid #d29922'; }
     } else {
-      document.getElementById('lerr').textContent = 'Incorrect password';
+      document.getElementById('lerr').textContent = 'Incorrect password or authenticator code';
     }
   }).catch(function(e){ document.getElementById('lerr').textContent = 'Error: ' + e.message; });
 }
@@ -3746,6 +3763,44 @@ def login():
             'failure_count': _m153a_login_limiter.failure_count(client_ip),
         })
         return jsonify({'ok': False}), 401
+
+    # 3b. M15.3.A.2 — TOTP second factor (only if DASHBOARD_TOTP_SECRET set).
+    # When TOTP is unset/empty, this block is a complete no-op — preserving
+    # M15.3.A password-only behaviour byte-for-byte (regression-tested in
+    # test_m15_3_a_2_totp.py group G2).
+    if _m153a_totp_enabled():
+        provided_code = data.get('totp_code', '')
+        if not isinstance(provided_code, str):
+            provided_code = ''
+        provided_code = provided_code.strip()
+        if not provided_code:
+            # Q-A.3 / Correction 3: only return totp_required AFTER password
+            # has verified. This is a small password-validity oracle (see
+            # the M15.3.A.2 runbook §12). Mitigation: rate-limiter still
+            # caps probes at 5 / 15 min via the per-IP counter. Approved
+            # trade-off for UX clarity. Counter is NOT incremented for this
+            # path — the operator legitimately forgot to enter the code.
+            _m153a_audit('totp_required_not_provided', success=False)
+            return jsonify({'ok': False, 'error': 'totp_required'}), 401
+        ok_t, info_t = _m153a_totp_verify_code(provided_code)
+        if not ok_t:
+            # Generic 401 — do NOT leak whether code was wrong/expired/
+            # replay/format-invalid. Counter IS incremented (same per-IP
+            # bucket as wrong-password) per Correction 3.
+            _m153a_login_limiter.record_failure(client_ip)
+            _m153a_audit('totp_failure', success=False, extras={
+                # extras_json contract: NEVER include the code, the secret,
+                # or the URI. Only the reason classifier (already a
+                # closed-set string from totp.verify_code).
+                'reason': info_t.get('reason', 'unknown'),
+                'failure_count': _m153a_login_limiter.failure_count(client_ip),
+            })
+            return jsonify({'ok': False}), 401
+        # TOTP success — record audit but do not yet finalize login
+        # (still need to rotate session etc.).
+        _m153a_audit('totp_success', success=True, extras={
+            'window': info_t.get('window'),
+        })
 
     # 4. Success — rotate session, issue CSRF, audit.
     _m153a_login_limiter.record_success(client_ip)

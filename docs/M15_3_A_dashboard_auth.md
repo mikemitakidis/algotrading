@@ -247,3 +247,82 @@ Two genuine bugs were caught during VPS verification that the sandbox tests had 
 2. Same root cause in `tools/set_dashboard_password.py`. Fixed in `f26407f`. New `test_subprocess_works_without_PYTHONPATH_from_non_repo_cwd` test runs the tool from `/tmp` with `PYTHONPATH` cleared.
 
 The M15.3.A milestone is closed. The next M15.3 sub-milestone in sequence is `M15.3.A.2` (TOTP 2FA), tracked in [`NEXT_WORK_REGISTER.md`](NEXT_WORK_REGISTER.md). No code for that sub-milestone has been written yet — it awaits an explicit pre-code Q-style approval from the operator before any implementation work begins.
+
+## §12 — TOTP / Google Authenticator 2FA (M15.3.A.2)
+
+Adds an OPTIONAL second factor on `/api/login` using time-based one-time passwords (RFC 6238). When `DASHBOARD_TOTP_SECRET` is unset/empty, the dashboard behaviour is byte-identical to M15.3.A — password-only login. When set, every login requires both the password AND a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, …).
+
+**Important: TOTP is not a substitute for HTTPS.** Over plain HTTP, an on-path attacker can still steal a valid session cookie after a successful 2FA login. The Caddy/TLS cutover under `M15.3.A.cutover` remains important even after TOTP is enabled.
+
+### §12.1 — Enable TOTP
+
+```bash
+sudo /opt/algo-trader/venv/bin/python /opt/algo-trader/tools/set_dashboard_password.py --enable-totp
+```
+
+What this does, in order:
+1. Checks that `DASHBOARD_PASSWORD` or `DASHBOARD_PASSWORD_HASH` is already set (TOTP without a password is nonsensical).
+2. Refuses if `DASHBOARD_TOTP_SECRET` is already set (prevents accidental lockout; you must `--disable-totp` first).
+3. Generates a fresh 20-byte base32 secret.
+4. Renders a QR code as Unicode-block characters directly to your SSH terminal. **The QR is shown ONCE; do not screenshot it to anywhere persistent.**
+5. Prints the secret in plaintext below the QR (so you can manually enter it if the QR doesn't render in your terminal).
+6. Prompts: *Enter the 6-digit code from your authenticator app.*
+7. Verifies the code against the new secret.
+8. **Only on verification success**, writes `DASHBOARD_TOTP_SECRET=<secret>` into `.env` (with backup, 0600 perms, unrelated lines preserved). If verification fails or you hit Ctrl-C, `.env` is untouched.
+9. Restart the dashboard service to pick up the change:
+   ```bash
+   sudo systemctl restart algo-trader-dashboard.service
+   ```
+
+The tool never logs the secret to stderr or to `journald`. The secret only reaches stdout (your terminal) during the one-time setup. The `auth_events` row for `totp_setup` contains `via=tool` only — never the secret, code, or otpauth URI.
+
+### §12.2 — Login with TOTP
+
+Once enabled, the login form shows two fields: password + authenticator code. Enter both; the dashboard validates them in sequence:
+
+| Password | TOTP | Result |
+|---|---|---|
+| right | right | login succeeds |
+| right | missing | 401 + UI hint "Authenticator code required" |
+| right | wrong / replay / expired | 401 generic (does NOT leak which TOTP failure mode) |
+| wrong | (any) | 401 generic (does NOT leak whether TOTP would have been valid) |
+
+The rate-limiter (5 failures / 10 min → 15 min lockout per IP) counts wrong TOTP codes the same as wrong passwords. **Missing-but-required** does NOT count — the operator legitimately forgot to enter the code.
+
+### §12.3 — Replay prevention
+
+TOTP codes are valid for ~90 seconds (current 30-sec window plus ±1 for clock skew). To prevent re-use of a captured-but-valid code within that window, the dashboard tracks accepted `(secret-fingerprint, time-step)` pairs in memory with a 120-second TTL. **The cache stores fingerprints (sha256-truncated), never raw secrets or codes.** Reset on dashboard restart — same trade-off as the M15.3.A in-memory rate-limiter. A DB-backed variant is tracked under `M15.3.A.2.persist` (not on the active roadmap).
+
+### §12.4 — Disable / lost-device recovery
+
+If you lose the phone with the authenticator app, SSH to the VPS and disable TOTP:
+
+```bash
+sudo /opt/algo-trader/venv/bin/python /opt/algo-trader/tools/set_dashboard_password.py --disable-totp
+sudo systemctl restart algo-trader-dashboard.service
+```
+
+Then login with password-only, run `--enable-totp` again with a new device. The disable flow is the recovery path — it works even if the SQLite audit DB is broken (the `totp_disabled` audit row is written best-effort; a warning is printed but the `.env` mutation still happens).
+
+**No backup codes** are issued in this version of the design. The SSH-based recovery is the single recovery channel — same as how you'd recover from a forgotten password. If you want backup codes added later, that's tracked as a future carry-forward item under `M15.3.A.2.backup_codes`.
+
+### §12.5 — Audit log additions
+
+Five new closed `kind` values in `auth_events`:
+
+| Kind | When | Extras |
+|---|---|---|
+| `totp_success` | login verified password + TOTP | `{"window": 0\|-1\|1}` (which time-window matched) |
+| `totp_failure` | TOTP wrong / replay / malformed | `{"reason": "wrong_code"\|"replay"\|"wrong_format", "failure_count": N}` |
+| `totp_required_not_provided` | login with right password but no `totp_code` | `{}` |
+| `totp_setup` | operator ran `--enable-totp` successfully | `{"via": "tool"}` |
+| `totp_disabled` | operator ran `--disable-totp` | `{"via": "tool"}` |
+
+**Critical invariant**: `extras_json` for TOTP rows NEVER contains the code, the secret, the otpauth URI, or password material. Asserted by test `test_extras_json_never_contains_secret_material` in `test_m15_3_a_2_totp.py`.
+
+### §12.6 — Threat model trade-offs (honest)
+
+- **What TOTP protects against**: credential theft alone (e.g. password phished or leaked). An attacker with only the password cannot log in.
+- **What TOTP does NOT protect against over plain HTTP**: an on-path attacker who can read network packets can wait for a valid login, then steal the session cookie. Mitigated when `M15.3.A.cutover` lands HTTPS via Caddy.
+- **What TOTP does NOT protect against ever**: a compromised VPS (an attacker with root can read `.env` and forge sessions). Out of scope for application-level controls.
+- **Acknowledged UX leak**: the `totp_required` hint only appears after the password verifies. An attacker can use this as a password-validity oracle (`{password: X, totp_code: ""}` → `totp_required` iff X is right). Mitigated by the rate-limiter (5 probes / 15 min). Approved trade-off for legitimate-operator UX clarity.

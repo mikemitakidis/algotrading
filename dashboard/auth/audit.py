@@ -79,6 +79,12 @@ ALLOWED_KINDS = frozenset({
     "session_rotate",
     "csrf_invalid",
     "session_expired",
+    # M15.3.A.2 — TOTP / Google Authenticator 2FA additions:
+    "totp_success",                  # TOTP code verified during login
+    "totp_failure",                  # TOTP code wrong / replay / format error
+    "totp_required_not_provided",    # login with correct password but no totp_code
+    "totp_setup",                    # operator enabled TOTP via tool
+    "totp_disabled",                 # operator disabled TOTP via tool
 })
 
 
