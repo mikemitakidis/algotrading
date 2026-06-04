@@ -1,9 +1,10 @@
 # M15.3.A — Dashboard Auth / Security Hardening
 
-**Status:** Implementation shipped; awaiting VPS verification.
-**Scope:** Hardening of `dashboard/app.py` login/session/CSRF surfaces. No order paths, no broker imports, no IB API, no M14 engine changes.
+**Status:** **CLOSED** — VPS-verified 2026-06-04.
+**Implementation commits:** `34fc157` → `c280a83` → `f26407f`.
+**Scope:** Hardening of `dashboard/app.py` login/session/CSRF surfaces. No order paths, no broker imports, no IB API, no M14 engine changes. Protected files modified: 0 / 24.
 
-For project-wide status, see [`../MILESTONE_STATUS.md`](../MILESTONE_STATUS.md). M15.3.A is sub-milestone 1 of 3 inside M15.3; M15.3.B (`manual_reset` operator flow) and M15.3.C (compliance audit/export) follow.
+For project-wide status, see [`../MILESTONE_STATUS.md`](../MILESTONE_STATUS.md). M15.3.A is sub-milestone 1 of 4 inside M15.3; the remaining sub-milestones (`M15.3.A.2` TOTP 2FA, `M15.3.B` manual_reset, `M15.3.C` compliance audit/export) are tracked in [`NEXT_WORK_REGISTER.md`](NEXT_WORK_REGISTER.md).
 
 ## §1 — What M15.3.A does
 
@@ -211,9 +212,38 @@ sudo systemctl restart algo-trader-dashboard.service
 
 The `auth_events` SQLite table created by M15.3.A is additive — leave it in place after rollback (orphan audit rows are useful evidence; the rolled-back code simply ignores them). `.env` modifications (`DASHBOARD_PASSWORD_HASH`, `DASHBOARD_SECRET_KEY`) are also safe to leave; the rolled-back code uses only `DASHBOARD_PASSWORD`.
 
-## §10 — Out of scope (explicitly recorded in `docs/NEXT_WORK_REGISTER.md`)
+## §10 — Out of scope (explicitly recorded in `NEXT_WORK_REGISTER.md`)
 
-- Caddy/TLS install on the VPS — operator action, not part of M15.3.A.
-- Hard cutover to `DASHBOARD_BIND_HOST=127.0.0.1` — operator action after Caddy is in place.
-- SQLite-backed rate-limit persistence — deferred until needed.
-- Multi-user accounts, 2FA, SSO/LDAP — out of scope for M15.3 entirely (single-operator model retained per Q3).
+- Caddy/TLS install on the VPS — operator action, not part of M15.3.A. Tracked as `M15.3.A.cutover`.
+- Hard cutover to `DASHBOARD_BIND_HOST=127.0.0.1` — operator action after Caddy is in place. Same item.
+- SQLite-backed rate-limit persistence — deferred until needed. Tracked as `M15.3.A.persist`.
+- **2FA (TOTP / Google Authenticator)** — was originally out-of-scope for M15.3.A but has been re-scoped as a dedicated sub-milestone `M15.3.A.2`, sequenced **before** `M15.3.B` (manual_reset). Rationale: `manual_reset` is a state-clearing operator action that 2FA materially protects. Not coded yet; awaiting explicit go-ahead.
+- **Multi-user accounts / read-only viewer roles** — recorded as `M15.3.D or later`. Single-operator model retained for now; the future enhancement would split the current single-password model into roles (e.g. `operator`, `viewer`) without weakening any existing security primitive.
+- SSO / LDAP / WebAuthn-passkeys — not on the immediate roadmap; WebAuthn would require the HTTPS cutover to be done first.
+
+## §11 — Closeout (2026-06-04)
+
+The M15.3.A milestone was VPS-verified and closed on 2026-06-04. Evidence captured:
+
+- **HEAD on VPS:** `f26407f` (final fix-2 commit; chain `34fc157` → `c280a83` → `f26407f`).
+- **Tests on VPS:** `test_m15_3_a_dashboard_auth.py` 97/97 OK.
+- **`set_dashboard_password.py` direct execution** (no `PYTHONPATH` workaround required, fixed in `f26407f`):
+  - `tools/set_dashboard_password.py` succeeded interactively.
+  - Backup file created at `.env.bak.<timestamp>`.
+  - `.env` permissions verified `0o600`.
+  - bcrypt hash written: prefix `$2b$`, length 60 — both checks pass.
+  - `DASHBOARD_SECRET_KEY` generated, length 64.
+  - `DASHBOARD_PASSWORD` retained as transitional fallback (operator can hard-cut over with `--remove-plaintext` later).
+- **Dashboard service**: `systemctl is-active algo-trader-dashboard.service` → `active`. (Earlier `c280a83` deploy crash-looped at `NRestarts=68` with `ModuleNotFoundError: No module named 'dashboard'` — root-caused as a script-mode `sys.path` issue, fixed in the next commit. The negative-verified `TestScriptModeInvocation` test catches this exact failure mode.)
+- **HTTP probes**: `/` → 200, `/api/health` → 200.
+- **Browser login**: operator manually authenticated with the new bcrypt password in a real browser session — proves the full end-to-end flow (login → session cookie issued with `HttpOnly`/`SameSite=Strict` → CSRF token returned to JS → state-changing POSTs accepted).
+- **`auth_events` table** present with all 8 expected columns: `id, ts_utc, kind, client_ip, user_agent, session_id, success, extras_json`.
+- **Hard-constraint evidence**: protected files modified vs `60281c4` (pre-M15.3.A baseline): **0 / 24**. No engine, broker, scanner, strategy, eToro, IBKR-reader, systemd, `sync.sh`, or `deploy.sh` changes across the entire `34fc157 → c280a83 → f26407f` chain.
+- **`git status`**: clean on both the dashboard repo and the VPS working copy.
+
+Two genuine bugs were caught during VPS verification that the sandbox tests had not exercised — both honestly recorded in the commit messages and now covered by regression tests in `test_m15_3_a_dashboard_auth.py`:
+
+1. Script-mode `sys.path` regime differs from module-import regime. The sandbox always imported `dashboard.app` via `python3 -m unittest`, masking the bug. Fixed in `c280a83`. New `TestScriptModeInvocation` test invokes the script the same way systemd does.
+2. Same root cause in `tools/set_dashboard_password.py`. Fixed in `f26407f`. New `test_subprocess_works_without_PYTHONPATH_from_non_repo_cwd` test runs the tool from `/tmp` with `PYTHONPATH` cleared.
+
+The M15.3.A milestone is closed. The next M15.3 sub-milestone in sequence is `M15.3.A.2` (TOTP 2FA), tracked in [`NEXT_WORK_REGISTER.md`](NEXT_WORK_REGISTER.md). No code for that sub-milestone has been written yet — it awaits an explicit pre-code Q-style approval from the operator before any implementation work begins.

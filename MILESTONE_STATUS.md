@@ -45,7 +45,7 @@ project-wide reconciliation narrative lives in
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
-| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4/.5 CLOSED; M15.3 PENDING) | See M15 detail below |
+| 15 | Production Hardening | PARTIAL (M15.0-pre/.0/.1/.2/.4/.5/.3.A CLOSED; M15.3.A.2/.B/.C PENDING) | See M15 detail below |
 | 16–23 | Future scope | PENDING | See `ROADMAP.md` |
 
 ---
@@ -173,7 +173,10 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 | M15.0 — Scanner / systemd reliability + production process clarity | CLOSED | `597635d` (chain `57dc200` → `597635d`); `test_m15_0_service.py` 40/40; VPS-verified 2026-06-02 |
 | M15.4 — IB Gateway reliability + broker connectivity health (visibility/truth layer) | CLOSED | `073a8bd`; `test_m15_4_gateway_health.py` 47/47; VPS-verified 2026-06-02. Login-error precedence hardened in post-VPS patch `2446df6` (`test_m15_4_gateway_health.py` 50/50). |
 | M15.5 — IBKR exposure reader wiring (paper mode) | CLOSED | `138df9e` → `2446df6` (cross-confirm + phased dry-run + login-error gate hardening); `test_m15_5_ibkr_exposure.py` 78/78; VPS-verified 2026-06-03 with real paper ingest succeeded. |
-| M15.3 — Infra recovery (dashboard auth + manual_reset + compliance audit/export) | PENDING | — |
+| M15.3.A — Dashboard auth/security hardening | CLOSED | `34fc157` → `c280a83` (script-mode sys.path bootstrap + `--stdin` for setpw tool) → `f26407f` (setpw sys.path bootstrap + M15.3.A.2 carry-forward); `test_m15_3_a_dashboard_auth.py` 97/97; VPS-verified 2026-06-04 with real operator browser login succeeded. |
+| M15.3.A.2 — Dashboard TOTP / Google Authenticator 2FA | PENDING (proposed, before M15.3.B) | — |
+| M15.3.B — `manual_reset` operator flow | PENDING (blocked on M15.3.A.2) | — |
+| M15.3.C — Compliance audit + export | PENDING | — |
 
 **M15.5 closeout (IBKR paper exposure reader wired)** — VPS-verified 2026-06-03:
 - The `NotImplementedError` stub at `tools/ingest_exposure_state.py::_build_ibkr_exposure_adapter` for `ibkr_paper` is replaced by a real read-only IB API positions reader at `bot/risk_authority/ibkr_paper_reader.py`. The reader connects to `127.0.0.1:4002` with `clientId=15`, `readonly=True`, waits for the account-update snapshot to be ready (bounded by `api_timeout`), reads both `ib.portfolio()` and `ib.positions()` for cross-confirmation, then disconnects in a `finally` block. The M14.D `IBKRExposureAdapter` is byte-identical — M15.5 only supplies a real `positions_reader` callable.
@@ -187,9 +190,31 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
 - Hard-constraint evidence: M14.D adapter byte-identical vs `d73a04a`; M14 engine/governor/snapshot/audit/preflight modules untouched; AST scan rejects every order method (`placeOrder/cancelOrder/modifyOrder/reqGlobalCancel/reqMktData/reqHistoricalData/reqOpenOrders/reqExecutions`) on every commit; `readonly=True` AST-asserted on every `connect()` call; `ibkr_live` CLI path still raises `NotImplementedError`.
 - Authoritative operator reference: [`docs/M15_5_ibkr_exposure_reader.md`](docs/M15_5_ibkr_exposure_reader.md). Dry-run-first workflow remains required before any real ingest (`run_paper_dryrun()` with phased observability: `error_phase`, `elapsed_ms`, per-step booleans).
 
-**M15.3 open items** (carry-forwards remaining after M15.0, M15.4, M15.5 — process-manager identification CLOSED via M15.0; IB Gateway visibility CLOSED via M15.4; IBKR paper exposure wiring CLOSED via M15.5):
-- **Dashboard auth/security hardening.** Dashboard binds to `0.0.0.0:8080`; current `@require_auth` is session-based. TLS / IP-allowlist / `manual_reset` operator flow are M15.3 scope.
-- **Compliance-grade audit log + regulatory export** — explicit M15.3 scope, not happening earlier by accident.
+**M15.3.A closeout (dashboard auth/security hardening)** — VPS-verified 2026-06-04:
+- **Status:** CLOSED. Implementation chain `34fc157` → `c280a83` → `f26407f`. Operator manually logged into the dashboard in a browser with the new bcrypt-hashed password on closeout day.
+- **What shipped:**
+  - **bcrypt password verification** (cost factor 12, `DASHBOARD_PASSWORD_HASH`) preferred; plaintext `DASHBOARD_PASSWORD` retained as transitional fallback. The default `'changeme'` is REJECTED.
+  - **Login rate-limit**: in-memory sliding window — 5 failures / 10 min → 15 min lockout per `client_ip`. The in-memory trade-off was accepted per Q-A.1; persistence is deferred under `M15.3.A.persist`.
+  - **CSRF protection** on all 16 non-exempt state-changing POST endpoints (only `/api/login` exempt). Inline-JS `window.fetch` monkey-patched once at the top of the embedded HTML so every existing `fetch(...)` call site auto-attaches the `X-CSRF-Token` header — zero call-site changes.
+  - **Session cookies**: `HttpOnly=True` always, `SameSite=Strict` always, `Secure=` env-gated via `DASHBOARD_HTTPS_MODE` or `DASHBOARD_COOKIE_SECURE` (not unconditional — would have broken login over plain HTTP during the Caddy transition window).
+  - **Hybrid session timeout**: 30 min idle + 12 h absolute, both env-configurable. Legacy-session first-deploy grace.
+  - **Stable `DASHBOARD_SECRET_KEY`** env var (no longer password-derived; auto-generated by `tools/set_dashboard_password.py` on first run).
+  - **`auth_events` append-only audit log** (sha256-hashed session IDs per Q-A.8; closed `kind` set with SQLite CHECK constraints).
+  - **Soft bind-host cutover** — default `0.0.0.0:8080` retained with explicit startup warning. `DASHBOARD_BIND_HOST=127.0.0.1` + Caddy/TLS final cutover is recorded under `M15.3.A.cutover` (operator action; not done in M15.3.A by design).
+  - **`tools/set_dashboard_password.py`**: interactive bcrypt setter that backs up `.env`, preserves unrelated lines, sets 0600 perms, never prints the password. `--stdin` flag for non-interactive automation. Operates from any cwd without requiring `PYTHONPATH` (sys.path bootstrap fixed in `f26407f` after VPS verification of `c280a83` revealed the helper still needed `PYTHONPATH=/opt/algo-trader` as a workaround).
+- **Two real bugs found and fixed during VPS verification** (test-suite gaps the sandbox masked):
+  1. `34fc157` → `c280a83`: dashboard service crash-looped on the VPS (`NRestarts=68`, no listener) because systemd invokes `python3 /opt/algo-trader/dashboard/app.py` as a script and Python's script-mode `sys.path` only contains the script's directory, not the repo root — so `from dashboard.auth import ...` raised `ModuleNotFoundError` before any logging handler could capture the traceback. Fixed by prepending the repo root to `sys.path` at the top of `dashboard/app.py`. A new `TestScriptModeInvocation` test now invokes the script the same way systemd does and was negative-verified to catch the bug on the unfixed code.
+  2. `c280a83` → `f26407f`: same root cause in `tools/set_dashboard_password.py` — operator had to run with `PYTHONPATH=/opt/algo-trader` as a workaround. Fixed with the same sys.path bootstrap; a new `test_subprocess_works_without_PYTHONPATH_from_non_repo_cwd` regression test runs the tool from `/tmp` with `PYTHONPATH` cleared.
+- **Test evidence**: `test_m15_3_a_dashboard_auth.py` 97/97 (9 test groups covering password verify, rate-limit, session hardening, CSRF primitives, bind-host behaviour, audit DAO, login endpoint, CSRF enforcement, existing-endpoints regression, no-forbidden-surface AST scan, protected-files git-diff sweep, real-HTTP cookie flags, set-password subprocess including the script-mode regression). Regressions: `test_m13_4a_allocation` 61/61 (CSRF-aware test update was required — minimal `_csrf_headers()` helper, no production-code workaround), `test_m14_g_dashboard` 51/51, `test_m15_5_ibkr_exposure` 78/78, `test_m15_4_gateway_health` 50/50.
+- **VPS verification facts (2026-06-04)**: HEAD = `f26407f`; dashboard `is-active = active`; `/` → HTTP 200; `/api/health` → HTTP 200; `auth_events` table present with 8 expected columns; `DASHBOARD_PASSWORD_HASH` valid bcrypt prefix `$2b$`, length 60; `DASHBOARD_SECRET_KEY` length 64; `.env` permissions `0o600`; operator successfully logged into the dashboard in a browser.
+- **Hard-constraint evidence**: protected files modified vs `60281c4` (pre-M15.3.A baseline): 0 / 24. AST scan rejects every order method (`placeOrder/cancelOrder/modifyOrder/reqGlobalCancel/reqMktData/reqHistoricalData/reqOpenOrders/reqExecutions`) in the M15.3.A `dashboard/auth/` modules. No imports of `bot.scanner`, `bot.strategy`, `bot.brokers`, `bot.etoro`, `ib_insync`, or any `bot.risk_authority.*` engine module from any auth module.
+- **Authoritative operator reference**: [`docs/M15_3_A_dashboard_auth.md`](docs/M15_3_A_dashboard_auth.md). Carry-forward items deferred from M15.3.A and tracked in [`docs/NEXT_WORK_REGISTER.md`](docs/NEXT_WORK_REGISTER.md): `M15.3.A.cutover` (Caddy/TLS operator action), `M15.3.A.persist` (DB-backed rate-limit), `M15.3.A.2` (TOTP 2FA, proposed before M15.3.B), and the newly-recorded `M15.3.D or later — multi-user/read-only dashboard roles`.
+
+**M15.3 open items** (carry-forwards remaining after M15.0, M15.4, M15.5, M15.3.A — process-manager identification CLOSED via M15.0; IB Gateway visibility CLOSED via M15.4; IBKR paper exposure wiring CLOSED via M15.5; dashboard auth/security hardening CLOSED via M15.3.A):
+- **TOTP / Google Authenticator 2FA** — recorded as `M15.3.A.2`, proposed before `M15.3.B` because `manual_reset` is a state-clearing operator action that 2FA materially protects.
+- **`manual_reset` operator flow** — `M15.3.B`, blocked on `M15.3.A.2`.
+- **Compliance-grade audit log + regulatory export** — `M15.3.C`, sequenced after `M15.3.B`.
+- **Caddy / 127.0.0.1 final cutover** — `M15.3.A.cutover`, operator action.
 
 **M15.4 closeout (IB Gateway visibility/truth layer)** — VPS-verified 2026-06-02:
 - New read-only helper `bot/gateway_health.py` combines five sources (`systemctl is-active/is-enabled/show`, TCP connect-and-close probe on 4001/4002, trading-mode discovery from `start_ibgateway.sh` + IBC config, `/var/log/ibgateway/ibgateway.log` tail, `journalctl -u ibgateway.service`) into a single point-in-time classification.
