@@ -70,18 +70,40 @@ def _make_test_app(*, password="testpw-12345",
                     secret_key="test_m15_3_a_2_secret_xxxxxxxx"):
     """Build (or reuse) the dashboard.app test instance with explicit env.
 
-    Per-test state reset: env, rate-limiter, replay-cache, DB_PATH."""
+    Per-test state reset: env, rate-limiter, replay-cache, DB_PATH.
+
+    IMPORTANT (M15.3.A.2 VPS fix): dashboard.app calls `load_dotenv()` at
+    module import time. On the VPS, `/opt/algo-trader/.env` contains a real
+    `DASHBOARD_PASSWORD_HASH`, which dotenv loads into `os.environ`. If we
+    clean env BEFORE the import, dotenv re-pollutes after we clean — and
+    then `verify_password` sees the real (operator) hash, our test
+    plaintext password fails the bcrypt check, login returns 401 before
+    reaching the TOTP block, and no `totp_*` audit rows are written.
+
+    Fix: import dashboard.app FIRST (letting dotenv run whatever it runs),
+    THEN clean env, THEN set test values. This way the test's env always
+    wins over whatever the real .env contains.
+    """
     global _DASHAPP_SINGLETON
+    # Step 1: ensure dashboard.app is imported (singleton). On the first
+    # call this triggers `load_dotenv()` which may populate os.environ
+    # from a real .env file in the cwd (VPS scenario). On subsequent
+    # calls this is a no-op.
+    if _DASHAPP_SINGLETON is None:
+        from dashboard import app as dashapp
+        _DASHAPP_SINGLETON = dashapp
+    dashapp = _DASHAPP_SINGLETON
+
+    # Step 2: NOW clean env — after any dotenv pollution.
     _clean_env()
+
+    # Step 3: set the test's env values. These override anything dotenv
+    # may have loaded.
     os.environ["DASHBOARD_SECRET_KEY"] = secret_key
     os.environ["DASHBOARD_PASSWORD"] = password
     if totp_secret:
         os.environ["DASHBOARD_TOTP_SECRET"] = totp_secret
 
-    if _DASHAPP_SINGLETON is None:
-        from dashboard import app as dashapp
-        _DASHAPP_SINGLETON = dashapp
-    dashapp = _DASHAPP_SINGLETON
     dashapp.app.config["TESTING"] = True
     # Silence the cookie/bind-host warnings during tests.
     import logging
@@ -295,6 +317,77 @@ class TestTOTPDisabledMode(unittest.TestCase):
         finally:
             conn.close()
         self.assertEqual(totp_rows, 0)
+
+    def test_fixture_overrides_preexisting_password_hash_from_env(self):
+        """Regression test for the VPS-only M15.3.A.2 failure (commit 723b963).
+
+        Symptom: on the VPS, `test_extras_json_never_contains_secret_material`
+        failed with `0 not greater than 0` — no `totp_*` rows in auth_events.
+
+        Root cause: `dashboard.app` calls `load_dotenv()` at module-import
+        time. On the VPS, `/opt/algo-trader/.env` contains a real
+        `DASHBOARD_PASSWORD_HASH` (set by the operator's `--set-password`
+        run). My original `_make_test_app` cleaned `os.environ` BEFORE
+        the dashboard.app import — dotenv then re-populated the hash
+        AFTER my cleanup. `verify_password` saw the real hash, bcrypt
+        check failed against the test's plaintext password, login
+        returned 401 before reaching the TOTP block, and no `totp_*`
+        audit rows were written.
+
+        Fix: import dashboard.app first (let dotenv run), then clean env,
+        then set test values. The test below proves the fix by seeding
+        a real bcrypt hash into os.environ BEFORE invoking `_make_test_app`,
+        simulating the VPS's dotenv pre-pollution. The fixture must
+        override it so the test's plaintext password works.
+        """
+        try:
+            import bcrypt, pyotp
+        except ImportError:
+            self.skipTest("bcrypt/pyotp not installed")
+        test_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+        # Seed a real bcrypt hash for a DIFFERENT password than the test
+        # will use. Use a low cost factor since speed matters in tests.
+        real_hash = bcrypt.hashpw(b"DIFFERENT-OPERATOR-PASSWORD",
+                                    bcrypt.gensalt(rounds=4)).decode()
+        os.environ["DASHBOARD_PASSWORD_HASH"] = real_hash
+        # Also seed a different DASHBOARD_PASSWORD to test the override.
+        os.environ["DASHBOARD_PASSWORD"] = "WRONG-PASSWORD-FROM-FAKE-ENV"
+
+        # Invoke the fixture exactly as a normal test would.
+        dashapp = _make_test_app(password="real-test-pw-12345",
+                                   totp_secret=test_secret,
+                                   db_path=self.tmp_db.name)
+
+        # After the fixture: the seeded hash + wrong-password should be GONE.
+        self.assertNotIn("DASHBOARD_PASSWORD_HASH", os.environ,
+            "fixture failed to override DASHBOARD_PASSWORD_HASH from env")
+        self.assertEqual(os.environ.get("DASHBOARD_PASSWORD"),
+                          "real-test-pw-12345",
+            "fixture failed to override DASHBOARD_PASSWORD from env")
+
+        # And login with the test's plaintext password works (proving
+        # the test password — not the seeded hash — is what the dashboard
+        # uses).
+        c = dashapp.app.test_client()
+        code = pyotp.TOTP(test_secret).now()
+        r = c.post("/api/login", json={
+            "password": "real-test-pw-12345",
+            "totp_code": code,
+        })
+        self.assertEqual(r.status_code, 200,
+            f"fixture-overridden login should succeed; got {r.status_code} "
+            f"body={r.get_json()!r}")
+
+        # And the TOTP audit rows ARE written (the original failure mode).
+        conn = sqlite3.connect(self.tmp_db.name)
+        try:
+            totp_rows = conn.execute(
+                "SELECT COUNT(*) FROM auth_events WHERE kind LIKE 'totp%'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertGreater(totp_rows, 0,
+            "TOTP audit rows should have been written")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
