@@ -59,27 +59,10 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Estimated effort:** 1 sub-milestone, ~300-500 LOC including tests.
 - **Owner:** TBD.
 
-### M15.3.A.2 — Dashboard TOTP / Google Authenticator 2FA (CODE COMPLETE — PENDING VPS VERIFICATION)
-- **Status:** Code shipped 2026-06-04; awaiting VPS verification. Pre-code checklist Q-A.1..Q-A.11 + Corrections 1-9 all honoured. Implementation summary:
-  - New module `dashboard/auth/totp.py` (TOTP primitives + replay cache, dependency-injectable clock & secret).
-  - `/api/login` extended in `dashboard/app.py` with a second-factor block between password verify and session rotation. Byte-identical to M15.3.A when `DASHBOARD_TOTP_SECRET` is unset (regression-tested as G2 hard guarantee).
-  - `tools/set_dashboard_password.py` gained `--enable-totp` (generates secret, renders terminal QR, verifies first code before writing `.env`) and `--disable-totp` (best-effort audit; never blocks on broken DB — recovery path).
-  - Login form gained an always-visible TOTP field; JS handles the `totp_required` response with an orange-outline focus on the TOTP input.
-  - `auth_events` ALLOWED_KINDS extended with 5 new closed values: `totp_success`, `totp_failure`, `totp_required_not_provided`, `totp_setup`, `totp_disabled`. No schema migration (kind enforcement is code-side).
-  - Replay cache stores `(sha256(secret)[:16], time_step)` only — never raw codes or secrets. TTL 120 sec.
-  - Test surface: 51/51 in `test_m15_3_a_2_totp.py` across 8 groups (primitives, disabled-mode hard guarantee, enabled-mode flows, setpw flags, rate-limit integration, replay prevention, auth events without secret material, AST scan + protected files).
-  - Clean-venv proof: `pyotp==2.9.0` + `qrcode==7.4.2` install/check/import all exit 0.
-  - Hard constraints: 0/24 protected files modified vs `648682c`.
-- **Next step:** operator VPS verification (see runbook §12 in `docs/M15_3_A_dashboard_auth.md`); closeout to follow per Correction 9 (`MILESTONE_STATUS.md` only at closeout).
-- **Honest trade-offs documented in runbook §12.6:** TOTP does not substitute for HTTPS; `totp_required` is a small password-validity oracle (rate-limit-capped); in-memory replay cache resets on restart.
-- **Reference:** Mike's request 2026-06-04 + M15.3.A.2 pre-code checklist approval.
-
-### M15.3.B — manual_reset operator flow (PENDING M15.3 SEQUENCE — blocked on M15.3.A.2 AND HTTPS decision)
-- **Status:** Plan approved (in M15.3 plan), scheduled after M15.3.A.2 (TOTP 2FA) **and** an explicit HTTPS-exposure decision per Correction 1.
-- **Blockers (both must clear before coding starts):**
-  1. M15.3.A.2 VPS-verified + closed.
-  2. Either `M15.3.A.cutover` (Caddy/TLS) is complete, **or** the operator records an explicit acceptance that `manual_reset` will be exposed on plain HTTP. Reason: `manual_reset` clears engine state; without HTTPS, a network attacker who observes a valid 2FA login can hijack the session cookie and invoke it. TOTP protects credential theft, not session theft.
-- **Why deferred:** Sequenced after M15.3.A because B uses A's CSRF + auth primitives. Now further sequenced after M15.3.A.2 because `manual_reset` is the kind of state-clearing operator action that 2FA materially protects.
+### M15.3.B — manual_reset operator flow (PENDING M15.3 SEQUENCE — blocked on HTTPS decision)
+- **Status:** Plan approved (in M15.3 plan). M15.3.A.2 (TOTP 2FA) closed on 2026-06-04 — that blocker is cleared. The remaining blocker is an explicit HTTPS-exposure decision per Correction 1.
+- **Blocker (must clear before coding starts):** Either `M15.3.A.cutover` (Caddy/TLS) is complete, **or** the operator records an explicit acceptance that `manual_reset` will be exposed on plain HTTP. Reason: `manual_reset` clears engine state; without HTTPS, a network attacker who observes a valid 2FA login can hijack the session cookie and invoke it. TOTP defends credential theft, not session theft over an unencrypted channel.
+- **Why deferred:** Sequenced after M15.3.A because B uses A's CSRF + auth primitives. Now further sequenced after M15.3.A.2 because `manual_reset` is the kind of state-clearing operator action that 2FA materially protects — but TOTP alone is not sufficient over plain HTTP.
 - **Acceptance criteria:** see §5 of the M15.3 plan and the M15.3 closeout discussion.
 
 ### M15.3.C — Compliance audit + export (PENDING M15.3 SEQUENCE)
@@ -121,6 +104,27 @@ Per `ROADMAP.md`, M16+ begins after M15 closes (i.e. after M15.3.C ships). Items
 ---
 
 ## Closed items
+
+### M15.3.A.2 — Dashboard TOTP / Google Authenticator 2FA (CLOSED 2026-06-04)
+- **Closing commits:** `723b963` (initial implementation per pre-code checklist Q-A.1..Q-A.11 + Corrections 1–9) → `7ab7555` (test-fixture VPS regression fix — test-only patch, no production code changes; covers the dotenv-pollution issue surfaced during VPS verification).
+- **Acceptance criteria met:**
+  - New module `dashboard/auth/totp.py`: RFC 6238 TOTP (30-sec window, ±1 step tolerance via `valid_window=1`); replay cache keyed by `(sha256(secret)[:16], time_step)` with 120-sec TTL; **no raw codes or secrets stored in cache memory** (per Q-A.10 correction).
+  - `/api/login` extended with a second-factor block between password verify and session rotation. **Hard guarantee preserved**: password-only login is byte-identical to M15.3.A when `DASHBOARD_TOTP_SECRET` is unset/empty.
+  - Failure semantics per Correction 3: wrong-password → 401 generic; wrong-TOTP → 401 generic (no leak of which-factor-failed); right-password + missing-TOTP → 401 `totp_required` (acknowledged password-validity oracle, rate-limit-capped); missing-TOTP does NOT increment counter (operator forgot); wrong-TOTP DOES increment same per-IP bucket as wrong-password.
+  - `tools/set_dashboard_password.py` gained `--enable-totp` (sanity-checks password is set, refuses overwrite, verify-before-write, abort-on-Ctrl-C without `.env` mutation) and `--disable-totp` (removes only `DASHBOARD_TOTP_SECRET`, best-effort `totp_disabled` audit — recovery path must not block on broken DB).
+  - Login form gained always-visible TOTP input (per Q-A.8 — no probe endpoint). JS handles `totp_required` response with orange-outline focus.
+  - `auth_events.ALLOWED_KINDS` extended with 5 new closed values; **`extras_json` invariant**: never contains code/secret/otpauth-URI/password material (Correction 4). Verified against the live VPS audit log: `SECRET_MATERIAL_DETECTED = False`.
+  - New deps pinned and clean-venv verified: `pyotp==2.9.0`, `qrcode==7.4.2`. Install / pip-check / imports all exit 0 in a fresh venv.
+- **VPS verification on closeout day (2026-06-04, HEAD `7ab7555`):** M15.3.A.2 tests 52/52 OK; M15.3.A regression 97/97 OK; clean temp venv (`CLEAN_INSTALL_EXIT=0`, `CLEAN_CHECK_EXIT=0`, `CLEAN_IMPORT_EXIT=0`); pyotp/qrcode imports OK; dashboard `is-active = active`; `/` and `/api/health` both HTTP 200. `--enable-totp` ran successfully — `.env` backup created, `DASHBOARD_TOTP_SECRET` written (length 32, valid base32). **Operator authenticated against the dashboard in a real browser session with password + Google Authenticator code** — the full chain works (login form → password verify → TOTP verify → session rotation → CSRF token → state-changing POSTs accepted). `auth_events` recorded `totp_setup`, `totp_success`, `login_success`. Redacted audit check confirms `SECRET_MATERIAL_DETECTED = False`.
+- **VPS-only bug caught + fixed during closeout** (`723b963` → `7ab7555`): test-setup bug, not production-code bug. `dashboard.app` calls `load_dotenv()` at module-import time; my original `_make_test_app` cleaned `os.environ` BEFORE the dashboard.app import, so dotenv re-populated `DASHBOARD_PASSWORD_HASH` from the real `.env` afterwards, and `verify_password` rejected the test's plaintext password — login returned 401 at the password step, never reaching the TOTP block, so no `totp_*` audit rows were written. Sandbox could not reproduce (no `.env` in sandbox). Fix: import dashboard.app first, clean env after, set test values. New `test_fixture_overrides_preexisting_password_hash_from_env` regression test explicitly seeds a real bcrypt hash into `os.environ` before invoking the fixture and asserts the fixture cleanly overrides it. Negative-verified by reverting the fix. **The "extras_json never leaks secrets" production invariant was unchanged by the fix.**
+- **Tests at closeout:** `test_m15_3_a_2_totp.py` 52/52 OK (51 design + 1 fixture-robustness regression). Regressions clean across the whole project: `test_m15_3_a_dashboard_auth` 97/97, `test_m15_5_ibkr_exposure` 78/78, `test_m15_4_gateway_health` 50/50, `test_m14_g_dashboard` 51/51, `test_m13_4a_allocation` 61/61, `test_m14_e_engine` 105/105.
+- **Hard-constraint evidence:** protected files modified vs `648682c` (pre-M15.3.A.2 baseline) across both commits in the chain: **0 / 24**. No engine, broker, scanner, strategy, eToro, IBKR-reader, systemd, `sync.sh`, or `deploy.sh` changes. No `manual_reset` code. No multi-user code. No live mode. No orders. No broker writes. AST scan of `dashboard/auth/totp.py` confirms no forbidden imports.
+- **Authoritative operator reference:** [`M15_3_A_dashboard_auth.md`](M15_3_A_dashboard_auth.md) §12 (TOTP runbook, including §12.7 closeout evidence).
+- **Honest trade-offs (documented in runbook §12.6):**
+  - **TOTP does NOT substitute for HTTPS.** Over plain HTTP an on-path attacker can still steal a valid session cookie after a successful 2FA login. `M15.3.A.cutover` remains an open carry-forward and a real prerequisite for state-changing operator actions like `M15.3.B` manual_reset.
+  - **`totp_required` is a small password-validity oracle**, rate-limit-capped at 5 probes / 15 min. Approved trade-off for legitimate-operator UX clarity.
+  - **In-memory replay cache resets on dashboard restart** — same trade-off as M15.3.A rate-limiter.
+- **Carry-forward note**: `M15.3.A.cutover` (Caddy/TLS) is still important even with TOTP enabled. `M15.3.B` (manual_reset) is now blocked on either Caddy/TLS landing OR an explicit operator decision to expose `manual_reset` over plain HTTP. A DB-backed replay cache could be added later as `M15.3.A.2.persist` if a real incident materializes.
 
 ### M15.3.A — Dashboard auth/security hardening (CLOSED 2026-06-04)
 - **Closing commits:** `34fc157` (initial M15.3.A shipped) → `c280a83` (script-mode `sys.path` bootstrap fix in `dashboard/app.py` + `--stdin` flag for `tools/set_dashboard_password.py`) → `f26407f` (same `sys.path` bootstrap applied to `tools/set_dashboard_password.py` + this M15.3.D entry).

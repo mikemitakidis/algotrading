@@ -250,6 +250,8 @@ The M15.3.A milestone is closed. The next M15.3 sub-milestone in sequence is `M1
 
 ## §12 — TOTP / Google Authenticator 2FA (M15.3.A.2)
 
+**Status: CLOSED — VPS-verified 2026-06-04.** Implementation chain: `723b963` (initial) → `7ab7555` (test-fixture VPS fix). Tests: `test_m15_3_a_2_totp.py` 52/52 OK. Operator end-to-end browser login with password + Google Authenticator code succeeded on closeout day; `auth_events` recorded `totp_setup`, `totp_success`, `login_success`; redacted audit invariant `SECRET_MATERIAL_DETECTED = False`. Hard constraints: 0 / 24 protected files modified.
+
 Adds an OPTIONAL second factor on `/api/login` using time-based one-time passwords (RFC 6238). When `DASHBOARD_TOTP_SECRET` is unset/empty, the dashboard behaviour is byte-identical to M15.3.A — password-only login. When set, every login requires both the password AND a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password, Bitwarden, …).
 
 **Important: TOTP is not a substitute for HTTPS.** Over plain HTTP, an on-path attacker can still steal a valid session cookie after a successful 2FA login. The Caddy/TLS cutover under `M15.3.A.cutover` remains important even after TOTP is enabled.
@@ -326,3 +328,20 @@ Five new closed `kind` values in `auth_events`:
 - **What TOTP does NOT protect against over plain HTTP**: an on-path attacker who can read network packets can wait for a valid login, then steal the session cookie. Mitigated when `M15.3.A.cutover` lands HTTPS via Caddy.
 - **What TOTP does NOT protect against ever**: a compromised VPS (an attacker with root can read `.env` and forge sessions). Out of scope for application-level controls.
 - **Acknowledged UX leak**: the `totp_required` hint only appears after the password verifies. An attacker can use this as a password-validity oracle (`{password: X, totp_code: ""}` → `totp_required` iff X is right). Mitigated by the rate-limiter (5 probes / 15 min). Approved trade-off for legitimate-operator UX clarity.
+
+### §12.7 — Closeout (2026-06-04)
+
+The M15.3.A.2 sub-milestone was VPS-verified and closed on 2026-06-04. No secrets, codes, or QR data are reproduced here; the evidence is recorded by reference only.
+
+- **HEAD on VPS:** `7ab7555` (test-fixture VPS fix; chain `723b963` → `7ab7555`).
+- **Tests on VPS:** `test_m15_3_a_2_totp.py` 52/52 OK; `test_m15_3_a_dashboard_auth.py` 97/97 OK (regression intact).
+- **Clean temp venv on VPS:** install / pip-check / pyotp+qrcode imports — all exit 0.
+- **Setup flow:** `tools/set_dashboard_password.py --enable-totp` succeeded interactively. `.env` backup created. `DASHBOARD_TOTP_SECRET` written with length 32 and recognised as valid base32. Service restarted.
+- **End-to-end login:** operator authenticated against the dashboard in a real browser session using password + a 6-digit code from Google Authenticator. The full chain works — login form → server-side password verify → TOTP verify → session rotation → CSRF token issued → state-changing POSTs accepted.
+- **`auth_events` rows recorded** for the closeout session: `totp_setup` (from the tool invocation), `totp_success` (from the browser login), and `login_success` (from the final auth-success path).
+- **Secret-material invariant verified on the real audit log:** the redacted `extras_json` audit check returned `SECRET_MATERIAL_DETECTED = False`. The production invariant from Correction 4 holds against live data.
+- **Bug caught + fixed during VPS verification** (`723b963` → `7ab7555`): test-fixture dotenv-pollution issue — `dashboard.app` calls `load_dotenv()` at module-import time; the original `_make_test_app` cleaned `os.environ` before the import, so dotenv re-populated `DASHBOARD_PASSWORD_HASH` from the real `.env` afterwards, and the test's plaintext password was rejected at the password step before reaching the TOTP block. The sandbox could not reproduce because it had no `.env` file. Fix is test-only (re-ordered `_make_test_app` to import first, clean env after); new `test_fixture_overrides_preexisting_password_hash_from_env` regression seeds a real bcrypt hash into `os.environ` before invoking the fixture and asserts the fixture cleanly overrides it. **The "extras_json never leaks secret material" production invariant was unchanged by the fix.** Negative-verified.
+- **Hard-constraint evidence:** protected files modified vs `648682c` (pre-M15.3.A.2 baseline) across both commits in the chain: 0 / 24. No engine, broker, scanner, strategy, eToro, IBKR-reader, systemd, `sync.sh`, or `deploy.sh` changes.
+- **`git status`:** clean on both repo and VPS working copy.
+
+The M15.3.A.2 sub-milestone is closed. The next M15.3 sub-milestone in sequence is `M15.3.B` (manual_reset), tracked in [`NEXT_WORK_REGISTER.md`](NEXT_WORK_REGISTER.md). **`M15.3.B` is now blocked on either `M15.3.A.cutover` (Caddy/TLS) OR an explicit operator decision to expose `manual_reset` over plain HTTP** — TOTP defends credential theft but not session theft over an unencrypted channel, and `manual_reset` is a state-clearing operator action. No code for `M15.3.B` has been written yet; it awaits an explicit pre-code Q-style approval, same process as M15.3.A and M15.3.A.2.
