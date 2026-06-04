@@ -61,6 +61,13 @@ _AUTH_ENV_KEYS = (
     "LOGIN_LOCKOUT_WINDOW_SEC",
     "LOGIN_LOCKOUT_THRESHOLD",
     "LOGIN_LOCKOUT_DURATION_SEC",
+    # M15.3.A.2 — TOTP secret. Added 2026-06-04 after the VPS .env
+    # started carrying it post-M15.3.A.2 enable. If left un-cleaned,
+    # password-only login tests fail with totp_required.
+    "DASHBOARD_TOTP_SECRET",
+    # Defensive — operator could in principle override DASHBOARD_PORT
+    # in .env; we don't want a test to silently bind a different port.
+    "DASHBOARD_PORT",
 )
 
 
@@ -114,9 +121,37 @@ def _make_test_app(*, password="testpw-12345", with_hash=False,
 
     Tests that need different env-at-import-time must call
     `_reset_dashboard_modules()` themselves AND not call _make_test_app.
+
+    IMPORTANT (M15.3.A.cutover fix-2): dashboard.app calls
+    `load_dotenv()` at module-import time. On a VPS where `.env`
+    contains `DASHBOARD_TOTP_SECRET`, `DASHBOARD_BIND_HOST=127.0.0.1`,
+    `DASHBOARD_HTTPS_MODE=true`, etc., a fixture that cleans env
+    BEFORE the import lets dotenv re-pollute afterwards. The
+    fixture's intended test values then lose to whatever is in .env,
+    and password-only login tests fail with totp_required, bind-host
+    tests see 127.0.0.1, etc.
+
+    Fix (same pattern as M15.3.A.2 fix-1): import dashboard.app
+    FIRST (let dotenv run whatever it runs), THEN clean env, THEN
+    set test values. This way the test's env always wins, regardless
+    of what dotenv loaded.
     """
     global _DASHAPP_SINGLETON
+
+    # Step 1 — ensure dashboard.app is imported (singleton; only on
+    # the very first call across all tests). This triggers
+    # `load_dotenv()` which may populate os.environ from a real .env
+    # in the cwd (VPS scenario). Subsequent calls skip the import.
+    if _DASHAPP_SINGLETON is None:
+        from dashboard import app as dashapp
+        _DASHAPP_SINGLETON = dashapp
+    dashapp = _DASHAPP_SINGLETON
+
+    # Step 2 — NOW clean env, AFTER any dotenv pollution.
     _clean_auth_env()
+
+    # Step 3 — set the test's env values. These override anything
+    # dotenv may have loaded.
     os.environ["DASHBOARD_SECRET_KEY"] = secret_key
     if with_hash:
         try:
@@ -132,10 +167,6 @@ def _make_test_app(*, password="testpw-12345", with_hash=False,
     if https_mode:
         os.environ["DASHBOARD_HTTPS_MODE"] = "true"
 
-    if _DASHAPP_SINGLETON is None:
-        from dashboard import app as dashapp
-        _DASHAPP_SINGLETON = dashapp
-    dashapp = _DASHAPP_SINGLETON
     dashapp.app.config["TESTING"] = True
     # Re-apply env-dependent cookie config (DASHBOARD_HTTPS_MODE may
     # have changed since the previous test).
@@ -547,12 +578,29 @@ class TestBindHostBehaviour(unittest.TestCase):
     def test_startup_warning_emitted_when_exposed_plaintext(self):
         """When binding to 0.0.0.0 without HTTPS or explicit ack, the
         startup banner MUST emit a warning. This test forces a fresh
-        dashboard.app import so the import-time warning fires."""
+        dashboard.app import so the import-time warning fires.
+
+        M15.3.A.cutover fix-2: this test RELOADS dashboard.app, so
+        `load_dotenv()` runs again at reload time. On a VPS where
+        `.env` has DASHBOARD_BIND_HOST=127.0.0.1 / DASHBOARD_HTTPS_MODE
+        =true / DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE=…, dotenv would
+        populate those values and suppress the warning. To prevent
+        that, we explicitly seed the relevant vars to EMPTY STRING
+        before the reload — dotenv's default `override=False` skips
+        keys already in os.environ (including those set to ""), and
+        `_m153a_bind_host = os.getenv(...).strip() or '0.0.0.0'`
+        falls back to '0.0.0.0' on empty.
+        """
         import logging
         import io
         _clean_auth_env()
         os.environ["DASHBOARD_PASSWORD"] = "any"
         os.environ["DASHBOARD_SECRET_KEY"] = "test_xxx"
+        # Block .env-resident values from polluting the fresh import.
+        os.environ["DASHBOARD_BIND_HOST"] = ""
+        os.environ["DASHBOARD_HTTPS_MODE"] = ""
+        os.environ["DASHBOARD_COOKIE_SECURE"] = ""
+        os.environ["DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE"] = ""
         # Drop the singleton + force a fresh import.
         global _DASHAPP_SINGLETON
         # NOTE: this test deliberately invalidates the singleton; tests
@@ -648,15 +696,30 @@ class TestBindHostBehaviour(unittest.TestCase):
         """Subprocess test: when DASHBOARD_BIND_HOST=127.0.0.1 in the
         subprocess env, `dashboard.app._m153a_bind_host` reads as
         '127.0.0.1'. Combined with the AST test above, this proves
-        the env-to-runtime wiring is intact end-to-end."""
+        the env-to-runtime wiring is intact end-to-end.
+
+        M15.3.A.cutover fix-2: explicitly clear other dotenv-touchable
+        vars in the subprocess env (TOTP_SECRET, HTTPS_MODE, etc.) so
+        the test's behaviour is independent of whatever .env file
+        happens to be in the cwd. `load_dotenv` default override=False
+        leaves already-set (even empty) keys alone.
+        """
         import subprocess, sys as _sys
         env = {k: v for k, v in os.environ.items()
                 if not k.startswith("DASHBOARD_")}
         env["PYTHONPATH"] = _REPO
+        # The value being tested:
         env["DASHBOARD_BIND_HOST"] = "127.0.0.1"
+        # Force the dashboard to start cleanly regardless of real .env:
         env["DASHBOARD_PASSWORD"] = "any-non-default-password"
         env["DASHBOARD_SECRET_KEY"] = "x" * 64
         env["DASHBOARD_HTTPS_MODE"] = "true"  # suppress startup warning
+        # Block all other dashboard-relevant .env vars by pre-setting
+        # them to empty — dotenv won't override.
+        env["DASHBOARD_PASSWORD_HASH"] = ""
+        env["DASHBOARD_TOTP_SECRET"] = ""
+        env["DASHBOARD_COOKIE_SECURE"] = ""
+        env["DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE"] = ""
         wrapper = (
             "import sys; sys.path.insert(0, '.'); "
             "import dashboard.app as a; "
@@ -674,16 +737,33 @@ class TestBindHostBehaviour(unittest.TestCase):
             f"got stdout={proc.stdout!r}")
 
     def test_dashboard_bind_host_env_to_module_variable_default(self):
-        """Subprocess test: when DASHBOARD_BIND_HOST is UNSET in the
-        subprocess env, `_m153a_bind_host` falls back to '0.0.0.0'.
-        Proves we don't break existing default behaviour."""
+        """Subprocess test: when DASHBOARD_BIND_HOST is empty (or has
+        never been set), `_m153a_bind_host` falls back to '0.0.0.0'.
+        Proves we don't break existing default behaviour.
+
+        M15.3.A.cutover fix-2: we explicitly set DASHBOARD_BIND_HOST=""
+        (empty string) in the subprocess env. dotenv's default
+        `override=False` skips already-set keys — even if the real
+        `.env` in the cwd has `DASHBOARD_BIND_HOST=127.0.0.1` (which
+        it does post-cutover on the VPS), the empty value wins. The
+        dashboard's line 103 code is:
+            os.getenv('DASHBOARD_BIND_HOST', '0.0.0.0').strip() or '0.0.0.0'
+        which evaluates to `'0.0.0.0'` on empty.
+        """
         import subprocess, sys as _sys
         env = {k: v for k, v in os.environ.items()
                 if not k.startswith("DASHBOARD_")}
         env["PYTHONPATH"] = _REPO
+        # Force empty so dotenv won't repopulate from .env on VPS:
+        env["DASHBOARD_BIND_HOST"] = ""
         env["DASHBOARD_PASSWORD"] = "any-non-default-password"
         env["DASHBOARD_SECRET_KEY"] = "x" * 64
         env["DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE"] = "yes"  # silence warn
+        # Block other dashboard-relevant .env vars:
+        env["DASHBOARD_PASSWORD_HASH"] = ""
+        env["DASHBOARD_TOTP_SECRET"] = ""
+        env["DASHBOARD_HTTPS_MODE"] = ""
+        env["DASHBOARD_COOKIE_SECURE"] = ""
         wrapper = (
             "import sys; sys.path.insert(0, '.'); "
             "import dashboard.app as a; "
@@ -891,6 +971,62 @@ class TestLoginEndpoint(unittest.TestCase):
         self.assertTrue(d["ok"])
         self.assertIn("csrf_token", d)
         self.assertGreater(len(d["csrf_token"]), 16)
+
+    def test_fixture_isolates_password_only_login_from_vps_totp_dotenv(self):
+        """Regression for M15.3.A.cutover VPS test failures (commit 224e8a3).
+
+        Symptom on VPS: 21 M15.3.A tests failed after the cutover landed,
+        because the operator's `.env` now carries `DASHBOARD_TOTP_SECRET`
+        (from M15.3.A.2 enable), `DASHBOARD_BIND_HOST=127.0.0.1`, and
+        `DASHBOARD_HTTPS_MODE=true`. The original `_make_test_app`
+        cleaned `os.environ` BEFORE the dashboard.app import, so dotenv
+        re-populated the TOTP secret after cleanup. Password-only
+        login tests then returned `totp_required` instead of 200.
+
+        Fix (same pattern as M15.3.A.2 fix-1): import dashboard.app
+        first (let dotenv run), then clean env, then set test values.
+
+        This test seeds the polluting vars into `os.environ` BEFORE
+        invoking `_make_test_app`, simulating the VPS dotenv result,
+        and asserts:
+          * fixture clears the seeded TOTP secret + bind-host
+          * password-only login still works (no totp_required)
+          * the dashboard's TOTP block is NOT in effect during this test
+        """
+        try:
+            import bcrypt, pyotp
+        except ImportError:
+            self.skipTest("bcrypt/pyotp not installed")
+        # Seed the VPS-style pollution.
+        polluting_secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+        polluting_hash = bcrypt.hashpw(
+            b"DIFFERENT-OPERATOR-PASSWORD",
+            bcrypt.gensalt(rounds=4),
+        ).decode()
+        os.environ["DASHBOARD_TOTP_SECRET"] = polluting_secret
+        os.environ["DASHBOARD_PASSWORD_HASH"] = polluting_hash
+        os.environ["DASHBOARD_BIND_HOST"] = "127.0.0.1"
+        os.environ["DASHBOARD_HTTPS_MODE"] = "true"
+        # Invoke fixture exactly as a normal test would.
+        dashapp = _make_test_app(password="real-test-pw-12345",
+                                   db_path=self.tmp_db.name)
+        # After fixture: seeded pollution should be gone.
+        self.assertNotIn("DASHBOARD_TOTP_SECRET", os.environ,
+            "fixture must clear DASHBOARD_TOTP_SECRET (dotenv pollution)")
+        self.assertNotIn("DASHBOARD_PASSWORD_HASH", os.environ,
+            "fixture must clear DASHBOARD_PASSWORD_HASH")
+        # Password-only login should succeed.
+        c = dashapp.app.test_client()
+        r = c.post("/api/login", json={"password": "real-test-pw-12345"})
+        self.assertEqual(r.status_code, 200,
+            f"password-only login must succeed when fixture isolates "
+            f"from VPS dotenv pollution; got {r.status_code} "
+            f"body={r.get_json()!r}")
+        self.assertTrue(r.get_json()["ok"])
+        # And totp_required must NOT appear.
+        self.assertNotEqual(r.get_json().get("error"), "totp_required",
+            "fixture failed to suppress DASHBOARD_TOTP_SECRET — TOTP "
+            "still active during a password-only M15.3.A test")
 
     def test_login_correct_password_bcrypt_returns_token(self):
         dashapp, c = self._client(password="testpw-12345", with_hash=True)

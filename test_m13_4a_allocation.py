@@ -568,6 +568,19 @@ class TestDashboardEndpoints(unittest.TestCase):
         c.commit()
         c.close()
 
+        # M15.3.A.cutover fix-2: dashboard.app calls `load_dotenv()` at
+        # import time. On the VPS post-cutover, /opt/algo-trader/.env now
+        # carries DASHBOARD_PASSWORD_HASH (real operator hash, would
+        # short-circuit our test password), DASHBOARD_TOTP_SECRET (would
+        # require a TOTP code our test doesn't have), DASHBOARD_HTTPS_MODE=
+        # true (would set Secure cookies that Werkzeug's HTTP test_client
+        # won't send back), and DASHBOARD_BIND_HOST=127.0.0.1. Setting
+        # DASHBOARD_PASSWORD before the import is necessary but not
+        # sufficient — dotenv's default override=False does skip our
+        # pre-set DASHBOARD_PASSWORD (good), BUT it also LOADS all the
+        # other vars from .env (since they weren't pre-set), which
+        # poisons the test environment. We clean those out AFTER the
+        # import, then re-apply harden_app_config so cookies are HTTP-safe.
         os.environ["DASHBOARD_PASSWORD"] = "testpw"
 
         # Import dashboard.app fresh and rebind its BASE_DIR / DB_PATH to
@@ -576,9 +589,33 @@ class TestDashboardEndpoints(unittest.TestCase):
             del sys.modules["dashboard.app"]
         sys.path.insert(0, str(cls.repo_root))
         import dashboard.app as dash_app
+
+        # Clear dotenv-loaded pollutants AFTER the import.
+        for _k in ("DASHBOARD_PASSWORD_HASH", "DASHBOARD_TOTP_SECRET",
+                    "DASHBOARD_HTTPS_MODE", "DASHBOARD_COOKIE_SECURE",
+                    "DASHBOARD_BIND_HOST",
+                    "DASHBOARD_ACCEPT_PLAINTEXT_EXPOSURE"):
+            os.environ.pop(_k, None)
+        # Re-assert the test password (in case dotenv override happened
+        # somewhere; cheap defensive).
+        os.environ["DASHBOARD_PASSWORD"] = "testpw"
+
         dash_app.BASE_DIR = Path(cls.tmp)
         dash_app.DB_PATH = cls.db_path
         dash_app.app.config["TESTING"] = True
+
+        # Re-harden cookie config WITHOUT https_mode so Secure flag is off
+        # — Werkzeug's HTTP test_client won't return Secure cookies.
+        try:
+            from dashboard.auth.sessions import harden_app_config
+            import logging
+            silent = logging.getLogger("test_silent_m13_4a")
+            silent.addHandler(logging.NullHandler())
+            silent.propagate = False
+            harden_app_config(dash_app.app, logger=silent)
+        except ImportError:
+            pass
+
         cls.dash_app = dash_app
 
     @classmethod
