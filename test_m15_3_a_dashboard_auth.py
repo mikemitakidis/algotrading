@@ -1432,14 +1432,31 @@ class TestProtectedFilesUntouched(unittest.TestCase):
     `test_m15_3_b_manual_reset.TestProtectedFilesUntouched.\
 test_audit_decisions_only_additive_change` which checks that all
     pre-existing functions in that file remain byte-identical.
+
+    Note (2026-06-05, P0-4 fixture fixup): `main.py` and `bot/risk.py`
+    were removed from this list because the M1-M16 audit P0-4 patch
+    (commit `a072032`) legitimately modified both with EXPLICIT
+    OPERATOR APPROVAL recorded in the P0 implementation plan. The
+    changes are:
+      * `main.py` +23 lines: populate the previously-empty
+        `PortfolioRiskContext.positions / .open_orders /
+        .local_open_intents / .kill_switch_active` fields so the
+        M14 portfolio-risk gates no longer run blind.
+      * `bot/risk.py` +6 lines: stash the existing live-mode
+        reconcile result into `checks['_recon']` so the new
+        `bot.portfolio_ctx.gather()` helper can reuse it without
+        a second IBKR network round-trip (audit Correction B).
+    Per-patch protected-file evidence is in the commit message of
+    `a072032` and the P0 evidence pack. Same docstring-exception
+    pattern as the M15.3.B audit_decisions.py precedent above.
     """
 
     BASE_REV = "60281c4"
     PROTECTED = (
-        "main.py",
+        # main.py removed — see class docstring (P0-4 commit a072032).
         "bot/scanner.py",
         "bot/strategy.py",
-        "bot/risk.py",
+        # bot/risk.py removed — see class docstring (P0-4 commit a072032).
         "bot/risk_authority/engine.py",
         "bot/risk_authority/governor.py",
         "bot/risk_authority/authority.py",

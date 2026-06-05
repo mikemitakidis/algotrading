@@ -954,11 +954,28 @@ class TestNoBrokerImports(unittest.TestCase):
 # G15. Protected files untouched
 # ---------------------------------------------------------------------------
 class TestProtectedFilesUntouched(unittest.TestCase):
+    """M16 must NOT modify protected runtime files vs ceb8cd5 (M15
+    closeout baseline).
+
+    Note (2026-06-05, P0-4 fixture fixup): `main.py` and
+    `bot/risk.py` were removed from this list because the M1-M16
+    audit P0-4 patch (commit `a072032`) legitimately modified both
+    with explicit operator approval recorded in the P0
+    implementation plan. main.py +23 lines populates the
+    previously-empty PortfolioRiskContext fields; bot/risk.py +6
+    lines stashes the existing live-mode reconcile result so the
+    new bot.portfolio_ctx.gather() helper can reuse it without a
+    second IBKR network round-trip (audit Correction B). Same
+    docstring-exception pattern used by every M15.3.x
+    TestProtectedFilesUntouched class for the M15.3.B
+    audit_decisions.py precedent.
+    """
+
     PROTECTED = (
-        "main.py",
+        # main.py removed — see class docstring (P0-4 commit a072032).
         "bot/scanner.py",
         "bot/strategy.py",
-        "bot/risk.py",
+        # bot/risk.py removed — see class docstring (P0-4 commit a072032).
         "bot/heartbeat.py",
         "bot/gateway_watchdog.py",
         "bot/gateway_health.py",

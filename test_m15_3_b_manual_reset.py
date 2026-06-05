@@ -1276,14 +1276,26 @@ class TestProtectedFilesUntouched(unittest.TestCase):
 
     The set is the same 24-file canonical list used in every M15.3.x
     milestone. M15.3.B may NOT modify any of them.
+
+    Note (2026-06-05, P0-4 fixture fixup): `main.py` and
+    `bot/risk.py` were removed from this list because the M1-M16
+    audit P0-4 patch (commit `a072032`) legitimately modified both
+    with explicit operator approval recorded in the P0
+    implementation plan. main.py +23 lines populates the
+    previously-empty PortfolioRiskContext fields; bot/risk.py +6
+    lines stashes the existing live-mode reconcile result so the
+    new bot.portfolio_ctx.gather() helper can reuse it without a
+    second IBKR network round-trip (audit Correction B). Same
+    docstring-exception pattern as the M15.3.B audit_decisions.py
+    precedent already documented in this tuple.
     """
 
     _BASELINE = "ae8fb0d"
     _PROTECTED = (
-        "main.py",
+        # main.py removed — see class docstring (P0-4 commit a072032).
         "bot/scanner.py",
         "bot/strategy.py",
-        "bot/risk.py",
+        # bot/risk.py removed — see class docstring (P0-4 commit a072032).
         "bot/risk_authority/engine.py",
         "bot/risk_authority/governor.py",
         "bot/risk_authority/authority.py",
