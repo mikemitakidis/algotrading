@@ -5921,6 +5921,151 @@ def _write_env(updates: dict):
     env_path.write_text('\n'.join(output_lines) + '\n')
 
 
+# ─── M16 historical-data read-only endpoints ─────────────────────────────────
+# Reads bot.data.store (which reads data/historical.db + Parquet only).
+# No writes. No provider calls. CSRF not needed (GET). Same @require_auth
+# as the rest of the dashboard. M16 refresh is operator-CLI only — no
+# POST endpoint per D-ε.
+
+@app.route('/api/historical/status')
+@require_auth
+def m16_historical_status():
+    """Returns a 4-key summary for the Observability card."""
+    try:
+        from bot.historical import schema as _hist_schema
+        from bot.historical import store as _hist_store
+    except ImportError as e:
+        return jsonify({'ok': False, 'error': f'm16 not available: {e}'}), 503
+
+    db_path = _hist_schema.default_db_path()
+    if not db_path.exists():
+        return jsonify({
+            'ok': True,
+            'available': False,
+            'message': 'historical store not yet initialised',
+            'provider': 'yfinance',
+            'last_refresh': None,
+            'totals': {'symbols_covered': 0, 'timeframes_covered': 0,
+                        'coverage_rows': 0},
+            'oldest_stale_symbol': None,
+            'quality_errors_24h': 0,
+        })
+
+    conn = _hist_schema.open_db(db_path)
+    try:
+        last_row = conn.execute(
+            "SELECT run_id, started_at_utc, finished_at_utc, mode, status, "
+            "       provider, symbols_ok, symbols_no_data, symbols_failed, "
+            "       bars_written, duration_sec "
+            "FROM historical_refresh_runs ORDER BY run_id DESC LIMIT 1"
+        ).fetchone()
+        last_refresh = None
+        if last_row:
+            last_refresh = {
+                'run_id':      last_row[0],
+                'started_at':  last_row[1],
+                'finished_at': last_row[2],
+                'mode':        last_row[3],
+                'status':      last_row[4],
+                'provider':    last_row[5],
+                'symbols_ok':  last_row[6],
+                'symbols_no_data': last_row[7],
+                'symbols_failed':  last_row[8],
+                'bars_written':    last_row[9],
+                'duration_sec':    last_row[10],
+            }
+
+        n_syms = conn.execute(
+            "SELECT COUNT(DISTINCT symbol) FROM historical_coverage").fetchone()[0]
+        n_tfs = conn.execute(
+            "SELECT COUNT(DISTINCT timeframe) FROM historical_coverage").fetchone()[0]
+        n_cov = conn.execute(
+            "SELECT COUNT(*) FROM historical_coverage").fetchone()[0]
+
+        oldest_stale = conn.execute(
+            "SELECT symbol, timeframe, last_ts_utc FROM historical_coverage "
+            "WHERE freshness_status='stale' "
+            "ORDER BY last_ts_utc ASC LIMIT 1").fetchone()
+        oldest = None
+        if oldest_stale:
+            oldest = {'symbol': oldest_stale[0], 'timeframe': oldest_stale[1],
+                       'last_ts_utc': oldest_stale[2]}
+
+        since = (datetime.now(timezone.utc) - __import__('datetime').timedelta(
+            hours=24)).isoformat()
+        errs_24h = conn.execute(
+            "SELECT COUNT(*) FROM historical_quality_events "
+            "WHERE severity='error' AND created_at_utc >= ?",
+            (since,)).fetchone()[0]
+
+        provider = (last_refresh or {}).get('provider', 'yfinance')
+
+        return jsonify({
+            'ok': True,
+            'available': True,
+            'provider': provider,
+            'last_refresh': last_refresh,
+            'totals': {'symbols_covered': n_syms, 'timeframes_covered': n_tfs,
+                        'coverage_rows': n_cov},
+            'oldest_stale_symbol': oldest,
+            'quality_errors_24h': int(errs_24h),
+        })
+    finally:
+        conn.close()
+
+
+@app.route('/api/historical/coverage')
+@require_auth
+def m16_historical_coverage():
+    """Per-symbol coverage across all timeframes."""
+    try:
+        from bot.historical import store as _hist_store
+    except ImportError as e:
+        return jsonify({'ok': False, 'error': f'm16 not available: {e}'}), 503
+
+    sym = (request.args.get('symbol') or '').strip()
+    if not sym:
+        # No symbol → list all (capped).
+        try:
+            symbols = _hist_store.list_symbols()[:200]
+        except Exception as e:  # noqa: BLE001
+            return jsonify({'ok': False, 'error': str(e)}), 500
+        out = []
+        for s in symbols:
+            cov = _hist_store.get_coverage(s)
+            if cov:
+                out.append({'symbol': s, 'timeframes': cov})
+        return jsonify({'ok': True, 'count': len(out), 'rows': out})
+
+    cov = _hist_store.get_coverage(sym)
+    return jsonify({'ok': True, 'symbol': sym.upper(),
+                     'timeframes': cov if cov else []})
+
+
+@app.route('/api/historical/quality-events')
+@require_auth
+def m16_historical_quality_events():
+    """Recent quality events list, newest first."""
+    try:
+        from bot.historical import store as _hist_store
+    except ImportError as e:
+        return jsonify({'ok': False, 'error': f'm16 not available: {e}'}), 503
+
+    sym = request.args.get('symbol')
+    tf = request.args.get('timeframe')
+    severity = request.args.get('severity')
+    since = request.args.get('since')
+    try:
+        limit = min(int(request.args.get('limit') or 100), 500)
+    except ValueError:
+        limit = 100
+
+    events = _hist_store.list_quality_events(
+        symbol=sym, timeframe=tf, severity=severity,
+        since_utc=since, limit=limit)
+    return jsonify({'ok': True, 'count': len(events), 'events': events})
+
+
 if __name__ == '__main__':
     port = int(os.getenv('DASHBOARD_PORT', '8080'))
     # M15.3.A.cutover — bind to _m153a_bind_host (env-controlled via

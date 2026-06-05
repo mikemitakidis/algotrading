@@ -35,3 +35,14 @@ build/
 data/heartbeat.json
 data/heartbeat.json.tmp.*
 data/.hb_probe_*
+
+# M16 historical-data engine (RUNTIME ARTIFACTS — never committed).
+# The blanket `data/` rule above already covers these; entries here
+# are explicit so the intent is greppable.
+data/historical.db
+data/historical.db-*
+data/historical/
+data/*.parquet
+data/*.parquet.tmp.*
+data/.historical_refresh.lock
+data/.historical_refresh.lock.*
