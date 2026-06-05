@@ -37,6 +37,12 @@ REASON_BROKER_NOT_ALLOWED    = "broker_not_in_allowed_brokers"
 REASON_ETORO_LIVE_DISABLED   = "etoro_live_disabled_policy"
 REASON_POLICY_MISSING        = "policy_missing_or_invalid"
 REASON_GENERIC               = "auto_trading_disabled"
+# P0-3 (audit, 2026-06-05): runtime policy fail-safe reason.
+# Emitted by bot.runtime_policy.get_signal_only_reason() when NO
+# cached policy exists AND the DB read fails. The runtime check
+# refuses to allow submission when the policy state is unknown
+# — never fail-open on a safety surface (audit Correction A).
+REASON_POLICY_UNAVAILABLE    = "policy_unavailable"
 
 # Reason codes -> human-readable labels used in the rejection_reason
 # string. The exact strings are tested.
@@ -49,6 +55,7 @@ VALID_REASONS = {
     REASON_ETORO_LIVE_DISABLED,
     REASON_POLICY_MISSING,
     REASON_GENERIC,
+    REASON_POLICY_UNAVAILABLE,
 }
 
 

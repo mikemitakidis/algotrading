@@ -146,7 +146,21 @@ def run(live_tests=False):
         valid_count=3, strategy_version=1, position_size=1,
     )
     broker = IBKRBroker()
-    result = broker.submit(intent)
+    # P0-3 test wiring (audit, 2026-06-05): IBKRBroker.submit() now
+    # consults bot.runtime_policy.get_signal_only_reason() between
+    # the file-based kill_switch and the live safety gate. This
+    # test pre-dates that gate and does not seed a broker_alloc-
+    # ation_policy DB; without isolation the new gate fail-safes
+    # to signal_only_skipped (Correction A) and the safety-gate
+    # case below would never be exercised. Patch it out for this
+    # one call so the original test intent (safety gate fires
+    # when LIVE_CONFIRMED etc are missing) is preserved.
+    # Runtime-policy enforcement itself is unit-tested in
+    # test_m13_4a_runtime_enforcement.py.
+    from unittest.mock import patch as _patch
+    with _patch('bot.runtime_policy.get_signal_only_reason',
+                  return_value=(False, '')):
+        result = broker.submit(intent)
     check('submit_blocked_by_safety_gate',
           result.status == 'live_safety_blocked',
           f'status={result.status}  reason={result.reason[:60]}')

@@ -37,6 +37,26 @@ class PaperBroker(BrokerAdapter):
         return False
 
     def submit(self, intent: OrderIntent) -> OrderResult:
+        # P0-3 (audit, 2026-06-05): runtime M13.4A kill-switch
+        # enforcement. Before P0-3, the broker-allocation policy
+        # was consulted only at scanner startup in get_broker();
+        # operator dashboard toggles took effect only after restart.
+        # Now every submit re-checks via a TTL-cached read.
+        # Fail-safe per audit Correction A: if no cached policy and
+        # DB unavailable, returns signal_only_skipped — never trades
+        # on unknown policy state.
+        from bot.runtime_policy import get_signal_only_reason
+        _skip, _reason = get_signal_only_reason(self.name)
+        if _skip:
+            log.info('[PAPER] runtime policy says skip: reason=%s', _reason)
+            return OrderResult(
+                intent=intent,
+                status='signal_only_skipped',
+                broker_order_id=None,
+                reason=_reason,
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+            )
+
         result = OrderResult(
             intent=intent,
             status='paper_logged',

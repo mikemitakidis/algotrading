@@ -25,7 +25,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,6 +33,43 @@ from bot.brokers.base import OrderIntent, OrderResult
 from bot.etoro.instrument_cache import InstrumentCache
 from bot.etoro.paper_broker import PaperEtoroBroker
 from bot.etoro.schema_validator import ValidationResult, validate_open
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-3 test-isolation: PaperEtoroBroker.submit() now consults the
+# bot.runtime_policy M13.4A runtime kill-switch (audit P0-3,
+# 2026-06-05). The existing tests in this file pre-date that gate
+# and do NOT seed a broker_allocation_policy DB, so the runtime
+# check would fail-safe to signal_only_skipped (Correction A:
+# policy state unknown → do not trade). Patch it out for the
+# duration of this module so the legacy tests can exercise the
+# OTHER gates (schema validation, rejection paths, no-write
+# capability, audit trail, etc.) in isolation.
+#
+# Runtime-policy enforcement itself is unit-tested in
+# test_m13_4a_runtime_enforcement.py — including the etoro paper
+# integration (TestEtoroPaperBrokerRuntimeEnforcement). This patch
+# does not weaken that coverage; it only preserves the original
+# scope of the legacy schema/rejection/etc tests.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_runtime_policy_patcher = None
+
+
+def setUpModule():
+    global _runtime_policy_patcher
+    _runtime_policy_patcher = patch(
+        "bot.runtime_policy.get_signal_only_reason",
+        return_value=(False, ""),
+    )
+    _runtime_policy_patcher.start()
+
+
+def tearDownModule():
+    global _runtime_policy_patcher
+    if _runtime_policy_patcher is not None:
+        _runtime_policy_patcher.stop()
+        _runtime_policy_patcher = None
 
 
 # ---------------------------------------------------------------------------

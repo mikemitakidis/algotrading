@@ -247,6 +247,27 @@ class IBKRBroker(BrokerAdapter):
                 submitted_at=datetime.now(timezone.utc).isoformat(),
             )
 
+        # ── Runtime M13.4A broker-allocation policy (P0-3, audit 2026-06-05)
+        # Re-checks the policy state at submit time so dashboard
+        # toggles of the global / per-broker kill_switches take
+        # effect without scanner restart. TTL-cached (default 5s)
+        # so the hot path is not slowed by a DB read per signal.
+        # Fail-safe per audit Correction A: no cached policy + DB
+        # unavailable → signal_only_skipped (never trade on unknown
+        # policy state).
+        from bot.runtime_policy import get_signal_only_reason as _rt_policy
+        _skip, _reason = _rt_policy(self.name)
+        if _skip:
+            log.warning('[IBKR] runtime policy says skip: reason=%s',
+                          _reason)
+            return OrderResult(
+                intent=intent,
+                status='signal_only_skipped',
+                broker_order_id=None,
+                reason=_reason,
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+            )
+
         # ── Live safety gate (checked before any network probe) ─────────────────
         # ORDER MATTERS: safety gate before _gateway_available() so that
         # incomplete live config returns live_safety_blocked, not connection_failed

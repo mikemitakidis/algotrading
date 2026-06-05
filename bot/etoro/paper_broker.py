@@ -80,6 +80,25 @@ class PaperEtoroBroker(BrokerAdapter):
         NEVER calls log_intent / update_intent_status.
         NEVER calls a write HTTP method.
         """
+        # P0-3 (audit, 2026-06-05): runtime M13.4A kill-switch
+        # enforcement at submit time. Re-checks the broker-allocation
+        # policy via TTL-cached read so operator dashboard toggles
+        # take effect without scanner restart. Fail-safe per audit
+        # Correction A: no cached policy + DB unavailable → signal-
+        # only skip (never trade on unknown policy state).
+        from bot.runtime_policy import get_signal_only_reason
+        _skip, _reason = get_signal_only_reason(self.name)
+        if _skip:
+            log.info('[ETORO-PAPER] runtime policy says skip: reason=%s',
+                       _reason)
+            return OrderResult(
+                intent=intent,
+                status='signal_only_skipped',
+                broker_order_id=None,
+                reason=_reason,
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+            )
+
         try:
             # 1. Resolve symbol → instrumentId (cache, or read_adapter GET)
             instrument_id = self._resolve_instrument(intent.symbol)
