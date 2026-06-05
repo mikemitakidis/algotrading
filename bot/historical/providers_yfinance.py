@@ -56,11 +56,21 @@ class YFinanceProvider(BaseProvider):
         # Lazy-import to keep the module importable in tests that don't
         # need yfinance, and to keep AST scans happy.
         self._yf = None
+        self._yf_rate_limit_exc = None  # populated by _yfinance()
 
     def _yfinance(self):
         if self._yf is None:
             import yfinance as yf
             self._yf = yf
+            # Cache the rate-limit exception class (importable in
+            # yfinance >= 0.2.x; None on older versions). Used to
+            # classify exceptions cleanly without string heuristics
+            # being the only signal.
+            try:
+                from yfinance.exceptions import YFRateLimitError
+                self._yf_rate_limit_exc = YFRateLimitError
+            except ImportError:
+                self._yf_rate_limit_exc = None
         return self._yf
 
     @property
@@ -85,20 +95,40 @@ class YFinanceProvider(BaseProvider):
         e = (end_utc + timedelta(days=1)).strftime("%Y-%m-%d")
 
         yf = self._yfinance()
+
+        # Reset yfinance's per-symbol error registry before this call so
+        # we can detect rate-limit signals AFTER yf.download returns.
+        # yfinance >= 0.2 catches per-symbol exceptions internally and
+        # returns an empty DataFrame; the original exception is recorded
+        # in yf.shared._ERRORS[symbol]. Without this inspection we
+        # cannot distinguish rate-limit-empty from genuinely-no-data-
+        # empty (that was the M16.A.fix-1 bug).
+        try:
+            if hasattr(yf, "shared") and hasattr(yf.shared, "_ERRORS"):
+                yf.shared._ERRORS.clear()
+        except Exception:  # noqa: BLE001 - defensive
+            pass
+
         try:
             df = yf.download(
                 symbol, start=s, end=e, interval=interval,
                 progress=False, auto_adjust=False, actions=False,
                 threads=False,
             )
-        except Exception as exc:  # noqa: BLE001 — provider-error wrapping
-            msg = str(exc)
-            # Heuristic rate-limit detection (yfinance surfaces 429 +
-            # other rate-related errors as plain exceptions).
-            if any(t in msg.lower() for t in ("rate limit", "too many requests",
-                                                 "429")):
-                return FetchResult(outcome=FETCH_RATE_LIMITED, message=msg)
-            return FetchResult(outcome=FETCH_PROVIDER_ERROR, message=msg)
+        except Exception as exc:  # noqa: BLE001 - provider-error wrapping
+            return self._classify_exception(exc)
+
+        # Inspect yfinance's per-symbol error registry. If it contains a
+        # rate-limit signal for our symbol, classify the empty-DF
+        # response as RATE_LIMITED (not NO_DATA).
+        rl_msg = self._scan_yf_errors_for_rate_limit(yf, symbol)
+        if rl_msg is not None:
+            return FetchResult(outcome=FETCH_RATE_LIMITED, message=rl_msg)
+
+        # Non-rate-limit per-symbol error: surface as provider_error.
+        pe_msg = self._scan_yf_errors_for_provider_error(yf, symbol)
+        if pe_msg is not None:
+            return FetchResult(outcome=FETCH_PROVIDER_ERROR, message=pe_msg)
 
         if df is None or len(df) == 0:
             return FetchResult(outcome=FETCH_NO_DATA,
@@ -146,6 +176,93 @@ class YFinanceProvider(BaseProvider):
                                 message="all rows had NaN OHLC; treating as no_data")
 
         return FetchResult(outcome=FETCH_OK, df=out.reset_index(drop=True))
+
+    # -- classification helpers -------------------------------------------
+
+    # Substrings (lower-cased) that mean "rate limited" in either an
+    # exception message or a yf.shared._ERRORS entry. We check by type
+    # FIRST (YFRateLimitError) and fall back to substring match — the
+    # substrings are belt-and-braces for upstream signal drift.
+    _RATE_LIMIT_TOKENS = (
+        "yfratelimiterror",     # repr of yfinance.exceptions.YFRateLimitError
+        "rate limit",
+        "rate-limit",
+        "rate limited",
+        "too many requests",
+        "429",
+    )
+
+    def _is_rate_limit_signal(self, text: str) -> bool:
+        if not text:
+            return False
+        lower = text.lower()
+        return any(tok in lower for tok in self._RATE_LIMIT_TOKENS)
+
+    def _classify_exception(self, exc: BaseException) -> FetchResult:
+        """Map a raised exception to a FetchResult.
+
+        Order of precedence:
+          1. isinstance check against YFRateLimitError (if importable)
+          2. exception type-name match for YFRateLimitError (in case
+             import path differs across versions)
+          3. substring match on str(exc)
+        """
+        if (self._yf_rate_limit_exc is not None
+                and isinstance(exc, self._yf_rate_limit_exc)):
+            return FetchResult(outcome=FETCH_RATE_LIMITED, message=str(exc))
+        if type(exc).__name__ == "YFRateLimitError":
+            return FetchResult(outcome=FETCH_RATE_LIMITED, message=str(exc))
+        if self._is_rate_limit_signal(str(exc)):
+            return FetchResult(outcome=FETCH_RATE_LIMITED, message=str(exc))
+        return FetchResult(outcome=FETCH_PROVIDER_ERROR, message=str(exc))
+
+    def _scan_yf_errors_for_rate_limit(self, yf, symbol: str):
+        """If yf.shared._ERRORS contains a rate-limit signal, return its
+        message; otherwise None.
+
+        yfinance >= 0.2 catches per-symbol exceptions inside `download()`
+        and stores the exception repr in `yf.shared._ERRORS[symbol]`.
+        Without this scan, the empty DataFrame returned by `download()`
+        was being misclassified as NO_DATA. (M16.A.fix-1.)
+        """
+        try:
+            errors = getattr(yf.shared, "_ERRORS", None)
+            if not errors:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        # Try the exact key first, then any other key (the registry is
+        # global across calls; we cleared it earlier so the entry, if
+        # any, belongs to THIS call).
+        candidates = []
+        if symbol in errors:
+            candidates.append((symbol, errors[symbol]))
+        for k, v in errors.items():
+            if k != symbol:
+                candidates.append((k, v))
+        for _, msg in candidates:
+            if self._is_rate_limit_signal(str(msg)):
+                return str(msg)
+        return None
+
+    def _scan_yf_errors_for_provider_error(self, yf, symbol: str):
+        """If yf.shared._ERRORS has a NON-rate-limit error, return it.
+
+        Called after _scan_yf_errors_for_rate_limit returns None, so
+        any remaining error in the registry is a provider problem worth
+        surfacing as provider_error (not silently treating as no_data).
+        """
+        try:
+            errors = getattr(yf.shared, "_ERRORS", None)
+            if not errors:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        # If the only entries are about other symbols, ignore them.
+        own = errors.get(symbol)
+        if own:
+            return str(own)
+        return None
 
 
 def _to_utc_index(idx) -> pd.Series:

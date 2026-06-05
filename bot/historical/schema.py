@@ -30,7 +30,13 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Version history:
+#   1 — initial M16.A schema (6 tables)
+#   2 — M16.A.fix-1: added historical_refresh_runs.symbols_rate_limited
+#       so rate-limited symbols are a first-class counter (previously
+#       only retry-attempts were tracked via rate_limit_count, and the
+#       symbol-level outcome got misclassified as no_data).
 
 # Closed set — adding a new value requires bumping SCHEMA_VERSION.
 ALLOWED_TIMEFRAMES = ("1D", "4H", "1H", "15m")
@@ -145,6 +151,7 @@ CREATE TABLE IF NOT EXISTS historical_refresh_runs (
     symbols_ok           INTEGER NOT NULL DEFAULT 0,
     symbols_no_data      INTEGER NOT NULL DEFAULT 0,
     symbols_failed       INTEGER NOT NULL DEFAULT 0,
+    symbols_rate_limited INTEGER NOT NULL DEFAULT 0,
     bars_fetched         INTEGER NOT NULL DEFAULT 0,
     bars_written         INTEGER NOT NULL DEFAULT 0,
     bars_updated         INTEGER NOT NULL DEFAULT 0,
@@ -230,7 +237,8 @@ def apply_schema(conn: sqlite3.Connection) -> int:
     """Idempotently apply all M16 DDL. Returns the schema_version on disk.
 
     Safe to call multiple times — CREATE TABLE IF NOT EXISTS + idempotent
-    version-row insert.
+    version-row insert. Also performs additive column migrations for
+    pre-existing DBs (e.g. v1 → v2 adds symbols_rate_limited).
     """
     cur = conn.cursor()
     cur.execute(_DDL_SCHEMA_VERSION)
@@ -241,6 +249,12 @@ def apply_schema(conn: sqlite3.Connection) -> int:
     cur.execute(_DDL_REFRESH_LOCK)
     for stmt in _INDEXES:
         cur.execute(stmt)
+
+    # ── Additive migrations (idempotent — only ADD COLUMN if missing) ──
+    # v1 -> v2: historical_refresh_runs.symbols_rate_limited
+    _add_column_if_missing(
+        cur, "historical_refresh_runs",
+        "symbols_rate_limited INTEGER NOT NULL DEFAULT 0")
 
     # Seed the lock row if absent.
     cur.execute(
@@ -261,6 +275,22 @@ def apply_schema(conn: sqlite3.Connection) -> int:
     if actual is None:
         actual = 0
     return int(actual)
+
+
+def _add_column_if_missing(cur: sqlite3.Cursor, table: str,
+                              col_def: str) -> None:
+    """ALTER TABLE ... ADD COLUMN, but only if the column doesn't exist.
+
+    SQLite < 3.35 lacks "ADD COLUMN IF NOT EXISTS"; we use PRAGMA
+    table_info to check first. col_def is just the column part,
+    e.g. 'foo INTEGER NOT NULL DEFAULT 0'.
+    """
+    col_name = col_def.split()[0]
+    info = cur.execute(f"PRAGMA table_info({table})").fetchall()
+    cols = {row[1] for row in info}
+    if col_name in cols:
+        return
+    cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:

@@ -154,13 +154,15 @@ def cmd_status(args, repo_root: Path) -> int:
         last = conn.execute(
             "SELECT run_id, started_at_utc, finished_at_utc, mode, "
             "       status, symbols_ok, symbols_no_data, symbols_failed, "
-            "       bars_written, duration_sec "
+            "       symbols_rate_limited, bars_written, "
+            "       rate_limit_count, duration_sec "
             "FROM historical_refresh_runs "
             "ORDER BY run_id DESC LIMIT 1").fetchone()
         if last is not None:
             print(f"  last refresh:")
             keys = ("run_id", "started", "finished", "mode", "status",
-                      "ok", "no_data", "failed", "bars_written", "duration_s")
+                      "ok", "no_data", "failed", "rate_limited",
+                      "bars_written", "rate_limit_count", "duration_s")
             for k, val in zip(keys, last):
                 print(f"    {k:14s} {val}")
 
@@ -190,14 +192,30 @@ def _print_result(res):
     print(f"  status={res.status}")
     print(f"  symbols_attempted={res.symbols_attempted}")
     print(f"  symbols_ok={res.symbols_ok} no_data={res.symbols_no_data} "
-            f"failed={res.symbols_failed}")
+            f"failed={res.symbols_failed} "
+            f"rate_limited={res.symbols_rate_limited}")
     print(f"  bars_fetched={res.bars_fetched} bars_written={res.bars_written} "
             f"bars_updated={res.bars_updated}")
     print(f"  duration_sec={res.duration_sec:.2f}")
     if res.errors_count:
         print(f"  errors_count={res.errors_count}")
     if res.rate_limit_count:
-        print(f"  rate_limit_count={res.rate_limit_count}")
+        print(f"  rate_limit_count={res.rate_limit_count}  "
+                f"(retry attempts hit by rate-limit responses)")
+    # Honest banner: when nothing was stored, say so loudly.
+    if res.symbols_rate_limited > 0 and res.symbols_ok == 0:
+        print("")
+        print("  PROVIDER RATE-LIMITED — no bars were written.")
+        print("  See 'rate_limited' quality events for details:")
+        print("    python -m bot.historical.cli status")
+        print("  Operator response options:")
+        print("    * wait 5-15 minutes and retry")
+        print("    * retry with fewer symbols (e.g. --symbols AAPL)")
+        print("    * retry with one timeframe only (e.g. --timeframes 1D)")
+        print("    * see docs/M16_historical_data.md §P for guidance")
+    elif res.symbols_failed > 0 and res.symbols_ok == 0:
+        print("")
+        print("  ALL SYMBOLS FAILED — no bars were written.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

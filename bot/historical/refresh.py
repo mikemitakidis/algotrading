@@ -161,11 +161,12 @@ class RefreshResult:
     symbols_ok: int = 0
     symbols_no_data: int = 0
     symbols_failed: int = 0
+    symbols_rate_limited: int = 0   # M16.A.fix-1: distinct from failed/no_data
     bars_fetched: int = 0
     bars_written: int = 0
     bars_updated: int = 0
     errors_count: int = 0
-    rate_limit_count: int = 0
+    rate_limit_count: int = 0       # retry-attempt count (different from above)
     duration_sec: float = 0.0
     summary: Dict[str, Any] = field(default_factory=dict)
 
@@ -251,13 +252,21 @@ def run(
         result.status = "failed"
         return result
 
-    # Decide final status.
-    if result.symbols_failed == 0:
+    # Decide final status. M16.A.fix-1: rate-limited symbols are NOT
+    # silently rolled into "ok". A run where zero symbols succeeded is
+    # never "ok" — it's at best "partial" (some succeeded, some did not)
+    # and at worst "failed" (none succeeded).
+    has_failures = (result.symbols_failed + result.symbols_rate_limited) > 0
+    has_successes = result.symbols_ok > 0
+    if not has_failures:
+        # No failures and no rate-limits: clean (including all-no-data,
+        # which is a legitimate "nothing to fetch" outcome).
         result.status = "ok"
-    elif result.symbols_ok == 0 and result.symbols_no_data == 0:
-        result.status = "failed"
-    else:
+    elif has_successes:
         result.status = "partial"
+    else:
+        # Failures and/or rate-limits with zero successes.
+        result.status = "failed"
     _finalize_run(conn, run_id, result.status, t0, result)
     return result
 
@@ -440,6 +449,24 @@ def _process_one(
     if fetch.outcome == FETCH_PROVIDER_ERROR:
         result.errors_count += 1
         result.symbols_failed += 1
+        return
+
+    if fetch.outcome == FETCH_RATE_LIMITED:
+        # M16.A.fix-1: when all retries are exhausted with a rate-limit
+        # outcome, classify the symbol as rate_limited — NOT as no_data.
+        # Before this fix the code fell through to the OK/persist branch
+        # which then misclassified the empty result as no_data.
+        result.symbols_rate_limited += 1
+        _quality.write_quality_events(conn, [_quality.QualityEvent(
+            severity="warn", kind="rate_limited",
+            message=("retries exhausted with rate-limit response; "
+                       "symbol marked rate_limited"),
+            symbol=symbol, timeframe=timeframe,
+            provider=provider.capability.name,
+            run_id=run_id,
+            details={"retry_attempts": len(RETRY_DELAYS_SEC) + 1,
+                       "last_message": fetch.message})],
+            run_id=run_id)
         return
 
     # FETCH_OK — persist
@@ -678,6 +705,7 @@ def _finalize_run(conn: sqlite3.Connection, run_id: int, status: str,
         "UPDATE historical_refresh_runs SET "
         " finished_at_utc=?, status=?, symbols_attempted=?, "
         " symbols_ok=?, symbols_no_data=?, symbols_failed=?, "
+        " symbols_rate_limited=?, "
         " bars_fetched=?, bars_written=?, bars_updated=?, "
         " errors_count=?, rate_limit_count=?, "
         " duration_sec=?, summary_json=? "
@@ -685,6 +713,7 @@ def _finalize_run(conn: sqlite3.Connection, run_id: int, status: str,
         (datetime.now(timezone.utc).isoformat(), status,
          result.symbols_attempted, result.symbols_ok,
          result.symbols_no_data, result.symbols_failed,
+         result.symbols_rate_limited,
          result.bars_fetched, result.bars_written, result.bars_updated,
          result.errors_count, result.rate_limit_count,
          duration, json.dumps(summary, sort_keys=True, default=str),

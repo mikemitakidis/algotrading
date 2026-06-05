@@ -222,6 +222,73 @@ class TestSchemaMigrations(_TmpEnv):
         finally:
             c.close()
 
+    def test_schema_version_is_2(self):
+        """M16.A.fix-1 bumped SCHEMA_VERSION 1 -> 2 for the new
+        historical_refresh_runs.symbols_rate_limited column."""
+        from bot.historical import schema
+        self.assertEqual(schema.SCHEMA_VERSION, 2)
+        c = schema.open_db(self.db_path)
+        try:
+            schema.apply_schema(c)
+            self.assertEqual(schema.get_schema_version(c), 2)
+        finally:
+            c.close()
+
+    def test_symbols_rate_limited_column_present(self):
+        """Fresh installs must have historical_refresh_runs.symbols_rate_limited."""
+        from bot.historical import schema
+        c = schema.open_db(self.db_path)
+        try:
+            schema.apply_schema(c)
+            cols = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertIn("symbols_rate_limited", cols)
+        finally:
+            c.close()
+
+    def test_additive_migration_from_v1(self):
+        """Pre-existing v1 DBs (without symbols_rate_limited) must get
+        the column added when apply_schema runs again."""
+        from bot.historical import schema
+        # Manually create a v1-shaped historical_refresh_runs (without
+        # symbols_rate_limited) to simulate a pre-fix DB.
+        c = schema.open_db(self.db_path)
+        try:
+            c.execute("""
+                CREATE TABLE historical_refresh_runs (
+                  run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  started_at_utc TEXT NOT NULL,
+                  finished_at_utc TEXT,
+                  mode TEXT NOT NULL,
+                  provider TEXT NOT NULL,
+                  symbols_requested TEXT NOT NULL,
+                  timeframes_requested TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  symbols_attempted INTEGER NOT NULL DEFAULT 0,
+                  symbols_ok INTEGER NOT NULL DEFAULT 0,
+                  symbols_no_data INTEGER NOT NULL DEFAULT 0,
+                  symbols_failed INTEGER NOT NULL DEFAULT 0,
+                  bars_fetched INTEGER NOT NULL DEFAULT 0,
+                  bars_written INTEGER NOT NULL DEFAULT 0,
+                  bars_updated INTEGER NOT NULL DEFAULT 0,
+                  errors_count INTEGER NOT NULL DEFAULT 0,
+                  rate_limit_count INTEGER NOT NULL DEFAULT 0,
+                  duration_sec REAL,
+                  summary_json TEXT
+                )""")
+            c.commit()
+            cols_before = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertNotIn("symbols_rate_limited", cols_before)
+
+            # Now apply_schema — it must add the missing column.
+            schema.apply_schema(c)
+            cols_after = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertIn("symbols_rate_limited", cols_after)
+        finally:
+            c.close()
+
 
 # ---------------------------------------------------------------------------
 # G3. Parquet atomic write
@@ -437,6 +504,56 @@ class TestProviderOutcomes(_TmpEnv):
             rmod.RETRY_DELAYS_SEC = orig
         self.assertEqual(r.symbols_ok, 1)
         self.assertEqual(r.rate_limit_count, 1)
+
+    def test_all_rate_limited_is_failed_not_ok(self):
+        """M16.A.fix-1: if every symbol exhausts retries with rate-limit
+        outcomes, the run status must NOT be 'ok' and the symbols must
+        be counted as `symbols_rate_limited`, not `symbols_no_data`.
+
+        Before the fix this run came back as status='ok'
+        symbols_no_data=N — which falsely implied a clean 'nothing to
+        fetch' outcome.
+        """
+        from bot.historical import refresh, store
+        # FakeProvider returns RATE_LIMITED on every call.
+        p = FakeProvider(); p.outcome = FETCH_RATE_LIMITED
+        import bot.historical.refresh as rmod
+        orig = rmod.RETRY_DELAYS_SEC
+        rmod.RETRY_DELAYS_SEC = (0.001, 0.001, 0.001, 0.001, 0.001)
+        try:
+            r = refresh.run(mode="backfill",
+                              symbols=["AAPL", "MSFT"], timeframes=["1D"],
+                              provider=p, db_path=self.db_path,
+                              parquet_root=self.parquet_root,
+                              now_utc=self._now())
+        finally:
+            rmod.RETRY_DELAYS_SEC = orig
+
+        # Status must be 'failed' (no successes + only rate-limit failures).
+        self.assertEqual(r.status, "failed",
+                          f"all-rate-limited run had status={r.status!r}; "
+                          "must be 'failed', NOT 'ok'")
+        # Symbol-level classification.
+        self.assertEqual(r.symbols_rate_limited, 2)
+        self.assertEqual(r.symbols_no_data, 0,
+                          "rate-limited symbols leaked into symbols_no_data")
+        self.assertEqual(r.symbols_ok, 0)
+        self.assertEqual(r.bars_written, 0)
+        # Retry-attempt counter is also non-zero.
+        self.assertGreater(r.rate_limit_count, 0)
+
+        # The quality events must include 'rate_limited' kind, NOT 'no_data'.
+        events = store.list_quality_events(db_path=self.db_path, limit=500)
+        kinds = {e["kind"] for e in events}
+        self.assertIn("rate_limited", kinds)
+        # If 'no_data' was generated when the cause was rate-limit,
+        # we'd see no_data events; the only legitimate no_data events
+        # in this test would come from a successful empty fetch, which
+        # didn't happen.
+        no_data_events = [e for e in events if e["kind"] == "no_data"]
+        self.assertEqual(no_data_events, [],
+            "rate-limited fetches leaked 'no_data' quality events "
+            "(M16.A.fix-1 regression)")
 
 
 # ---------------------------------------------------------------------------
@@ -959,6 +1076,157 @@ class TestLiveYfinanceSmoke(unittest.TestCase):
         for c in ("ts_utc", "open", "high", "low", "close", "volume",
                     "adj_close", "adjustment_ratio"):
             self.assertIn(c, df.columns)
+
+
+# ---------------------------------------------------------------------------
+# G20. yfinance-adapter rate-limit classification (M16.A.fix-1)
+# ---------------------------------------------------------------------------
+class TestYFinanceRateLimitClassification(unittest.TestCase):
+    """Prove the yfinance adapter classifies rate-limit responses as
+    FETCH_RATE_LIMITED, NOT FETCH_NO_DATA, for both observed paths:
+
+      (a) yfinance raises YFRateLimitError directly  — older / direct API
+      (b) yfinance returns empty DataFrame + populates yf.shared._ERRORS
+          — current behaviour of yf.download() in 0.2.x
+
+    The M16.A original code only handled (a) and via brittle string match;
+    on the VPS it hit path (b) and misclassified every rate-limited
+    symbol as 'no_data'.
+    """
+
+    def _make_provider(self):
+        from bot.historical.providers_yfinance import YFinanceProvider
+        return YFinanceProvider()
+
+    def test_path_a_raises_yfratelimit(self):
+        """When yfinance raises a YFRateLimitError, the adapter must
+        return FETCH_RATE_LIMITED."""
+        from bot.historical.providers import FETCH_RATE_LIMITED
+        prov = self._make_provider()
+
+        # Simulate an installed YFRateLimitError exception class.
+        class FakeYFRateLimitError(Exception):
+            pass
+        FakeYFRateLimitError.__name__ = "YFRateLimitError"
+
+        class FakeYF:
+            __version__ = "0.2.55-test"
+            class shared: _ERRORS = {}
+            @staticmethod
+            def download(*a, **kw):
+                raise FakeYFRateLimitError(
+                    "Too Many Requests. Rate limited. Try after a while.")
+
+        prov._yf = FakeYF
+        prov._yf_rate_limit_exc = FakeYFRateLimitError
+        r = prov.fetch_bars("AAPL", "1D",
+                              datetime(2026, 5, 1, tzinfo=timezone.utc),
+                              datetime(2026, 6, 1, tzinfo=timezone.utc))
+        self.assertEqual(r.outcome, FETCH_RATE_LIMITED,
+                          f"expected RATE_LIMITED, got {r.outcome!r}")
+        self.assertIn("rate", r.message.lower())
+
+    def test_path_b_empty_df_with_errors_registry(self):
+        """When yf.download returns empty AND yf.shared._ERRORS has a
+        rate-limit entry for our symbol, the adapter must return
+        FETCH_RATE_LIMITED (not FETCH_NO_DATA).
+
+        This is the path that broke on the VPS.
+        """
+        from bot.historical.providers import FETCH_RATE_LIMITED, FETCH_NO_DATA
+        import pandas as pd
+        prov = self._make_provider()
+
+        class FakeYFShared:
+            _ERRORS = {}
+        class FakeYF:
+            __version__ = "0.2.55-test"
+            shared = FakeYFShared
+            @staticmethod
+            def download(symbol, *a, **kw):
+                # Simulate yfinance 0.2.55's behaviour: catches the
+                # exception internally, stores it in _ERRORS, returns
+                # an empty DataFrame.
+                FakeYFShared._ERRORS[symbol] = (
+                    "YFRateLimitError('Too Many Requests. Rate limited. "
+                    "Try after a while.')")
+                return pd.DataFrame()
+
+        prov._yf = FakeYF
+        prov._yf_rate_limit_exc = None  # simulate not-importable
+        r = prov.fetch_bars("AAPL", "1D",
+                              datetime(2026, 5, 1, tzinfo=timezone.utc),
+                              datetime(2026, 6, 1, tzinfo=timezone.utc))
+        self.assertEqual(r.outcome, FETCH_RATE_LIMITED,
+            f"empty-DF + _ERRORS rate-limit signal must classify as "
+            f"RATE_LIMITED, NOT NO_DATA (M16.A.fix-1). Got {r.outcome!r}.")
+
+    def test_path_b_empty_df_no_rate_limit_is_no_data(self):
+        """Conversely: empty DF + clear _ERRORS = legitimate NO_DATA."""
+        from bot.historical.providers import FETCH_NO_DATA
+        import pandas as pd
+        prov = self._make_provider()
+
+        class FakeYFShared:
+            _ERRORS = {}
+        class FakeYF:
+            __version__ = "0.2.55-test"
+            shared = FakeYFShared
+            @staticmethod
+            def download(*a, **kw):
+                return pd.DataFrame()
+
+        prov._yf = FakeYF
+        r = prov.fetch_bars("OBSCURE", "1D",
+                              datetime(2026, 5, 1, tzinfo=timezone.utc),
+                              datetime(2026, 6, 1, tzinfo=timezone.utc))
+        self.assertEqual(r.outcome, FETCH_NO_DATA)
+
+    def test_path_b_empty_df_non_rate_limit_error_is_provider_error(self):
+        """Empty DF + non-rate-limit error in _ERRORS = PROVIDER_ERROR."""
+        from bot.historical.providers import FETCH_PROVIDER_ERROR
+        import pandas as pd
+        prov = self._make_provider()
+
+        class FakeYFShared:
+            _ERRORS = {}
+        class FakeYF:
+            __version__ = "0.2.55-test"
+            shared = FakeYFShared
+            @staticmethod
+            def download(symbol, *a, **kw):
+                FakeYFShared._ERRORS[symbol] = (
+                    "AttributeError(\"'NoneType' object has no attribute 'name'\")")
+                return pd.DataFrame()
+
+        prov._yf = FakeYF
+        r = prov.fetch_bars("ZZZ", "1D",
+                              datetime(2026, 5, 1, tzinfo=timezone.utc),
+                              datetime(2026, 6, 1, tzinfo=timezone.utc))
+        self.assertEqual(r.outcome, FETCH_PROVIDER_ERROR)
+        self.assertIn("NoneType", r.message)
+
+    def test_rate_limit_token_matcher(self):
+        """The rate-limit substring matcher catches all known signals."""
+        prov = self._make_provider()
+        for txt in (
+            "YFRateLimitError('foo')",
+            "Too Many Requests",
+            "rate limit exceeded",
+            "rate-limit hit",
+            "Rate Limited",
+            "HTTP 429 Too Many Requests",
+        ):
+            self.assertTrue(prov._is_rate_limit_signal(txt),
+                              f"failed to match: {txt!r}")
+        for txt in (
+            "Some other error",
+            "NoneType has no attribute",
+            "",
+            "404 Not Found",
+        ):
+            self.assertFalse(prov._is_rate_limit_signal(txt),
+                              f"false-positive on: {txt!r}")
 
 
 # ---------------------------------------------------------------------------

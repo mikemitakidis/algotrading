@@ -308,23 +308,112 @@ invoking the provider.
 
 ### M16.A — engine
 
-1. Schema applied: `data/historical.db` exists with 6 tables; version = 1 ✓
-2. CLI backfill creates Parquet files at the canonical path ✓
-3. Coverage table populated; refresh_run row with `status='ok'` ✓
+1. Schema applied: `data/historical.db` exists with 6 tables; version = 2 ✓
+2. CLI backfill creates Parquet files at the canonical path
+   (CONDITIONAL — gated on yfinance not rate-limiting the VPS;
+   see §P)
+3. Coverage table populated; refresh_run row with `status='ok'`
+   when symbols succeed (CONDITIONAL — see §P)
 4. Idempotent: second incremental writes 0 new bars ✓
-5. Quality events written for the three distinct outcomes ✓
+5. Quality events written for the four distinct outcomes:
+   `no_data`, `provider_error`, `rate_limited`, plus structural rules ✓
 6. `get_bars()` returns local bars with NO provider call ✓
 7. Dashboard endpoints return expected JSON shape ✓
-8. Full test suite passes (48 / 48, 1 skipped = live-yfinance) ✓
+8. Full test suite passes (57 / 57, 1 skipped = live-yfinance) ✓
 9. Regression: all M14/M15 suites green (zero new failures) ✓
 10. AST scan: no broker / scanner / strategy imports in `bot/historical/*` ✓
 11. Protected-files diff vs `ceb8cd5`: 0/N modified ✓
 12. pyarrow installs cleanly in venv; `import pyarrow` succeeds ✓
+13. **Rate-limit honesty (M16.A.fix-1):** a refresh where every symbol
+    is rate-limited reports `status='failed'`, `symbols_rate_limited > 0`,
+    `symbols_no_data = 0`, and quality events of `kind='rate_limited'`
+    (NOT `kind='no_data'`) ✓
 
 ### M16.B — local read proof
 
-1. `python -c "from bot.historical.preview import compute_recent_sma; print(compute_recent_sma('AAPL','1D',periods=20,lookback=5))"` succeeds after backfill ✓
+1. `python -c "from bot.historical.preview import compute_recent_sma; ..."`
+   succeeds after backfill (CONDITIONAL — gated on §K.2/§K.3 above)
 2. Test G16 proves no provider call on cache hit ✓
+
+---
+
+## §P. Yahoo/yfinance rate-limit operations (M16.A.fix-1)
+
+**Yahoo Finance rate-limits aggressively** — the VPS IP can be capped
+within a few minutes of starting a multi-symbol backfill. This is a
+property of the upstream provider, not of M16; we handle it honestly
+rather than papering over it.
+
+### How M16 reports rate-limit conditions
+
+When yfinance is rate-limiting:
+
+1. **Adapter layer (`providers_yfinance.py`):** every yfinance
+   response is inspected via TWO paths because yfinance 0.2.x has
+   inconsistent error propagation:
+   - Path A: `YFRateLimitError` raised → caught explicitly by type
+   - Path B: empty DataFrame returned + per-symbol error in
+     `yf.shared._ERRORS` → scanned for rate-limit substrings
+   Both paths return `FetchResult(outcome=FETCH_RATE_LIMITED)`.
+
+2. **Orchestrator (`refresh.py`):** retries with exponential backoff
+   + jitter. If retries exhaust with the symbol still rate-limited,
+   the symbol is counted in `symbols_rate_limited` (a NEW first-class
+   counter — schema v2). It is NOT silently rolled into
+   `symbols_no_data`.
+
+3. **Run status:** a refresh where zero symbols succeeded and any
+   rate-limited or failed symbols exist is `status='failed'`
+   (NOT `'ok'`). A run where some succeeded and some were
+   rate-limited is `status='partial'`.
+
+4. **CLI:** when `symbols_rate_limited > 0 and symbols_ok == 0`,
+   `python -m bot.historical.cli backfill ...` prints a
+   `PROVIDER RATE-LIMITED — no bars were written` banner with
+   suggested operator actions.
+
+5. **Dashboard `/api/historical/status`:** the `last_refresh` object
+   includes `symbols_rate_limited` and `rate_limit_count`.
+
+### Operator response when rate-limited
+
+In order of escalating effort:
+
+1. **Wait and retry.** Yahoo's rate-limit windows are typically
+   5–15 minutes. The cheapest action is to wait and retry.
+2. **Reduce scope.** Retry with a single symbol or single timeframe:
+   ```bash
+   python -m bot.historical.cli backfill --symbols AAPL --timeframes 1D
+   ```
+3. **Stagger.** If multi-symbol backfill is needed, run them one at
+   a time with a delay between, e.g. a shell loop with `sleep 10`.
+4. **Verify off-VPS.** Use the standalone `python -c "import
+   yfinance; print(yfinance.Ticker('AAPL').history(period='5d'))"`
+   from a different network to confirm Yahoo is not blocking the
+   VPS IP specifically.
+5. **Defer to a paid provider.** Out of scope for M16.A; a future
+   milestone can drop in IBKR or Polygon behind the same
+   `BaseProvider` contract.
+
+### Acceptance with persistent rate-limiting
+
+If yfinance continues to rate-limit during M16.A acceptance, the
+operator has three options:
+
+- **(A) Wait + retry until a small live backfill succeeds.**
+  Even one symbol × one timeframe with bars written + idempotent
+  incremental confirms the engine works.
+- **(B) Defer live-provider acceptance.** Mark the engine
+  acceptance complete based on the unit/integration tests + the
+  honest rate-limit reporting (above), and defer the "real bars
+  stored" acceptance to a separate task.
+- **(C) Inject a fixture provider for runtime acceptance.** Not
+  shipped with M16.A.fix-1 — would require a new CLI flag that
+  reads bars from a CSV fixture. Out of scope here.
+
+**M16 must not be marked closed until at least one of A/B is
+satisfied.** This runbook does not claim live backfill acceptance
+has passed when zero bars have been stored.
 
 ---
 

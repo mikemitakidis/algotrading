@@ -5956,7 +5956,8 @@ def m16_historical_status():
         last_row = conn.execute(
             "SELECT run_id, started_at_utc, finished_at_utc, mode, status, "
             "       provider, symbols_ok, symbols_no_data, symbols_failed, "
-            "       bars_written, duration_sec "
+            "       symbols_rate_limited, bars_written, duration_sec, "
+            "       rate_limit_count "
             "FROM historical_refresh_runs ORDER BY run_id DESC LIMIT 1"
         ).fetchone()
         last_refresh = None
@@ -5971,8 +5972,10 @@ def m16_historical_status():
                 'symbols_ok':  last_row[6],
                 'symbols_no_data': last_row[7],
                 'symbols_failed':  last_row[8],
-                'bars_written':    last_row[9],
-                'duration_sec':    last_row[10],
+                'symbols_rate_limited': last_row[9],
+                'bars_written':    last_row[10],
+                'duration_sec':    last_row[11],
+                'rate_limit_count': last_row[12],
             }
 
         n_syms = conn.execute(
