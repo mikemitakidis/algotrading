@@ -149,6 +149,14 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Acceptance criteria when audit pass complete:** a comparison document (or chat record) of the two findings lists, with operator decisions on which findings (if any) become tracked sub-milestone fixes. Once the audit pass clears, M17 (Outcome Learning Loop / Closed-Loop ML) becomes the next coding milestone.
 - **Reference:** operator instruction at M16 closeout, 2026-06-05.
 
+### M14-extension-to-scanner-path (BLOCKER FOR M22, recorded 2026-06-05)
+- **Status:** Not started. Tracked here so it isn't lost. This is the first concrete carry-forward produced by the M1–M16 audit-only pass.
+- **What:** Extend the M14 Risk Authority Engine (`bot.risk_authority.engine.decide` — 24 gates) so it wraps the scanner-driven IBKR submit path in `main.py`, OR extend `bot/risk.py` with explicit equivalents of every M14 gate currently missing from the scanner path. AST-asserted parity required either way.
+- **Why:** The M14 engine is invoked only by `tools/etoro_live_write.py` via `bot/risk_authority/preflight.py`. The scanner path runs only `bot/risk.py` (`RiskManager` + `PortfolioRiskPolicy`) — a smaller gate set. Gates currently missing from the scanner path: `broker_daily_loss_cap`, `global_capital`, `combined_exposure`, `drawdown_throttle`, per-symbol concentration, `quote_freshness`, `spread`, `data_staleness`, `etoro_live_flag/env`, the unified `policy_invalid`. Some of these (e.g. `broker_open_positions` from the engine) are different in semantics from the `RISK_MAX_OPEN_POSITIONS` counterpart in `bot/risk.py`. The audit P0-3 patch addresses runtime M13.4A kill-switch enforcement separately; it does not close this gap.
+- **Hard pre-requisite for M22 (Semi-Automated Live Trading).** Auto-allowed submissions are not operator-pre-checked per transmission, so the scanner-path gate set must equal-or-exceed the M14 engine's gate set before M22 can begin. **NOT in M17 scope.**
+- **Until then:** IBKR live submissions in production must remain operator-supervised; do not enable any unattended automation that bypasses operator review.
+- **Reference:** [`docs/M14_FINAL_AUDIT.md` §12](M14_FINAL_AUDIT.md) (full text); MILESTONE_STATUS.md M14 detail section "Known coverage gap"; ROADMAP.md M22 line "Requires M14 engine extension to scanner path."
+
 ### M17 — Outcome Learning Loop / Closed-Loop ML (PROPOSED, AFTER AUDIT PASS)
 - **Status:** Not started. Sequenced AFTER the M1–M16 audit pass clears, not directly after M16 closure.
 - **Scope sketch:** the dataset bottleneck for ML readiness is the `candidate_snapshots` flywheel which is still accumulating from the M14 pipeline. M17 wires `ml_train.py` (existing 541-line XGBoost meta-labeling, M9) into the scanner as a live signal filter, using the M16 historical store as the source of truth for backtest-vs-live consistency.

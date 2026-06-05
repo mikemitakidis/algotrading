@@ -269,4 +269,58 @@ After M14, the Risk Authority exists. Before moving to M16+ intelligence (strate
 
 ---
 
+## §12 — Scanner-path coverage gap (open carry-forward, recorded 2026-06-05)
+
+Recorded at the post-M16 M1–M16 independent audit pass.
+
+### What the gap is
+
+The M14 Risk Authority Engine (`bot.risk_authority.engine.decide` — 24 ordered gates) is invoked **only** from `tools/etoro_live_write.py` via `bot/risk_authority/preflight.py`. The scanner-driven IBKR submit path in `main.py` (lines 226–322) runs only `bot/risk.py` (`RiskManager.evaluate` + `PortfolioRiskPolicy.evaluate`) — a smaller set of gates.
+
+Gates that the M14 engine enforces but the scanner path does NOT consult:
+
+- `broker_daily_loss_cap` / `global_daily_loss_cap`
+- `global_capital` / `combined_exposure` / `broker_open_positions` (max cap from engine, distinct from M10 `max_open_positions`)
+- `drawdown_throttle`
+- `per-symbol concentration` (M14.E)
+- `quote_freshness`, `spread`, `data_staleness`
+- `etoro_live_flag` / `etoro_live_env`
+- `policy_invalid` (the unified policy-validity check)
+
+Gates that the scanner path DOES enforce (via `bot/risk.py`):
+
+- Per-position size cap (`RISK_MAX_POSITION_PCT`)
+- Live hard cap (`LIVE_MAX_POSITION_PCT = 2.0` for IBKR live)
+- Per-symbol broker position-exists check (live mode)
+- Per-symbol broker open-order-exists check (live mode)
+- `RISK_MAX_OPEN_POSITIONS` ceiling
+- Duplicate same-symbol+direction
+- File-based `bot/kill_switch.py`
+- M13.4A broker-allocation policy (at scanner startup only until runtime enforcement lands; see audit P0-3)
+
+### Why the asymmetry exists
+
+M14 was scoped specifically for the eToro live-write operator-CLI path (M14.F preflight). It was not extended to the scanner path because the scanner was running paper trading and a small IBKR live trial that the existing `bot/risk.py` gates were deemed sufficient for.
+
+### Why it must NOT remain like this before M22
+
+The M22 milestone (Semi-Automated Live Trading — authority ladder reaches `AUTO_ALLOWED` per-broker) is incompatible with this asymmetry. Auto-allowed submissions, by definition, are not pre-checked by a human operator before each transmission. The scanner-driven path is what would carry those submissions. Without the M14 engine wrapping the scanner submit path, M22 would automate trading through the smaller gate set.
+
+### Hard pre-requisite recorded here
+
+**Before M22 (Semi-Automated Live Trading) can begin: the M14 Risk Authority Engine must wrap the scanner path's broker submits, OR `bot/risk.py` must be extended with explicit equivalents of every M14 gate listed above, with AST-asserted parity.** Either approach is acceptable; the recorded requirement is that **the gate set the scanner enforces must equal or exceed the M14 engine's gate set** at M22 time.
+
+This is NOT in M17 scope.
+
+### Until then
+
+IBKR live submissions in production must remain operator-supervised; do not enable any unattended automation that bypasses operator review. Scanner-driven paper trading is fine — paper has no real-money impact.
+
+### Linked tracking
+
+- `docs/NEXT_WORK_REGISTER.md` — entry "M14-extension-to-scanner-path" listed as blocker for M22.
+- `ROADMAP.md` — under M22, precondition note added pointing here.
+
+---
+
 *End of M14 final audit.*

@@ -164,6 +164,8 @@ project-wide reconciliation narrative lives in
 
 These are acceptable for M14 closure because every "unknown" returns fail-closed; the engine refuses to fabricate zero, and the dashboard distinguishes known-zero from unknown-zero explicitly.
 
+**Known coverage gap (open carry-forward, recorded 2026-06-05 at M1–M16 audit pass).** The M14 Risk Authority Engine (24 gates) is invoked **only** from the operator-CLI eToro live-write path (`tools/etoro_live_write.py` → `bot/risk_authority/preflight.py`). The scanner-driven IBKR submit path in `main.py` runs only `bot/risk.py` (`RiskManager` + `PortfolioRiskPolicy`) — a smaller gate set that does not include `broker_daily_loss_cap`, `global_capital`, `combined_exposure`, `drawdown_throttle`, per-symbol concentration, `quote_freshness`, `spread`, or `data_staleness`. This asymmetry is deliberate for M14 closure but is a **hard pre-requisite to address before M22 (Semi-Automated Live Trading)**: the gate set the scanner enforces must equal or exceed the M14 engine's gate set at M22 time. NOT in M17 scope. Full text in [`docs/M14_FINAL_AUDIT.md` §12](docs/M14_FINAL_AUDIT.md). Tracking: `docs/NEXT_WORK_REGISTER.md` entry `M14-extension-to-scanner-path`.
+
 ### Milestone 15 — Production Hardening (PARTIAL)
 
 | Sub-milestone | Status | Evidence |

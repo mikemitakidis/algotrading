@@ -348,6 +348,7 @@ After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safet
 - Correlation-aware sizing (M14.A design-only → real).
 - Automated broker failover (M14.A design-only → real, gated).
 - Compliance-grade audit log, regulatory artifact export (overlaps with M15.3.C).
+- **Hard precondition recorded 2026-06-05 at M1–M16 audit pass:** Requires M14 engine extension to the scanner-driven submit path. The scanner currently runs only `bot/risk.py` gates (a strict subset of the M14 engine's 24 gates). `AUTO_ALLOWED` cannot be safely enabled while the scanner path bypasses gates like `broker_daily_loss_cap`, `global_capital`, `combined_exposure`, `drawdown_throttle`, `quote_freshness`, `spread`, `data_staleness`. See [`docs/M14_FINAL_AUDIT.md` §12](docs/M14_FINAL_AUDIT.md) and the `M14-extension-to-scanner-path` entry in `docs/NEXT_WORK_REGISTER.md`. **NOT in M17 scope.**
 - Was previously sketched as "M22 — Semi-Automated Live Trading" + "M23 — Full Advanced Intelligence".
 
 ### Notes on the restructure
