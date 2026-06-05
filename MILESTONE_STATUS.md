@@ -47,7 +47,7 @@ project-wide reconciliation narrative lives in
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
 | 15 | Production Hardening | CLOSED (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2/.3.A.cutover/.3.B/.3.C all CLOSED 2026-06-05) | See M15 detail below |
 | 16 | Historical Data + First Signal Engine | CLOSED 2026-06-05 (M16.A + M16.B + fixes 1-4) | See M16 detail below; `bot/historical/*`, `data/historical/yfinance/1D/AAPL.parquet` (real data); commit chain `c6e98b7` → `aef8335` |
-| 17–23 | Future scope | PENDING | See `ROADMAP.md`; next is an audit-only pass over M1–M16 before M17 coding |
+| 17–23 | Future scope | PENDING | See `ROADMAP.md`. The M1–M16 audit-only pass is now CLOSED (P0 batch verified 2026-06-05, commit chain `655c955` → `268a50b`); the next concrete work item is operator-chosen. M17 has not started. |
 
 ---
 
@@ -376,7 +376,7 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - M15.4 — IB Gateway visibility/truth layer (CLOSED 2026-06-02)
   - M15.5 — IBKR paper exposure wiring (CLOSED earlier)
   - M15.3.A / .A.2 / .A.cutover / .B / .C — Dashboard auth + 2FA + TLS + manual_reset + audit export (all CLOSED, see above)
-**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** The next step is an **audit-only pass over M1–M16** before any M17 coding begins. Dashboard work stops unless safety- or compliance-driven.
+**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **The M1–M16 audit-only pass is now CLOSED** (P0 batch verified 2026-06-05, commit chain `655c955` → `268a50b`; see "P0 audit batch" block below). The next concrete work item is operator-chosen; **M17 has not started**. Dashboard work stops unless safety- or compliance-driven.
 
 ---
 
@@ -448,13 +448,17 @@ Real provider fetch → Parquet write → SQLite coverage update → local `get_
 
 ---
 
-### Post-M16 next step — audit-only pass (not M17 coding yet)
+### Post-M16 next step — audit-only pass (CLOSED 2026-06-05)
 
 Per operator instruction recorded at M16 closeout (2026-06-05):
 
-**Before any M17 coding starts**, an audit-only pass over M1–M16 from the actual code will be conducted. Two independent inspections (this assistant + ChatGPT) will produce findings lists; the lists will be compared; only then will fix-priority decisions be made. **No code changes during this audit phase.**
+**Before any M17 coding starts**, an audit-only pass over M1–M16 from the actual code was conducted. Two independent inspections (this assistant + ChatGPT) produced findings lists; the lists were compared; fix-priority decisions were made jointly. **No code changes during the audit-only phase itself.**
 
-This is recorded here to make the deviation from the original roadmap explicit. M17 (Outcome Learning Loop) is still the intended next coding milestone after the audit pass clears.
+The audit-only pass produced 5 P0 (must-fix) findings + a P1/P2/P3 backlog. **All 5 P0 findings are now landed, regression-green, pushed, and VPS-verified 2026-06-05.** See the "P0 audit batch" block above for the 6-commit chain `655c955` → `6a04735` → `7e83415` → `a072032` → `0b4bf69` → `268a50b` and the full VPS evidence.
+
+The P1 / P2 / P3 backlog **remains open** and is tracked entry-by-entry in [`docs/NEXT_WORK_REGISTER.md`](docs/NEXT_WORK_REGISTER.md) under the `audit-P1-*`, `audit-P2-*`, `audit-P3-*` entries.
+
+This is recorded here to make the deviation from the original roadmap explicit. **M17 (originally "Outcome Learning Loop", and now per the M15-restructure "Backtesting + parameter rules") has not started.** The next concrete work item is operator-chosen.
 
 **M15.3 deferred items** (carry-forwards, all explicitly NOT blocking M15 closure):
 - **Dashboard login latency follow-up** — `M15.3.A.cutover.perf`, non-blocking. Operator observed ~7-10s end-to-end browser login; expected closer to 1-2s (~250ms bcrypt + minimal Caddy overhead). Investigate when convenient.
@@ -486,6 +490,49 @@ Detailed breakdown in [`ROADMAP.md`](ROADMAP.md) (M16+ section restructured 2026
 - New read-only API endpoint `/api/system/services` reports the canonical service map and live systemd state. **Auth-protected** — unauthenticated requests return `{"error":"Unauthorized"}`; the dashboard's Risk Authority tab and any authenticated curl will see the JSON payload.
 - `deploy.sh` and `sync.sh` are now systemd-aware: when canonical units exist + script runs as root, both prefer `systemctl restart` over the legacy `pkill + nohup` path; legacy fallback preserved for pre-install / post-rollback states.
 - Authoritative operator reference: [`docs/M15_0_systemd_canonical.md`](docs/M15_0_systemd_canonical.md).
+
+---
+
+**P0 audit batch (M1–M16 audit) — VPS-verified 2026-06-05, CLOSED:**
+
+The M1–M16 audit-only pass identified five P0 (must-fix) findings. All five are
+now landed, regression-green, pushed, and VPS-verified. Six commits, in order
+on `main`:
+
+| # | Commit | Patch | Summary |
+|---|---|---|---|
+| 1 | `655c955` | P0-5 | Docs-only: M14 engine vs scanner-path coverage-gap carry-forward (HARD pre-requisite for M22, NOT in M17 scope). |
+| 2 | `6a04735` | P0-1 | XFF trusted-proxy fix in `dashboard/auth/trusted_proxy.py`. Login rate-limiter + audit-IP corruption via rotating `X-Forwarded-For` now mitigated; XFF honoured only when `remote_addr` ∈ `DASHBOARD_TRUSTED_PROXIES` (default loopback), and the LAST entry is taken. 26 new tests. |
+| 3 | `7e83415` | P0-2 | `IBKRBroker.cancel()` now supports the canonical `IB-PERM-{permId}` format that `submit()` writes; legacy `IB-{orderId}-{tp}-{sl}` preserved. Unknown / malformed / non-string IDs fail-fast with no I/O. 9 new tests. |
+| 4 | `a072032` | P0-4 | `PortfolioRiskContext` now populated with `positions`, `open_orders`, `local_open_intents`, `kill_switch_active` via new `bot/portfolio_ctx.py`. Audit Correction B preserved: live path reuses RiskManager's existing reconcile via a single `checks['_recon']` stash — **zero new IBKR round-trips per signal**, AST-asserted. 16 new tests. Touches 2 protected files (`main.py` +23, `bot/risk.py` +6) per the explicitly approved P0 implementation plan. |
+| 5 | `0b4bf69` | P0-3 | Runtime M13.4A kill-switch enforcement via new `bot/runtime_policy.py`. All three broker `submit()` paths re-check the broker-allocation policy through a 5s-TTL cache (env-overridable). Audit Correction A preserved: DB read failure with cached policy → use cached + warn; DB read failure with no cache → `REASON_POLICY_UNAVAILABLE` (fail-SAFE, never fail-OPEN). Operator dashboard toggles of global / per-broker kill_switch now take effect without scanner restart. 14 new tests including the headline `test_mid_run_kill_switch_activation_blocks_next_submit`. |
+| 6 | `268a50b` | P0-4 fixup | Test-fixture-only follow-up: removes `main.py` and `bot/risk.py` from the `TestProtectedFilesUntouched` PROTECTED tuples in 6 milestone test files (`test_m15_3_a_dashboard_auth`, `test_m15_3_a_2_totp`, `test_m15_3_b_manual_reset`, `test_m15_3_c_audit_export`, `test_m15_5_ibkr_exposure`, `test_m16_historical_data`) and documents the P0-4 exception following the M15.3.B `audit_decisions.py` precedent. No production code touched. |
+
+**Hard-constraint evidence (cumulative across the P0 batch vs `ceb8cd5`):**
+- Protected files modified: **2 / 20** (`main.py` +22 lines, `bot/risk.py` +6 lines — both from `a072032` only, both operator-pre-approved).
+- `bot/data.py` sha256: byte-identical to baseline.
+- AST scan of new modules (`bot/runtime_policy.py`, `bot/portfolio_ctx.py`, `dashboard/auth/trusted_proxy.py`): zero forbidden broker imports.
+- New tests: **65 / 65 OK**. Cumulative regression at `268a50b`: **563 tests in 132.984s, OK (skipped=1)** on the VPS.
+- No `.env` changes (only the public `.env.example` template gained the `DASHBOARD_TRUSTED_PROXIES` documentation entry in P0-1).
+- No service unit changes. No generated data committed (`data/` tracking unchanged: only `symbol_metadata.csv` + `symbol_universe.csv`).
+
+**VPS evidence (operator-verified 2026-06-05):**
+- HEAD = `268a50b` (expected = `268a50b`); commit chain since M16 closeout = 6 commits, all present.
+- Landed-presence checks pass for all 5 patches plus the fixup.
+- Regression sweep on VPS: `Ran 563 tests in 132.984s` / `OK (skipped=1)` / exit code 0.
+- Production: `algo-trader-dashboard.service` active, `caddy.service` active, `https://algotrading.marketwarrior.club/api/health` → HTTP 200.
+- `git status` clean.
+
+**P1 / P2 / P3 backlog from the audit pass remains OPEN.** Recorded in
+`docs/NEXT_WORK_REGISTER.md` for carry-forward; see entries
+`audit-P1-broker-permId-fallback`, `audit-P1-data-rate-limit-investigate`,
+`audit-P1-portfolio-ctx-engine-bypass`, `audit-P2-batch`, `audit-P3-batch`.
+Each is tracked separately so it cannot be lost when context resets.
+
+**M17 has NOT started.** The audit-only pass is complete; the next concrete
+work item is operator-chosen. The M14-extension-to-scanner-path carry-forward
+(P0-5) remains a HARD pre-requisite for M22 (Semi-Automated Live Trading) and
+is NOT in M17 scope.
 
 ---
 

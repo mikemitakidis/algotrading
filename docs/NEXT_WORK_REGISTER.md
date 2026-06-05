@@ -141,13 +141,50 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
   - 4H ↔ 1H consistency edge: if 1H was just updated but 4H is "fresh" per its own threshold, 4H is not automatically re-resampled. Tracked as a future enhancement; current behaviour is documented in M16 runbook.
   - Freshness-aware incremental no-op (fix-4) means a split that lands within the freshness window AND triggers yfinance to retroactively rewrite Adj Close in the same window will not be detected until the next incremental past the window. For US equities at 1D granularity this is acceptable; `force-rebuild` provides an escape hatch when needed.
 
-### M1–M16 audit-only pass (NEXT ACTIVE — recorded 2026-06-05 at M16 closeout)
-- **Status:** Not started. **This — not M17 coding — is the next active task.** Recorded at M16 closeout per explicit operator instruction.
-- **Why now:** The M16 work surfaced multiple class-of-issues that ChatGPT's line-by-line review caught after VPS verification (rate-limit classification, two separate migration-order bugs, missing incremental no-op). Each was a small fix individually but the pattern suggests the prior M1–M15 surface area should be audited from the actual code before another large coding milestone (M17 Outcome Learning Loop) begins.
-- **Scope:** independent inspection of the M1–M16 codebase by two reviewers (this assistant + ChatGPT) producing separate findings lists. Lists will be compared; only then will fix-priority decisions be made.
-- **Hard constraint:** **NO CODE CHANGES during the audit phase.** Inspection only. Output is a written findings list (sub-milestones if any fixes are approved come later, each with its own pre-code checklist).
-- **Acceptance criteria when audit pass complete:** a comparison document (or chat record) of the two findings lists, with operator decisions on which findings (if any) become tracked sub-milestone fixes. Once the audit pass clears, M17 (Outcome Learning Loop / Closed-Loop ML) becomes the next coding milestone.
-- **Reference:** operator instruction at M16 closeout, 2026-06-05.
+### M1–M16 audit-only pass (CLOSED 2026-06-05)
+- **Status:** **CLOSED.** Two independent reviews (this assistant + ChatGPT) produced findings lists; lists were merged; the 5 P0 (must-fix) findings were implemented as a 6-commit batch and pushed + VPS-verified 2026-06-05.
+- **Commit chain (in order on `main`):**
+  - `655c955` — P0-5: docs-only M14 engine vs scanner-path asymmetry carry-forward (created the `M14-extension-to-scanner-path` entry below).
+  - `6a04735` — P0-1: XFF trusted-proxy fix in `dashboard/auth/trusted_proxy.py` (login rate-limiter bypass + audit IP corruption via rotating XFF mitigated).
+  - `7e83415` — P0-2: `IBKRBroker.cancel()` supports canonical `IB-PERM-{permId}` format.
+  - `a072032` — P0-4: `PortfolioRiskContext` populated via `bot/portfolio_ctx.py` (Correction B: live path reuses RiskManager reconcile via `checks['_recon']` stash — zero new IBKR round-trips per signal).
+  - `0b4bf69` — P0-3: runtime M13.4A kill-switch enforcement via `bot/runtime_policy.py` (Correction A: fail-SAFE to `policy_unavailable` when DB read fails and no cached policy).
+  - `268a50b` — P0-4 fixup: 6 test-fixture updates following the M15.3.B `audit_decisions.py` precedent.
+- **VPS evidence (2026-06-05):** HEAD = `268a50b`; regression `Ran 563 tests in 132.984s` / `OK (skipped=1)` / exit 0; dashboard + caddy active; `/api/health` HTTP 200; `git status` clean.
+- **Hard constraints upheld:** 2/20 protected files modified (both `a072032` only, both operator-pre-approved); `bot/data.py` byte-identical to `ceb8cd5`; AST-clean new modules; no `.env`/service/data changes; 65 new tests all green.
+- **What remains open:** the P1 / P2 / P3 backlog. Tracked as separate entries below so individual items cannot be lost when context resets.
+- **Reference:** MILESTONE_STATUS.md "P0 audit batch (M1–M16 audit) — VPS-verified 2026-06-05, CLOSED" block. Original audit-pass directive recorded at M16 closeout (2026-06-05).
+
+### audit-P1-broker-permId-fallback (DEFERRED, recorded 2026-06-05 at P0 closeout)
+- **Status:** Not started. Identified by the M1–M16 audit pass; deliberately deferred from the P0 batch to keep the P0 scope focused.
+- **What:** `IBKRBroker.submit()` writes the canonical `broker_oid = f'IB-PERM-{parent_perm}'` when `permId` is non-zero, but the fallback branch when `permId` is still zero at write time uses `f'IB-{orderId}-{tp}-{sl}'`. P0-2 fixed `cancel()` to handle BOTH formats correctly. P1 considers whether to harden `submit()` itself to wait briefly for `permId` propagation (with bounded timeout) before writing the broker_oid, OR to explicitly record the `permId=0` case as an actionable warning in `execution_intents` for operator review.
+- **Acceptance criteria when undeferred:** decision recorded between (a) bounded-wait approach with explicit timeout config + tests, or (b) accept the legacy format + ensure operator-visible warning. Either way, no silent fallback.
+- **Reference:** P0 implementation plan / audit findings — Claude finding A4 + ChatGPT finding #1.
+
+### audit-P1-data-rate-limit-investigate (DEFERRED, INVESTIGATE-FIRST, recorded 2026-06-05)
+- **Status:** Not started. Marked INVESTIGATE-FIRST: no code changes until the current real-world failure mode is reproduced.
+- **What:** ChatGPT's audit findings #3 and #4 flagged a possible yfinance rate-limit / backoff issue in `bot/data.py`. Claude's independent audit observed `bot/data.py` is byte-identical to `ceb8cd5` (the protected baseline) and could not reproduce a failure from code inspection alone. Operator-approved decision: investigate first against live yfinance behaviour and the production logs; only patch if a concrete failure mode is reproduced.
+- **Hard constraint:** `bot/data.py` is on the protected list. Any code change here requires an explicit pre-code checklist + operator approval, mirroring the P0-4 protected-file approval pattern.
+- **Acceptance criteria when undeferred:** reproducer (or absence-of-reproducer evidence) + operator decision on next step.
+- **Reference:** P0 audit findings — ChatGPT #3 + #4; Claude D3.
+
+### audit-P1-portfolio-ctx-engine-bypass (DEFERRED, recorded 2026-06-05 at P0 closeout)
+- **Status:** Not started. Distinct from `M14-extension-to-scanner-path` (which addresses the broader M14 24-gate parity gap) — this P1 item is narrower in scope.
+- **What:** ChatGPT finding #1 vs Claude finding I3 reconciliation: ChatGPT identified that `PortfolioRiskContext` was structurally underfed; Claude separately identified that the M14 engine itself is bypassed by the scanner path. P0-4 fixed the structural underfeed for `PortfolioRiskPolicy` (the gate set the scanner DOES run). The full M14 engine bypass remains open as `M14-extension-to-scanner-path` (BLOCKER FOR M22). This P1 entry tracks the residual smaller items that surfaced once P0-4 landed — e.g. confirming `local_open_intents` semantics across paper/live boundaries, expanded test fixtures with realistic populated-ctx scenarios.
+- **Hard pre-requisite for closing this entry:** P0-4 verified in production (DONE at 2026-06-05) AND `M14-extension-to-scanner-path` scope decided.
+- **Reference:** P0 audit findings reconciliation — ChatGPT #1 + Claude I3.
+
+### audit-P2-batch (DEFERRED, 9 items, recorded 2026-06-05 at P0 closeout)
+- **Status:** Not started. 9 P2 (should-fix) findings from the audit pass, none safety-critical, none blocking M17 or any current milestone.
+- **Notable items:** consolidating the two backtest engines (deferred to M17 scope discussion); cleaning up the M16 historical-data engine + scanner backtest engine duplication; auditing `bot/risk.py` `_load_open_intents` for symbol-direction discrimination consistency; reviewing `bot/etoro/*` SignalOnlyBroker reason-code coverage parity with VALID_REASONS; auditing M13.5 audit-trail completeness across all eToro events; consolidating M14 engine reason-code spelling (`risk_rejected` vs `rejected`); reviewing M14 gate threshold defaults for tightness; rationalising the M15.3.B/.C audit chain CHECK constraint enforcement; reviewing the M14 sector-map config-vs-DB precedence.
+- **Acceptance criteria for closing each:** individual sub-milestone with its own pre-code checklist + tests. No bulk fixup.
+- **Reference:** P0 audit findings — full P2 list in the audit-pass merged-fix-plan.
+
+### audit-P3-batch (DEFERRED, 6 items, recorded 2026-06-05 at P0 closeout)
+- **Status:** Not started. 6 P3 (nice-to-have) findings. Cleanup-grade.
+- **Notable items:** docstring consistency across `bot/*` modules; consolidating the 4 separate `protected_files_*` fixture patterns into a single shared helper; tightening test-discovery patterns (`test_m10.py` / `test_m11.py` / `test_m12.py` use custom-script style instead of `unittest`); replacing synthetic test signal IDs (`888888`, `999999`) with an explicit `is_test` column in `execution_intents`; trimming dead imports flagged by static analysis.
+- **Acceptance criteria for closing each:** sub-milestone or grouped cleanup commit. No code-quality gate is currently failing on these.
+- **Reference:** P0 audit findings — full P3 list in the audit-pass merged-fix-plan.
 
 ### M14-extension-to-scanner-path (BLOCKER FOR M22, recorded 2026-06-05)
 - **Status:** Not started. Tracked here so it isn't lost. This is the first concrete carry-forward produced by the M1–M16 audit-only pass.
@@ -157,11 +194,11 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Until then:** IBKR live submissions in production must remain operator-supervised; do not enable any unattended automation that bypasses operator review.
 - **Reference:** [`docs/M14_FINAL_AUDIT.md` §12](M14_FINAL_AUDIT.md) (full text); MILESTONE_STATUS.md M14 detail section "Known coverage gap"; ROADMAP.md M22 line "Requires M14 engine extension to scanner path."
 
-### M17 — Outcome Learning Loop / Closed-Loop ML (PROPOSED, AFTER AUDIT PASS)
-- **Status:** Not started. Sequenced AFTER the M1–M16 audit pass clears, not directly after M16 closure.
-- **Scope sketch:** the dataset bottleneck for ML readiness is the `candidate_snapshots` flywheel which is still accumulating from the M14 pipeline. M17 wires `ml_train.py` (existing 541-line XGBoost meta-labeling, M9) into the scanner as a live signal filter, using the M16 historical store as the source of truth for backtest-vs-live consistency.
-- **Hard constraint:** matches the permanent rule "Backtesting using the same live strategy". Any closed-loop ML training that diverges from the live scanner's feature path is a P0 bug.
-- **Reference:** repositioned from "after M16" to "after audit pass" at M16 closeout, 2026-06-05. Original entry sketched at M15.3.A.cutover closeout, 2026-06-04.
+### M17 — Backtesting + parameter rules (PROPOSED — audit pass NOW CLEARED 2026-06-05)
+- **Status:** Not started. The M1–M16 audit-only pass is now CLOSED (see entry above) and the P0 batch is VPS-verified. M17 is unblocked from an audit-prerequisite standpoint; whether to start it now is an operator decision.
+- **Scope sketch:** per the M15 strategic-direction restructure (2026-06-04), the authoritative M17 is **"Backtesting + parameter rules using M16 historical data"**. The earlier sketch ("Outcome Learning Loop / Closed-Loop ML") was repositioned later in the sequence — it now sits as a post-M18 step, after the dataset bottleneck (`candidate_snapshots` flywheel) has accumulated more data. Permanent rule "Backtesting using the same live strategy" applies: the M17 backtest engine must consume the same feature/strategy code path as the live scanner.
+- **Hard pre-requisite carried OVER from the audit pass:** none of the open `audit-P1-*` / `audit-P2-*` / `audit-P3-*` items block M17 specifically. The `M14-extension-to-scanner-path` BLOCKER applies to M22 only, NOT M17.
+- **Reference:** ROADMAP.md "Backtesting + parameter rules" section; M16 closeout discussion 2026-06-05; this register's "M1–M16 audit-only pass (CLOSED)" entry above.
 
 ### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17)
 - **Status:** Not started. Sequenced after M17. Pre-code Q-style checklist required.
