@@ -125,14 +125,31 @@ Rate-limit lockout active for this IP. Response includes `retry_after_sec`.
   dashboard views; the export is a convenience aggregation, not new
   access. If broader trading/risk exports are exposed later, step-up
   TOTP should be reconsidered.
-- Rate limit: 10 exports per IP per hour, 1-hour lockout. **Important
-  honest residual**: this follows the existing M15.3.A/B RateLimiter
-  pattern, which counts only *failed* attempts toward the limit. A
-  legitimate operator doing successful exports does not bump the
-  counter. If this becomes a problem, M15.3.A's rate-limiter API would
-  need to grow a `record_attempt()` method that all three callsites
-  (login, manual_reset, audit-export) use consistently. Not in scope
-  for M15.3.C.
+- Rate limit: **10 attempts per IP per hour**, sliding window. Per Q-C.8
+  M15.3.C re-spec (operator + ChatGPT review, 2026-06-05): the cap
+  counts **every authenticated attempt that reaches this endpoint**,
+  regardless of outcome — successful JSONL/CSV exports, format-invalid
+  responses, date-invalid responses, `row_cap_exceeded` rejections,
+  `redaction_violation` rejections. The 11th attempt within any 1-hour
+  window returns 429 and is itself meta-audited as
+  `audit_export_request` with `success=0`, `reason='rate_limited'`. No
+  secret values appear in the 429 response or its audit row.
+
+  This is **stricter than the shared M15.3.A/B `RateLimiter`** (which
+  counts only failed attempts — correct for login endpoints where
+  automated bots probe wrong creds). For a compliance export endpoint
+  every download is sensitive enough to bound by total volume. The
+  shared `RateLimiter` is **unchanged**; M15.3.C uses a new
+  M15.3.C-local `ExportAttemptLimiter` class in
+  `dashboard/auth/audit_export.py`. Both limiters coexist; M15.3.A
+  and M15.3.B behaviour is preserved.
+
+  Rejected (429) attempts are intentionally **not** themselves
+  recorded into the limiter's per-IP bucket — this prevents a burst
+  of post-cap requests from indefinitely extending the lockout. The
+  cap is purely on attempts that were ALLOWED through the rate
+  check. Rejected attempts are still meta-audited (one
+  `audit_export_request` row per 429) for compliance visibility.
 
 ---
 
@@ -294,7 +311,7 @@ M15.3.B's 4 manual_reset kinds).
 
 ---
 
-## §8 — Test suite (32 tests, 12 groups)
+## §8 — Test suite (37 tests, 12 groups)
 
 | G | Class | Tests | Asserts |
 |---|---|---|---|
@@ -306,7 +323,7 @@ M15.3.B's 4 manual_reset kinds).
 | G6 | `TestExportRowCap` | 1 | Monkey-patches `MAX_EXPORT_ROWS=5`, seeds 10 rows, asserts 400 `row_cap_exceeded` with `max_rows` + `row_counts` + `hint` |
 | G7 | `TestExportRedaction` | 4 | Scanner finds env-keyed secret; ignores short values; catches `otpauth://`; endpoint 500 + meta-audit + NO secret value in response/extras/logs |
 | G8 | `TestExportSelfAudit` | 2 | Success writes audit row with matching `export_id`; failure writes row with `reason` |
-| G9 | `TestExportRateLimit` | 1 | 10 failed-format calls + 11th → 429 |
+| G9 | `TestExportRateLimit` | 6 | **(Re-spec 2026-06-05)** First 10 successful exports allowed; 11th successful attempt → 429; mixed-outcome attempts (success + format-invalid + date-invalid) also count toward cap; rate-limited attempt writes `audit_export_request` `success=0` `reason='rate_limited'`; no secret values leak into rate-limit response or audit extras even with known long secrets in env; unit-level `ExportAttemptLimiter` semantics (3 allowed / 4th denied / sliding-window age-out / per-IP isolation) |
 | G10 | `TestNoBrokerImports` | 3 | AST scan: `audit_export.py` has no broker/scanner/strategy/engine imports; string literals have no broker method names; endpoint function body has no broker imports |
 | G11 | `TestProtectedFilesUntouched` | 1 | 0/24 protected files modified vs `384e484` (M15.3.B-closeout HEAD) |
 | G12 | `TestAllowedKindsRegistered` | 2 | `audit_export_request` is in `ALLOWED_KINDS`; the runtime snapshot in `audit_export.py` matches the live `ALLOWED_KINDS` set |
@@ -388,12 +405,6 @@ sudo sqlite3 /opt/algo-trader/data/signals.db \
 
 ## §10 — Honest residual
 
-- **Rate-limit only counts failures.** Per the existing M15.3.A/B
-  RateLimiter pattern. A high-volume legitimate operator workflow
-  would not hit the 10/hour cap. Acceptable trade-off; if it becomes a
-  real problem, the RateLimiter API needs a unified `record_attempt()`
-  method consistent across all three M15.3 callsites.
-
 - **No cryptographic signing.** The SHA-256 in the manifest is integrity
   (was the file modified after export), not provenance (did Anthropic
   generate this). Adding HMAC/sig would require a server-side key plus
@@ -414,8 +425,21 @@ sudo sqlite3 /opt/algo-trader/data/signals.db \
   `'operator'`. M15.3.D-or-later would need to thread the authenticated
   user identity through; out of scope here.
 
-- **Rate-limit and replay caches are in-memory.** A dashboard restart
-  resets them. Same trade-off as M15.3.A and M15.3.B.
+- **Rate-limit + replay caches are in-memory and per-process.** A
+  dashboard restart resets them. Same trade-off as M15.3.A and M15.3.B.
+  The dashboard runs single-worker (no gunicorn), so per-process is
+  sufficient. If multi-worker is introduced later, the
+  `ExportAttemptLimiter` would need to move to a shared store (e.g.
+  the SQLite DB) to maintain its semantics across workers.
+
+- **Rejected-attempt write amplification.** Per the rate-limit
+  design, every 429 response writes one `audit_export_request` row.
+  An authenticated attacker could in principle burst thousands of
+  requests after hitting the cap, each one generating one audit
+  row. This is actually a *feature* for compliance — every attempted
+  access is logged — but it bounds the per-day audit-table growth
+  at "attacker request rate × 24h". Acceptable given the attacker
+  must already have valid creds + TOTP to reach this endpoint.
 
 - **No CSV-Excel character set negotiation.** The CSV files are UTF-8.
   Excel on Windows defaults to CP1252 in some locales; if the operator's

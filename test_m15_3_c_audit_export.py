@@ -849,6 +849,18 @@ class TestExportSelfAudit(unittest.TestCase):
 
 
 class TestExportRateLimit(unittest.TestCase):
+    """Per Q-C.8 M15.3.C re-spec 2026-06-05:
+       EVERY authenticated attempt that reaches the endpoint counts
+       toward the 10/hour/IP cap — successful jsonl, successful csv,
+       format-invalid, date-invalid, row-cap-exceeded,
+       redaction_violation. The 11th attempt returns 429 and is
+       itself meta-audited as audit_export_request success=0
+       reason='rate_limited'.
+
+       This is STRICTER than the shared M15.3.A/B RateLimiter
+       (which counts only failures). The shared limiter is
+       unchanged; M15.3.C uses an M15.3.C-local
+       ExportAttemptLimiter (see dashboard/auth/audit_export.py)."""
     def setUp(self):
         self.tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp_db.close()
@@ -859,26 +871,159 @@ class TestExportRateLimit(unittest.TestCase):
         except OSError:
             pass
 
-    def test_ten_per_hour_then_429(self):
-        """Per Q-C.8: 10 exports/hour/IP. The 11th gets 429.
-        The limiter only counts FAILED attempts as recorded failures,
-        but successful attempts also bump the counter via the standard
-        RateLimiter API. To test reliably: drive 10 failed-format calls,
-        then assert the 11th is 429."""
+    def _setup(self):
         secret = _fresh_secret()
         dashapp = _make_test_app(db_path=self.tmp_db.name,
                                    totp_secret=secret)
         cli = dashapp.app.test_client()
         _login(cli, totp_secret=secret)
+        return cli
+
+    def test_ten_successful_exports_allowed(self):
+        """The first 10 successful (jsonl) exports must all succeed."""
+        cli = self._setup()
         for i in range(10):
-            r = cli.get("/api/audit-export?format=xml")  # invalid format
-            self.assertEqual(r.status_code, 400)
+            r = cli.get("/api/audit-export?format=jsonl"
+                           "&from=2026-06-01&to=2026-06-30")
+            self.assertEqual(r.status_code, 200,
+                f"export #{i+1} should succeed (got {r.status_code})")
+
+    def test_eleventh_successful_attempt_returns_429(self):
+        """After 10 successful exports, the 11th must be rate-limited."""
+        cli = self._setup()
+        for i in range(10):
+            r = cli.get("/api/audit-export?format=jsonl"
+                           "&from=2026-06-01&to=2026-06-30")
+            self.assertEqual(r.status_code, 200)
+        # 11th attempt — request a valid jsonl export, must be 429.
         r = cli.get("/api/audit-export?format=jsonl"
-                       "&from=2026-06-01&to=2026-06-04")
-        self.assertEqual(r.status_code, 429)
+                       "&from=2026-06-01&to=2026-06-30")
+        self.assertEqual(r.status_code, 429,
+            "11th attempt must be rate-limited")
         d = r.get_json()
         self.assertEqual(d["error"], "rate_limited")
         self.assertGreater(d["retry_after_sec"], 0)
+        self.assertLessEqual(d["retry_after_sec"], 3600,
+            "retry_after_sec must be within the 3600s window")
+
+    def test_failed_exports_also_count_toward_cap(self):
+        """Per Q-C.8 M15.3.C re-spec: format-invalid + date-invalid +
+        successful exports ALL count. Use a mix of 5 successes + 5
+        failures; the 11th attempt (regardless of would-be outcome)
+        must be 429."""
+        cli = self._setup()
+        # 5 successful jsonl
+        for i in range(5):
+            r = cli.get("/api/audit-export?format=jsonl"
+                           "&from=2026-06-01&to=2026-06-30")
+            self.assertEqual(r.status_code, 200)
+        # 3 format-invalid
+        for i in range(3):
+            r = cli.get("/api/audit-export?format=xml")
+            self.assertEqual(r.status_code, 400)
+        # 2 date-invalid
+        for i in range(2):
+            r = cli.get("/api/audit-export?from=not-a-date")
+            self.assertEqual(r.status_code, 400)
+        # That's 10 total. 11th — even a valid request — is 429.
+        r = cli.get("/api/audit-export?format=csv"
+                       "&from=2026-06-01&to=2026-06-30")
+        self.assertEqual(r.status_code, 429,
+            "11th attempt must be 429 regardless of would-be outcome")
+
+    def test_rate_limited_attempt_writes_meta_audit_row(self):
+        """Per Q-C.8 M15.3.C re-spec: rate-limited attempts are
+        themselves meta-audited as audit_export_request success=0
+        reason='rate_limited'."""
+        cli = self._setup()
+        # Exhaust the cap with 10 successful exports.
+        for i in range(10):
+            cli.get("/api/audit-export?format=jsonl"
+                       "&from=2026-06-01&to=2026-06-30")
+        # 11th attempt — gets 429.
+        r = cli.get("/api/audit-export?format=jsonl"
+                       "&from=2026-06-01&to=2026-06-30")
+        self.assertEqual(r.status_code, 429)
+        # Verify the latest audit_export_request row records the
+        # rate-limited attempt.
+        c = sqlite3.connect(self.tmp_db.name)
+        try:
+            row = c.execute(
+                "SELECT success, extras_json FROM auth_events "
+                "WHERE kind='audit_export_request' "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            c.close()
+        self.assertIsNotNone(row, "audit row missing")
+        success, extras_json = row
+        self.assertEqual(success, 0,
+            "rate-limited attempt must be recorded with success=0")
+        extras = json.loads(extras_json)
+        self.assertEqual(extras["reason"], "rate_limited")
+
+    def test_no_secrets_in_rate_limit_response_or_extras(self):
+        """The rate-limited path must not leak any env-keyed secret
+        into the response body, the audit row's extras, or logs."""
+        # Set known long secrets in the env so we can grep for them.
+        known_secrets = {
+            "DASHBOARD_TOTP_SECRET":   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "DASHBOARD_PASSWORD_HASH": "$2b$12$AAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "IBKR_API_KEY":            "IBKR_LIVE_KEY_VERYLONGANDSECRET",
+            "ETORO_USER_KEY":          "ETORO_KEY_VERYLONGANDSECRETVALUE",
+        }
+        for k, v in known_secrets.items():
+            os.environ[k] = v
+
+        cli = self._setup()
+        for i in range(10):
+            cli.get("/api/audit-export?format=jsonl"
+                       "&from=2026-06-01&to=2026-06-30")
+        r = cli.get("/api/audit-export?format=jsonl"
+                       "&from=2026-06-01&to=2026-06-30")
+        self.assertEqual(r.status_code, 429)
+
+        # Response body must not contain any secret value.
+        resp_text = r.get_data(as_text=True)
+        for k, v in known_secrets.items():
+            self.assertNotIn(v, resp_text,
+                f"rate-limit response must not contain {k!r}")
+
+        # Audit-row extras_json must not contain any secret value.
+        c = sqlite3.connect(self.tmp_db.name)
+        try:
+            rows = c.execute(
+                "SELECT extras_json FROM auth_events "
+                "WHERE kind='audit_export_request'").fetchall()
+        finally:
+            c.close()
+        for (extras_json,) in rows:
+            if extras_json is None:
+                continue
+            for k, v in known_secrets.items():
+                self.assertNotIn(v, extras_json,
+                    f"audit row extras_json must not contain {k!r}")
+        # Cleanup the env we polluted (rest of tests shouldn't depend on it).
+        for k in known_secrets:
+            os.environ.pop(k, None)
+
+    def test_export_attempt_limiter_unit_semantics(self):
+        """Unit-level: the helper class itself counts every attempt
+        and aging out works on the sliding window. Cheap belt-and-
+        braces test that's independent of the endpoint integration."""
+        from dashboard.auth.audit_export import ExportAttemptLimiter
+        lim = ExportAttemptLimiter(max_per_window=3, window_sec=100)
+        # First 3 allowed; 4th denied.
+        self.assertTrue(lim.check_and_record("ip-a", now=10.0)[0])
+        self.assertTrue(lim.check_and_record("ip-a", now=11.0)[0])
+        self.assertTrue(lim.check_and_record("ip-a", now=12.0)[0])
+        allowed, retry = lim.check_and_record("ip-a", now=13.0)
+        self.assertFalse(allowed)
+        self.assertGreater(retry, 0)
+        # ip-b is fresh.
+        self.assertTrue(lim.check_and_record("ip-b", now=13.0)[0])
+        # After the window elapses, ip-a is fresh again.
+        allowed, _ = lim.check_and_record("ip-a", now=200.0)
+        self.assertTrue(allowed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -42,6 +42,7 @@ test_m15_3_c_audit_export.TestNoBrokerImports.
 """
 from __future__ import annotations
 
+import collections
 import csv
 import hashlib
 import io
@@ -50,6 +51,8 @@ import logging
 import os
 import re
 import sqlite3
+import threading
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -68,20 +71,124 @@ MAX_EXPORT_ROWS = 100_000
 SUPPORTED_FORMATS = ("jsonl", "csv")
 DEFAULT_FORMAT = "jsonl"
 
-# Rate-limit policy per Q-C.8: 10 exports / hour / IP. Cheaper than
-# manual_reset (3/hour) because exports are non-destructive.
-EXPORT_RATE_LIMIT_THRESHOLD = 10
+# Rate-limit policy per Q-C.8 (M15.3.C re-spec'd 2026-06-05 after the
+# ChatGPT review correction):
+#   10 EVERY authenticated attempt that reaches the endpoint counts —
+#   including successful jsonl/csv exports, format/date validation
+#   failures after auth, row_cap_exceeded, redaction_violation. This
+#   differs from the shared dashboard.auth.rate_limit.RateLimiter
+#   (M15.3.A login pattern, which counts only failures).
+EXPORT_RATE_LIMIT_MAX_PER_WINDOW = 10
 EXPORT_RATE_LIMIT_WINDOW_SEC = 3600
-EXPORT_RATE_LIMIT_LOCKOUT_SEC = 3600
 
 
-def make_export_limiter():
-    """Build a fresh RateLimiter for audit-export. Tests build their own."""
-    from dashboard.auth.rate_limit import RateLimiter
-    return RateLimiter(
-        threshold=EXPORT_RATE_LIMIT_THRESHOLD,
+class ExportAttemptLimiter:
+    """M15.3.C-local rate limiter for the audit-export endpoint.
+
+    DIFFERENT FROM the shared RateLimiter (dashboard.auth.rate_limit):
+
+      * RateLimiter (M15.3.A login pattern): counts only FAILED
+        attempts. Correct for login endpoints where automated bots
+        probe wrong creds — we want generous headroom for legitimate
+        mistyped passwords without locking the operator out.
+      * ExportAttemptLimiter (this class, M15.3.C): counts EVERY
+        authenticated attempt that reaches the export endpoint,
+        regardless of outcome. Correct for a compliance export where
+        every download is sensitive enough to bound by total volume.
+
+    Both limiters coexist. This class does NOT modify the shared
+    RateLimiter — M15.3.A and M15.3.B behaviour is unchanged.
+
+    Implementation: sliding window. Per client IP, keeps a deque of
+    timestamps for attempts that passed the rate check (i.e. were
+    allowed through). On each call:
+      1. Prune expired timestamps (older than window_sec).
+      2. If remaining count < max: record this attempt and return
+         (allowed=True, retry_after=0).
+      3. If remaining count >= max: do NOT record. Return
+         (allowed=False, retry_after=time-until-oldest-ages-out).
+
+    Rejected attempts are intentionally NOT recorded — this prevents
+    a burst of rejected attempts from indefinitely extending the
+    lockout. The cap is purely on attempts that were ALLOWED through.
+    Rejected attempts are still meta-audited at the endpoint layer
+    (audit_export_request, success=0, reason='rate_limited').
+
+    Thread safety: a single threading.Lock guards all per-IP bucket
+    mutations. Atomic prune + check + record in one critical section.
+    The dashboard runs single-worker (no gunicorn), so cross-process
+    sync is not required.
+    """
+
+    def __init__(self, *,
+                  max_per_window: int = EXPORT_RATE_LIMIT_MAX_PER_WINDOW,
+                  window_sec: int = EXPORT_RATE_LIMIT_WINDOW_SEC):
+        if max_per_window < 1:
+            raise ValueError("max_per_window must be >= 1")
+        if window_sec < 1:
+            raise ValueError("window_sec must be >= 1")
+        self._max = int(max_per_window)
+        self._window = int(window_sec)
+        self._buckets: Dict[str, "collections.deque[float]"] = {}
+        self._lock = threading.Lock()
+
+    @property
+    def max_per_window(self) -> int:
+        return self._max
+
+    @property
+    def window_sec(self) -> int:
+        return self._window
+
+    def check_and_record(self, ip: Optional[str],
+                          *, now: Optional[float] = None,
+                          ) -> Tuple[bool, int]:
+        """Atomic: prune expired + check + record.
+
+        Args:
+            ip: client IP string. Empty/None bucketed under '_unknown'
+                so rejected attempts can't bypass by spoofing empty IP.
+            now: monotonic time override (for tests).
+
+        Returns:
+            (allowed, retry_after_sec)
+              allowed=True  — this attempt is within the cap; recorded.
+              allowed=False — would exceed cap; NOT recorded.
+                              retry_after_sec is seconds until the
+                              oldest in-window attempt ages out
+                              (minimum 1).
+        """
+        if not ip:
+            ip = "_unknown"
+        clock = now if now is not None else time.monotonic()
+        with self._lock:
+            bucket = self._buckets.setdefault(ip, collections.deque())
+            cutoff = clock - self._window
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            if len(bucket) >= self._max:
+                # Oldest in-window timestamp ages out at:
+                #   bucket[0] + self._window
+                retry_after = max(1, int(bucket[0] + self._window - clock))
+                return False, retry_after
+            bucket.append(clock)
+            return True, 0
+
+    def reset(self) -> None:
+        """Clear all per-IP counters. Test helper."""
+        with self._lock:
+            self._buckets.clear()
+
+
+def make_export_limiter() -> ExportAttemptLimiter:
+    """Build a fresh ExportAttemptLimiter with M15.3.C defaults.
+
+    The endpoint and tests both call this — endpoint at lazy init,
+    tests on every _make_test_app() call so each test starts fresh.
+    """
+    return ExportAttemptLimiter(
+        max_per_window=EXPORT_RATE_LIMIT_MAX_PER_WINDOW,
         window_sec=EXPORT_RATE_LIMIT_WINDOW_SEC,
-        lockout_sec=EXPORT_RATE_LIMIT_LOCKOUT_SEC,
     )
 
 

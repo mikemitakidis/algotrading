@@ -5678,7 +5678,6 @@ def m153c_audit_export():
     """
     import sqlite3 as _sqlite3
     from dashboard.auth import audit_export as _ae
-    from dashboard.auth.rate_limit import LoginRateLimited
 
     client_ip = _m153a_client_ip()
     limiter = _m153c_get_export_limiter()
@@ -5704,23 +5703,22 @@ def m153c_audit_export():
         extras = {k: v for k, v in extras.items() if v is not None}
         _m153a_audit('audit_export_request', success=success, extras=extras)
 
-    # 1. Rate limit.
-    try:
-        limiter.check_locked(client_ip)
-    except LoginRateLimited as e:
-        _write_meta(success=False, export_id=None, fmt=None,
-                     from_iso=None, to_iso=None, row_counts=None,
-                     reason='rate_limited')
+    # 1. Rate limit — counts EVERY authenticated attempt that reaches
+    #    this endpoint (success or failure). Per Q-C.8 M15.3.C re-spec
+    #    2026-06-05: a compliance export endpoint must bound total
+    #    volume per IP, not just failed-credential probes. The shared
+    #    M15.3.A/B RateLimiter is unchanged; this uses an M15.3.C-local
+    #    ExportAttemptLimiter (see dashboard/auth/audit_export.py).
+    allowed, retry_after = limiter.check_and_record(client_ip)
+    if not allowed:
+        _write_meta(success=False, reason='rate_limited')
         return jsonify({'ok': False, 'error': 'rate_limited',
-                         'retry_after_sec': e.retry_after_sec}), 429
+                         'retry_after_sec': retry_after}), 429
 
     # 2. Format param.
     fmt = (request.args.get('format') or _ae.DEFAULT_FORMAT).lower()
     if fmt not in _ae.SUPPORTED_FORMATS:
-        limiter.record_failure(client_ip)
-        _write_meta(success=False, export_id=None, fmt=fmt,
-                     from_iso=None, to_iso=None, row_counts=None,
-                     reason='format_invalid')
+        _write_meta(success=False, fmt=fmt, reason='format_invalid')
         return jsonify({'ok': False, 'error': 'format_invalid',
                          'supported': list(_ae.SUPPORTED_FORMATS)}), 400
 
@@ -5729,10 +5727,7 @@ def m153c_audit_export():
     to_str   = request.args.get('to')   or None
     ok, derr, from_iso, to_iso = _ae.validate_date_range(from_str, to_str)
     if not ok:
-        limiter.record_failure(client_ip)
-        _write_meta(success=False, export_id=None, fmt=fmt,
-                     from_iso=None, to_iso=None, row_counts=None,
-                     reason=derr)
+        _write_meta(success=False, fmt=fmt, reason=derr)
         return jsonify({'ok': False, 'error': derr}), 400
 
     # 4. Row-count cap.
@@ -5744,8 +5739,7 @@ def m153c_audit_export():
         conn.close()
     total = n_auth + n_rd
     if total > _ae.MAX_EXPORT_ROWS:
-        limiter.record_failure(client_ip)
-        _write_meta(success=False, export_id=None, fmt=fmt,
+        _write_meta(success=False, fmt=fmt,
                      from_iso=from_iso, to_iso=to_iso,
                      row_counts={'auth_events': n_auth,
                                   'risk_decisions_manual_reset': n_rd},
@@ -5774,9 +5768,8 @@ def m153c_audit_export():
                 conn, from_iso=from_iso, to_iso=to_iso,
                 export_id=export_id, generated_at_utc=generated_at)
             content_type = 'application/zip'
-    except Exception as e:
+    except Exception:
         _m153a_log.exception("audit_export: build failed")
-        limiter.record_failure(client_ip)
         _write_meta(success=False, export_id=export_id, fmt=fmt,
                      from_iso=from_iso, to_iso=to_iso,
                      row_counts={'auth_events': n_auth,
