@@ -1387,6 +1387,209 @@ class TestStatusCommandAutoMigrates(_TmpEnv):
 
 
 # ---------------------------------------------------------------------------
+# G22. dashboard /api/historical/status auto-migrates v1 DB (M16.A.fix-3)
+# ---------------------------------------------------------------------------
+class TestDashboardStatusEndpointAutoMigrates(_TmpEnv):
+    """M16.A.fix-3: GET /api/historical/status must work against a
+    pre-existing v1 historical.db. Same bug-shape as the CLI status
+    fix (M16.A.fix-2): the endpoint queried `symbols_rate_limited`
+    without first calling _hist_schema.apply_schema, so the dashboard
+    raised OperationalError when the v1 DB hadn't yet been migrated
+    by some other code path.
+    """
+
+    def _make_v1_db(self):
+        """Create a v1-shaped DB without `symbols_rate_limited`.
+
+        Same fixture as G21 TestStatusCommandAutoMigrates — duplicated
+        here so this test stays self-contained.
+        """
+        from bot.historical import schema
+        c = schema.open_db(self.db_path)
+        try:
+            c.execute("""
+                CREATE TABLE historical_schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_utc TEXT NOT NULL)""")
+            c.execute("""
+                CREATE TABLE historical_symbols (
+                    symbol TEXT PRIMARY KEY,
+                    asset_class TEXT NOT NULL,
+                    is_active INTEGER NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    CHECK (is_active IN (0, 1)))""")
+            c.execute("""
+                CREATE TABLE historical_coverage (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    first_ts_utc TEXT, last_ts_utc TEXT,
+                    bar_count INTEGER NOT NULL DEFAULT 0,
+                    missing_count INTEGER NOT NULL DEFAULT 0,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    quality_status TEXT NOT NULL DEFAULT 'unknown',
+                    freshness_status TEXT NOT NULL DEFAULT 'unknown',
+                    last_refresh_at_utc TEXT,
+                    last_refresh_id INTEGER,
+                    provider_limit_note TEXT,
+                    source_timeframe TEXT,
+                    derivation_method TEXT NOT NULL DEFAULT 'native',
+                    resample_rule_version INTEGER,
+                    PRIMARY KEY (symbol, timeframe, provider))""")
+            # v1 shape — NO symbols_rate_limited.
+            c.execute("""
+                CREATE TABLE historical_refresh_runs (
+                    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at_utc TEXT NOT NULL,
+                    finished_at_utc TEXT,
+                    mode TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    symbols_requested TEXT NOT NULL,
+                    timeframes_requested TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    symbols_attempted INTEGER NOT NULL DEFAULT 0,
+                    symbols_ok INTEGER NOT NULL DEFAULT 0,
+                    symbols_no_data INTEGER NOT NULL DEFAULT 0,
+                    symbols_failed INTEGER NOT NULL DEFAULT 0,
+                    bars_fetched INTEGER NOT NULL DEFAULT 0,
+                    bars_written INTEGER NOT NULL DEFAULT 0,
+                    bars_updated INTEGER NOT NULL DEFAULT 0,
+                    errors_count INTEGER NOT NULL DEFAULT 0,
+                    rate_limit_count INTEGER NOT NULL DEFAULT 0,
+                    duration_sec REAL,
+                    summary_json TEXT)""")
+            c.execute("""
+                CREATE TABLE historical_quality_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER REFERENCES historical_refresh_runs(run_id),
+                    symbol TEXT, timeframe TEXT, provider TEXT, ts_utc TEXT,
+                    severity TEXT NOT NULL, kind TEXT NOT NULL,
+                    message TEXT NOT NULL, details_json TEXT,
+                    created_at_utc TEXT NOT NULL)""")
+            c.execute("""
+                CREATE TABLE historical_refresh_lock (
+                    id INTEGER PRIMARY KEY CHECK (id=1),
+                    owner_pid INTEGER, owner_host TEXT,
+                    acquired_at_utc TEXT, lease_expires_at_utc TEXT,
+                    last_heartbeat_utc TEXT)""")
+            c.execute("INSERT INTO historical_schema_version "
+                      "(version, applied_at_utc) VALUES (1, '2026-06-01T00:00:00+00:00')")
+            c.execute("INSERT INTO historical_refresh_lock (id) VALUES (1)")
+            c.execute(
+                "INSERT INTO historical_refresh_runs "
+                "(started_at_utc, mode, provider, symbols_requested, "
+                " timeframes_requested, status, symbols_ok, bars_written) "
+                "VALUES ('2026-06-01T10:00:00+00:00', 'backfill', "
+                "  'yfinance', '[\"AAPL\"]', '[\"1D\"]', 'ok', 5, 12)")
+            c.commit()
+        finally:
+            c.close()
+
+    def _flask_client_authed(self):
+        """Build a Flask test client with an authed session, then
+        return (client, app_module). Mirrors the pattern from
+        test_m14_g_dashboard.py:_flask_client.
+        """
+        import sys as _sys
+        # Ensure a clean re-import so dashboard.app's module-level
+        # state (DB_PATH, etc.) doesn't leak between tests.
+        for k in [k for k in list(_sys.modules) if k.startswith("dashboard")]:
+            del _sys.modules[k]
+        from dashboard import app as _app_mod
+        flask_app = _app_mod.app
+        flask_app.config["TESTING"] = True
+        client = flask_app.test_client()
+        with client.session_transaction() as sess:
+            sess["user"] = "admin"
+            sess["logged_in"] = True
+            sess["authed"] = True
+        return client, _app_mod
+
+    def test_dashboard_status_against_v1_db_returns_200(self):
+        """Hitting /api/historical/status with a v1 DB must return 200
+        with valid JSON — NOT 500 OperationalError."""
+        self._make_v1_db()
+
+        # Confirm v1 shape BEFORE hitting the endpoint.
+        from bot.historical import schema
+        c = schema.open_db(self.db_path)
+        try:
+            cols = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertNotIn("symbols_rate_limited", cols,
+                              "test setup error — DB already v2")
+            self.assertEqual(schema.get_schema_version(c), 1)
+        finally:
+            c.close()
+
+        client, app_mod = self._flask_client_authed()
+
+        # Patch the schema.default_db_path called inside the endpoint
+        # so it resolves to our v1 fixture DB.
+        import unittest.mock as _mock
+        from bot.historical import schema as _hist_schema
+        with _mock.patch.object(
+                _hist_schema, "default_db_path", return_value=self.db_path):
+            response = client.get("/api/historical/status")
+
+        # Status code 200, JSON body.
+        self.assertEqual(
+            response.status_code, 200,
+            f"endpoint failed against v1 DB: status={response.status_code}, "
+            f"body={response.get_data(as_text=True)[:500]}")
+        self.assertEqual(response.content_type, "application/json")
+
+        body = response.get_json()
+        self.assertTrue(body.get("ok"), f"body.ok=False: {body}")
+        # The migration ran and the row was readable (we seeded one
+        # symbols_ok=5 bars_written=12).
+        last = body.get("last_refresh")
+        self.assertIsNotNone(last, f"no last_refresh in body: {body}")
+        self.assertEqual(last.get("symbols_ok"), 5)
+        self.assertEqual(last.get("bars_written"), 12)
+        # symbols_rate_limited key is present (post-migration) and
+        # null/0 for the v1-shape row that didn't have the column.
+        self.assertIn("symbols_rate_limited", last)
+        self.assertIn(last["symbols_rate_limited"], (None, 0))
+
+        # And the column now exists on disk (migration was persisted).
+        c = schema.open_db(self.db_path)
+        try:
+            cols = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertIn("symbols_rate_limited", cols,
+                "endpoint did NOT migrate the DB to v2")
+            self.assertEqual(schema.get_schema_version(c), 2)
+        finally:
+            c.close()
+
+    def test_dashboard_status_missing_db_returns_200_unavailable(self):
+        """If the historical.db doesn't exist yet, the endpoint must
+        still return 200 with available=False (NOT a 500). This was
+        already the behaviour; included here to lock it in.
+        """
+        # Don't create the DB.
+        # Point default_db_path at a path that won't exist.
+        bad_path = self.db_path.with_name("nonexistent_v3_db.db")
+        if bad_path.exists():
+            bad_path.unlink()
+
+        client, _ = self._flask_client_authed()
+
+        import unittest.mock as _mock
+        from bot.historical import schema as _hist_schema
+        with _mock.patch.object(
+                _hist_schema, "default_db_path", return_value=bad_path):
+            response = client.get("/api/historical/status")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertTrue(body.get("ok"))
+        self.assertFalse(body.get("available"))
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

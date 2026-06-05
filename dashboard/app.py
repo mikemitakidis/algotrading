@@ -5953,6 +5953,13 @@ def m16_historical_status():
 
     conn = _hist_schema.open_db(db_path)
     try:
+        # M16.A.fix-3: idempotent migration BEFORE any SELECT that
+        # references v2-shaped columns (symbols_rate_limited). Without
+        # this, the endpoint would raise OperationalError ("no such
+        # column") when the dashboard is the first thing to touch a
+        # pre-v2 historical.db. Matches the cmd_status fix in fix-2.
+        _hist_schema.apply_schema(conn)
+
         last_row = conn.execute(
             "SELECT run_id, started_at_utc, finished_at_utc, mode, status, "
             "       provider, symbols_ok, symbols_no_data, symbols_failed, "
