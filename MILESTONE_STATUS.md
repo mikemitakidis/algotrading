@@ -46,7 +46,8 @@ project-wide reconciliation narrative lives in
 | 13 | eToro Integration / Manual Bridge | CLOSED | `docs/M13_7_closeout.md` (chain → `1e2ced7`); zero real orders placed |
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
 | 15 | Production Hardening | CLOSED (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2/.3.A.cutover/.3.B/.3.C all CLOSED 2026-06-05) | See M15 detail below |
-| 16–23 | Future scope | PENDING | See `ROADMAP.md` |
+| 16 | Historical Data + First Signal Engine | CLOSED 2026-06-05 (M16.A + M16.B + fixes 1-4) | See M16 detail below; `bot/historical/*`, `data/historical/yfinance/1D/AAPL.parquet` (real data); commit chain `c6e98b7` → `aef8335` |
+| 17–23 | Future scope | PENDING | See `ROADMAP.md`; next is an audit-only pass over M1–M16 before M17 coding |
 
 ---
 
@@ -373,7 +374,85 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - M15.4 — IB Gateway visibility/truth layer (CLOSED 2026-06-02)
   - M15.5 — IBKR paper exposure wiring (CLOSED earlier)
   - M15.3.A / .A.2 / .A.cutover / .B / .C — Dashboard auth + 2FA + TLS + manual_reset + audit export (all CLOSED, see above)
-- **M15 is now fully CLOSED.** The next active milestone is **M16 (Historical data + first signal engine)** per the post-M15 strategic direction (recorded 2026-06-04 on M15.3.A.cutover closeout, reaffirmed at every subsequent M15.3 sub-milestone closeout). Dashboard work stops unless safety- or compliance-driven.
+**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** The next step is an **audit-only pass over M1–M16** before any M17 coding begins. Dashboard work stops unless safety- or compliance-driven.
+
+---
+
+### Milestone 16 — Historical Data + First Signal Engine (CLOSED 2026-06-05)
+
+**M16.A + M16.B + four small follow-up fixes, all VPS-verified.**
+
+Real provider fetch → Parquet write → SQLite coverage update → local `get_bars()` read → SMA local-read proof, all working end-to-end with honest reporting at every failure mode.
+
+**Commit chain on `origin/main`:**
+- `c6e98b7` — M16.A: historical data engine + M16.B local-read proof
+- `af96eda` — M16.A.fix-1: honest rate-limit classification (was silently `no_data`)
+- `c5702f1` — M16.A.fix-2: `cmd_status` auto-migrates v1 DB + clean stale docstrings
+- `cc979aa` — M16.A.fix-3: `/api/historical/status` auto-migrates v1 DB
+- `aef8335` — M16.A.fix-4: freshness-aware incremental no-op + clean remaining docstrings
+
+**Architecture (per approved pre-code checklist + 7 ChatGPT corrections):**
+- Package `bot/historical/` (renamed mid-flight from `bot/data/` after collision with the existing M6 `bot/data.py` provider-delegation module; `bot/data.py` byte-identical to baseline, protected-files invariant held).
+- Hybrid storage: SQLite metadata at `data/historical.db` (separate from `signals.db`) + Parquet bars at `data/historical/<provider>/<timeframe>/<symbol>.parquet`. Provider in path per Correction D-δ.
+- 6 SQLite tables (`historical_schema_version`, `historical_symbols`, `historical_coverage`, `historical_refresh_runs`, `historical_quality_events`, `historical_refresh_lock`). Schema version 2 (v1 → v2 added `symbols_rate_limited` for honest rate-limit classification).
+- Raw OHLC + `adj_close` + `adjustment_ratio` + `is_adjusted` columns (Correction 2) — uniform-ratio adjustment approximation documented honestly in `docs/M16_historical_data.md` §C.
+- 4H timeframe resampled at write time from 1H, with explicit `source_timeframe`/`derivation_method`/`resample_rule_version` metadata in coverage (D-α).
+- SQLite-table-based cross-process refresh lock with PID-aliveness probe + 30-minute lease (Correction 1).
+- One public read façade `bot.historical.store.get_bars(...)`; one write orchestrator `bot.historical.refresh.run(...)`.
+- 4 refresh modes (backfill / incremental / repair / force_rebuild). Incremental is provider-free when coverage is already fresh (fix-4).
+- 5 hard-reject quality rules + 4 warn-tag rules + bitwise `quality_flags` Parquet column.
+- 3 dashboard GET endpoints (`/api/historical/status`, `/coverage`, `/quality-events`). No POST refresh per Correction D-ε.
+- pyarrow pinned `>=24,<25` in `requirements.txt`; clean-install verified.
+- `data/symbol_universe.csv` (10-symbol V1 list AAPL,MSFT,GOOGL,AMZN,META,NVDA,TSLA,JPM,WMT,KO) git-tracked intentionally; all other `data/historical/*` runtime artifacts ignored.
+
+**VPS evidence (2026-06-05, fix-4 acceptance):**
+- HEAD = `aef8335` (= expected)
+- `requirements.txt` install exit code 0; pyarrow = 24.0.0
+- M16 suite: **70/70 OK, 1 skipped** (skipped is the live-yfinance smoke gated on `M16_LIVE=1`)
+- Schema migration verified: `schema_version = 2`, `symbols_rate_limited` column present
+- Live AAPL 1D backfill (fix-3 run): `status=ok`, `symbols_ok=1`, `bars_fetched=11462`, `bars_written=11462`, **real Parquet file on disk at `/opt/algo-trader/data/historical/yfinance/1D/AAPL.parquet` = 571,139 bytes**
+- Local read proof: `get_bars` returns 11,462 rows, `freshness_status=fresh`, `last_ts_utc=2026-06-05`, SMA(20) returned 5 trailing values
+- Fix-4 acceptance (fresh incremental no-op): `status=ok`, `symbols_attempted=1`, `symbols_ok=1`, `no_data=0`, `failed=0`, `rate_limited=0`, `bars_fetched=0`, `bars_written=0`, `bars_updated=0`, `duration_sec=0.01`, no provider call, no banner
+- DB run log: `run_id 7 = incremental|ok|1|1|0|0|0|0|0` (fix-4 no-op), `run_id 4 = backfill|ok|1|1|0|0|0|0|11462` (fix-3 real fetch)
+- Production: dashboard active, caddy active, HTTPS `/api/health` = 200, git status clean
+
+**M16 proves end-to-end:**
+1. Real yfinance provider fetch
+2. Atomic Parquet write (temp → validate → rename)
+3. SQLite coverage update
+4. Local `get_bars()` read with no network
+5. SMA local-read proof (M16.B capability gate)
+6. Honest rate-limit classification (fix-1: no more silent `no_data` masquerade)
+7. CLI status migration safety (fix-2)
+8. Dashboard status migration safety (fix-3)
+9. Freshness-aware incremental no-op (fix-4): back-to-back incremental never hits the provider when coverage is fresh
+10. No generated runtime data ever committed to git
+
+**Hard constraints upheld across all five commits:**
+- Protected files vs `ceb8cd5`: 0/20 modified (every commit)
+- `bot/data.py` sha256: byte-identical to baseline
+- AST scan over `bot/historical/`: 0 broker / order / scanner / strategy imports
+- Regression sweep: 1,183 tests across 30 suites, 0 failed
+- Git-tracked under `data/`: only the 2 intentional CSVs (`symbol_metadata.csv` pre-existing + `symbol_universe.csv` for V1 universe)
+
+**Authoritative operator reference:** [`docs/M16_historical_data.md`](docs/M16_historical_data.md).
+
+**Known semantic trade-off (documented in M16 runbook §O):**
+- Freshness-aware incremental no-op (fix-4) means a split that lands within the freshness window AND triggers yfinance to retroactively rewrite Adj Close in the same window will not be detected by an incremental within that window. The next incremental past the window catches it via the existing `split_detected` path. For US equities at 1D granularity, splits are rare enough and yfinance's history-rewrite latency is long enough (days) that this is acceptable. An operator who suspects a split can force a check via `force-rebuild`.
+
+**Open known limitations carry-forward to future audit/M17+:**
+- Live multi-symbol backfill at scale remains rate-limit-prone against Yahoo from the VPS IP; the engine reports rate-limits honestly but the operator may need to stagger/reduce/wait. A paid provider behind the same `BaseProvider` contract is a one-file future addition.
+- 4H ↔ 1H consistency edge case: if 1H was just updated but 4H is "fresh" per its own threshold, 4H is not automatically re-resampled. Tracked as a future enhancement.
+
+---
+
+### Post-M16 next step — audit-only pass (not M17 coding yet)
+
+Per operator instruction recorded at M16 closeout (2026-06-05):
+
+**Before any M17 coding starts**, an audit-only pass over M1–M16 from the actual code will be conducted. Two independent inspections (this assistant + ChatGPT) will produce findings lists; the lists will be compared; only then will fix-priority decisions be made. **No code changes during this audit phase.**
+
+This is recorded here to make the deviation from the original roadmap explicit. M17 (Outcome Learning Loop) is still the intended next coding milestone after the audit pass clears.
 
 **M15.3 deferred items** (carry-forwards, all explicitly NOT blocking M15 closure):
 - **Dashboard login latency follow-up** — `M15.3.A.cutover.perf`, non-blocking. Operator observed ~7-10s end-to-end browser login; expected closer to 1-2s (~250ms bcrypt + minimal Caddy overhead). Investigate when convenient.
@@ -408,14 +487,13 @@ Detailed breakdown in [`ROADMAP.md`](ROADMAP.md) (M16+ section restructured 2026
 
 ---
 
-## Future milestones (M16–M23)
+## Future milestones (M17–M23)
 
-Listed for scope-preservation; see `ROADMAP.md` for the full descriptions.
+Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The next step before any M17 coding is an **audit-only pass over M1–M16** (operator instruction recorded 2026-06-05).
 
 | # | Title | Status | Note |
 |---|---|---|---|
-| 16 | Strategy / Historical Intelligence | PENDING | regime-aware backtesting, A/B vs live shadow |
-| 17 | Outcome Learning Loop / Closed-Loop ML | PENDING | hooks `ml_train.py` into scanner as a live filter |
+| 17 | Outcome Learning Loop / Closed-Loop ML | PENDING | hooks `ml_train.py` into scanner as a live filter; dataset quality is the bottleneck (`candidate_snapshots` flywheel still accumulating) |
 | 18 | News / Sentiment / Macro | PENDING | aggregation across multiple providers + macro overlay |
 | 19 | Universe Diagnostics & Discovery | PENDING | why-no-signal explainer, liquidity/spread filters |
 | 20 | Optimiser / Adaptive Sizing | PENDING | confidence-adjusted + volatility-targeted |

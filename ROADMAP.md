@@ -280,13 +280,21 @@ After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safet
 
 ### Near-term (concrete timing estimates per operator 2026-06-04)
 
-#### Milestone 16 — Historical data + first signal engine (3-7 days)
-- Historical OHLCV data across the ~1,200 US equity universe at multiple timeframes (15m, 1H, 4H, Daily) via the existing `yfinance` path.
-- Local cache: deduplicated, gap-detected, re-fetchable.
-- First concrete signal engine — initial implementation aligned with the existing M4 strategy. **Hard constraint** (permanent project rule): do NOT change strategy thresholds to manufacture signals.
-- End-to-end pipeline: data ingest → signal engine → signal rows persisted to existing schema → visible in the dashboard.
+#### Milestone 16 — Historical data + first signal engine (CLOSED 2026-06-05)
+- **Shipped:** historical OHLCV across `data/symbol_universe.csv` (10-symbol V1 sample, extensible to ~1,200) at 1D / 1H / 15m / 4H (4H resampled from 1H at write time) via the existing `yfinance` path.
+- **Local cache:** hybrid SQLite metadata (`data/historical.db`) + Parquet bars (`data/historical/<provider>/<timeframe>/<symbol>.parquet`). Deduplicated, gap-detected, re-fetchable via `repair` or `force_rebuild` modes.
+- **Signal engine for M16:** M16.B local-read capability proof via `compute_recent_sma` — read façade `bot.historical.store.get_bars()` returns DataFrame with no provider call. Concrete first signal engine (multi-indicator scanner integration) is left to M17+ per the audit-first sequencing.
+- **End-to-end:** data ingest → atomic Parquet write → SQLite coverage update → local `get_bars()` read → SMA local-read proof. All VPS-verified.
+- **Commit chain:** `c6e98b7` → `af96eda` → `c5702f1` → `cc979aa` → `aef8335`. See `docs/M16_historical_data.md` §Q for full closeout evidence.
 
-#### Milestone 17 — Backtesting + parameter rules (1-2 weeks)
+#### M1–M16 audit-only pass (NEXT — recorded 2026-06-05)
+- **Status:** Not started. **This — not M17 coding — is the next step.** Operator instruction at M16 closeout.
+- **Scope:** independent inspection of the M1–M16 codebase by two reviewers (this assistant + ChatGPT) producing separate findings lists. Lists compared; fix-priority decisions made jointly.
+- **Hard constraint:** NO CODE CHANGES during the audit phase. Inspection only.
+- **Rationale:** the M16 work surfaced multiple class-of-issues that ChatGPT's line-by-line review caught after VPS verification (rate-limit classification, two separate migration-order bugs, missing incremental no-op). The pattern suggests an audit of the prior M1–M15 surface area before another large coding milestone (M17 Outcome Learning Loop) begins.
+
+#### Milestone 17 — Backtesting + parameter rules (1-2 weeks) — DEFERRED PENDING AUDIT PASS
+- **Note 2026-06-05:** Title-inconsistency between this section ("Backtesting + parameter rules") and `MILESTONE_STATUS.md` future-milestones table ("Outcome Learning Loop / Closed-Loop ML") is a pre-existing doc drift. The audit-only pass over M1–M16 (above) is the right place to surface this and decide which numbering is authoritative. No code change here.
 - Backtest harness that uses the EXACT live strategy. Any backtest-only forking of strategy logic is a P0 bug (permanent rule: "Backtesting using the same live strategy").
 - Parameter rules + sweep infrastructure.
 - Per-regime / per-symbol breakdown.

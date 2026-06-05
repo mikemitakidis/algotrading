@@ -125,21 +125,35 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Estimated effort:** ~500-700 LOC including tests + docs. Self-contained milestone.
 - **Reference:** Mike's request 2026-06-04 at M15.3.A closeout. Explicit instruction: "do not implement multi-user now." Updated 2026-06-04 on M15.3.A.cutover closeout: "After M15, stop expanding the dashboard unless needed for safety."
 
-### M16 — Historical data + first signal engine (3-7 days; NEXT ACTIVE MILESTONE — M15 CLOSED 2026-06-05)
-- **Status:** Not started. Recorded 2026-06-04 at M15.3.A.cutover closeout. **Now the next active milestone** as of 2026-06-05 when M15.3.C closed and the entire M15 tree closed. Pre-code Q-style checklist required before code starts; no implementation work yet per operator's "no M16 work yet" constraint at the M15.3.C closeout.
-- **Why now:** Per the post-M15 strategic direction recorded 2026-06-04: dashboard expansion stops; the priority is the advanced trading bot. Step 1 is reliable historical data + a first concrete signal engine.
-- **Scope sketch (to be confirmed in pre-code checklist):**
-  - Historical OHLCV data across the ~1,200 US equity universe at multiple timeframes (15m, 1H, 4H, Daily) using the existing `yfinance` data path established in earlier milestones.
-  - Local cache with deduplication, gap-detection, and re-fetch logic.
-  - A concrete first signal engine — initial implementation aligned with the existing M4 strategy logic (do NOT change strategy thresholds to manufacture signals; this is a hard constraint).
-  - End-to-end: data ingest → signal engine → signal rows persisted to the existing schema → visible in the M15.3 dashboard.
-- **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 3-7 days.
+### M16 — Historical data + first signal engine (CLOSED 2026-06-05)
+- **Status:** **CLOSED.** Five commits on `origin/main`:
+  - `c6e98b7` — M16.A: historical data engine + M16.B local-read proof
+  - `af96eda` — M16.A.fix-1: honest rate-limit classification (was silently `no_data`)
+  - `c5702f1` — M16.A.fix-2: `cmd_status` auto-migrates v1 DB + clean stale docstrings
+  - `cc979aa` — M16.A.fix-3: `/api/historical/status` auto-migrates v1 DB
+  - `aef8335` — M16.A.fix-4: freshness-aware incremental no-op + clean remaining docstrings
+- **Terminal verification evidence (operator, on VPS, 2026-06-05 fix-4 acceptance):** HEAD `aef8335` (= expected). `requirements.txt` install exit 0; pyarrow = 24.0.0. M16 suite: 70/70 OK, 1 skipped. `schema_version = 2`, `symbols_rate_limited` column present. AAPL 1D backfill (fix-3 run): `status=ok`, `symbols_ok=1`, `bars_fetched=11462`, `bars_written=11462`. Local read proof: `get_bars rows = 11462`, `freshness_status = fresh`, `last_ts_utc = 2026-06-05 00:00:00+00:00`, SMA(20) returned 5 trailing values. **Real Parquet on disk at `/opt/algo-trader/data/historical/yfinance/1D/AAPL.parquet` = 571,139 bytes.** Fix-4 acceptance (back-to-back incremental against fresh coverage): `status=ok`, `symbols_attempted=1`, `symbols_ok=1`, `no_data=0`, `failed=0`, `rate_limited=0`, `bars_fetched=0`, `bars_written=0`, `bars_updated=0`, `duration_sec=0.01`, **no provider call, no banner, no yfinance error output**. DB last-run rows: `run_id 7 = incremental|ok|1|1|0|0|0|0|0`, `run_id 4 = backfill|ok|1|1|0|0|0|0|11462`. Production: dashboard active, caddy active, HTTPS `/api/health` = 200. `git status` clean.
+- **M16 proves end-to-end:** real yfinance provider fetch → atomic Parquet write → SQLite coverage update → local `get_bars()` read → SMA local-read proof. Plus four operational properties: honest rate-limit classification (fix-1), CLI status migration safety (fix-2), dashboard status migration safety (fix-3), freshness-aware incremental no-op (fix-4). Plus no generated runtime data ever committed.
+- **Hard constraints upheld across all five commits:** protected files vs `ceb8cd5` = 0/20 modified; `bot/data.py` sha256 byte-identical to baseline; AST scan over `bot/historical/` = 0 broker/order/scanner/strategy imports across 11 files; regression sweep 1,183 tests across 30 suites, 0 failed; git-tracked under `data/` = only the 2 intentional CSVs.
+- **Authoritative operator reference:** [`docs/M16_historical_data.md`](M16_historical_data.md) — includes the §P Yahoo/yfinance rate-limit operations runbook landed in fix-1.
+- **Known carry-forward limitations (NOT blocking closure):**
+  - Live multi-symbol backfill at scale remains rate-limit-prone against Yahoo from the VPS IP. The engine reports rate-limits honestly; the operator may need to stagger/reduce/wait. A paid provider behind the same `BaseProvider` contract is a one-file future addition (out of scope for M16).
+  - 4H ↔ 1H consistency edge: if 1H was just updated but 4H is "fresh" per its own threshold, 4H is not automatically re-resampled. Tracked as a future enhancement; current behaviour is documented in M16 runbook.
+  - Freshness-aware incremental no-op (fix-4) means a split that lands within the freshness window AND triggers yfinance to retroactively rewrite Adj Close in the same window will not be detected until the next incremental past the window. For US equities at 1D granularity this is acceptable; `force-rebuild` provides an escape hatch when needed.
 
-### M17 — Backtesting + parameter rules (1-2 weeks; PROPOSED, AFTER M16)
-- **Status:** Not started. Sequenced after M16. Pre-code Q-style checklist required.
-- **Scope sketch:** backtest harness that uses the EXACT live strategy (no parallel implementation that drifts); parameter rules + sweep infrastructure; per-regime / per-symbol breakdown of results; reproducibility (same seed → same outputs).
-- **Hard constraint:** matches the project's permanent rule "Backtesting using the same live strategy". Any backtest-only forking of strategy logic is a P0 bug.
-- **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 1-2 weeks.
+### M1–M16 audit-only pass (NEXT ACTIVE — recorded 2026-06-05 at M16 closeout)
+- **Status:** Not started. **This — not M17 coding — is the next active task.** Recorded at M16 closeout per explicit operator instruction.
+- **Why now:** The M16 work surfaced multiple class-of-issues that ChatGPT's line-by-line review caught after VPS verification (rate-limit classification, two separate migration-order bugs, missing incremental no-op). Each was a small fix individually but the pattern suggests the prior M1–M15 surface area should be audited from the actual code before another large coding milestone (M17 Outcome Learning Loop) begins.
+- **Scope:** independent inspection of the M1–M16 codebase by two reviewers (this assistant + ChatGPT) producing separate findings lists. Lists will be compared; only then will fix-priority decisions be made.
+- **Hard constraint:** **NO CODE CHANGES during the audit phase.** Inspection only. Output is a written findings list (sub-milestones if any fixes are approved come later, each with its own pre-code checklist).
+- **Acceptance criteria when audit pass complete:** a comparison document (or chat record) of the two findings lists, with operator decisions on which findings (if any) become tracked sub-milestone fixes. Once the audit pass clears, M17 (Outcome Learning Loop / Closed-Loop ML) becomes the next coding milestone.
+- **Reference:** operator instruction at M16 closeout, 2026-06-05.
+
+### M17 — Outcome Learning Loop / Closed-Loop ML (PROPOSED, AFTER AUDIT PASS)
+- **Status:** Not started. Sequenced AFTER the M1–M16 audit pass clears, not directly after M16 closure.
+- **Scope sketch:** the dataset bottleneck for ML readiness is the `candidate_snapshots` flywheel which is still accumulating from the M14 pipeline. M17 wires `ml_train.py` (existing 541-line XGBoost meta-labeling, M9) into the scanner as a live signal filter, using the M16 historical store as the source of truth for backtest-vs-live consistency.
+- **Hard constraint:** matches the permanent rule "Backtesting using the same live strategy". Any closed-loop ML training that diverges from the live scanner's feature path is a P0 bug.
+- **Reference:** repositioned from "after M16" to "after audit pass" at M16 closeout, 2026-06-05. Original entry sketched at M15.3.A.cutover closeout, 2026-06-04.
 
 ### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17)
 - **Status:** Not started. Sequenced after M17. Pre-code Q-style checklist required.

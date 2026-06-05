@@ -1,8 +1,16 @@
 # M16 Historical Data Engine — Runbook
 
-**Milestone:** M16.A (engine) + M16.B (local-read capability proof)
-**Status as of merge:** ready for VPS verification
+**Milestone:** M16.A (engine) + M16.B (local-read capability proof) + four small follow-up fixes (1-4)
+**Status:** **CLOSED 2026-06-05** (VPS verification of fix-4 acceptance complete; full evidence in §Q below)
 **Baseline:** M15 closeout at `ceb8cd5`
+**HEAD at closure:** `aef8335`
+**Commit chain on `origin/main`:**
+- `c6e98b7` — M16.A: historical data engine + M16.B local-read proof
+- `af96eda` — M16.A.fix-1: honest rate-limit classification (was silently `no_data`)
+- `c5702f1` — M16.A.fix-2: `cmd_status` auto-migrates v1 DB + clean stale docstrings
+- `cc979aa` — M16.A.fix-3: `/api/historical/status` auto-migrates v1 DB
+- `aef8335` — M16.A.fix-4: freshness-aware incremental no-op + clean remaining docstrings
+
 **Package:** `bot/historical/` (NOT `bot/data/` — see §A.0 note)
 
 ---
@@ -560,3 +568,111 @@ echo "Browser check: open Observability page, confirm HISTORICAL DATA card prese
 6. **`pyarrow>=24,<25`.** See §L for the honest pin rationale. Pinned
    to the verified major-version line; bump intentionally on a future
    M17+ subtask with a full M16 test re-run.
+
+---
+
+## §Q. Closeout evidence — VPS-verified 2026-06-05
+
+M16 closed on the strength of the following terminal evidence from the
+operator's VPS verification at HEAD `aef8335` (= expected). Every line
+is what the VPS actually reported; nothing here is inferred.
+
+### Commit chain
+
+| Commit | Title | What it fixed |
+|---|---|---|
+| `c6e98b7` | M16.A: historical data engine + M16.B local-read proof | Initial 4298-line landing: schema, store, refresh, providers, quality, CLI, 3 dashboard endpoints, M16.B preview |
+| `af96eda` | M16.A.fix-1: honest rate-limit classification | yfinance 0.2.x's `download()` swallows `YFRateLimitError` and stores it in `yf.shared._ERRORS`; original code saw empty DF + classified as `no_data`. fix-1 inspects `_ERRORS`, adds `symbols_rate_limited` first-class counter (schema v2 with additive migration), `_process_one` handles `FETCH_RATE_LIMITED` as a distinct outcome, honest status determination (zero-success + any rate-limit = `failed` not `ok`), CLI banner |
+| `c5702f1` | M16.A.fix-2: `cmd_status` auto-migrates v1 DB + clean stale docstrings | `bot.historical.cli.cmd_status` SELECTed `symbols_rate_limited` without first calling `apply_schema`; failed against pre-v2 DBs. Fixed + 4 stale `bot/data/...` docstring headers cleaned |
+| `cc979aa` | M16.A.fix-3: `/api/historical/status` auto-migrates v1 DB | Same bug-shape as fix-2 in `dashboard/app.py m16_historical_status`. The other two endpoints (coverage, quality-events) audited as safe — no v2-column refs |
+| `aef8335` | M16.A.fix-4: freshness-aware incremental no-op + clean remaining docstrings | Back-to-back incremental was unnecessarily calling the provider (and getting rate-limited) even when local coverage was already fresh. fix-4 adds an early-return at both code paths (native + 4H) when `mode='incremental' AND cov exists AND last_ts_utc exists AND Parquet exists AND freshness=='fresh'`. Result is a clean provider-free no-op. Plus 4 more stale `bot/data/...` docstring headers cleaned — zero residual refs across the whole package |
+
+### Fix-4 acceptance run (the proof M16 is closeable)
+
+```text
+$ python -m bot.historical.cli incremental --symbols AAPL --timeframes 1D
+  status=ok
+  symbols_attempted=1
+  symbols_ok=1   no_data=0   failed=0   rate_limited=0
+  bars_fetched=0   bars_written=0   bars_updated=0
+  duration_sec=0.01
+```
+
+- **No provider rate-limit banner.**
+- **No yfinance error output.**
+- DB row: `run_id 7 = incremental|ok|1|1|0|0|0|0|0`.
+
+### Live-data acceptance run (fix-3 run, the proof of real bars)
+
+```text
+$ python -m bot.historical.cli backfill --symbols AAPL --timeframes 1D
+  status=ok
+  symbols_attempted=1
+  symbols_ok=1
+  bars_fetched=11462
+  bars_written=11462
+```
+
+- File on disk: `/opt/algo-trader/data/historical/yfinance/1D/AAPL.parquet` = **571,139 bytes**
+- Historical data dir total: **572K**
+- DB row: `run_id 4 = backfill|ok|1|1|0|0|0|0|11462`
+
+### Local-read proof
+
+```python
+>>> from bot.historical.store import get_bars, get_coverage
+>>> from bot.historical.preview import compute_recent_sma
+>>> bars = get_bars('AAPL', '1D')
+>>> len(bars)
+11462
+>>> cov = get_coverage('AAPL', '1D')
+>>> cov['freshness_status']
+'fresh'
+>>> cov['last_ts_utc']
+'2026-06-05 00:00:00+00:00'
+>>> compute_recent_sma('AAPL', '1D', periods=20, lookback=5)  # returned 5 values
+```
+
+### Engine / regression / infra
+
+- M16 test suite: **70/70 OK, 1 skipped** (skip is the live-yfinance smoke gated on `M16_LIVE=1`)
+- Regression sweep across earlier suites: **1,113 tests, 0 failed** (M13: 313, M14: 324, M15: 476)
+- Combined including M16: **1,183 tests, 0 failed across 30 suites**
+- `requirements.txt` install exit code: 0
+- pyarrow imported and reports version 24.0.0
+- `algo-trader-dashboard.service`: active
+- `caddy.service`: active
+- HTTPS `/api/health`: 200
+- `git status`: clean
+- HEAD at closure: `aef8335` (= expected)
+- Schema migration verified live: `schema_version = 2`, `symbols_rate_limited` column present
+
+### Hard constraints upheld across all five commits
+
+- Protected files vs `ceb8cd5`: **0/20 modified** (every commit)
+- `bot/data.py` sha256: **byte-identical** to baseline (the rename collision avoided any modification)
+- AST scan over `bot/historical/`: **11 files, 0 violations** (no broker / order / scanner / strategy / engine / governor / heartbeat imports; no `placeOrder`/`cancelOrder`/`modifyOrder`/`closePosition`/`submitOrder` strings)
+- Files git-tracked under `data/`: **only the 2 intentional CSVs** (`symbol_metadata.csv` pre-existing + `symbol_universe.csv` for the V1 universe). Zero generated runtime data ever committed.
+
+### What M16 proves end-to-end
+
+1. **Real yfinance provider fetch** (11,462 AAPL 1D bars)
+2. **Atomic Parquet write** (`temp → validate → os.replace`, dup ts_utc refused)
+3. **SQLite coverage update** (with freshness + derivation + provider-limit-note columns)
+4. **Local `get_bars()` read** (façade returns DataFrame with no network call)
+5. **SMA local-read proof** (M16.B capability gate: `compute_recent_sma` returns numbers from cache)
+6. **Honest rate-limit classification** (fix-1: distinct `symbols_rate_limited` counter, `status='failed'` not `'ok'` when zero succeed, no silent `no_data` masquerade)
+7. **CLI status migration safety** (fix-2: `apply_schema` runs before any v2-column SELECT)
+8. **Dashboard status migration safety** (fix-3: same fix shape in `m16_historical_status`)
+9. **Freshness-aware incremental no-op** (fix-4: back-to-back incremental never hits the provider when coverage is fresh; result is `status=ok, bars_written=0, rate_limit_count=0`, no banner)
+10. **No generated runtime data committed** (only the 2 intentional symbol CSVs)
+
+### Next step after closure
+
+**Not M17 coding.** Per operator instruction at closeout, the next task is an
+**audit-only pass over M1–M16** from the actual code, conducted by two
+independent reviewers (this assistant + ChatGPT). Findings lists will be
+compared before any fix-priority decisions are made. M17 (Outcome Learning
+Loop / Closed-Loop ML) becomes the next coding milestone only after the
+audit pass clears. See `MILESTONE_STATUS.md` and `docs/NEXT_WORK_REGISTER.md`
+for the canonical record.
