@@ -447,3 +447,110 @@ sudo sqlite3 /opt/algo-trader/data/signals.db \
   render badly. LibreOffice handles UTF-8 cleanly. If this becomes a
   pain point, a BOM prefix could be added — but it's not the kind of
   change to make speculatively.
+
+---
+
+## §11 — Closeout evidence (2026-06-05)
+
+M15.3.C was VPS-verified by the operator on 2026-06-05 and is **CLOSED**.
+With M15.3.C closed, the entire **M15.3 sub-milestone tree is complete**
+and **M15 itself is fully CLOSED**. Recorded here for historical
+traceability.
+
+**Commit chain:** `0018c32` (initial implementation) → `02b5dcf`
+(ChatGPT-review rate-limit fix to honour the approved "every
+authenticated attempt counts" semantics; introduced the M15.3.C-local
+`ExportAttemptLimiter` class without modifying the shared M15.3.A/B
+`RateLimiter`).
+
+**Terminal verification (operator, on VPS):**
+- `git rev-parse --short HEAD` = `02b5dcf`
+- `test_m15_3_c_audit_export.py` → **37/37 OK**
+- Regression sweep all green:
+  - `test_m15_3_b_manual_reset` 51/51
+  - `test_m15_3_a_dashboard_auth` 101/101
+  - `test_m15_3_a_2_totp` 52/52
+  - `test_m13_4a_allocation` 61/61
+  - `test_m14_e_engine` 105/105
+  - `test_m14_g_dashboard` 51/51
+  - `test_m15_4_gateway_health` 50/50
+  - `test_m15_5_ibkr_exposure` 78/78
+  - **Total: 586 tests OK**
+- `algo-trader-dashboard.service` → `active`
+- `caddy.service` → `active`
+- `ss -ltnp 'sport = :8080'` → `127.0.0.1:8080` only (M15.3.A.cutover bind preserved)
+- Caddy listening on `*:80` + `*:443`
+- `https://algotrading.marketwarrior.club/api/health` → HTTP 200
+- Unauthenticated `GET /api/audit-export?format=jsonl` → HTTP 401 (expected — `@require_auth` enforced)
+- `git status` clean
+
+**Browser end-to-end verification (operator, real session over HTTPS via Caddy → loopback → dashboard):**
+
+| Step | Result |
+|---|---|
+| Login at `https://algotrading.marketwarrior.club` with password + Google Authenticator | ✓ Success |
+| Open Recovery → Audit Export (M15.3.C) card | ✓ Card visible with date pickers + format selector + Download button |
+| Pick JSONL format + Download | ✓ Downloaded `audit_export_20260605T094145Z.jsonl` |
+| JSONL manifest parses | `_schema_version=1`, `_format=jsonl`, `_row_counts={auth_events:48, risk_decisions_manual_reset:1}` |
+| JSONL payload SHA-256 verifies | ✓ Hash matches `_sha256_payload` in manifest |
+| JSONL `_source` values are within scope | ✓ Only `auth_events` and `risk_decisions_manual_reset` appear (Q-C.1 scope) |
+| Pick CSV format + Download | ✓ Downloaded `audit_export_20260605T094158Z.zip` |
+| CSV ZIP contents | ✓ Contains exactly `manifest.txt` + `auth_events.csv` + `risk_decisions_manual_reset.csv` |
+| `auth_events.csv` data rows | 50 |
+| `risk_decisions_manual_reset.csv` data rows | 1 |
+
+**Notable confirmation of the meta-audit chain:** the CSV's
+`auth_events.csv` has **two more rows** than the JSONL's `auth_events`
+count (50 vs 48). The operator correctly identified this as the
+meta-audit chain working exactly as designed:
+
+1. The JSONL export itself wrote one `audit_export_request` row
+   (Q-C.6 — every export attempt that reaches the endpoint is
+   meta-audited).
+2. Between the JSONL and CSV downloads, additional dashboard activity
+   (likely a date-range validation attempt or further interaction)
+   wrote at least one more audit row.
+3. The CSV download then captured all of those — including the audit
+   trail of the very JSONL export that preceded it.
+
+This is exactly the bidirectional traceability behaviour intended by
+the design: every export attempt creates a permanent audit footprint
+visible in subsequent exports. The `_export_id` in each
+`audit_export_request.extras_json` row links back to the corresponding
+delivered file's manifest `_export_id`.
+
+**End-to-end chain verified:** rate-limit check (`ExportAttemptLimiter`
+counts every attempt) → format param validation → date range validation
+→ row-count cap check → body build (spool to bytes + SHA-256) →
+redaction scan (defence-in-depth) → meta-audit success row write
+(`audit_export_request` with linked `export_id`) → file download
+response with `X-Export-Id` + `X-Export-Sha256` headers + correct
+`Content-Disposition` filename.
+
+**What this closeout proves end-to-end:**
+- The operator can produce a compliance-friendly export of the M15.3
+  audit trail via the dashboard, with full audit linkage, without shell
+  access to the VPS.
+- The two-format design (JSONL + CSV-ZIP) works in real browsers and
+  both formats are usable by their intended audiences.
+- The M15.3.C `ExportAttemptLimiter` enforces the approved "every
+  authenticated attempt counts" semantics without affecting the shared
+  M15.3.A/B `RateLimiter`.
+- The design-intent disclosure in §1 is honoured at runtime: M15.3.C
+  performed exactly one write (the meta-audit row) and called no
+  broker method, executed no order, and modified no trading state.
+- The redaction defence-in-depth is in place but did not fire (no
+  secret-substring matches in any real audit row), which is the
+  expected steady-state given the M15.3.A/A.2/B audit invariants.
+
+**With this closeout, M15.3.C is the final M15 sub-milestone and M15
+itself is fully CLOSED.** Carry-forwards remain DEFERRED but none
+block M15 closure:
+- `M15.3.A.cutover.perf` (login latency follow-up, ~7-10s) — non-blocking
+- `M15.3.A.persist` (DB-backed rate-limit) — DEFERRED
+- `M15.3.D or later` (multi-user roles) — DEFERRED INDEFINITELY
+
+**Next active milestone:** M16 (Historical data + first signal engine),
+per the post-M15 strategic direction recorded at M15.3.A.cutover
+closeout and reaffirmed at every subsequent M15.3 sub-milestone
+closeout. Dashboard work stops unless safety- or compliance-driven.

@@ -82,29 +82,33 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Authoritative operator reference:** [`docs/M15_3_B_manual_reset.md`](M15_3_B_manual_reset.md).
 - **Post-M15 direction note (added 2026-06-04 on M15.3.A.cutover closeout):** `M15.3.B` (operator-action safety surface, now CLOSED) and `M15.3.C` (compliance audit/export, remaining) are explicitly preserved on the active path because they fit the "safety/compliance" exception to the post-M15 dashboard freeze. Other dashboard work (e.g. `M15.3.D` multi-user roles) is deferred indefinitely.
 
-### M15.3.C — Compliance audit + export (IMPLEMENTATION LANDED — AWAITING VPS VERIFICATION 2026-06-05)
-- **Status:** Code, tests, and runbook landed on `main`. Pre-code Q-style checklist Q-C.1..Q-C.12 approved by operator + ChatGPT, with the formal correction set (Q-C.2 count → 17, Q-C.3 spool-then-hash, Q-C.5 fail-fast + meta-audit, Q-C.7 GET with documented design-intent, Q-C.8 no step-up TOTP as conscious decision, Q-C.9 drop the RSS test). All corrections honoured. Closeout still requires operator VPS verification + ChatGPT acceptance, after which `MILESTONE_STATUS.md` is updated and this entry moves to CLOSED. M15 itself fully closes at that point.
-- **What landed:**
-  - `dashboard/auth/audit_export.py` (NEW, ~530 LOC) — pure-logic primitives: `validate_date_range`, `count_export_rows`, `read_auth_events_range`, `read_risk_decisions_manual_reset_range`, `build_jsonl_export`, `build_csv_zip_export`, `scan_for_secrets`, `make_export_limiter`, `make_download_filename`, manifest builders. Zero broker/scanner/strategy/engine imports.
+### M15.3.C — Compliance audit + export (CLOSED 2026-06-05)
+- **Status:** CLOSED. Implementation chain `0018c32` (initial) → `02b5dcf` (ChatGPT-review rate-limit fix). Terminal verification + operator browser end-to-end verification both passed on VPS 2026-06-05. Pre-code checklist Q-C.1..Q-C.12 + post-review correction C-α (strict "every authenticated attempt counts" rate-limit, M15.3.C-local `ExportAttemptLimiter` class, shared M15.3.A/B `RateLimiter` unchanged) all honoured.
+- **Browser verification evidence (operator, real session over HTTPS):** Logged in at `https://algotrading.marketwarrior.club` with password + Google Authenticator. Opened Recovery → Audit Export (M15.3.C). Downloaded JSONL at `audit_export_20260605T094145Z.jsonl`: manifest parsed, `_schema_version=1`, `_format=jsonl`, `_row_counts={auth_events:48, risk_decisions_manual_reset:1}`, payload SHA-256 verified, `_source` values only `auth_events` and `risk_decisions_manual_reset` (Q-C.1 scope holds). Downloaded CSV ZIP at `audit_export_20260605T094158Z.zip`: contains exactly `manifest.txt` + `auth_events.csv` (50 data rows) + `risk_decisions_manual_reset.csv` (1 data row). The +2 auth_events delta vs JSONL confirms the meta-audit chain works as designed — every export attempt that reaches the endpoint writes a permanent `audit_export_request` row visible in subsequent exports.
+- **Terminal verification evidence (operator, on VPS):** HEAD `02b5dcf`. `test_m15_3_c_audit_export` 37/37 OK. Regression sweep all green: `test_m15_3_b_manual_reset` 51/51, `test_m15_3_a_dashboard_auth` 101/101, `test_m15_3_a_2_totp` 52/52, `test_m13_4a_allocation` 61/61, `test_m14_e_engine` 105/105, `test_m14_g_dashboard` 51/51, `test_m15_4_gateway_health` 50/50, `test_m15_5_ibkr_exposure` 78/78. Total: 586 tests OK. `algo-trader-dashboard.service` + `caddy.service` both `active`. `ss` confirms `:8080` bound to `127.0.0.1:8080` only (M15.3.A.cutover bind preserved). Caddy listening on `*:80` + `*:443`. `https://algotrading.marketwarrior.club/api/health` returns HTTP 200. Unauthenticated `GET /api/audit-export` returns HTTP 401 (expected — `@require_auth` enforced). `git status` clean.
+- **What shipped (2 commits, 7 files total — see `MILESTONE_STATUS.md` M15.3.C closeout block for the per-commit breakdown):**
+  - `dashboard/auth/audit_export.py` (NEW, ~650 LOC after both commits) — `ExportAttemptLimiter` class + pure-logic primitives (date validation, row reading, JSONL/CSV-ZIP builders, redaction scanner, manifest builder, filename construction). Zero broker/scanner/strategy/engine imports.
   - `dashboard/auth/audit.py` (extended, +7 lines) — `audit_export_request` added as the 18th `ALLOWED_KINDS` value.
-  - `dashboard/app.py` (extended, ~+270 LOC) — `m153c_audit_export()` endpoint with strict validation order (rate-limit → format → date → row-cap → build → redact-scan → meta-audit → file response), plus a minimal Audit Export card on the Recovery page (date pickers + format selector + Download button, ~120 LOC HTML/JS).
-  - `test_m15_3_c_audit_export.py` (NEW, 32 tests across 12 groups, ~870 LOC) — full coverage of auth, both formats, scope, date filters, row cap, redaction (incl. fail-fast endpoint behaviour with the labels-only contract), self-audit, rate limit, AST scan, protected-files, allowed-kinds.
-  - `docs/M15_3_C_audit_export.md` (NEW, ~280 LOC) — full operator runbook with §1 purpose+scope+design-intent, §2 mutations, §3 endpoint surface, §4 format spec (JSONL + CSV columns + ZIP layout), §5 redaction rules, §6 self-audit, §7 implementation files, §8 test suite, §9 VPS deploy + verification, §10 honest residual.
+  - `dashboard/app.py` (extended, ~+290 LOC net after both commits) — `m153c_audit_export()` endpoint + minimal Audit Export card on the Recovery page.
+  - `test_m15_3_c_audit_export.py` (NEW, 37 tests across 12 groups, ~1000 LOC)
+  - `docs/M15_3_C_audit_export.md` (NEW, ~330 LOC) — full operator runbook.
 - **Hard constraints honoured** (asserted in test suite):
-  - No broker orders / writes / live-trading code (AST scan G10, 3 tests)
+  - No broker orders / writes / live-trading code (AST scan G10)
   - No scanner/strategy changes (protected-files G11, 0/24)
   - No M14 engine/governor/snapshot/preflight changes (protected-files G11)
   - No eToro/IBKR adapter changes (protected-files G11)
-  - No M16 historical data / signal engine work
-  - No multi-user work
-  - No mutation of audit data — strictly read-only export (audit rows are immutable input)
-  - No new external dependencies (stdlib `csv`, `zipfile`, `json`, `hashlib`, `io`, `uuid`, `datetime`, `re`; plus `dashboard.auth.rate_limit`)
+  - No M16 work, no multi-user work, no new dashboard platform (one endpoint + small UI card only)
+  - No mutation of audit data — strictly read-only export of immutable rows; only write is the single `audit_export_request` meta-audit row per attempt
+  - No new external dependencies (stdlib only + `dashboard.auth.audit`)
   - No service restarts / sync.sh / deploy.sh / systemd-unit changes
   - No `.env` mutation
-  - No secret material in output / logs / extras / filenames (G7 + runbook §5)
-- **Verified in sandbox (clean + VPS-like .env):** test_m15_3_c 32/32, test_m15_3_b 51/51, test_m15_3_a_dashboard_auth 101/101, test_m15_3_a_2_totp 52/52, test_m13_4a_allocation 61/61, test_m14_e_engine 105/105, test_m14_g_dashboard 51/51, test_m15_4_gateway_health 50/50, test_m15_5_ibkr_exposure 78/78. Total: 581 tests OK.
-- **Operator VPS verification command** (using `git fetch + git reset --hard origin/main`, NOT `sudo ./sync.sh`): see `docs/M15_3_C_audit_export.md` §9.
-- **Post-M15 direction note:** when M15.3.C closes, M15 itself fully closes and the focus shifts entirely to bot intelligence (M16 first, see below).
+  - No secret material in output / logs / extras / filenames / response bodies (G7 secret-material sweep + runbook §5)
+  - **No changes to the shared `dashboard.auth.rate_limit.RateLimiter`** — M15.3.A login and M15.3.B manual_reset rate-limit semantics preserved exactly. M15.3.C's stricter "every attempt counts" semantics live in the new M15.3.C-local `ExportAttemptLimiter` class.
+- **Authoritative operator reference:** [`docs/M15_3_C_audit_export.md`](M15_3_C_audit_export.md).
+- **M15 status:** M15.3.C was the final M15.3 sub-milestone. With it CLOSED, **M15 itself is now fully CLOSED.** The next active milestone is M16 (see below).
+
+### M15 — fully CLOSED 2026-06-05
+All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.3.A.cutover, M15.3.B, M15.3.C, M15.4, M15.5) are CLOSED. The Production Hardening milestone is complete. Carry-forwards remain DEFERRED (none blocking): `M15.3.A.cutover.perf` (login latency follow-up), `M15.3.A.persist` (DB-backed rate-limit), `M15.3.D or later` (multi-user roles — DEFERRED INDEFINITELY). Dashboard work now stops unless safety- or compliance-driven, per the post-M15 strategic direction.
 
 ### M15.3.D or later — Multi-user / read-only dashboard roles (DEFERRED INDEFINITELY)
 - **Status:** Not started. Recorded 2026-06-04 to ensure the idea isn't lost. **Updated 2026-06-04 on M15.3.A.cutover closeout: DEFERRED INDEFINITELY under the post-M15 strategic direction.** The dashboard work is frozen post-M15 unless safety- or compliance-driven; multi-user is neither.
@@ -121,8 +125,8 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Estimated effort:** ~500-700 LOC including tests + docs. Self-contained milestone.
 - **Reference:** Mike's request 2026-06-04 at M15.3.A closeout. Explicit instruction: "do not implement multi-user now." Updated 2026-06-04 on M15.3.A.cutover closeout: "After M15, stop expanding the dashboard unless needed for safety."
 
-### M16 — Historical data + first signal engine (3-7 days; PROPOSED, NEXT IN SEQUENCE AFTER M15.3 CLOSES)
-- **Status:** Not started. Recorded 2026-06-04 at M15.3.A.cutover closeout. **This is the next major work after M15 closes** (i.e. after M15.3.B + M15.3.C ship). Pre-code Q-style checklist required before code starts.
+### M16 — Historical data + first signal engine (3-7 days; NEXT ACTIVE MILESTONE — M15 CLOSED 2026-06-05)
+- **Status:** Not started. Recorded 2026-06-04 at M15.3.A.cutover closeout. **Now the next active milestone** as of 2026-06-05 when M15.3.C closed and the entire M15 tree closed. Pre-code Q-style checklist required before code starts; no implementation work yet per operator's "no M16 work yet" constraint at the M15.3.C closeout.
 - **Why now:** Per the post-M15 strategic direction recorded 2026-06-04: dashboard expansion stops; the priority is the advanced trading bot. Step 1 is reliable historical data + a first concrete signal engine.
 - **Scope sketch (to be confirmed in pre-code checklist):**
   - Historical OHLCV data across the ~1,200 US equity universe at multiple timeframes (15m, 1H, 4H, Daily) using the existing `yfinance` data path established in earlier milestones.
