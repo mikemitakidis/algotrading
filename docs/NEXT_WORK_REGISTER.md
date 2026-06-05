@@ -59,11 +59,13 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Estimated effort:** 1 sub-milestone, ~300-500 LOC including tests.
 - **Owner:** TBD.
 
-### M15.3.B — manual_reset operator flow (IMPLEMENTATION LANDED — AWAITING VPS VERIFICATION 2026-06-04)
-- **Status:** Code, tests, and runbook landed on `main`. Pre-code Q-style checklist approved by operator with corrections C1..C4 + implementation corrections 1..10. All M15.3.B work done in scope; closeout still requires operator VPS verification + ChatGPT acceptance, after which `MILESTONE_STATUS.md` is updated and this entry moves to CLOSED.
-- **What landed:**
+### M15.3.B — manual_reset operator flow (CLOSED 2026-06-04)
+- **Status:** CLOSED. Single implementation commit `2f55f1d`. Terminal verification + operator browser end-to-end verification both passed on VPS 2026-06-04. Pre-code Q-style checklist approved by operator with corrections C1..C4 + implementation corrections 1..10; all honoured.
+- **Browser verification evidence (operator, real session over HTTPS):** Logged in at `https://algotrading.marketwarrior.club` with password + Google Authenticator code. Opened Recovery / Operator manual_reset section. Set `ibkr.kill_switch=true` for the controlled test. Recovery preview correctly showed `etoro=false, global=false, ibkr=true (locked)`. Entered operator reason ("M15.3.B browser verification: clearing test ibkr kill switch after confirming no broker action is performed."), typed `RESET`, entered fresh authenticator code, submitted. Browser returned success: `Cleared 1 kill switch(es): ibkr`, `auth_event_id=38`, `decision_id=mr-3086a40a9b2f46e5`. Full chain verified: preview → confirm → step-up TOTP → reset → dual audit → kill switch clear.
+- **Terminal verification evidence (operator, on VPS):** HEAD `2f55f1d`; `test_m15_3_b_manual_reset` 51/51 OK; regression sweep all green; `algo-trader-dashboard.service` active; `caddy.service` active; `ss` confirms `:8080` still bound to `127.0.0.1:8080` only (M15.3.A.cutover bind preserved); `https://algotrading.marketwarrior.club/api/health` 200; `git status` clean.
+- **What shipped:**
   - `dashboard/auth/manual_reset.py` (NEW, ~370 LOC) — pure-logic helpers: PreviewTokenStore (session-bound, 60s TTL, single-use), rate-limiter factory (3/3600s/3600s), step-up TOTP check (only `hint='recently_used'` per C1), policy I/O, validators, atomic-reset transaction
-  - `bot/risk_authority/audit_decisions.py` (extended, +135 LOC) — additive new `write_manual_reset_decision()` function; all pre-existing functions byte-identical (asserted by G11 `test_audit_decisions_only_additive_change`)
+  - `bot/risk_authority/audit_decisions.py` (extended, +133 LOC) — additive new `write_manual_reset_decision()` function; all pre-existing functions byte-identical (asserted by G11 `test_audit_decisions_only_additive_change`)
   - `dashboard/auth/audit.py` (extended, +5 lines) — 4 new closed kinds in `ALLOWED_KINDS`: `manual_reset_preview`, `_attempt`, `_success`, `_failure`
   - `dashboard/app.py` (extended, ~+490 LOC) — `GET /api/manual-reset/preview` + `POST /api/manual-reset` endpoints + Recovery nav link + minimal Recovery UI + JS handlers
   - `test_m15_3_b_manual_reset.py` (NEW, 51 tests across 12 groups G1..G12, ~870 LOC)
@@ -71,15 +73,14 @@ This file is updated by every milestone closeout. Each item has: **status, why d
   - Three older test files (`test_m15_3_a_dashboard_auth.py`, `test_m15_3_a_2_totp.py`, `test_m15_5_ibkr_exposure.py`) had `bot/risk_authority/audit_decisions.py` removed from their PROTECTED tuple with a docstring note pointing to test_m15_3_b's additive-only check; nothing else touched in those files
 - **Hard constraints honoured** (asserted in test suite):
   - No broker orders / writes / live-trading code (AST scan G10)
-  - No scanner/strategy changes (protected-files G11, 0/24)
+  - No scanner/strategy changes (protected-files G11, 0/23)
   - No M14 engine/governor/snapshot/preflight changes (protected-files G11)
   - No eToro/IBKR adapter changes (protected-files G11)
   - No M16 work, no multi-user work, no extra dashboard platform work
   - TOTP error API exposes ONLY `hint='recently_used'`; wrong/malformed/expired/missing all return generic `totp_invalid` (G4 + operator C1)
   - No TOTP code/secret/otpauth URI/password/raw session ID in logs or audit extras (G7 secret-material invariant sweep with known-secret substring blacklist)
-- **Verified in sandbox (clean + VPS-like .env):** test_m15_3_b 51/51, test_m15_3_a_dashboard_auth 101/101, test_m15_3_a_2_totp 52/52, test_m14_e_engine 105/105, test_m14_g_dashboard 51/51, test_m13_4a_allocation 61/61, test_m15_5_ibkr_exposure 78/78, test_m15_4_gateway_health 50/50.
-- **Operator VPS verification command** (using `git fetch + git reset --hard origin/main`, NOT `sudo ./sync.sh` per implementation correction 9): see `docs/M15_3_B_manual_reset.md` §11.
-- **Post-M15 direction note (added 2026-06-04 on M15.3.A.cutover closeout):** `M15.3.B` (operator-action safety surface) and `M15.3.C` (compliance audit/export) are explicitly preserved on the active path because they fit the "safety/compliance" exception to the post-M15 dashboard freeze. Other dashboard work (e.g. `M15.3.D` multi-user roles) is now deferred indefinitely.
+- **Authoritative operator reference:** [`docs/M15_3_B_manual_reset.md`](M15_3_B_manual_reset.md).
+- **Post-M15 direction note (added 2026-06-04 on M15.3.A.cutover closeout):** `M15.3.B` (operator-action safety surface, now CLOSED) and `M15.3.C` (compliance audit/export, remaining) are explicitly preserved on the active path because they fit the "safety/compliance" exception to the post-M15 dashboard freeze. Other dashboard work (e.g. `M15.3.D` multi-user roles) is deferred indefinitely.
 
 ### M15.3.C — Compliance audit + export (PENDING M15.3 SEQUENCE)
 - **Status:** Plan approved (in M15.3 plan), scheduled after M15.3.B.

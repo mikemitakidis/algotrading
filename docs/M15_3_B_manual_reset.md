@@ -286,3 +286,46 @@ You should see one `manual_reset_preview` + one `manual_reset_attempt` + one `ma
 - **TOTP replay cache is in-memory.** A dashboard restart clears it. Same trade-off as M15.3.A.2.
 - **No multi-user roles.** Single-operator model preserved per the operator's "no multi-user work" constraint. If multiple operators ever co-administer, each successful reset's audit row currently records `actor='operator'` rather than a specific user.
 - **The endpoint does NOT cancel orders, close positions, or restart services.** It clears policy flags only. If the operator wants to do those things, they must be done explicitly via the existing surfaces (or via the broker directly).
+
+---
+
+## §13 — Closeout evidence (2026-06-04)
+
+M15.3.B was VPS-verified by the operator on 2026-06-04 and is **CLOSED**. Recorded here for historical traceability.
+
+**Commit chain:** `2f55f1d` — single implementation commit. No follow-up fix commits were required.
+
+**Terminal verification (operator, on VPS):**
+- `git rev-parse --short HEAD` = `2f55f1d`
+- `test_m15_3_b_manual_reset.py` → 51/51 OK
+- Regression sweep all green: `test_m15_3_a_dashboard_auth` 101/101, `test_m15_3_a_2_totp` 52/52, `test_m13_4a_allocation` 61/61, `test_m14_e_engine` 105/105, `test_m14_g_dashboard` 51/51, `test_m15_4_gateway_health` 50/50, `test_m15_5_ibkr_exposure` 78/78
+- `algo-trader-dashboard.service` → `active`
+- `caddy.service` → `active`
+- `ss -ltnp 'sport = :8080'` → `127.0.0.1:8080` only (M15.3.A.cutover bind preserved)
+- `https://algotrading.marketwarrior.club/api/health` → 200
+- `git status` clean
+
+**Browser end-to-end verification (operator, real session over HTTPS):**
+
+| Step | Result |
+|---|---|
+| Login at `https://algotrading.marketwarrior.club` with password + Google Authenticator code | ✓ Success |
+| Set `ibkr.kill_switch=true` via the M13.4A Broker Allocation tab (controlled test) | ✓ Lock applied |
+| Open Recovery → click "Load current state" | Preview shows `etoro=false`, `global=false`, `ibkr=true (locked)` ✓ |
+| Enter operator reason (>10 chars): "M15.3.B browser verification: clearing test ibkr kill switch after confirming no broker action is performed." | ✓ Accepted |
+| Type `RESET` in the confirm box | ✓ Accepted |
+| Enter fresh Google Authenticator code (replay cache aged out naturally from login) | ✓ Accepted |
+| Click "Clear kill switches" | ✓ Submit |
+| Browser response | `Success. Cleared 1 kill switch(es): ibkr.` |
+| `auth_event_id` in response | `38` |
+| `decision_id` in response | `mr-3086a40a9b2f46e5` |
+
+**End-to-end chain verified:** preview state read → preview token issuance → CSRF check → confirm-string validation → preview token consume → reason validation → step-up TOTP verification → atomic policy update + dual audit writes (`auth_events` + `risk_decisions`) → response with before/after state + audit IDs → UI confirmation. Browser-side HTTPS via Caddy → loopback → dashboard preserved across the full request chain (M15.3.A.cutover transport intact).
+
+**What this closeout proves end-to-end:**
+- The operator can recover from a kill-switch lockout via the dashboard, with full audit trail, without shell access to the VPS.
+- The M15.3 defensive stack (HTTPS + auth + CSRF + step-up TOTP + rate limit + dual audit) holds together for a state-changing operator action.
+- The dual audit angle works: `auth_events` row `id=38` (operator-side) and `risk_decisions` row `decision_id=mr-3086a40a9b2f46e5` (M14-side) both written atomically in one transaction.
+- The design-intent disclosure in §1 is honoured at runtime: `manual_reset` cleared the policy flag and did not call any broker method, place any order, or modify any position.
+
+**Carry-forward to M15.3.C** (the next and final M15.3 sub-milestone): the compliance-grade audit log + regulatory export feature will read M15.3.B's `manual_reset_*` rows from `auth_events` + the `risk_decisions` rows with `source='manual_reset'` and surface them in a compliance-friendly format. M15.3.B's append-only audit schema makes this straightforward.
