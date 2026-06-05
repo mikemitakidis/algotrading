@@ -1,4 +1,4 @@
-"""bot/data/providers_yfinance.py — M16 yfinance adapter.
+"""bot/historical/providers_yfinance.py — M16 yfinance adapter.
 
 Wraps yfinance (already a project dependency via M6) into the M16
 BaseProvider contract.

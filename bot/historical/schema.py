@@ -1,4 +1,4 @@
-"""bot/data/schema.py — M16 historical-data SQLite DDL.
+"""bot/historical/schema.py — M16 historical-data SQLite DDL.
 
 Lives in its own DB file `data/historical.db`, completely separate from
 `data/signals.db` (the M15.3 audit DB). No table from this schema is
@@ -326,7 +326,7 @@ def open_db(db_path: Path | str) -> sqlite3.Connection:
 def default_db_path(repo_root: Optional[Path] = None) -> Path:
     """Return the canonical historical DB path: <repo>/data/historical.db."""
     if repo_root is None:
-        # Climb from this file: bot/data/schema.py -> bot/data -> bot -> repo
+        # Climb from this file: bot/historical/schema.py -> bot/historical -> bot -> repo
         repo_root = Path(__file__).resolve().parent.parent.parent
     return Path(repo_root) / "data" / "historical.db"
 

@@ -1,4 +1,4 @@
-"""bot/data/refresh.py — M16 write orchestrator.
+"""bot/historical/refresh.py — M16 write orchestrator.
 
 The ONLY write path into the historical store. Callers (CLI, tests,
 future systemd timer) invoke `run()` with a mode + scope.

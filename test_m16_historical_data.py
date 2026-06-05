@@ -1230,6 +1230,163 @@ class TestYFinanceRateLimitClassification(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# G21. status CLI auto-migrates v1 DB (M16.A.fix-2)
+# ---------------------------------------------------------------------------
+class TestStatusCommandAutoMigrates(_TmpEnv):
+    """M16.A.fix-2: `python -m bot.historical.cli status` must work
+    against a pre-existing v1 historical.db. Previously it queried
+    `symbols_rate_limited` without first calling apply_schema, so a
+    v1 DB produced `sqlite3.OperationalError: no such column:
+    symbols_rate_limited`.
+    """
+
+    def _make_v1_db(self):
+        """Create a real v1-shaped DB: every table from v1 schema,
+        WITHOUT the v2 column `symbols_rate_limited`."""
+        from bot.historical import schema
+        c = schema.open_db(self.db_path)
+        try:
+            # Manually create the v1 shape (no symbols_rate_limited).
+            c.execute("""
+                CREATE TABLE historical_schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_utc TEXT NOT NULL)""")
+            c.execute("""
+                CREATE TABLE historical_symbols (
+                    symbol TEXT PRIMARY KEY,
+                    asset_class TEXT NOT NULL,
+                    is_active INTEGER NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    CHECK (is_active IN (0, 1)))""")
+            c.execute("""
+                CREATE TABLE historical_coverage (
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    first_ts_utc TEXT, last_ts_utc TEXT,
+                    bar_count INTEGER NOT NULL DEFAULT 0,
+                    missing_count INTEGER NOT NULL DEFAULT 0,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    quality_status TEXT NOT NULL DEFAULT 'unknown',
+                    freshness_status TEXT NOT NULL DEFAULT 'unknown',
+                    last_refresh_at_utc TEXT,
+                    last_refresh_id INTEGER,
+                    provider_limit_note TEXT,
+                    source_timeframe TEXT,
+                    derivation_method TEXT NOT NULL DEFAULT 'native',
+                    resample_rule_version INTEGER,
+                    PRIMARY KEY (symbol, timeframe, provider))""")
+            # v1-shape refresh_runs — NO symbols_rate_limited.
+            c.execute("""
+                CREATE TABLE historical_refresh_runs (
+                    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at_utc TEXT NOT NULL,
+                    finished_at_utc TEXT,
+                    mode TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    symbols_requested TEXT NOT NULL,
+                    timeframes_requested TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    symbols_attempted INTEGER NOT NULL DEFAULT 0,
+                    symbols_ok INTEGER NOT NULL DEFAULT 0,
+                    symbols_no_data INTEGER NOT NULL DEFAULT 0,
+                    symbols_failed INTEGER NOT NULL DEFAULT 0,
+                    bars_fetched INTEGER NOT NULL DEFAULT 0,
+                    bars_written INTEGER NOT NULL DEFAULT 0,
+                    bars_updated INTEGER NOT NULL DEFAULT 0,
+                    errors_count INTEGER NOT NULL DEFAULT 0,
+                    rate_limit_count INTEGER NOT NULL DEFAULT 0,
+                    duration_sec REAL,
+                    summary_json TEXT)""")
+            c.execute("""
+                CREATE TABLE historical_quality_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER REFERENCES historical_refresh_runs(run_id),
+                    symbol TEXT, timeframe TEXT, provider TEXT, ts_utc TEXT,
+                    severity TEXT NOT NULL, kind TEXT NOT NULL,
+                    message TEXT NOT NULL, details_json TEXT,
+                    created_at_utc TEXT NOT NULL)""")
+            c.execute("""
+                CREATE TABLE historical_refresh_lock (
+                    id INTEGER PRIMARY KEY CHECK (id=1),
+                    owner_pid INTEGER, owner_host TEXT,
+                    acquired_at_utc TEXT, lease_expires_at_utc TEXT,
+                    last_heartbeat_utc TEXT)""")
+            # Mark version=1.
+            c.execute("INSERT INTO historical_schema_version "
+                        "(version, applied_at_utc) VALUES (1, '2026-06-01T00:00:00+00:00')")
+            c.execute("INSERT INTO historical_refresh_lock (id) VALUES (1)")
+            # Seed one historical run in the v1 shape (no
+            # symbols_rate_limited column) so the status query has
+            # something to display.
+            c.execute(
+                "INSERT INTO historical_refresh_runs "
+                "(started_at_utc, mode, provider, symbols_requested, "
+                " timeframes_requested, status) "
+                "VALUES ('2026-06-01T10:00:00+00:00', 'backfill', "
+                "  'yfinance', '[\"AAPL\"]', '[\"1D\"]', 'ok')")
+            c.commit()
+        finally:
+            c.close()
+
+    def test_status_command_against_v1_db_succeeds(self):
+        """A v1 DB without `symbols_rate_limited` must NOT cause
+        status to fail — apply_schema must migrate it first."""
+        import io
+        import argparse
+        import contextlib
+        from bot.historical import cli as historical_cli
+
+        self._make_v1_db()
+
+        # Confirm the column is absent BEFORE running status.
+        from bot.historical import schema
+        c = schema.open_db(self.db_path)
+        try:
+            cols = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertNotIn("symbols_rate_limited", cols,
+                              "test setup error — DB already has v2 column")
+            self.assertEqual(
+                schema.get_schema_version(c), 1,
+                "test setup error — DB not at v1")
+        finally:
+            c.close()
+
+        # Patch default_db_path so cmd_status uses our tmp DB.
+        import unittest.mock as _mock
+        repo_root_arg = self.db_path.parent.parent  # any path; not used here
+        with _mock.patch.object(historical_cli._schema, "default_db_path",
+                                  return_value=self.db_path):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = historical_cli.cmd_status(
+                    argparse.Namespace(), repo_root_arg)
+        out = buf.getvalue()
+
+        # status returns 0 (success).
+        self.assertEqual(rc, 0, f"status returned {rc}; output:\n{out}")
+        # schema_version is now 2.
+        self.assertIn("schema_version:       2", out,
+                       f"expected schema_version=2 after migration; got:\n{out}")
+        # No traceback / sqlite error in stdout.
+        self.assertNotIn("OperationalError", out)
+        self.assertNotIn("no such column", out)
+
+        # And the column now exists.
+        c = schema.open_db(self.db_path)
+        try:
+            cols = {row[1] for row in c.execute(
+                "PRAGMA table_info(historical_refresh_runs)").fetchall()}
+            self.assertIn("symbols_rate_limited", cols,
+                "cmd_status did not migrate the DB to v2")
+            self.assertEqual(schema.get_schema_version(c), 2)
+        finally:
+            c.close()
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

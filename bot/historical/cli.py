@@ -1,4 +1,4 @@
-"""bot/data/cli.py — M16 operator entry points.
+"""bot/historical/cli.py — M16 operator entry points.
 
 Invoked as: python -m bot.historical.cli <subcommand> [args]
 
@@ -128,13 +128,26 @@ def cmd_force_rebuild(args, repo_root: Path) -> int:
 
 
 def cmd_status(args, repo_root: Path) -> int:
-    """Human-readable status check. Reads DB only."""
+    """Human-readable status check.
+
+    Opens the DB and idempotently applies the current schema before
+    querying. This matters because `status` may be the FIRST command
+    an operator runs against an older v1 historical.db — without the
+    schema apply, the SELECT on `symbols_rate_limited` would fail
+    with `no such column` (M16.A.fix-2).
+    """
     db = _schema.default_db_path(repo_root)
     if not db.exists():
         print(f"no historical DB at {db}; nothing to report")
         return 0
     conn = _schema.open_db(db)
     try:
+        # Idempotent: applies any pending additive migrations (e.g.
+        # v1 -> v2 adds historical_refresh_runs.symbols_rate_limited)
+        # before we read v2-shaped columns below. Safe on a brand-new
+        # v2 DB too.
+        _schema.apply_schema(conn)
+
         v = _schema.get_schema_version(conn)
         n_symbols = conn.execute(
             "SELECT COUNT(*) FROM historical_symbols").fetchone()[0]
