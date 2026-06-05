@@ -56,6 +56,9 @@ from dashboard.auth.sessions import (
     DEFAULT_MAX_HOUR as _M153A_MAX_HOUR,
 )
 from dashboard.auth.csrf import get_csrf_token as _m153a_get_csrf
+from dashboard.auth.trusted_proxy import (
+    resolve_client_ip as _m153a_resolve_client_ip,
+)
 
 _m153a_log = logging.getLogger("dashboard.m153a")
 _m153a_log.setLevel(logging.INFO)
@@ -145,12 +148,30 @@ _m153a_ensure_auth_schema_once()
 
 
 def _m153a_client_ip() -> str:
-    """Best-effort client IP. Honours X-Forwarded-For when set
-    (reverse-proxy scenario). Returns "" if not derivable."""
-    xff = request.headers.get('X-Forwarded-For', '')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.remote_addr or ''
+    """Resolve the real client IP for rate-limiting + audit logging.
+
+    P0-1 fix (M1-M16 audit, 2026-06-05): `X-Forwarded-For` is now
+    honoured ONLY when `request.remote_addr` is in the env-configured
+    `DASHBOARD_TRUSTED_PROXIES` allowlist (default 127.0.0.1,::1 —
+    the Caddy-on-same-host deployment). Previously XFF was honoured
+    from any caller, letting an attacker rotate spoofed XFF on every
+    request to bypass the login rate-limiter and corrupt audit IPs.
+
+    Also: when XFF is honoured, we use the LAST entry, not the
+    first. The last entry is the hop immediately before our trusted
+    proxy — i.e. the actual client. Earlier entries were
+    attacker-supplied when they were added and remain untrustworthy
+    even when the final hop is trusted.
+
+    Returns "" only if no IP is derivable from any source — never
+    raises. The pure helper `dashboard.auth.trusted_proxy
+    .resolve_client_ip()` carries the implementation so it is
+    testable without a Flask request context.
+    """
+    return _m153a_resolve_client_ip(
+        remote_addr=request.remote_addr,
+        xff_header=request.headers.get('X-Forwarded-For', ''),
+    )
 
 
 def _m153a_audit(kind: str, *, success: bool,
