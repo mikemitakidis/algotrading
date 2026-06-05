@@ -298,5 +298,195 @@ class G1_ConfigValidation(unittest.TestCase):
         self.assertTrue(ENGINE_VERSION.startswith("M17"))
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G2 — Data loader (Phase 2)
+# ─────────────────────────────────────────────────────────────────────
+
+from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+
+from bot.backtesting import data_loader
+
+
+def _good_coverage(start="2023-01-01", end="2025-01-01",
+                    missing_count=0, quality_status="clean",
+                    freshness_status="fresh"):
+    return {
+        "symbol":            "AAPL",
+        "timeframe":         "1D",
+        "provider":          "yfinance",
+        "first_ts_utc":      pd.Timestamp(start, tz="UTC"),
+        "last_ts_utc":       pd.Timestamp(end,   tz="UTC"),
+        "bar_count":         500,
+        "missing_count":     missing_count,
+        "duplicate_count":   0,
+        "quality_status":    quality_status,
+        "freshness_status":  freshness_status,
+        "last_refresh_at_utc": pd.Timestamp("2025-01-02", tz="UTC"),
+        "last_refresh_id":   "abc123",
+        "provider_limit_note": None,
+        "source_timeframe":  "1D",
+        "derivation_method": "native",
+        "resample_rule_version": None,
+    }
+
+
+def _good_bars(n=300, start_date=date(2024, 1, 1)):
+    """Build n synthetic daily bars starting from start_date.
+    All columns present, no NaN, no duplicates, sorted ascending."""
+    rng = pd.date_range(start=pd.Timestamp(start_date, tz="UTC"),
+                          periods=n, freq="D")
+    return pd.DataFrame({
+        "ts_utc": rng,
+        "open":   [100.0 + i * 0.1 for i in range(n)],
+        "high":   [101.0 + i * 0.1 for i in range(n)],
+        "low":    [ 99.0 + i * 0.1 for i in range(n)],
+        "close":  [100.5 + i * 0.1 for i in range(n)],
+        "volume": [1_000_000] * n,
+        "quality_flags": [0] * n,
+    })
+
+
+class G2_DataLoader(unittest.TestCase):
+    """Group 2: data loader. M16 coverage gate enforcement + bar
+    integrity checks. M16 store is mocked end-to-end; no real file
+    access."""
+
+    def _patched(self, *, coverage, bars):
+        """Helper: patch the M16 store so get_coverage returns
+        `coverage` and get_bars returns `bars`."""
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(return_value=coverage)
+        fake.get_bars     = MagicMock(return_value=bars)
+        return patch.object(data_loader, "_m16_store", fake)
+
+    def test_happy_path_returns_bars_coverage_warnings(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        bars = _good_bars(n=400, start_date=date(2023, 12, 1))
+        with self._patched(coverage=cov, bars=bars):
+            df, returned_cov, warnings = data_loader.load_backtest_bars(cfg)
+        self.assertEqual(len(df), 400)
+        self.assertEqual(returned_cov["symbol"], "AAPL")
+        self.assertEqual(warnings, [])
+
+    def test_no_coverage_row_raises_with_refresh_command(self):
+        cfg = parse_config_dict(_good_config_dict())
+        with self._patched(coverage=None, bars=pd.DataFrame()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("python -m bot.historical.cli backfill", msg)
+        self.assertIn("--symbols AAPL",  msg)
+        self.assertIn("--timeframes 1D", msg)
+
+    def test_coverage_starts_too_late_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        # request start 2024-01-01, but coverage starts 2024-06-01
+        cov = _good_coverage(start="2024-06-01")
+        with self._patched(coverage=cov, bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("starts at",  str(ctx.exception))
+        self.assertIn("after requested start", str(ctx.exception))
+
+    def test_coverage_ends_too_early_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        # request end 2024-12-31, but coverage ends 2024-06-01
+        cov = _good_coverage(end="2024-06-01")
+        with self._patched(coverage=cov, bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("ends at", str(ctx.exception))
+        self.assertIn("before requested end", str(ctx.exception))
+
+    def test_missing_count_gt_zero_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(missing_count=5)
+        with self._patched(coverage=cov, bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("missing_count=5", str(ctx.exception))
+
+    def test_quality_status_error_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(quality_status="error")
+        with self._patched(coverage=cov, bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("quality_status='error'", str(ctx.exception))
+
+    def test_quality_status_warn_records_warning_but_continues(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(quality_status="warn")
+        with self._patched(coverage=cov, bars=_good_bars()):
+            df, _, warnings = data_loader.load_backtest_bars(cfg)
+        self.assertGreater(len(df), 0)
+        codes = [w.code for w in warnings]
+        self.assertIn("m16_quality_warn", codes)
+
+    def test_freshness_status_stale_records_warning_but_continues(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(freshness_status="stale")
+        with self._patched(coverage=cov, bars=_good_bars()):
+            df, _, warnings = data_loader.load_backtest_bars(cfg)
+        codes = [w.code for w in warnings]
+        self.assertIn("m16_freshness_warn", codes)
+
+    def test_empty_bars_after_load_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        empty = pd.DataFrame(columns=[
+            "ts_utc", "open", "high", "low", "close",
+            "volume", "quality_flags"])
+        with self._patched(coverage=cov, bars=empty):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("0 bars", str(ctx.exception))
+
+    def test_nan_ohlc_in_bars_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        bars = _good_bars(n=100)
+        bars.loc[50, "close"] = float("nan")
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("NaN OHLC", str(ctx.exception))
+
+    def test_duplicate_timestamps_in_bars_raises(self):
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        bars = _good_bars(n=100)
+        bars.loc[50, "ts_utc"] = bars.loc[51, "ts_utc"]  # duplicate
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("duplicate timestamps", str(ctx.exception))
+
+    def test_date_boundary_inclusive_to_exclusive_conversion(self):
+        """The CLI passes inclusive end '2024-12-31'; M16 must be
+        called with exclusive end '2025-01-01' (next day 00:00 UTC)
+        so the bar at ts_utc=2024-12-31 00:00 UTC is included."""
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        bars = _good_bars(n=400, start_date=date(2023, 12, 1))
+
+        with self._patched(coverage=cov, bars=bars) as p:
+            data_loader.load_backtest_bars(cfg)
+
+            # Inspect the call to get_bars.
+            data_loader._m16_store.get_bars.assert_called_once()
+            kw = data_loader._m16_store.get_bars.call_args.kwargs
+            self.assertEqual(kw["start_utc"],
+                              datetime(2024, 1, 1, tzinfo=timezone.utc))
+            self.assertEqual(kw["end_utc"],
+                              datetime(2025, 1, 1, tzinfo=timezone.utc))
+            self.assertEqual(kw["adjusted"], True)
+            self.assertEqual(kw["provider"], "yfinance")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
