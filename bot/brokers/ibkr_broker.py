@@ -441,18 +441,84 @@ class IBKRBroker(BrokerAdapter):
                     pass
 
     def cancel(self, broker_order_id: str) -> bool:
+        """Cancel an open order at IBKR by broker_order_id.
+
+        Supports two ID formats — both produced by submit():
+          * Canonical (preferred, since the M12 ChatGPT correction):
+              'IB-PERM-{permId}'         e.g. 'IB-PERM-1735201840'
+            Matched against `order.permId`. permId is broker-assigned
+            and stable across sessions, which is why this is the
+            preferred audit ref.
+          * Legacy fallback (only used when permId failed to
+            propagate at submit time):
+              'IB-{orderId}-{tp}-{sl}'   e.g. 'IB-42-43-44'
+            Matched against `order.orderId`.
+
+        Returns True iff exactly one open order matched the ID and
+        was successfully cancelled. Otherwise returns False (no
+        match, broker error, or unknown ID format) and logs a
+        clear warning.
+
+        P0-2 fix (M1-M16 audit, 2026-06-05): the previous
+        implementation did `int(broker_order_id.split('-')[1])`,
+        which raised ValueError on the canonical 'IB-PERM-...'
+        format ('PERM' is not an int). The exception was swallowed
+        by a broad `except Exception` so cancel returned False
+        silently — the order remained live at IBKR while the
+        operator saw "cancel failed" with no actionable detail.
+        """
+        if not isinstance(broker_order_id, str) or not broker_order_id:
+            log.warning('[IBKR] cancel: empty or non-string id %r',
+                          broker_order_id)
+            return False
+
+        # Determine match mode + extract the lookup value.
+        if broker_order_id.startswith('IB-PERM-'):
+            suffix = broker_order_id[len('IB-PERM-'):]
+            try:
+                lookup_value = int(suffix)
+            except ValueError:
+                log.warning('[IBKR] cancel: malformed PERM id %r '
+                              '(suffix %r not int)',
+                              broker_order_id, suffix)
+                return False
+            match_attr = 'permId'
+        elif broker_order_id.startswith('IB-'):
+            # Legacy 'IB-{parent}-{tp}-{sl}' shape.
+            parts = broker_order_id.split('-')
+            if len(parts) < 2:
+                log.warning('[IBKR] cancel: legacy id missing parent '
+                              'segment: %r', broker_order_id)
+                return False
+            try:
+                lookup_value = int(parts[1])
+            except ValueError:
+                log.warning('[IBKR] cancel: legacy id parent segment '
+                              'not int: %r', broker_order_id)
+                return False
+            match_attr = 'orderId'
+        else:
+            log.warning('[IBKR] cancel: unknown broker_order_id format: %r',
+                          broker_order_id)
+            return False
+
         ib = None
         try:
-            parent_id = int(broker_order_id.split('-')[1])
             ib = self._connect()
             for order in ib.openOrders():
-                if order.orderId == parent_id:
+                candidate = getattr(order, match_attr, None)
+                if candidate == lookup_value:
                     ib.cancelOrder(order)
-                    log.info('[IBKR] Cancelled %s', broker_order_id)
+                    log.info('[IBKR] Cancelled %s (%s=%s)',
+                               broker_order_id, match_attr, lookup_value)
                     return True
+            log.warning('[IBKR] cancel: no open order matches %s '
+                          '(%s=%s)', broker_order_id, match_attr,
+                          lookup_value)
             return False
         except Exception as e:
-            log.warning('[IBKR] cancel failed: %s', e)
+            log.warning('[IBKR] cancel failed for %s: %s',
+                          broker_order_id, e)
             return False
         finally:
             if ib and ib.isConnected():
