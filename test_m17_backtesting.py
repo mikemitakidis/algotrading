@@ -488,5 +488,196 @@ class G2_DataLoader(unittest.TestCase):
             self.assertEqual(kw["provider"], "yfinance")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G3 — Indicators (Phase 3)
+# ─────────────────────────────────────────────────────────────────────
+
+import math
+
+import numpy as np
+
+from bot.backtesting import indicators as ind
+
+
+class G3_Indicators(unittest.TestCase):
+    """Group 3: vectorized indicators. Hand-computed reference values,
+    NaN-at-warmup behaviour, no-look-ahead AST patterns."""
+
+    # ---- SMA ---------------------------------------------------------
+
+    def test_sma_known_values(self):
+        # window=3, hand-computed
+        s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        out = ind.sma(s, window=3)
+        # NaN, NaN, (1+2+3)/3, (2+3+4)/3, (3+4+5)/3, (4+5+6)/3
+        expected = [math.nan, math.nan, 2.0, 3.0, 4.0, 5.0]
+        for i, exp in enumerate(expected):
+            if math.isnan(exp):
+                self.assertTrue(math.isnan(out.iloc[i]))
+            else:
+                self.assertAlmostEqual(out.iloc[i], exp, places=9)
+
+    def test_sma_warmup_is_nan(self):
+        s = pd.Series([1.0] * 10)
+        out = ind.sma(s, window=5)
+        for i in range(4):
+            self.assertTrue(math.isnan(out.iloc[i]))
+        for i in range(4, 10):
+            self.assertEqual(out.iloc[i], 1.0)
+
+    def test_sma_rejects_invalid_window(self):
+        s = pd.Series([1.0, 2.0, 3.0])
+        with self.assertRaises(ValueError):
+            ind.sma(s, window=0)
+        with self.assertRaises(ValueError):
+            ind.sma(s, window=-3)
+
+    # ---- EMA ---------------------------------------------------------
+
+    def test_ema_known_values(self):
+        # EMA(span=3, adjust=False, min_periods=3):
+        #   alpha = 2 / (3+1) = 0.5
+        #   ema[2] = (1 + 2 + 3) / 3 = 2.0   (seed = SMA(window) at first valid)
+        # Pandas' ewm seeds differently:
+        #   ema[0] = NaN, ema[1] = NaN (min_periods),
+        #   ema[2] = recursive: 0.25*x[0] + 0.25*x[1] + 0.5*x[2]
+        #         = 0.25*1 + 0.25*2 + 0.5*3 = 0.25 + 0.5 + 1.5 = 2.25
+        # We test pandas' behaviour directly, not Wilder seed.
+        s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
+        out = ind.ema(s, window=3)
+        self.assertTrue(math.isnan(out.iloc[0]))
+        self.assertTrue(math.isnan(out.iloc[1]))
+        # Pandas ewm(span=3, adjust=False) starting from x[0]:
+        # y[0] = 1.0
+        # y[1] = 0.5*1 + 0.5*2 = 1.5
+        # y[2] = 0.5*1.5 + 0.5*3 = 2.25
+        # y[3] = 0.5*2.25 + 0.5*4 = 3.125
+        # y[4] = 0.5*3.125 + 0.5*5 = 4.0625
+        # min_periods=3 masks indices 0..1; index 2 onward visible.
+        self.assertAlmostEqual(out.iloc[2], 2.25,   places=6)
+        self.assertAlmostEqual(out.iloc[3], 3.125,  places=6)
+        self.assertAlmostEqual(out.iloc[4], 4.0625, places=6)
+
+    # ---- RSI ---------------------------------------------------------
+
+    def test_rsi_all_up_is_100(self):
+        # Continuously rising series -> all gains, no losses -> RSI = 100
+        s = pd.Series([float(i) for i in range(1, 50)])
+        out = ind.rsi(s, period=14)
+        # After warmup, RSI should be 100.
+        for i in range(20, len(out)):
+            self.assertEqual(out.iloc[i], 100.0,
+                              f"index {i}: expected 100, got {out.iloc[i]}")
+
+    def test_rsi_all_down_is_zero(self):
+        s = pd.Series([float(i) for i in range(50, 1, -1)])
+        out = ind.rsi(s, period=14)
+        for i in range(20, len(out)):
+            self.assertAlmostEqual(out.iloc[i], 0.0, places=6)
+
+    def test_rsi_warmup_is_nan(self):
+        s = pd.Series([1.0, 2.0, 3.0])
+        out = ind.rsi(s, period=14)
+        # Too few values: all NaN.
+        for v in out:
+            self.assertTrue(math.isnan(v))
+
+    # ---- MACD --------------------------------------------------------
+
+    def test_macd_columns_present(self):
+        s = pd.Series([float(i) for i in range(1, 50)])
+        out = ind.macd(s, fast=12, slow=26, signal=9)
+        self.assertEqual(set(out.columns), {"macd", "signal", "hist"})
+        # Last row should not be NaN (we have enough warmup).
+        self.assertFalse(math.isnan(out["macd"].iloc[-1]))
+        self.assertFalse(math.isnan(out["signal"].iloc[-1]))
+        self.assertFalse(math.isnan(out["hist"].iloc[-1]))
+
+    def test_macd_hist_equals_macd_minus_signal(self):
+        s = pd.Series(np.random.RandomState(42).randn(100).cumsum() + 100)
+        out = ind.macd(s, fast=12, slow=26, signal=9)
+        diff = out["macd"] - out["signal"]
+        last = out["hist"].dropna().tail(30)
+        for i in last.index:
+            self.assertAlmostEqual(out["hist"].loc[i],
+                                      diff.loc[i], places=9)
+
+    def test_macd_rejects_fast_gte_slow(self):
+        s = pd.Series([1.0, 2.0, 3.0])
+        with self.assertRaises(ValueError):
+            ind.macd(s, fast=12, slow=12, signal=9)
+
+    # ---- ATR ---------------------------------------------------------
+
+    def test_atr_basic_shape(self):
+        h = pd.Series([10.0, 11.0, 12.0, 11.5, 12.5, 13.0] * 5)
+        l = pd.Series([ 9.0,  9.5, 10.0, 10.0, 11.0, 11.5] * 5)
+        c = pd.Series([ 9.5, 10.5, 11.0, 11.0, 12.0, 12.5] * 5)
+        out = ind.atr(h, l, c, period=14)
+        # Last value finite, > 0
+        self.assertFalse(math.isnan(out.iloc[-1]))
+        self.assertGreater(out.iloc[-1], 0)
+
+    def test_atr_warmup_is_nan(self):
+        h = pd.Series([10.0, 11.0, 12.0])
+        l = pd.Series([ 9.0,  9.5, 10.0])
+        c = pd.Series([ 9.5, 10.5, 11.0])
+        out = ind.atr(h, l, c, period=14)
+        for v in out:
+            self.assertTrue(math.isnan(v))
+
+    # ---- Bollinger ---------------------------------------------------
+
+    def test_bollinger_at_constant_series(self):
+        s = pd.Series([100.0] * 30)
+        out = ind.bollinger(s, window=20, num_std=2.0)
+        # std is 0 everywhere; bands collapse to middle; pct_b NaN
+        self.assertEqual(out["middle"].iloc[-1], 100.0)
+        self.assertEqual(out["upper"].iloc[-1],  100.0)
+        self.assertEqual(out["lower"].iloc[-1],  100.0)
+        self.assertTrue(math.isnan(out["pct_b"].iloc[-1]))
+
+    # ---- volume_avg / volume_ratio -----------------------------------
+
+    def test_volume_ratio_above_below_average(self):
+        v = pd.Series([100.0] * 19 + [200.0])
+        avg = ind.volume_avg(v, window=20)
+        ratio = ind.volume_ratio(v, window=20)
+        # last bar's avg includes the spike: (19*100 + 200)/20 = 105
+        self.assertAlmostEqual(avg.iloc[-1], 105.0, places=6)
+        self.assertAlmostEqual(ratio.iloc[-1], 200.0 / 105.0, places=6)
+
+    # ---- AST: no centered windows, no negative shifts ---------------
+
+    def test_indicators_have_no_centered_or_forward_indexing(self):
+        """AST scan: ensure no rolling(..., center=True) or shift(-N)."""
+        import ast
+        with open("bot/backtesting/indicators.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            # rolling(..., center=True)
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "rolling"):
+                for kw in node.keywords:
+                    if kw.arg == "center":
+                        # If center is set, it must be False (or absent)
+                        if isinstance(kw.value, ast.Constant):
+                            self.assertFalse(
+                                kw.value.value,
+                                "rolling(center=True) creates look-ahead")
+            # shift(-N)
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "shift"):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
+                        self.assertGreaterEqual(
+                            arg.value, 0,
+                            f"shift({arg.value}) is forward-looking")
+                    elif isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                        self.fail("shift(-N) is forward-looking")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
