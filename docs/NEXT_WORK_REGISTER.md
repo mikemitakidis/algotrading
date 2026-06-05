@@ -161,12 +161,23 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Acceptance criteria when undeferred:** decision recorded between (a) bounded-wait approach with explicit timeout config + tests, or (b) accept the legacy format + ensure operator-visible warning. Either way, no silent fallback.
 - **Reference:** P0 implementation plan / audit findings — Claude finding A4 + ChatGPT finding #1.
 
-### audit-P1-data-rate-limit-investigate (DEFERRED, INVESTIGATE-FIRST, recorded 2026-06-05)
-- **Status:** Not started. Marked INVESTIGATE-FIRST: no code changes until the current real-world failure mode is reproduced.
-- **What:** ChatGPT's audit findings #3 and #4 flagged a possible yfinance rate-limit / backoff issue in `bot/data.py`. Claude's independent audit observed `bot/data.py` is byte-identical to `ceb8cd5` (the protected baseline) and could not reproduce a failure from code inspection alone. Operator-approved decision: investigate first against live yfinance behaviour and the production logs; only patch if a concrete failure mode is reproduced.
-- **Hard constraint:** `bot/data.py` is on the protected list. Any code change here requires an explicit pre-code checklist + operator approval, mirroring the P0-4 protected-file approval pattern.
-- **Acceptance criteria when undeferred:** reproducer (or absence-of-reproducer evidence) + operator decision on next step.
-- **Reference:** P0 audit findings — ChatGPT #3 + #4; Claude D3.
+### audit-P1-data-rate-limit-fix (CLOSED 2026-06-05, supersedes audit-P1-data-rate-limit-investigate)
+- **Status:** **CLOSED.** Investigation confirmed the bug; the patch landed, regression-green, pushed, and VPS-verified.
+- **Investigation outcome (2026-06-05):** ChatGPT's audit findings #3 + #4 were vindicated. Line-by-line code inspection of `bot/providers/yfinance_provider.py`, `bot/backtest.py`, `bot/backtest_v2.py`, `bot/data.py`, `bot/scanner.py`, and the M16 reference path `bot/historical/providers_yfinance.py` confirmed:
+  - The OLD provider's `_fetch_one` (used by the live scanner via `bot/data.fetch_bars`) detected rate limits only via `str(exc)` substring match on raised exceptions; it never inspected `yf.shared._ERRORS`. yfinance ≥ 0.2 catches per-symbol exceptions internally and stashes them there while returning an empty DataFrame, so swallowed rate-limits were silently misclassified as `no_data` — the `consec_rl` counter never incremented and the `MAX_CONSEC_RL` cache-only safety mode never engaged.
+  - The OLD provider's `fetch_bars_range` (used by `bot/backtest_v2`) used `raise_errors=False`, which *guaranteed* swallowed rate-limits. Empty DataFrame returned `('empty_response')` on the first attempt with NO retry-with-backoff.
+  - `bot/backtest.py:_fetch_yf_single` had the identical shape with the same misclassification.
+  - The M16 fix pattern in `bot/historical/providers_yfinance.py` (clear `_ERRORS` before call, scan after empty df, layered `YFRateLimitError` isinstance + type-name + substring detection) was the right shape to replicate in the OLD path.
+- **Sub-milestone scope (operator-approved 2026-06-05):**
+  - Patched `bot/providers/yfinance_provider.py` (new module-level helpers + rewrites of `_fetch_one` and `fetch_bars_range`).
+  - Patched `bot/backtest.py:_fetch_yf_single` (mirror pattern via imported helpers from the provider).
+  - Strict 1-line import repair in `bot/backtest.py` (`_browser_session` was moved to `bot.providers.yfinance_provider` at Milestone 6 but the import was never updated — the module had been unimportable since M6 and was discovered mid-task). Repair was strictly bounded to the broken import line; no other `bot/backtest.py` changes.
+  - `_fetch_benchmark` deliberately NOT touched per operator instruction (degrades-gracefully, lower priority).
+- **Commit:** `9994692` "audit-P1-data-rate-limit-fix: detect swallowed yfinance rate-limits via yf.shared._ERRORS in the OLD provider + backtest path".
+- **VPS evidence (2026-06-05):** HEAD = `9994692`; all 7 new helpers present in `bot/providers/yfinance_provider.py`; `_scan_yf_errors_for_rate_limit` present in both call sites; `bot/backtest.py` import repair landed; `bot.backtest` importable for the first time since M6. New `test_audit_p1_data_rate_limit.py` 23/23 OK. Targeted regression sweep: 206 tests / OK / 1 skipped pre-existing / exit 0. Dashboard + Caddy active; `https://algotrading.marketwarrior.club/api/health` HTTP 200; `git status` clean.
+- **Hard constraints upheld:** 0/20 protected files modified by this commit; cumulative 2/20 unchanged from P0 batch (`main.py` + `bot/risk.py` from P0-4 only). `bot/data.py` sha256 byte-identical to `ceb8cd5`. AST scan clean. No `.env`/service/data changes. No new dependencies. No new status codes. Public API signatures unchanged (`bot.data.fetch_bars`, `YFinanceProvider.fetch_bars`, `YFinanceProvider.fetch_bars_range`, `bot.backtest._fetch_yf_single` all unchanged).
+- **Side effect:** `backtest_cli.py` is no longer broken-on-import (it depends on `bot.backtest`). The CLI was not separately exercised in this commit — only its `_fetch_yf_single` data fetch path was patched + tested. Any further bugs in `backtest_cli.py` remain unaddressed and would need a separate sub-milestone if surfaced.
+- **Reference:** P0 audit findings — ChatGPT #3 + #4, Claude D3; investigation report 2026-06-05; commit `9994692`.
 
 ### audit-P1-portfolio-ctx-engine-bypass (DEFERRED, recorded 2026-06-05 at P0 closeout)
 - **Status:** Not started. Distinct from `M14-extension-to-scanner-path` (which addresses the broader M14 24-gate parity gap) — this P1 item is narrower in scope.

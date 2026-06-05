@@ -523,9 +523,10 @@ on `main`:
 - Production: `algo-trader-dashboard.service` active, `caddy.service` active, `https://algotrading.marketwarrior.club/api/health` → HTTP 200.
 - `git status` clean.
 
-**P1 / P2 / P3 backlog from the audit pass remains OPEN.** Recorded in
+**P1 / P2 / P3 backlog from the audit pass remains OPEN** (except the
+data-rate-limit P1 closed by `9994692` — see block below). Recorded in
 `docs/NEXT_WORK_REGISTER.md` for carry-forward; see entries
-`audit-P1-broker-permId-fallback`, `audit-P1-data-rate-limit-investigate`,
+`audit-P1-broker-permId-fallback`, `audit-P1-data-rate-limit-fix` (CLOSED),
 `audit-P1-portfolio-ctx-engine-bypass`, `audit-P2-batch`, `audit-P3-batch`.
 Each is tracked separately so it cannot be lost when context resets.
 
@@ -536,9 +537,73 @@ is NOT in M17 scope.
 
 ---
 
+**audit-P1-data-rate-limit-fix — VPS-verified 2026-06-05, CLOSED:**
+
+First P1 sub-milestone closed after the P0 batch. Single commit on
+`main`:
+
+| # | Commit | Patch | Summary |
+|---|---|---|---|
+| 1 | `9994692` | audit-P1-data-rate-limit-fix | Detect swallowed yfinance rate-limits via `yf.shared._ERRORS` in the OLD provider (`bot/providers/yfinance_provider.py`) and in `bot/backtest.py:_fetch_yf_single`. Mirrors the M16 fix pattern at `bot/historical/providers_yfinance.py`. Plus a strictly-bounded 1-line import repair in `bot/backtest.py` (the module had been unimportable since Milestone 6 — `_browser_session` moved to the provider package at M6 but the import was never updated; discovered mid-task). 7 new helpers (`_is_rate_limit_signal`, `_yf_rate_limit_exc_class`, `_clear_yf_errors`, `_scan_yf_errors_for_rate_limit`, `_scan_yf_errors_for_other_error`, `_is_rate_limit_exception`, `_RATE_LIMIT_TOKENS`). 23 new tests across 4 groups including the smoking-gun `test_fetch_one_detects_rate_limit_in_yf_shared_errors_after_empty_df`. |
+
+**Bug closed:** before this patch, the live scanner silently
+misclassified Yahoo rate-limited responses as `no_data` (empty
+DataFrame plus error swallowed into `yf.shared._ERRORS`). The
+`consec_rl` counter never incremented and the `MAX_CONSEC_RL`
+cache-only safety mode never engaged. Operationally the symptom
+was scanner output like `[DATA] ... fresh=0 cache=N stale=0 skip=M`
+indistinguishable from a thin-volume day. Same shape of bug in
+`fetch_bars_range` (backtest_v2 path) and `_fetch_yf_single`
+(`bot/backtest.py`) — both used `raise_errors=False`, both
+returned `'empty_response'` on swallowed rate-limits with no retry.
+
+**Hard-constraint evidence:**
+- Protected files modified by this commit: **0 / 20**.
+- Cumulative protected modified vs `ceb8cd5`: **2 / 20** (unchanged
+  from P0 batch — `main.py` + `bot/risk.py` from P0-4 `a072032` only).
+- `bot/data.py` sha256: byte-identical to baseline.
+- AST scan on patched modules: clean.
+- No `.env` / service / generated-data changes. No new
+  dependencies. No new status codes. Public API signatures
+  unchanged (`bot.data.fetch_bars`, `YFinanceProvider.fetch_bars`,
+  `YFinanceProvider.fetch_bars_range`, `bot.backtest._fetch_yf_single`
+  all unchanged).
+- Test results at commit: `test_audit_p1_data_rate_limit.py`
+  23/23 OK (new); full unittest sweep all 35 suites OK; targeted
+  regression sweep `Ran 206 tests / OK (skipped=1) / exit 0` on
+  the VPS.
+
+**VPS evidence (operator-verified 2026-06-05):**
+- HEAD = `9994692` (expected = `9994692`).
+- All 7 helpers present in `bot/providers/yfinance_provider.py`.
+- `_scan_yf_errors_for_rate_limit` present in both call sites
+  (provider + backtest).
+- `bot/backtest.py` import repair landed; `bot.backtest`
+  importable for the first time since M6 closure.
+- audit-P1 test suite: `Ran 23 tests / OK / exit 0`.
+- Targeted regression: `Ran 206 tests / OK (skipped=1) / exit 0`.
+- Production: `algo-trader-dashboard.service` active, `caddy.service`
+  active, `https://algotrading.marketwarrior.club/api/health` HTTP 200.
+- `git status` clean.
+
+**Side effect (not in scope, not addressed):** `backtest_cli.py`
+(the operator-facing CLI runner of `bot.backtest`) was broken on
+import since Milestone 6 because of the same `_browser_session`
+move. The strict 1-line import repair revives the CLI from broken-
+on-import state; the CLI itself was not separately exercised in
+this commit and may have other latent issues accumulated since M6.
+Any further `backtest_cli.py` work would be a fresh sub-milestone.
+
+**Remaining audit P1 / P2 / P3 backlog stays OPEN** — see
+`docs/NEXT_WORK_REGISTER.md` entries `audit-P1-broker-permId-fallback`,
+`audit-P1-portfolio-ctx-engine-bypass`, `audit-P2-batch`,
+`audit-P3-batch`. M17 has NOT started.
+
+---
+
 ## Future milestones (M17–M23)
 
-Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The next step before any M17 coding is an **audit-only pass over M1–M16** (operator instruction recorded 2026-06-05).
+Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The M1–M16 audit-only pass is CLOSED 2026-06-05 (P0 batch + the first P1 sub-milestone `audit-P1-data-rate-limit-fix`); remaining P1 / P2 / P3 backlog stays open per `docs/NEXT_WORK_REGISTER.md`.
 
 | # | Title | Status | Note |
 |---|---|---|---|
