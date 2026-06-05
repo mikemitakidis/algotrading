@@ -27,7 +27,7 @@ _M153A_REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_M153A_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_M153A_REPO_ROOT))
 
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, Response
 from dotenv import load_dotenv
 
 BASE_DIR   = Path(__file__).resolve().parent.parent
@@ -3015,8 +3015,99 @@ document.addEventListener('DOMContentLoaded', function(){
     </div>
     <div id="mrResult" style="margin-top:18px;display:none"></div>
   </div>
+
+  <!-- ── M15.3.C — Audit Export (compliance) ─────────────────────────────── -->
+  <div class="card" style="border-color:#3b82f6;margin-top:14px">
+    <div class="ct" style="color:#3b82f6">Audit Export (M15.3.C)</div>
+    <p style="color:#8b949e;font-size:13px;margin:8px 0 14px">
+      Compliance-friendly export of the M15.3 audit trail: all
+      <code>auth_events</code> rows (login / TOTP / manual_reset) plus
+      <code>risk_decisions</code> rows with <code>source='manual_reset'</code>.
+      Read-only — no broker, order, or trading-state writes. The export call
+      itself is meta-audited as <code>audit_export_request</code>.
+    </p>
+    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+      <div>
+        <div style="color:#8b949e;font-size:11px;margin-bottom:2px">From (UTC, inclusive)</div>
+        <input id="aeFrom" type="date"
+                style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px;font-family:monospace" />
+      </div>
+      <div>
+        <div style="color:#8b949e;font-size:11px;margin-bottom:2px">To (UTC, inclusive)</div>
+        <input id="aeTo" type="date"
+                style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px;font-family:monospace" />
+      </div>
+      <div>
+        <div style="color:#8b949e;font-size:11px;margin-bottom:2px">Format</div>
+        <select id="aeFormat"
+                style="background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:6px;font-family:monospace">
+          <option value="jsonl">JSONL (high-fidelity, programmatic)</option>
+          <option value="csv">CSV (ZIP — opens in Excel)</option>
+        </select>
+      </div>
+      <button onclick="downloadAuditExport()"
+              style="padding:8px 18px;background:#1f6feb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold">
+        Download export
+      </button>
+    </div>
+    <div id="aeResult" style="margin-top:12px;font-size:12px;color:#8b949e"></div>
+  </div>
+
 </div>
 <!-- end recovery page -->
+
+<script>
+// ── M15.3.C — Audit Export ───────────────────────────────────────────────────
+function downloadAuditExport(){
+  var from = (document.getElementById('aeFrom').value || '').trim();
+  var to   = (document.getElementById('aeTo').value   || '').trim();
+  var fmt  = (document.getElementById('aeFormat').value || 'jsonl').trim();
+  var res  = document.getElementById('aeResult');
+  var qs   = new URLSearchParams();
+  qs.set('format', fmt);
+  if(from) qs.set('from', from);
+  if(to)   qs.set('to',   to);
+  res.style.color = '#8b949e';
+  res.textContent = 'Building export...';
+  fetch('/api/audit-export?' + qs.toString(), {credentials:'include'})
+    .then(function(r){
+      if(r.status !== 200){
+        return r.json().then(function(d){
+          res.style.color = '#f85149';
+          var msg = 'Export failed: ' + (d.error || 'http_' + r.status);
+          if(d.error === 'row_cap_exceeded'){
+            msg += ' (max ' + d.max_rows + ' rows; got ' + JSON.stringify(d.row_counts) + ' — narrow your date range)';
+          } else if(d.error === 'redaction_violation'){
+            msg += ' (defence-in-depth refusal; export_id=' + d.export_id + ', labels=' + JSON.stringify(d.violation_labels) + '). This indicates a bug in audit-row writing upstream.';
+          } else if(d.error === 'rate_limited'){
+            msg += ' (retry in ' + (d.retry_after_sec || '?') + 's)';
+          }
+          res.textContent = msg;
+        });
+      }
+      var exportId = r.headers.get('X-Export-Id') || 'unknown';
+      var sha      = r.headers.get('X-Export-Sha256') || '';
+      var cd       = r.headers.get('Content-Disposition') || '';
+      var match    = /filename="([^"]+)"/.exec(cd);
+      var filename = match ? match[1] : ('audit_export.' + (fmt === 'csv' ? 'zip' : 'jsonl'));
+      return r.blob().then(function(blob){
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        res.style.color = '#7ee787';
+        res.textContent = 'Downloaded ' + filename + '   (export_id=' + exportId + ', sha256=' + sha.substring(0, 16) + '...)';
+      });
+    })
+    .catch(function(e){
+      res.style.color = '#f85149';
+      res.textContent = 'Network error: ' + String(e);
+    });
+}
+</script>
+
+<!-- end M15.3.C export controls -->
 
 <script>
 // ── M15.3.B — Recovery (manual_reset) ────────────────────────────────────────
@@ -5527,6 +5618,215 @@ def m153b_manual_reset_execute():
             'decision_id':   result['decision_id'],
         },
     })
+
+
+# ── M15.3.C — audit export endpoint ─────────────────────────────────────────
+#
+# GET /api/audit-export?format=jsonl|csv&from=YYYY-MM-DD&to=YYYY-MM-DD
+#
+# Compliance-friendly export of:
+#   * auth_events       — all rows in the date range (M15.3.A login/session +
+#                         M15.3.A.2 TOTP + M15.3.B manual_reset audit history)
+#   * risk_decisions    — rows with source='manual_reset' ONLY (the M14-side
+#                         half of M15.3.B's dual-audit). Other risk_decisions
+#                         (source IN 'auto','manual','reconciled') are
+#                         EXCLUDED per Q-C.1 — operational/risk-engine
+#                         audit, separate from operator/security audit.
+#
+# This endpoint is READ-ONLY with respect to all trading/account state.
+# The ONLY write it performs is a single `audit_export_request` row in
+# `auth_events` — the meta-audit-of-the-audit (success=1 or success=0).
+#
+# Per Q-C.7 operator approval: GET is acceptable for this milestone even
+# though it writes the meta-audit row, because the primary action is
+# download/export of already-visible-to-the-operator data. No CSRF token
+# required (GET has no cross-site-attack surface that mutates state).
+#
+# Per Q-C.8 operator approval: no step-up TOTP for this milestone.
+# Conscious decision — exported data is already visible to the
+# authenticated operator via existing dashboard views; the export is a
+# convenience aggregation, not new access. If broader trading/risk
+# exports are exposed later, step-up TOTP should be reconsidered.
+
+_m153c_export_limiter = None
+
+
+def _m153c_get_export_limiter():
+    """Lazy-init the audit-export rate limiter."""
+    global _m153c_export_limiter
+    if _m153c_export_limiter is None:
+        from dashboard.auth.audit_export import make_export_limiter
+        _m153c_export_limiter = make_export_limiter()
+    return _m153c_export_limiter
+
+
+@app.route('/api/audit-export', methods=['GET'])
+@require_auth
+def m153c_audit_export():
+    """Stream-spool an audit export. Returns a file download.
+
+    Validation order (each failure writes a manual_reset_failure-style
+    audit_export_request row with success=0):
+      1. Rate limit
+      2. format param ∈ {jsonl, csv}
+      3. from/to date params parse + valid range
+      4. Row-count cap (100,000)
+      5. Build body (spooled to memory bytes for SHA-256)
+      6. Redaction scan (fail-fast — do NOT silent-strip)
+      7. Write audit_export_request row with success=1, export_id linked
+      8. Return file response
+    """
+    import sqlite3 as _sqlite3
+    from dashboard.auth import audit_export as _ae
+    from dashboard.auth.rate_limit import LoginRateLimited
+
+    client_ip = _m153a_client_ip()
+    limiter = _m153c_get_export_limiter()
+
+    # Helper to write the audit_export_request meta-audit row.
+    def _write_meta(*, success, export_id=None, fmt=None,
+                     from_iso=None, to_iso=None,
+                     row_counts=None, reason=None,
+                     redaction_violations=None):
+        extras = {
+            "export_id":     export_id,
+            "format":        fmt,
+            "from_iso":      from_iso,
+            "to_iso":        to_iso,
+            "row_counts":    row_counts,
+        }
+        if reason is not None:
+            extras["reason"] = reason
+        if redaction_violations is not None:
+            # Labels only — never the actual secret values.
+            extras["redaction_violations"] = list(redaction_violations)
+        # Drop None values for cleaner extras.
+        extras = {k: v for k, v in extras.items() if v is not None}
+        _m153a_audit('audit_export_request', success=success, extras=extras)
+
+    # 1. Rate limit.
+    try:
+        limiter.check_locked(client_ip)
+    except LoginRateLimited as e:
+        _write_meta(success=False, export_id=None, fmt=None,
+                     from_iso=None, to_iso=None, row_counts=None,
+                     reason='rate_limited')
+        return jsonify({'ok': False, 'error': 'rate_limited',
+                         'retry_after_sec': e.retry_after_sec}), 429
+
+    # 2. Format param.
+    fmt = (request.args.get('format') or _ae.DEFAULT_FORMAT).lower()
+    if fmt not in _ae.SUPPORTED_FORMATS:
+        limiter.record_failure(client_ip)
+        _write_meta(success=False, export_id=None, fmt=fmt,
+                     from_iso=None, to_iso=None, row_counts=None,
+                     reason='format_invalid')
+        return jsonify({'ok': False, 'error': 'format_invalid',
+                         'supported': list(_ae.SUPPORTED_FORMATS)}), 400
+
+    # 3. Date range.
+    from_str = request.args.get('from') or None
+    to_str   = request.args.get('to')   or None
+    ok, derr, from_iso, to_iso = _ae.validate_date_range(from_str, to_str)
+    if not ok:
+        limiter.record_failure(client_ip)
+        _write_meta(success=False, export_id=None, fmt=fmt,
+                     from_iso=None, to_iso=None, row_counts=None,
+                     reason=derr)
+        return jsonify({'ok': False, 'error': derr}), 400
+
+    # 4. Row-count cap.
+    conn = _sqlite3.connect(str(DB_PATH))
+    try:
+        n_auth, n_rd = _ae.count_export_rows(
+            conn, from_iso=from_iso, to_iso=to_iso)
+    finally:
+        conn.close()
+    total = n_auth + n_rd
+    if total > _ae.MAX_EXPORT_ROWS:
+        limiter.record_failure(client_ip)
+        _write_meta(success=False, export_id=None, fmt=fmt,
+                     from_iso=from_iso, to_iso=to_iso,
+                     row_counts={'auth_events': n_auth,
+                                  'risk_decisions_manual_reset': n_rd},
+                     reason='row_cap_exceeded')
+        return jsonify({
+            'ok': False,
+            'error': 'row_cap_exceeded',
+            'hint': 'narrow your date range',
+            'max_rows': _ae.MAX_EXPORT_ROWS,
+            'row_counts': {'auth_events': n_auth,
+                            'risk_decisions_manual_reset': n_rd},
+        }), 400
+
+    # 5. Build body (spooled to bytes).
+    export_id = _ae._new_export_id()
+    generated_at = _ae._now_utc_iso()
+    conn = _sqlite3.connect(str(DB_PATH))
+    try:
+        if fmt == 'jsonl':
+            body_bytes, manifest = _ae.build_jsonl_export(
+                conn, from_iso=from_iso, to_iso=to_iso,
+                export_id=export_id, generated_at_utc=generated_at)
+            content_type = 'application/x-ndjson'
+        else:
+            body_bytes, manifest = _ae.build_csv_zip_export(
+                conn, from_iso=from_iso, to_iso=to_iso,
+                export_id=export_id, generated_at_utc=generated_at)
+            content_type = 'application/zip'
+    except Exception as e:
+        _m153a_log.exception("audit_export: build failed")
+        limiter.record_failure(client_ip)
+        _write_meta(success=False, export_id=export_id, fmt=fmt,
+                     from_iso=from_iso, to_iso=to_iso,
+                     row_counts={'auth_events': n_auth,
+                                  'risk_decisions_manual_reset': n_rd},
+                     reason='build_failed')
+        return jsonify({'ok': False, 'error': 'build_failed'}), 500
+    finally:
+        conn.close()
+
+    # 6. Redaction scan — fail-fast.
+    clean, violations = _ae.scan_for_secrets(body_bytes)
+    if not clean:
+        _m153a_log.error(
+            "audit_export %s: redaction_violation labels=%r — refusing to "
+            "return export (no secret values logged or returned)",
+            export_id, violations)
+        # Fail-fast per Q-C.5: do NOT return the body. Meta-audit the
+        # violation with labels-only (no secret values).
+        _write_meta(success=False, export_id=export_id, fmt=fmt,
+                     from_iso=from_iso, to_iso=to_iso,
+                     row_counts={'auth_events': n_auth,
+                                  'risk_decisions_manual_reset': n_rd},
+                     reason='redaction_violation',
+                     redaction_violations=violations)
+        return jsonify({
+            'ok': False,
+            'error': 'redaction_violation',
+            'export_id': export_id,
+            # Labels-only — never secret values.
+            'violation_labels': violations,
+            'hint': ('the export was refused because secret-pattern '
+                      'substrings were detected in audit data; this '
+                      'is defence-in-depth and indicates a bug in '
+                      'audit-row writing somewhere upstream'),
+        }), 500
+
+    # 7. Meta-audit success row (linked by export_id).
+    _write_meta(success=True, export_id=export_id, fmt=fmt,
+                 from_iso=from_iso, to_iso=to_iso,
+                 row_counts={'auth_events': n_auth,
+                              'risk_decisions_manual_reset': n_rd})
+
+    # 8. File download response.
+    filename = _ae.make_download_filename(fmt, generated_at)
+    resp = Response(body_bytes, status=200, mimetype=content_type)
+    resp.headers['Content-Disposition'] = (
+        f'attachment; filename="{filename}"')
+    resp.headers['X-Export-Id'] = export_id
+    resp.headers['X-Export-Sha256'] = manifest['_sha256_payload']
+    return resp
 
 
 # ── Strategy ─────────────────────────────────────────────────────────────────

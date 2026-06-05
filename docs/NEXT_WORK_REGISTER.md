@@ -82,11 +82,29 @@ This file is updated by every milestone closeout. Each item has: **status, why d
 - **Authoritative operator reference:** [`docs/M15_3_B_manual_reset.md`](M15_3_B_manual_reset.md).
 - **Post-M15 direction note (added 2026-06-04 on M15.3.A.cutover closeout):** `M15.3.B` (operator-action safety surface, now CLOSED) and `M15.3.C` (compliance audit/export, remaining) are explicitly preserved on the active path because they fit the "safety/compliance" exception to the post-M15 dashboard freeze. Other dashboard work (e.g. `M15.3.D` multi-user roles) is deferred indefinitely.
 
-### M15.3.C — Compliance audit + export (PENDING M15.3 SEQUENCE)
-- **Status:** Plan approved (in M15.3 plan), scheduled after M15.3.B.
-- **Why deferred:** Sequenced last because C reads B's `manual_reset_audit` and A's `auth_events`.
-- **Acceptance criteria:** see §6 of the M15.3 plan.
-- **Post-M15 direction note:** kept on the active path as a compliance/audit deliverable. After M15.3.C ships, M15 closes and the focus shifts entirely to bot intelligence (M16+).
+### M15.3.C — Compliance audit + export (IMPLEMENTATION LANDED — AWAITING VPS VERIFICATION 2026-06-05)
+- **Status:** Code, tests, and runbook landed on `main`. Pre-code Q-style checklist Q-C.1..Q-C.12 approved by operator + ChatGPT, with the formal correction set (Q-C.2 count → 17, Q-C.3 spool-then-hash, Q-C.5 fail-fast + meta-audit, Q-C.7 GET with documented design-intent, Q-C.8 no step-up TOTP as conscious decision, Q-C.9 drop the RSS test). All corrections honoured. Closeout still requires operator VPS verification + ChatGPT acceptance, after which `MILESTONE_STATUS.md` is updated and this entry moves to CLOSED. M15 itself fully closes at that point.
+- **What landed:**
+  - `dashboard/auth/audit_export.py` (NEW, ~530 LOC) — pure-logic primitives: `validate_date_range`, `count_export_rows`, `read_auth_events_range`, `read_risk_decisions_manual_reset_range`, `build_jsonl_export`, `build_csv_zip_export`, `scan_for_secrets`, `make_export_limiter`, `make_download_filename`, manifest builders. Zero broker/scanner/strategy/engine imports.
+  - `dashboard/auth/audit.py` (extended, +7 lines) — `audit_export_request` added as the 18th `ALLOWED_KINDS` value.
+  - `dashboard/app.py` (extended, ~+270 LOC) — `m153c_audit_export()` endpoint with strict validation order (rate-limit → format → date → row-cap → build → redact-scan → meta-audit → file response), plus a minimal Audit Export card on the Recovery page (date pickers + format selector + Download button, ~120 LOC HTML/JS).
+  - `test_m15_3_c_audit_export.py` (NEW, 32 tests across 12 groups, ~870 LOC) — full coverage of auth, both formats, scope, date filters, row cap, redaction (incl. fail-fast endpoint behaviour with the labels-only contract), self-audit, rate limit, AST scan, protected-files, allowed-kinds.
+  - `docs/M15_3_C_audit_export.md` (NEW, ~280 LOC) — full operator runbook with §1 purpose+scope+design-intent, §2 mutations, §3 endpoint surface, §4 format spec (JSONL + CSV columns + ZIP layout), §5 redaction rules, §6 self-audit, §7 implementation files, §8 test suite, §9 VPS deploy + verification, §10 honest residual.
+- **Hard constraints honoured** (asserted in test suite):
+  - No broker orders / writes / live-trading code (AST scan G10, 3 tests)
+  - No scanner/strategy changes (protected-files G11, 0/24)
+  - No M14 engine/governor/snapshot/preflight changes (protected-files G11)
+  - No eToro/IBKR adapter changes (protected-files G11)
+  - No M16 historical data / signal engine work
+  - No multi-user work
+  - No mutation of audit data — strictly read-only export (audit rows are immutable input)
+  - No new external dependencies (stdlib `csv`, `zipfile`, `json`, `hashlib`, `io`, `uuid`, `datetime`, `re`; plus `dashboard.auth.rate_limit`)
+  - No service restarts / sync.sh / deploy.sh / systemd-unit changes
+  - No `.env` mutation
+  - No secret material in output / logs / extras / filenames (G7 + runbook §5)
+- **Verified in sandbox (clean + VPS-like .env):** test_m15_3_c 32/32, test_m15_3_b 51/51, test_m15_3_a_dashboard_auth 101/101, test_m15_3_a_2_totp 52/52, test_m13_4a_allocation 61/61, test_m14_e_engine 105/105, test_m14_g_dashboard 51/51, test_m15_4_gateway_health 50/50, test_m15_5_ibkr_exposure 78/78. Total: 581 tests OK.
+- **Operator VPS verification command** (using `git fetch + git reset --hard origin/main`, NOT `sudo ./sync.sh`): see `docs/M15_3_C_audit_export.md` §9.
+- **Post-M15 direction note:** when M15.3.C closes, M15 itself fully closes and the focus shifts entirely to bot intelligence (M16 first, see below).
 
 ### M15.3.D or later — Multi-user / read-only dashboard roles (DEFERRED INDEFINITELY)
 - **Status:** Not started. Recorded 2026-06-04 to ensure the idea isn't lost. **Updated 2026-06-04 on M15.3.A.cutover closeout: DEFERRED INDEFINITELY under the post-M15 strategic direction.** The dashboard work is frozen post-M15 unless safety- or compliance-driven; multi-user is neither.

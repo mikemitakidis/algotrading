@@ -90,6 +90,12 @@ ALLOWED_KINDS = frozenset({
     "manual_reset_attempt",          # POST attempt (always written first)
     "manual_reset_success",          # POST success (kill switches cleared)
     "manual_reset_failure",          # POST failure (with reason in extras)
+    # M15.3.C — compliance audit + export additions:
+    "audit_export_request",          # GET /api/audit-export — meta-audit
+                                     # of every export (success=1 or
+                                     # success=0; extras carry export_id,
+                                     # format, date_range, row_counts;
+                                     # NEVER carries secret material).
 })
 
 
