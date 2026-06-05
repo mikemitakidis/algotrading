@@ -327,6 +327,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('settings')"  id="n-settings">Settings</a>
     <a onclick="go('risk');loadRisk()" id="n-risk">Risk</a>
     <a onclick="go('riskauth');loadRiskAuthority()" id="n-riskauth">Risk Authority</a>
+    <a onclick="go('recovery');loadRecovery()" id="n-recovery" style="color:#f0883e">Recovery</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
 </nav>
@@ -2957,6 +2958,230 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </div><!-- end riskauth page -->
 
+<!-- ════════════════ M15.3.B — Recovery (manual_reset) ════════════════ -->
+<div id="recovery" class="page">
+  <h2 style="color:#e6edf3;margin:0 0 16px">Recovery — Operator manual_reset</h2>
+  <div class="card" style="border-color:#f0883e">
+    <div class="ct" style="color:#f0883e">&#9888;&#65039; M15.3.B — Operator-only authority recovery</div>
+    <p style="color:#8b949e;font-size:13px;margin:8px 0 14px">
+      Clears the M13.4A allocation-policy <strong>kill switches</strong> (global + per-broker).
+      Use this when the M14 Risk Authority Engine is locked down by a kill_switch and you've
+      reviewed the situation and want to restore engine authority. This action does
+      <strong>not</strong> place orders, cancel orders, modify positions, or restart services
+      &mdash; it only clears the safety locks so the engine can resume normal operation
+      under its existing gating logic.
+    </p>
+    <p style="color:#8b949e;font-size:12px;margin:0 0 14px">
+      Note: this is <em>different</em> from the file-based emergency kill switch
+      (<code>data/kill_switch.json</code>) that you toggle elsewhere &mdash; that one
+      is unchanged by this action.
+    </p>
+    <div id="mrBanner" style="padding:10px;border-radius:4px;background:#161b22;margin-bottom:14px;font-size:13px">
+      Click <strong>Load current state</strong> to see kill_switch status and obtain a 60-second preview token.
+    </div>
+    <button id="mrLoad" onclick="loadRecovery()"
+            style="padding:8px 16px;background:#30363d;color:#e6edf3;border:1px solid #444c56;border-radius:4px;cursor:pointer">
+      Load current state
+    </button>
+    <div id="mrPreviewBlock" style="display:none;margin-top:18px">
+      <h3 style="color:#e6edf3;margin:0 0 8px;font-size:14px">Current kill_switch state</h3>
+      <div id="mrState" style="font-family:monospace;font-size:13px;background:#0d1117;padding:10px;border-radius:4px;border:1px solid #30363d;margin-bottom:14px"></div>
+      <h3 style="color:#e6edf3;margin:0 0 8px;font-size:14px">Operator reason (10&ndash;500 chars, required)</h3>
+      <p style="color:#8b949e;font-size:11px;margin:0 0 6px">
+        This reason is recorded in the audit log. Do not paste passwords, TOTP codes, secrets, API keys, or broker credentials.
+      </p>
+      <textarea id="mrReason" rows="3" maxlength="500"
+                style="width:100%;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px;font-family:monospace;font-size:12px"
+                placeholder="e.g. 'M13.5.A test left global.kill_switch=true; cleared after verifying broker state.'"></textarea>
+      <h3 style="color:#e6edf3;margin:14px 0 8px;font-size:14px">Type <code style="color:#f0883e">RESET</code> to confirm</h3>
+      <input id="mrConfirm" type="text" autocomplete="off"
+              style="width:160px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px;font-family:monospace"
+              placeholder="RESET" />
+      <h3 style="color:#e6edf3;margin:14px 0 8px;font-size:14px">Current 6-digit authenticator code</h3>
+      <p style="color:#8b949e;font-size:11px;margin:0 0 6px">
+        Required at reset time. If you just logged in with a code, your authenticator may need
+        ~30 seconds to generate a new one before this will accept it.
+      </p>
+      <input id="mrTotp" type="text" autocomplete="off" maxlength="6"
+              style="width:120px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:8px;font-family:monospace;font-size:16px;letter-spacing:4px"
+              placeholder="000000" />
+      <div style="margin-top:18px;display:flex;gap:10px;align-items:center">
+        <button id="mrExecute" onclick="executeRecovery()"
+                style="padding:10px 24px;background:#da3633;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold">
+          Clear kill switches
+        </button>
+        <span id="mrCountdown" style="color:#8b949e;font-size:12px"></span>
+      </div>
+    </div>
+    <div id="mrResult" style="margin-top:18px;display:none"></div>
+  </div>
+</div>
+<!-- end recovery page -->
+
+<script>
+// ── M15.3.B — Recovery (manual_reset) ────────────────────────────────────────
+// GET /api/manual-reset/preview to fetch current kill_switch state + a
+// 60-second preview token. Then POST /api/manual-reset with the token,
+// the confirm string "RESET", the operator reason, and a fresh TOTP code.
+var _mrPreviewToken = null;
+var _mrTokenExpiresAt = 0;
+var _mrCountdownTimer = null;
+
+function _mrEscapeHtml(s){
+  if(s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function _mrRenderState(state){
+  if(!state || typeof state !== 'object') return '<em>(no state)</em>';
+  var keys = Object.keys(state).sort();
+  if(keys.length === 0) return '<em>(no kill_switch flags present in policy)</em>';
+  var rows = keys.map(function(k){
+    var v = state[k];
+    var label = v === true
+      ? '<span style="color:#f85149">true (locked)</span>'
+      : '<span style="color:#2ea043">false</span>';
+    return '<div>' + _mrEscapeHtml(k) + '.kill_switch = ' + label + '</div>';
+  });
+  return rows.join('');
+}
+
+function _mrStartCountdown(){
+  var el = document.getElementById('mrCountdown');
+  if(!el) return;
+  if(_mrCountdownTimer){ clearInterval(_mrCountdownTimer); }
+  _mrCountdownTimer = setInterval(function(){
+    var remaining = Math.max(0, Math.floor((_mrTokenExpiresAt - Date.now()) / 1000));
+    if(remaining <= 0){
+      el.textContent = 'Preview token expired. Click "Load current state" again.';
+      el.style.color = '#f85149';
+      clearInterval(_mrCountdownTimer);
+      _mrCountdownTimer = null;
+      _mrPreviewToken = null;
+    } else {
+      el.textContent = 'Preview token: ' + remaining + 's remaining';
+      el.style.color = remaining < 15 ? '#f0883e' : '#8b949e';
+    }
+  }, 1000);
+}
+
+function loadRecovery(){
+  var banner = document.getElementById('mrBanner');
+  banner.textContent = 'Loading...';
+  banner.style.background = '#161b22';
+  fetch('/api/manual-reset/preview', {credentials:'include'})
+    .then(function(r){ return r.json().then(function(d){ return [r.status, d]; }); })
+    .then(function(pair){
+      var status = pair[0], d = pair[1];
+      if(status !== 200 || !d.ok){
+        banner.textContent = 'Preview failed: ' + _mrEscapeHtml(d.error || 'unknown');
+        banner.style.background = '#3d1d1d';
+        banner.style.color = '#f85149';
+        return;
+      }
+      _mrPreviewToken = d.preview_token;
+      _mrTokenExpiresAt = Date.now() + (d.preview_token_ttl_seconds * 1000);
+      document.getElementById('mrState').innerHTML = _mrRenderState(d.kill_switch_state);
+      document.getElementById('mrPreviewBlock').style.display = 'block';
+      document.getElementById('mrResult').style.display = 'none';
+      banner.textContent = 'Preview loaded. You have 60 seconds to confirm and execute.';
+      banner.style.background = '#1d3d1d';
+      banner.style.color = '#2ea043';
+      _mrStartCountdown();
+    })
+    .catch(function(e){
+      banner.textContent = 'Network error: ' + _mrEscapeHtml(String(e));
+      banner.style.background = '#3d1d1d';
+      banner.style.color = '#f85149';
+    });
+}
+
+function executeRecovery(){
+  var resultEl = document.getElementById('mrResult');
+  var confirm = document.getElementById('mrConfirm').value;
+  var reason = document.getElementById('mrReason').value;
+  var totp = document.getElementById('mrTotp').value;
+  if(!_mrPreviewToken){
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="padding:10px;background:#3d1d1d;color:#f85149;border-radius:4px">No preview token. Click "Load current state" first.</div>';
+    return;
+  }
+  if(confirm !== 'RESET'){
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="padding:10px;background:#3d1d1d;color:#f85149;border-radius:4px">Type RESET exactly to confirm.</div>';
+    return;
+  }
+  if(!reason || reason.trim().length < 10){
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="padding:10px;background:#3d1d1d;color:#f85149;border-radius:4px">Reason must be at least 10 characters.</div>';
+    return;
+  }
+  if(!totp || totp.length !== 6 || !/^\d{6}$/.test(totp)){
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="padding:10px;background:#3d1d1d;color:#f85149;border-radius:4px">Enter your current 6-digit authenticator code.</div>';
+    return;
+  }
+  var csrfToken = (typeof getCsrfToken === 'function') ? getCsrfToken() : '';
+  fetch('/api/manual-reset', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrfToken || ''},
+    credentials:'include',
+    body: JSON.stringify({
+      confirm: confirm,
+      preview_token: _mrPreviewToken,
+      reason: reason,
+      totp_code: totp
+    })
+  })
+    .then(function(r){ return r.json().then(function(d){ return [r.status, d]; }); })
+    .then(function(pair){
+      var status = pair[0], d = pair[1];
+      resultEl.style.display = 'block';
+      if(status === 200 && d.ok){
+        var sw = d.switches_cleared || [];
+        var noop = !!d.noop;
+        var msg = noop
+          ? '<strong>No-op success.</strong> All kill switches were already cleared. Audit rows written.'
+          : '<strong>Success.</strong> Cleared ' + sw.length + ' kill switch(es): ' + _mrEscapeHtml(sw.join(', ')) + '. The M14 engine will re-evaluate authority on its next cycle.';
+        resultEl.innerHTML = '<div style="padding:12px;background:#1d3d1d;color:#7ee787;border-radius:4px">' + msg +
+          '<div style="margin-top:6px;font-size:11px;color:#8b949e">audit auth_event_id=' + (d.audit && d.audit.auth_event_id) + ', decision_id=' + _mrEscapeHtml(d.audit && d.audit.decision_id) + '</div></div>';
+        // Reset the form; force operator to reload preview before next action.
+        _mrPreviewToken = null;
+        document.getElementById('mrPreviewBlock').style.display = 'none';
+        if(_mrCountdownTimer){ clearInterval(_mrCountdownTimer); _mrCountdownTimer = null; }
+        document.getElementById('mrCountdown').textContent = '';
+        document.getElementById('mrConfirm').value = '';
+        document.getElementById('mrReason').value = '';
+        document.getElementById('mrTotp').value = '';
+      } else {
+        var errLabel = d.error || ('http_' + status);
+        var hint = d.hint || '';
+        var msg;
+        if(errLabel === 'totp_invalid' && hint === 'recently_used'){
+          msg = '<strong>Invalid authenticator code.</strong> This code was recently used. Wait ~30 seconds for your authenticator to generate a new one.';
+        } else if(errLabel === 'totp_invalid'){
+          msg = '<strong>Invalid authenticator code.</strong>';
+        } else if(errLabel === 'rate_limited'){
+          msg = '<strong>Rate-limited.</strong> Retry in ' + (d.retry_after_sec || '?') + ' seconds.';
+        } else if(errLabel === 'preview_token_invalid' || errLabel === 'preview_token_missing'){
+          msg = '<strong>Preview token expired or invalid.</strong> Click "Load current state" to get a new one.';
+          _mrPreviewToken = null;
+        } else {
+          msg = '<strong>Failed:</strong> ' + _mrEscapeHtml(errLabel);
+        }
+        resultEl.innerHTML = '<div style="padding:12px;background:#3d1d1d;color:#f85149;border-radius:4px">' + msg + '</div>';
+      }
+    })
+    .catch(function(e){
+      resultEl.style.display = 'block';
+      resultEl.innerHTML = '<div style="padding:12px;background:#3d1d1d;color:#f85149;border-radius:4px">Network error: ' + _mrEscapeHtml(String(e)) + '</div>';
+    });
+}
+
+</script>
+
 <script>
 // ── Risk page ────────────────────────────────────────────────────────────────
 var _riskConfigData = {};
@@ -5041,6 +5266,267 @@ def kill_switch_deactivate():
     from bot.kill_switch import deactivate_kill_switch
     reason = request.json.get('reason', 'Dashboard deactivation') if request.json else 'Dashboard deactivation'
     return jsonify(deactivate_kill_switch(reason))
+
+
+# ── M15.3.B — manual_reset operator flow ─────────────────────────────────────
+#
+# Two endpoints implementing the operator-initiated reset of the M13.4A
+# allocation-policy kill switches (NOT bot/kill_switch.py — that file-based
+# emergency-stop is unchanged). When the M14 Risk Authority Engine is
+# locked down by `policy.global.kill_switch=true` or per-broker kill_switches,
+# the only recovery path is for the operator to clear those flags. Until
+# M15.3.B, the operator did this by hand-editing the M13.4A allocation JSON.
+# M15.3.B formalises it with: dedicated rate limiter, fresh step-up TOTP,
+# preview-then-execute pattern, dual audit (auth_events + risk_decisions),
+# and an explicit 10-500 char operator-reason field for compliance.
+#
+# Hard constraints (per M15.3.B pre-code checklist approval 2026-06-04):
+#   * No broker orders/writes/live-trading. AST-enforced in tests.
+#   * No scanner/strategy changes.
+#   * No M14 engine/governor/snapshot/preflight code changes.
+#   * No eToro/IBKR changes.
+#   * No service restarts (DB state action only).
+#
+# Operator-approved corrections (C1..C4):
+#   C1: TOTP error UX — only 'recently_used' hint is exposed; everything
+#       else returns the generic {ok:false, error:'totp_invalid'}.
+#   C2: Idempotent — empty switches_cleared still writes the audit rows.
+#   C3: Reason field 10-500 chars; UI helper text deters secret-pasting.
+#   C4: Design intent — manual_reset doesn't trade, but its purpose IS
+#       to let the engine resume trading after the operator clears locks.
+
+
+# Module-level singleton, parallel to _m153a_login_limiter.
+_m153b_reset_limiter = None
+
+
+def _m153b_get_limiter():
+    """Lazy-init the manual_reset rate limiter. Tests can replace via
+    `dashboard.app._m153b_reset_limiter = <fake>`."""
+    global _m153b_reset_limiter
+    if _m153b_reset_limiter is None:
+        from dashboard.auth.manual_reset import make_manual_reset_limiter
+        _m153b_reset_limiter = make_manual_reset_limiter()
+    return _m153b_reset_limiter
+
+
+def _m153b_session_hash() -> str:
+    """Stable per-session binding key for the manual_reset preview token.
+
+    Uses a per-session nonce stored INSIDE the Flask session payload
+    (`_mr_session_key`). This survives Flask re-signing the session
+    cookie between requests (which would otherwise change the raw
+    cookie value, breaking a cookie-hash binding). The nonce is
+    generated lazily on first call within a given Flask session and
+    persisted by Flask's normal session mechanism on the response.
+
+    The returned value is the sha256 of the nonce; the raw nonce never
+    appears outside the encrypted session cookie. Audit rows continue
+    to use `hash_session_id(raw_cookie)` for cross-row correlation,
+    which is a separate concern.
+    """
+    import secrets as _secrets
+    import hashlib
+    if "_mr_session_key" not in session:
+        session["_mr_session_key"] = _secrets.token_urlsafe(32)
+    return hashlib.sha256(
+        session["_mr_session_key"].encode("utf-8")).hexdigest()
+
+
+@app.route('/api/manual-reset/preview', methods=['GET'])
+@require_auth
+def m153b_manual_reset_preview():
+    """Return current kill_switch state + a short-lived preview token.
+
+    Read-only. Issues a 60-second single-use token bound to the
+    current session. The token is required by POST /api/manual-reset.
+    """
+    from dashboard.auth.manual_reset import (
+        read_kill_switch_state, get_preview_token_store,
+        make_preview_extras,
+    )
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            state = read_kill_switch_state(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        log.error("manual_reset_preview: db read failed: %s", e)
+        return jsonify({'ok': False, 'error': 'db_error'}), 500
+
+    sess_hash = _m153b_session_hash()
+    token = get_preview_token_store().issue(sess_hash)
+    _m153a_audit('manual_reset_preview', success=True,
+                  extras=make_preview_extras(
+                      kill_switch_state=state, token_issued=True))
+    return jsonify({
+        'ok': True,
+        'kill_switch_state': state,
+        'preview_token': token,
+        'preview_token_ttl_seconds': 60,
+    })
+
+
+@app.route('/api/manual-reset', methods=['POST'])
+@require_auth
+@csrf_required
+def m153b_manual_reset_execute():
+    """Execute the operator manual_reset: clear all M13.4A kill switches.
+
+    Validation order (early-rejects are cheaper than late-rejects):
+      1. JSON body parses
+      2. Rate limit check
+      3. confirm == "RESET"
+      4. preview_token valid + bound to session
+      5. reason 10-500 chars
+      6. Step-up TOTP (last — most expensive, runs pyotp + replay cache)
+
+    Every POST writes a `manual_reset_attempt` row first (regardless of
+    outcome). On validation failure, also writes `manual_reset_failure`
+    with the reason code. On success, an atomic transaction writes:
+      * the updated M13.4A allocation policy (kill_switches cleared)
+      * a risk_decisions row with source='manual_reset'
+      * a manual_reset_success auth_events row
+    """
+    from dashboard.auth.manual_reset import (
+        validate_confirm, validate_reason, verify_step_up_totp,
+        get_preview_token_store, execute_atomic_reset,
+        make_attempt_extras, make_failure_extras,
+    )
+    from dashboard.auth.rate_limit import LoginRateLimited
+
+    client_ip = _m153a_client_ip()
+    cookie_name = app.config.get('SESSION_COOKIE_NAME', 'session')
+    raw_sid = request.cookies.get(cookie_name, '') or ''
+    sess_hash = _m153b_session_hash()
+
+    # 1. Parse JSON body.
+    try:
+        body = request.get_json(silent=True) or {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    confirm_value = body.get('confirm')
+    preview_token = body.get('preview_token')
+    reason_text = body.get('reason')
+    totp_code = body.get('totp_code')
+
+    confirm_ok = validate_confirm(confirm_value)
+    has_preview_token = isinstance(preview_token, str) and bool(preview_token)
+    has_totp = isinstance(totp_code, str) and bool(totp_code)
+    has_reason = isinstance(reason_text, str) and bool(reason_text.strip())
+
+    # ALWAYS write the attempt row first.
+    _m153a_audit('manual_reset_attempt', success=True,
+                  extras=make_attempt_extras(
+                      has_csrf=True,  # csrf_required decorator already passed
+                      has_preview_token=has_preview_token,
+                      has_totp=has_totp,
+                      has_reason=has_reason,
+                      confirm_ok=confirm_ok))
+
+    # 2. Rate limit check.
+    limiter = _m153b_get_limiter()
+    try:
+        limiter.check_locked(client_ip)
+    except LoginRateLimited as e:
+        _m153a_audit('manual_reset_failure', success=False,
+                      extras=make_failure_extras(
+                          reason_code='rate_limited',
+                          extra={'retry_after_sec': e.retry_after_sec,
+                                  'policy': limiter.policy()}))
+        return jsonify({'ok': False, 'error': 'rate_limited',
+                         'retry_after_sec': e.retry_after_sec}), 429
+
+    def _fail(reason_code: str, status: int = 400,
+              api_error: str = None, extra_extras: dict = None,
+              count_against_limit: bool = True):
+        """Write a manual_reset_failure row + return error JSON.
+
+        count_against_limit=True bumps the rate-limit counter (used for
+        attempts that pass auth+CSRF but fail validation — those are
+        what we want to limit; an attacker shouldn't get unlimited
+        retries on the confirm/TOTP fields)."""
+        if count_against_limit:
+            limiter.record_failure(client_ip)
+        _m153a_audit('manual_reset_failure', success=False,
+                      extras=make_failure_extras(reason_code=reason_code,
+                                                  extra=extra_extras))
+        payload = {'ok': False, 'error': api_error or 'invalid_request'}
+        if reason_code == 'totp_invalid' and extra_extras and \
+                extra_extras.get('totp_hint') == 'recently_used':
+            payload['hint'] = 'recently_used'
+        return jsonify(payload), status
+
+    # 3. Confirm string.
+    if not confirm_ok:
+        return _fail('confirm_invalid', status=400,
+                      api_error='confirm_invalid')
+
+    # 4. Preview token (session-bound, single-use).
+    if not has_preview_token:
+        return _fail('preview_token_missing', status=400,
+                      api_error='preview_token_missing')
+    token_ok = get_preview_token_store().consume(sess_hash, preview_token)
+    if not token_ok:
+        return _fail('preview_token_invalid', status=400,
+                      api_error='preview_token_invalid')
+
+    # 5. Reason.
+    reason_ok, reason_err = validate_reason(reason_text)
+    if not reason_ok:
+        return _fail(reason_err, status=400,
+                      api_error='reason_invalid')
+
+    # 6. Step-up TOTP (last; most expensive).
+    if not has_totp:
+        return _fail('totp_missing', status=401,
+                      api_error='totp_invalid')
+    totp_ok, totp_hint = verify_step_up_totp(totp_code)
+    if not totp_ok:
+        extra = {'totp_hint': totp_hint} if totp_hint == 'recently_used' else None
+        return _fail('totp_invalid', status=401,
+                      api_error='totp_invalid', extra_extras=extra)
+
+    # All validation passed. Run the atomic write.
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            actor = 'operator'  # short identifier, no secret material
+            result = execute_atomic_reset(
+                conn,
+                actor=actor,
+                reason_text=reason_text.strip(),
+                client_ip=client_ip,
+                user_agent=request.headers.get('User-Agent', ''),
+                session_id=raw_sid,
+            )
+        finally:
+            conn.close()
+    except Exception as e:
+        _m153a_log.exception("manual_reset_execute: atomic write failed")
+        # Don't bump the rate limit on db errors — operator shouldn't be
+        # locked out by a transient infra problem.
+        _m153a_audit('manual_reset_failure', success=False,
+                      extras=make_failure_extras(
+                          reason_code='db_error',
+                          extra={'exception_type': type(e).__name__}))
+        return jsonify({'ok': False, 'error': 'db_error'}), 500
+
+    return jsonify({
+        'ok': True,
+        'before_state':     result['before_state'],
+        'after_state':      result['after_state'],
+        'switches_cleared': result['switches_cleared'],
+        'noop':             result['noop'],
+        'audit': {
+            'auth_event_id': result['auth_event_id'],
+            'decision_id':   result['decision_id'],
+        },
+    })
 
 
 # ── Strategy ─────────────────────────────────────────────────────────────────

@@ -1548,6 +1548,11 @@ class TestScannerIsolation(unittest.TestCase):
 
 
 class TestProtectedFilesUntouched(unittest.TestCase):
+    # Note (2026-06-04, M15.3.B): `bot/risk_authority/audit_decisions.py`
+    # was removed from this list because M15.3.B legitimately extends
+    # it with an additive `write_manual_reset_decision` function. The
+    # additive-only invariant is enforced by test_m15_3_b's
+    # test_audit_decisions_only_additive_change.
 
     BASE_REV = "d73a04a"  # pre-M15.5 HEAD (M15.4 docs-closeout)
 
@@ -1560,7 +1565,7 @@ class TestProtectedFilesUntouched(unittest.TestCase):
         "bot/risk_authority/governor.py",
         "bot/risk_authority/authority.py",
         "bot/risk_authority/snapshot.py",
-        "bot/risk_authority/audit_decisions.py",
+        # audit_decisions.py removed — see class docstring.
         "bot/risk_authority/preflight.py",
         "bot/risk_authority/ingest_ibkr_exposure.py",  # M14.D adapter frozen
         "bot/etoro/live_broker.py",

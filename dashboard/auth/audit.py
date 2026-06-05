@@ -85,6 +85,11 @@ ALLOWED_KINDS = frozenset({
     "totp_required_not_provided",    # login with correct password but no totp_code
     "totp_setup",                    # operator enabled TOTP via tool
     "totp_disabled",                 # operator disabled TOTP via tool
+    # M15.3.B — manual_reset operator flow additions:
+    "manual_reset_preview",          # GET /api/manual-reset/preview
+    "manual_reset_attempt",          # POST attempt (always written first)
+    "manual_reset_success",          # POST success (kill switches cleared)
+    "manual_reset_failure",          # POST failure (with reason in extras)
 })
 
 

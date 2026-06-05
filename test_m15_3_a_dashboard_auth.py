@@ -1423,7 +1423,16 @@ class TestNoForbiddenSurface(unittest.TestCase):
 
 
 class TestProtectedFilesUntouched(unittest.TestCase):
-    """M15.3.A must NOT modify protected runtime files vs 60281c4."""
+    """M15.3.A must NOT modify protected runtime files vs 60281c4.
+
+    Note (2026-06-04, M15.3.B): `bot/risk_authority/audit_decisions.py`
+    was removed from this list because M15.3.B legitimately extends it
+    with an additive `write_manual_reset_decision` function per the
+    pre-code checklist. The additive-only invariant is enforced by
+    `test_m15_3_b_manual_reset.TestProtectedFilesUntouched.\
+test_audit_decisions_only_additive_change` which checks that all
+    pre-existing functions in that file remain byte-identical.
+    """
 
     BASE_REV = "60281c4"
     PROTECTED = (
@@ -1435,7 +1444,7 @@ class TestProtectedFilesUntouched(unittest.TestCase):
         "bot/risk_authority/governor.py",
         "bot/risk_authority/authority.py",
         "bot/risk_authority/snapshot.py",
-        "bot/risk_authority/audit_decisions.py",
+        # audit_decisions.py removed — see class docstring.
         "bot/risk_authority/preflight.py",
         "bot/risk_authority/ingest_ibkr_exposure.py",
         "bot/risk_authority/ibkr_paper_reader.py",

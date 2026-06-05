@@ -25,6 +25,7 @@ import copy
 import json
 import logging
 import sqlite3
+import uuid
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -210,4 +211,136 @@ __all__ = [
     "decide_and_audit",
     "write_snapshot",
     "write_decision",
+    "write_manual_reset_decision",
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M15.3.B — manual_reset operator audit
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Per the M14.A design (docs/M14_A_design.md §390, M14_FINAL_AUDIT.md §226)
+# every operator-initiated manual_reset must write a risk_decisions row with
+# source='manual_reset'. The vocabulary has existed since M14 (the source
+# enum already accepts 'manual_reset' — see write_decision() above and the
+# CHECK constraint in bot/flywheel.py); only the writer was missing.
+#
+# This function is the audit writer. It is intentionally:
+#   * NOT calling decide() or any other engine function — manual_reset is
+#     not a trade evaluation; the operator is asserting "I cleared the
+#     locks", not asking the engine for a decision.
+#   * NOT requiring a RiskDecision dataclass or a RiskSnapshot — those
+#     are for trade-decision audit rows.
+#   * NOT committing — the caller commits as part of its atomic write.
+#
+# It writes a single risk_decisions row with:
+#   * broker_scope='GLOBAL'          (manual_reset is always a global action;
+#                                     per-broker kill-switch state is captured
+#                                     via switches_cleared+explainer)
+#   * requested_action='query_authority'
+#                                    (best-fit from the closed action set;
+#                                     manual_reset is not 'trade_open' or
+#                                     'trade_close')
+#   * result='allow'                 (the operation completed)
+#   * authority_before/after='OFF'   (kill_switch=true forces OFF per M14.F
+#                                     preflight; engine will re-evaluate
+#                                     authority on next cycle)
+#   * source='manual_reset'
+#   * snapshot_id=NULL               (no engine snapshot; manual_reset is
+#                                     an operator action, not an engine
+#                                     evaluation)
+#
+# The row schema is in bot/flywheel.py RISK_DECISIONS_SCHEMA. snapshot_id
+# is INTEGER (nullable) — NULL is valid per the schema (it's a soft FK
+# only; cf. comment in flywheel.py above the schema definition).
+#
+# This function is callable WITHOUT importing dashboard code — it stays
+# inside the bot/risk_authority package and uses only stdlib + the
+# already-imported `bot.risk_authority.engine` types (implicit; no new
+# imports added).
+#
+# The operator's reason text is stored in the `explainer` column. It is
+# plain text; the dashboard renders explainer values with HTML escaping
+# (existing M14.G audit display behaviour) so XSS is not a concern.
+
+def write_manual_reset_decision(
+    conn: sqlite3.Connection,
+    *,
+    switches_cleared: list,
+    reason_text: str,
+    actor: str = "operator",
+    now_iso: Optional[str] = None,
+) -> str:
+    """Insert one risk_decisions row recording an operator manual_reset.
+
+    Returns the new decision_id (a short ULID-ish string).
+
+    Does NOT call conn.commit() — caller manages the transaction.
+
+    Arguments:
+      conn               : sqlite3 connection. Must have risk_decisions
+                           table available (M14.B migration).
+      switches_cleared   : list of scope names whose kill_switch went
+                           True->False. May be empty (idempotent no-op).
+      reason_text        : operator-supplied reason. Stored in explainer.
+                           Caller is responsible for length validation.
+      actor              : short identifier for the operator (e.g.
+                           'operator', or 'operator:<client_ip>'). Stored
+                           in the actor column. NEVER contains the raw
+                           session id or any secret material.
+      now_iso            : UTC ISO timestamp. Defaults to now if None.
+                           Tests inject for determinism.
+
+    No engine call. No broker call. No HTTP call. No live broker
+    construction. AST-enforced in test_m15_3_b_manual_reset.py.
+    """
+    if not isinstance(switches_cleared, list):
+        raise TypeError(
+            f"switches_cleared must be a list, got {type(switches_cleared)!r}"
+        )
+    if not isinstance(reason_text, str):
+        raise TypeError(
+            f"reason_text must be a string, got {type(reason_text)!r}"
+        )
+    if not isinstance(actor, str) or not actor:
+        raise ValueError("actor must be a non-empty string")
+
+    decision_id = f"mr-{uuid.uuid4().hex[:16]}"
+    ts = now_iso or datetime.now(timezone.utc).isoformat()
+
+    cleared_sorted = sorted(str(s) for s in switches_cleared)
+    noop = len(cleared_sorted) == 0
+    if noop:
+        explainer = (
+            "manual_reset (no-op): all kill switches were already cleared; "
+            "operator confirmed reset intent. "
+            f"Operator reason: {reason_text}"
+        )
+    else:
+        explainer = (
+            f"manual_reset: cleared kill switches {cleared_sorted!r}; "
+            "engine will re-evaluate authority on next cycle. "
+            f"Operator reason: {reason_text}"
+        )
+
+    reason_codes = json.dumps(["manual_reset"])
+    recovery_paths = json.dumps(
+        {"manual_reset": "operator cleared kill switches"}
+    )
+
+    conn.execute(
+        "INSERT INTO risk_decisions "
+        "(decision_id, taken_at, broker_scope, requested_action, "
+        " request_json, result, authority_before, authority_after, "
+        " reason_codes, recovery_paths, snapshot_id, source, actor, "
+        " explainer, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (decision_id, ts, "GLOBAL", "query_authority",
+         None, "allow",
+         "OFF", "OFF",
+         reason_codes, recovery_paths,
+         None,  # snapshot_id — manual_reset is operator action, not engine eval
+         "manual_reset", actor,
+         explainer, ts),
+    )
+    return decision_id
