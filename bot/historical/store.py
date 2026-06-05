@@ -1,4 +1,4 @@
-"""bot/data/store.py — M16 public read façade.
+"""bot/historical/store.py — M16 public read façade.
 
 The ONLY public API the rest of the bot uses to access historical bars:
 

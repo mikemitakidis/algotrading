@@ -1,4 +1,4 @@
-"""bot/data/quality.py — M16 data quality gate.
+"""bot/historical/quality.py — M16 data quality gate.
 
 Runs at write time. Hard-rejects structurally invalid rows; tags rows
 with warning bits in quality_flags; records observations in

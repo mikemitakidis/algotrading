@@ -297,6 +297,30 @@ def _process_one(
         derivation = "resample"
         source_timeframe = "1H"
         resample_rule_version = _tf.RESAMPLE_RULE_VERSION
+
+        # M16.A.fix-4: freshness-aware incremental no-op (4H path).
+        # 4H doesn't call yfinance (it resamples from local 1H), but
+        # it does re-read + re-resample + re-write the 4H Parquet
+        # every run. Skip that I/O when 4H coverage is already fresh.
+        # Same conditions as the native path: incremental only,
+        # coverage exists with last_ts_utc, 4H Parquet exists,
+        # freshness == 'fresh'.
+        if mode == "incremental":
+            dst_path = _store._parquet_path(
+                provider.capability.name, "4H", symbol, root=parquet_root)
+            cov_4h = _cov.read_coverage(
+                conn, symbol=symbol, timeframe="4H",
+                provider=provider.capability.name)
+            if (cov_4h is not None and cov_4h.last_ts_utc is not None
+                    and dst_path.exists()
+                    and _cov.compute_freshness_status(
+                        cov_4h.last_ts_utc, timeframe="4H",
+                        now_utc=now_utc) == "fresh"):
+                result.symbols_ok += 1
+                result.summary.setdefault("skipped_fresh", []).append(
+                    f"{symbol}/4H")
+                return
+
         # If the source 1H file doesn't exist, we can't resample.
         src_path = _store._parquet_path(provider.capability.name, "1H",
                                             symbol, root=parquet_root)
@@ -379,6 +403,24 @@ def _process_one(
 
     cov = _cov.read_coverage(conn, symbol=symbol, timeframe=timeframe,
                                 provider=provider.capability.name)
+
+    # M16.A.fix-4: freshness-aware incremental no-op (native path).
+    # If we're in incremental mode and local coverage is already fresh
+    # AND the Parquet file exists, skip the provider call entirely.
+    # This avoids an unnecessary fetch (and a likely rate-limit hit
+    # from yfinance) on a back-to-back incremental run after a
+    # successful backfill. Applies to incremental ONLY — backfill,
+    # repair, and force_rebuild always touch the provider.
+    if (effective_mode == "incremental"
+            and cov is not None and cov.last_ts_utc is not None
+            and parquet_path.exists()
+            and _cov.compute_freshness_status(
+                cov.last_ts_utc, timeframe=timeframe,
+                now_utc=now_utc) == "fresh"):
+        result.symbols_ok += 1
+        result.summary.setdefault("skipped_fresh", []).append(
+            f"{symbol}/{timeframe}")
+        return
 
     if effective_mode == "backfill" or cov is None or cov.last_ts_utc is None:
         # Backfill — fetch from earliest provider date.

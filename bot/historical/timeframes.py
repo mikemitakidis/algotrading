@@ -1,4 +1,4 @@
-"""bot/data/timeframes.py — UTC arithmetic + resampling.
+"""bot/historical/timeframes.py — UTC arithmetic + resampling.
 
 All timestamps are tz-aware UTC. Naive datetimes are rejected at every
 boundary (provider adapters convert before storage; readers receive

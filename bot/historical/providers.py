@@ -1,4 +1,4 @@
-"""bot/data/providers.py — provider abstraction.
+"""bot/historical/providers.py — provider abstraction.
 
 Reuses the M6 provider boundary in spirit but adds two M16-specific
 concepts: a capability descriptor (what TFs/lookback the provider

@@ -1,4 +1,4 @@
-"""bot/data/preview.py — M16.B local-data read CAPABILITY PROOF.
+"""bot/historical/preview.py — M16.B local-data read CAPABILITY PROOF.
 
 This module exists for ONE purpose: prove that a downstream module can
 read bars from the local historical store via bot.historical.store.get_bars()

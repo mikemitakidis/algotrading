@@ -1,4 +1,4 @@
-"""bot/data/coverage.py — coverage state queries and updates.
+"""bot/historical/coverage.py — coverage state queries and updates.
 
 Reads + writes the historical_coverage table.
 Pure I/O on SQLite + the Parquet store; no provider calls.

@@ -662,8 +662,14 @@ class TestSplitDetection(_TmpEnv):
                       parquet_root=self.parquet_root, now_utc=self._now())
 
         # Now incremental with adjustment_ratio == 0.5 (a 2-for-1 split).
+        # M16.A.fix-4: advance the clock past the 1D freshness window
+        # (3 days) so the freshness no-op doesn't short-circuit this
+        # incremental. Realistic too — yfinance retroactively adjusts
+        # historical Adj Close days after a split announcement, not
+        # within seconds of a backfill.
+        later = self._now() + timedelta(days=5)
         p2 = FakeProvider()
-        last = pd.Timestamp(self._now())  # already tz-aware
+        last = pd.Timestamp(later)  # already tz-aware
         p2.fake_data[("AAPL", "1D")] = {
             "ts_utc": pd.date_range(end=last, periods=7, freq="D",
                                        tz="UTC"),
@@ -680,7 +686,7 @@ class TestSplitDetection(_TmpEnv):
         }
         refresh.run(mode="incremental", symbols=["AAPL"], timeframes=["1D"],
                       provider=p2, db_path=self.db_path,
-                      parquet_root=self.parquet_root, now_utc=self._now())
+                      parquet_root=self.parquet_root, now_utc=later)
         events = store.list_quality_events(symbol="AAPL",
                                               db_path=self.db_path)
         kinds = {e["kind"] for e in events}
@@ -1587,6 +1593,275 @@ class TestDashboardStatusEndpointAutoMigrates(_TmpEnv):
         body = response.get_json()
         self.assertTrue(body.get("ok"))
         self.assertFalse(body.get("available"))
+
+
+# ---------------------------------------------------------------------------
+# G23. freshness-aware incremental no-op (M16.A.fix-4)
+# ---------------------------------------------------------------------------
+class TestIncrementalFreshnessNoOp(_TmpEnv):
+    """M16.A.fix-4: incremental refresh against fresh coverage must NOT
+    call the provider, NOT write Parquet, NOT add duplicates. It must
+    return status=ok with bars_fetched=0 and bars_written=0.
+
+    Closes the rate-limit-on-back-to-back-incremental issue surfaced
+    by the M16.A.fix-3 VPS verification.
+    """
+
+    def _seed_via_backfill(self):
+        """Run a clean backfill so coverage is fresh."""
+        from bot.historical import refresh
+        return refresh.run(
+            mode="backfill", symbols=["AAPL"], timeframes=["1D"],
+            provider=FakeProvider(), db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+    def test_incremental_fresh_does_not_call_provider(self):
+        """The smoking-gun test: provider.fetch_bars must NEVER be
+        invoked during a fresh incremental."""
+        from bot.historical import refresh, store
+        # Backfill
+        self._seed_via_backfill()
+        cov_before = store.get_coverage("AAPL", "1D", provider="fake",
+                                            db_path=self.db_path)
+        self.assertEqual(cov_before["freshness_status"], "fresh")
+
+        # Use a provider that raises immediately if invoked. If the
+        # freshness no-op fails, raise_on_call would be triggered.
+        sentinel = FakeProvider()
+        sentinel.raise_on_call = True
+
+        r = refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=sentinel, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        # Provider was not called.
+        self.assertEqual(
+            sentinel.calls, 0,
+            f"provider.fetch_bars was called {sentinel.calls} times during "
+            f"incremental against fresh coverage (fix-4 broken)")
+
+        # Result shape matches the spec.
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.symbols_attempted, 1)
+        self.assertEqual(r.symbols_ok, 1)
+        self.assertEqual(r.symbols_no_data, 0)
+        self.assertEqual(r.symbols_failed, 0)
+        self.assertEqual(r.symbols_rate_limited, 0)
+        self.assertEqual(r.bars_fetched, 0)
+        self.assertEqual(r.bars_written, 0)
+        self.assertEqual(r.rate_limit_count, 0)
+
+    def test_incremental_fresh_does_not_touch_parquet(self):
+        """Parquet file mtime and content must be unchanged after a
+        fresh-skip incremental."""
+        from bot.historical import refresh, store
+        self._seed_via_backfill()
+        path = store._parquet_path("fake", "1D", "AAPL",
+                                       root=self.parquet_root)
+        self.assertTrue(path.exists())
+        mtime_before = path.stat().st_mtime
+        sha_before = self._sha256(path)
+        size_before = path.stat().st_size
+
+        # Sentinel provider — must not be called.
+        sentinel = FakeProvider(); sentinel.raise_on_call = True
+
+        refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=sentinel, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        self.assertEqual(path.stat().st_mtime, mtime_before,
+                          "Parquet mtime changed despite fresh-skip")
+        self.assertEqual(path.stat().st_size, size_before,
+                          "Parquet size changed despite fresh-skip")
+        self.assertEqual(self._sha256(path), sha_before,
+                          "Parquet bytes changed despite fresh-skip")
+
+    def test_incremental_fresh_keeps_coverage_unchanged(self):
+        """Coverage row including last_ts_utc must be unchanged."""
+        from bot.historical import refresh, store
+        self._seed_via_backfill()
+        cov_before = store.get_coverage("AAPL", "1D", provider="fake",
+                                            db_path=self.db_path)
+
+        sentinel = FakeProvider(); sentinel.raise_on_call = True
+        refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=sentinel, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        cov_after = store.get_coverage("AAPL", "1D", provider="fake",
+                                          db_path=self.db_path)
+        self.assertEqual(cov_before["last_ts_utc"],
+                          cov_after["last_ts_utc"])
+        self.assertEqual(cov_before["bar_count"], cov_after["bar_count"])
+        self.assertEqual(cov_after["freshness_status"], "fresh")
+
+    def test_incremental_stale_still_fetches(self):
+        """Regression: when coverage is stale, the provider MUST be
+        called (no-op only applies to fresh data)."""
+        from bot.historical import refresh
+        self._seed_via_backfill()
+
+        # Advance now_utc well past the 1D freshness threshold (3 days).
+        later = self._now() + timedelta(days=10)
+
+        # Provider that DOES return data (and counts its calls).
+        prov = FakeProvider()
+        r = refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=prov, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=later)
+
+        self.assertGreater(prov.calls, 0,
+                              "provider was NOT called against stale coverage")
+        self.assertEqual(r.status, "ok")
+
+    def test_incremental_no_coverage_still_fetches(self):
+        """Regression: with no prior coverage at all, incremental must
+        behave like backfill — provider IS called."""
+        from bot.historical import refresh
+
+        # NO backfill seeded — straight to incremental.
+        prov = FakeProvider()
+        r = refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=prov, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+        self.assertGreater(prov.calls, 0,
+                              "provider was NOT called when coverage absent")
+        # Status may be 'ok' (backfill semantics kick in).
+
+    def test_backfill_never_skips_even_when_fresh(self):
+        """Regression: backfill mode must ALWAYS call the provider,
+        even if coverage is fresh. The no-op is incremental-only."""
+        from bot.historical import refresh
+        self._seed_via_backfill()
+
+        # Fresh coverage now exists.
+        prov = FakeProvider()
+        r = refresh.run(
+            mode="backfill", symbols=["AAPL"], timeframes=["1D"],
+            provider=prov, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+        self.assertGreater(prov.calls, 0,
+            "backfill skipped the provider — no-op should be incremental-only")
+
+    def test_force_rebuild_never_skips(self):
+        """Regression: force_rebuild deletes coverage, so the freshness
+        check sees no coverage and must fall through to a real fetch."""
+        from bot.historical import refresh
+        self._seed_via_backfill()
+
+        prov = FakeProvider()
+        refresh.run(
+            mode="force_rebuild", symbols=["AAPL"], timeframes=["1D"],
+            provider=prov, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+        self.assertGreater(prov.calls, 0,
+                              "force_rebuild skipped the provider")
+
+    def test_repair_never_skips(self):
+        """Regression: repair must always call the provider — it's
+        specifically for filling gaps."""
+        from bot.historical import refresh
+        self._seed_via_backfill()
+
+        prov = FakeProvider()
+        refresh.run(
+            mode="repair", symbols=["AAPL"], timeframes=["1D"],
+            provider=prov, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+        self.assertGreater(prov.calls, 0,
+                              "repair skipped the provider")
+
+    def test_4h_fresh_skips_resample(self):
+        """4H path: also no-ops when 4H coverage is fresh + 4H Parquet
+        exists. Even though 4H doesn't call yfinance, it should not
+        re-read 1H + re-resample + re-write the 4H Parquet."""
+        from bot.historical import refresh, store
+        # Seed 1H source data so the 4H resample has something.
+        prov_seed = FakeProvider()
+        prov_seed.fake_data[("AAPL", "1H")] = {
+            "ts_utc": pd.date_range("2026-06-04T00:00", periods=24, freq="h",
+                                       tz="UTC"),
+            "open": [100.0]*24, "high":[101.0]*24, "low":[99.0]*24,
+            "close":[100.5]*24, "volume":[1000]*24,
+            "adj_close":[100.5]*24, "adjustment_ratio":[1.0]*24,
+            "is_adjusted":[True]*24, "provider":["fake"]*24,
+            "quality_flags":[0]*24,
+        }
+        # Backfill creates BOTH 1H and 4H.
+        refresh.run(
+            mode="backfill", symbols=["AAPL"],
+            timeframes=["1H", "4H"],
+            provider=prov_seed, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        path_4h = store._parquet_path("fake", "4H", "AAPL",
+                                          root=self.parquet_root)
+        self.assertTrue(path_4h.exists())
+        mtime_4h_before = path_4h.stat().st_mtime
+        sha_4h_before = self._sha256(path_4h)
+
+        # Now incremental for 4H only. Provider sentinel — for 4H it
+        # shouldn't be called anyway (4H is resample), but with the
+        # fix-4 no-op the 4H Parquet shouldn't be re-written either.
+        sentinel = FakeProvider(); sentinel.raise_on_call = True
+        r = refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["4H"],
+            provider=sentinel, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        # Same correctness criteria as native path: ok, no fetch, no write.
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.symbols_ok, 1)
+        self.assertEqual(r.bars_written, 0)
+        self.assertEqual(sentinel.calls, 0)
+
+        # 4H Parquet untouched.
+        self.assertEqual(path_4h.stat().st_mtime, mtime_4h_before)
+        self.assertEqual(self._sha256(path_4h), sha_4h_before)
+
+    def test_summary_records_skipped_fresh(self):
+        """The refresh_run summary_json must record what was skipped
+        — operator audit trail."""
+        from bot.historical import refresh, schema
+        self._seed_via_backfill()
+
+        sentinel = FakeProvider(); sentinel.raise_on_call = True
+        refresh.run(
+            mode="incremental", symbols=["AAPL"], timeframes=["1D"],
+            provider=sentinel, db_path=self.db_path,
+            parquet_root=self.parquet_root, now_utc=self._now())
+
+        # Most recent refresh row's summary_json should list AAPL/1D
+        # as skipped_fresh.
+        import json as _json
+        c = schema.open_db(self.db_path)
+        try:
+            row = c.execute(
+                "SELECT summary_json FROM historical_refresh_runs "
+                "WHERE mode='incremental' ORDER BY run_id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            c.close()
+        self.assertIsNotNone(row)
+        summary = _json.loads(row[0])
+        self.assertIn("skipped_fresh", summary)
+        self.assertIn("AAPL/1D", summary["skipped_fresh"])
+
+    # ---- helpers ----
+    @staticmethod
+    def _sha256(p):
+        import hashlib
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
 
 # ---------------------------------------------------------------------------
