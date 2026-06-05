@@ -110,6 +110,142 @@ class RateLimitError(Exception):
     pass
 
 
+# ── Rate-limit detection helpers (audit-P1-data-rate-limit-fix) ───────────────
+# Mirror the M16 pattern in bot/historical/providers_yfinance.py.
+#
+# Background: yfinance >= 0.2 catches per-symbol exceptions inside its
+# fetch routines (including YFRateLimitError) and stashes them in
+# `yf.shared._ERRORS[symbol]` while returning an empty DataFrame.
+# Inspecting that registry is the ONLY reliable way to distinguish a
+# rate-limited-empty response from a genuinely-no-data-empty response
+# without relying on str(exc) heuristics.
+#
+# Helpers are kept module-level (not class methods) so bot/backtest.py
+# can import them too — single source of truth across both old call
+# sites, with no inheritance / cross-import coupling to the M16 tree.
+
+# Substrings (lower-cased) that mean "rate limited" in either an
+# exception message or a yf.shared._ERRORS entry. Belt-and-braces for
+# upstream signal drift; isinstance and type-name checks come FIRST.
+_RATE_LIMIT_TOKENS = (
+    "yfratelimiterror",     # repr of yfinance.exceptions.YFRateLimitError
+    "rate limit",
+    "rate-limit",
+    "rate limited",
+    "too many requests",
+    "429",
+)
+
+
+def _is_rate_limit_signal(text) -> bool:
+    """True iff `text` (str or any stringifiable) contains a rate-limit
+    token. Tolerant of None / non-string input."""
+    if not text:
+        return False
+    try:
+        lower = str(text).lower()
+    except Exception:
+        return False
+    return any(tok in lower for tok in _RATE_LIMIT_TOKENS)
+
+
+def _yf_rate_limit_exc_class():
+    """Return yfinance.exceptions.YFRateLimitError if importable, else
+    None. yfinance < 0.2 didn't have it; defensive import keeps the
+    provider importable in any supported version."""
+    try:
+        from yfinance.exceptions import YFRateLimitError
+        return YFRateLimitError
+    except Exception:
+        return None
+
+
+def _clear_yf_errors(yf_mod) -> None:
+    """Best-effort clear of `yf.shared._ERRORS`. Idempotent and
+    defensive: a yfinance build without `shared._ERRORS` is treated as
+    a no-op rather than an error."""
+    try:
+        shared = getattr(yf_mod, "shared", None)
+        if shared is None:
+            return
+        errors = getattr(shared, "_ERRORS", None)
+        if errors is None:
+            return
+        try:
+            errors.clear()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _scan_yf_errors_for_rate_limit(yf_mod, symbol: str):
+    """Inspect `yf.shared._ERRORS` for a rate-limit signal.
+
+    Returns the rate-limit message string if found, else None.
+
+    Looks at the entry keyed by `symbol` first, then any other entries
+    (the registry is global; we cleared it before THIS call so any
+    entries present at scan time belong to this call). This mirrors
+    `bot/historical/providers_yfinance.py::_scan_yf_errors_for_rate_limit`.
+    """
+    try:
+        shared = getattr(yf_mod, "shared", None)
+        if shared is None:
+            return None
+        errors = getattr(shared, "_ERRORS", None)
+        if not errors:
+            return None
+    except Exception:
+        return None
+
+    # Prefer this symbol's entry; fall back to any other entry.
+    candidates = []
+    try:
+        if symbol in errors:
+            candidates.append(errors[symbol])
+        for k, v in errors.items():
+            if k != symbol:
+                candidates.append(v)
+    except Exception:
+        return None
+
+    for msg in candidates:
+        if _is_rate_limit_signal(msg):
+            return str(msg)
+    return None
+
+
+def _scan_yf_errors_for_other_error(yf_mod, symbol: str):
+    """Return non-rate-limit error message for `symbol` if present.
+    Called after `_scan_yf_errors_for_rate_limit` returned None; any
+    remaining entry for this symbol is worth surfacing at WARNING."""
+    try:
+        shared = getattr(yf_mod, "shared", None)
+        if shared is None:
+            return None
+        errors = getattr(shared, "_ERRORS", None)
+        if not errors:
+            return None
+        own = errors.get(symbol)
+        if own and not _is_rate_limit_signal(own):
+            return str(own)
+    except Exception:
+        return None
+    return None
+
+
+def _is_rate_limit_exception(exc: BaseException) -> bool:
+    """Layered detection — isinstance, then type-name, then substring.
+    Returns True iff `exc` represents a yfinance rate-limit signal."""
+    rl_cls = _yf_rate_limit_exc_class()
+    if rl_cls is not None and isinstance(exc, rl_cls):
+        return True
+    if type(exc).__name__ == "YFRateLimitError":
+        return True
+    return _is_rate_limit_signal(str(exc))
+
+
 # ── Provider ──────────────────────────────────────────────────────────────────
 
 class YFinanceProvider(DataProvider):
@@ -149,20 +285,46 @@ class YFinanceProvider(DataProvider):
     # ── Live scanner path (period-based, multi-symbol) ────────────────────────
 
     def _fetch_one(self, sym: str, period: str, interval: str) -> Optional[pd.DataFrame]:
+        # audit-P1-data-rate-limit-fix (2026-06-05): clear yfinance's
+        # per-symbol error registry BEFORE the call so any entry
+        # present at scan time can be attributed to this call. Without
+        # this, yfinance silently swallows rate-limit exceptions into
+        # _ERRORS while returning an empty DataFrame, and the empty df
+        # gets misclassified here as "no_data".
+        _clear_yf_errors(yf)
+
         try:
             df = yf.Ticker(sym, session=self._get_session()).history(
                 period=period, interval=interval, auto_adjust=True
             )
-            if df is None or df.empty or len(df) < MIN_BARS:
-                return None
-            df.columns = [c.lower() for c in df.columns]
-            keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
-            return df[keep]
         except Exception as e:
-            err = str(e)
-            if any(k in err for k in ('Rate', 'Too Many', '429', 'rate limit', 'TooMany')):
-                raise RateLimitError(err)
+            # Layered detection: isinstance(YFRateLimitError),
+            # type-name match, then substring fallback. Strictly more
+            # reliable than the pre-fix str(e)-only heuristic.
+            if _is_rate_limit_exception(e):
+                raise RateLimitError(str(e))
             return None
+
+        if df is None or df.empty:
+            # Empty df can mean either "no data" OR "rate limited and
+            # yfinance swallowed it". Disambiguate via _ERRORS.
+            rl_msg = _scan_yf_errors_for_rate_limit(yf, sym)
+            if rl_msg is not None:
+                raise RateLimitError(rl_msg)
+            # Non-rate-limit error for this symbol — surface at
+            # WARNING (operator visibility), then treat as no_data.
+            other_msg = _scan_yf_errors_for_other_error(yf, sym)
+            if other_msg is not None:
+                log.warning('[DATA] %s %s: yfinance error (non-RL): %s',
+                              sym, interval, str(other_msg)[:120])
+            return None
+
+        if len(df) < MIN_BARS:
+            return None
+
+        df.columns = [c.lower() for c in df.columns]
+        keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
+        return df[keep]
 
     def fetch_bars(self, symbols: list, period: str, interval: str) -> Dict[str, pd.DataFrame]:
         """
@@ -250,6 +412,17 @@ class YFinanceProvider(DataProvider):
                             sym, interval, wait, attempt + 1)
                 time.sleep(wait)
 
+            # audit-P1-data-rate-limit-fix (2026-06-05): clear yfinance's
+            # per-symbol error registry BEFORE each attempt. With
+            # raise_errors=False below, yfinance swallows rate-limit
+            # exceptions into _ERRORS and returns an empty DataFrame;
+            # without inspecting _ERRORS we cannot distinguish a
+            # rate-limited-empty response from a genuinely-no-data-
+            # empty response, so the pre-fix code silently
+            # misclassified rate-limits as 'empty_response' and never
+            # retried.
+            _clear_yf_errors(yf)
+
             try:
                 ses = self._get_session()
                 df  = yf.Ticker(sym, session=ses).history(
@@ -262,6 +435,25 @@ class YFinanceProvider(DataProvider):
                 )
 
                 if df is None or df.empty:
+                    # Disambiguate: swallowed rate-limit vs genuinely
+                    # empty. The retry-with-backoff path is gated on
+                    # the same flag (`is_rl`) the except branch uses
+                    # so both code paths behave identically.
+                    rl_msg = _scan_yf_errors_for_rate_limit(yf, sym)
+                    if rl_msg is not None:
+                        log.warning('[PROV] %s %s: swallowed rate-limit '
+                                      'detected via _ERRORS (attempt %d/3)',
+                                      sym, interval, attempt + 1)
+                        if attempt < 2:
+                            continue
+                        return None, 'rate_limited'
+                    # Non-rate-limit error worth surfacing.
+                    other_msg = _scan_yf_errors_for_other_error(yf, sym)
+                    if other_msg is not None:
+                        log.warning('[PROV] %s %s: yfinance error '
+                                      '(non-RL): %s',
+                                      sym, interval,
+                                      str(other_msg)[:120])
                     return None, 'empty_response'
 
                 df.columns = [c.lower() for c in df.columns]
@@ -285,12 +477,14 @@ class YFinanceProvider(DataProvider):
                 return df, 'ok'
 
             except Exception as e:
-                err = str(e)
-                is_rl = any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany'))
+                # Layered detection: isinstance(YFRateLimitError),
+                # type-name, then substring fallback.
+                is_rl = _is_rate_limit_exception(e)
                 if is_rl and attempt < 2:
                     continue
                 if is_rl:
                     return None, 'rate_limited'
+                err = str(e)
                 if any(k in err for k in ('403', 'Forbidden', 'proxy', 'tunnel')):
                     return None, 'network_error'
                 log.warning('[PROV] %s %s error: %s', sym, interval, err[:80])

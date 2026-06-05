@@ -28,7 +28,8 @@ import pandas as pd
 from bot.indicators import compute
 from bot.scanner    import score_timeframe, _build_timeframes
 from bot.strategy   import load as load_strategy
-from bot.data       import resample_to_4h, _browser_session
+from bot.data       import resample_to_4h
+from bot.providers.yfinance_provider import _browser_session
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +286,21 @@ def _fetch_yf_single(sym: str, start: date, end: date,
         try:
             session = _browser_session()
             ticker  = yf.Ticker(sym, session=session)
+            # audit-P1-data-rate-limit-fix (2026-06-05): clear
+            # yfinance's per-symbol error registry BEFORE the call.
+            # With raise_errors=False below, yfinance swallows
+            # rate-limit exceptions into _ERRORS and returns an empty
+            # DataFrame; the pre-fix code returned 'empty_response'
+            # without inspecting _ERRORS, so swallowed rate-limits
+            # never triggered the retry-with-backoff path.
+            from bot.providers.yfinance_provider import (
+                _clear_yf_errors,
+                _scan_yf_errors_for_rate_limit,
+                _scan_yf_errors_for_other_error,
+                _is_rate_limit_exception,
+            )
+            _clear_yf_errors(yf)
+
             df = ticker.history(
                 start        = fetch_start.strftime('%Y-%m-%d'),
                 end          = fetch_end.strftime('%Y-%m-%d'),
@@ -295,6 +311,24 @@ def _fetch_yf_single(sym: str, start: date, end: date,
             )
 
             if df is None or df.empty:
+                # Disambiguate swallowed-RL vs genuinely-empty.
+                rl_msg = _scan_yf_errors_for_rate_limit(yf, sym)
+                if rl_msg is not None:
+                    if progress_cb:
+                        progress_cb(
+                            f'{sym} {interval}: swallowed rate-limit '
+                            f'detected (attempt {attempt+1}/3)')
+                    log.warning('[BT] %s %s: swallowed rate-limit detected '
+                                  'via _ERRORS (attempt %d/3)',
+                                  sym, interval, attempt + 1)
+                    if attempt < 2:
+                        continue
+                    return None, 'rate_limited'
+                # Non-rate-limit error worth surfacing.
+                other_msg = _scan_yf_errors_for_other_error(yf, sym)
+                if other_msg is not None:
+                    log.warning('[BT] %s %s: yfinance error (non-RL): %s',
+                                  sym, interval, str(other_msg)[:120])
                 if progress_cb:
                     progress_cb(f'{sym} {interval}: empty response from Yahoo')
                 time.sleep(2)
@@ -327,8 +361,13 @@ def _fetch_yf_single(sym: str, start: date, end: date,
             return df, 'ok'
 
         except Exception as e:
+            # Layered detection: isinstance(YFRateLimitError),
+            # type-name, then substring fallback.
+            from bot.providers.yfinance_provider import (
+                _is_rate_limit_exception,
+            )
+            is_rl  = _is_rate_limit_exception(e)
             err = str(e)
-            is_rl  = any(k in err for k in ('429', 'Too Many', 'rate', 'Rate', 'TooMany'))
             is_net = any(k in err for k in ('403', 'Forbidden', 'proxy', 'Proxy', 'tunnel'))
             log.warning('[BT] %s %s attempt %d: %s', sym, interval, attempt+1, err[:80])
             if is_net:
