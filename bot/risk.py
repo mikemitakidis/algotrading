@@ -118,6 +118,12 @@ class RiskManager:
                 checks['broker_positions']  = len(broker_positions)
                 checks['broker_open_orders']= len(broker_orders)
                 checks['recon_warnings']    = recon_warnings
+                # P0-4 (audit, 2026-06-05): stash the full reconcile
+                # result so bot.portfolio_ctx.gather() can reuse it
+                # when building PortfolioRiskContext later in the
+                # same scan tick — without paying for a second IBKR
+                # round-trip per signal (audit Correction B).
+                checks['_recon']             = recon
 
                 # ── Block policy (broker is source of truth for live) ──────
                 # 1. Existing broker POSITION in this symbol → block

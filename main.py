@@ -40,6 +40,7 @@ from bot.flywheel  import (init_flywheel_tables, log_candidate, log_intent, rece
 from bot.brokers   import get_broker, get_broker_name
 from bot.brokers.base import OrderIntent
 from bot.risk       import RiskManager, PortfolioRiskPolicy, PortfolioRiskContext
+from bot.portfolio_ctx import gather as _portfolio_ctx_gather
 from bot.scanner  import scan_cycle
 from bot.notifier import (alert_startup, alert_stopped,
                           alert_crash, alert_cycle_summary, alert_signal,
@@ -265,6 +266,23 @@ def main():
 
                     # M14: portfolio risk gate
                     if risk_passed:
+                        # P0-4 (audit, 2026-06-05): populate the
+                        # positions / open_orders / local_open_intents
+                        # / kill_switch_active fields the dataclass
+                        # declares. Previously left at empty defaults,
+                        # which made PortfolioRiskPolicy's exposure +
+                        # open-trade-count gates run blind.
+                        #
+                        # gather() reuses the live-mode reconcile dict
+                        # that RiskManager.evaluate() just stashed at
+                        # checks['_recon'] — no second IBKR round-trip
+                        # (audit Correction B). For paper / eToro
+                        # paper / IBKR-paper-no-recon, gather()
+                        # derives positions from accepted local
+                        # execution_intents instead.
+                        _ctx_extra = _portfolio_ctx_gather(
+                            broker.name, intent, conn,
+                        )
                         _ctx = PortfolioRiskContext(
                             broker=broker.name,
                             mode='live' if 'live' in broker.name else 'paper',
@@ -273,6 +291,10 @@ def main():
                             sector_map=port_risk.sector_map,
                             daily_state=get_daily_state(conn),
                             persistent_state=get_persistent_state(conn),
+                            positions=_ctx_extra['positions'],
+                            open_orders=_ctx_extra['open_orders'],
+                            local_open_intents=_ctx_extra['local_open_intents'],
+                            kill_switch_active=_ctx_extra['kill_switch_active'],
                         )
                         p_passed, p_checks, p_reason = port_risk.evaluate(intent, _ctx)
                         if not p_passed:
