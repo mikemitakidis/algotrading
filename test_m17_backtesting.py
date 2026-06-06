@@ -1445,5 +1445,151 @@ class G8_Metrics(unittest.TestCase):
                                   1.0/3.0, places=6)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G9 — Output reproducibility (Phase 7)
+# Golden-path E2E tests come at the end of G9 in Phase 8.
+# ─────────────────────────────────────────────────────────────────────
+
+import shutil
+import tempfile
+
+from bot.backtesting.output import build_run_id, write_results
+from bot.backtesting.models import BacktestResult, BacktestWarning
+
+
+def _make_result_with_one_trade(cfg):
+    """Build a BacktestResult with one closed trade + 3 equity points
+    + one warning. Deterministic content."""
+    led = _make_ledger_with_trades([(10, 100.0, 110.0, 1.0, 0.5, 3)])
+    _make_equity_curve(led, [10000.0, 10500.0, 11000.0])
+    led.record_warning(BacktestWarning(
+        code="test_warn", message="for repro test",
+        ts_utc=pd.Timestamp("2024-01-02", tz="UTC").to_pydatetime(),
+        extras={"foo": "bar"},
+    ))
+    bars = _make_bars([100.0, 105.0, 110.0])
+    metrics = compute_metrics(ledger=led, bars=bars,
+                                exec_cfg=cfg.execution)
+    return BacktestResult(
+        run_id="placeholder",
+        created_at_utc=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        config=config_to_dict(cfg),
+        config_hash=config_hash(cfg),
+        coverage_metadata={
+            "symbol": "AAPL", "timeframe": "1D",
+            "first_ts_utc": pd.Timestamp("2023-01-01", tz="UTC"),
+            "last_ts_utc":  pd.Timestamp("2025-01-01", tz="UTC"),
+            "bar_count": 500, "missing_count": 0,
+            "quality_status": "clean", "freshness_status": "fresh",
+        },
+        trades=led.trades,
+        equity_curve=led.equity_curve,
+        warnings=led.warnings,
+        metrics=metrics,
+        bars_processed=len(bars),
+    )
+
+
+class G9_OutputReproducibility(unittest.TestCase):
+    """Group 9: output artifacts + reproducibility."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="m17_g9_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    # ---- file presence ---------------------------------------------
+
+    def test_all_six_artifacts_written(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        for name in ("manifest.json", "report.json",
+                       "trades.csv", "trades.jsonl",
+                       "equity_curve.csv", "warnings.json"):
+            self.assertTrue((run_dir / name).exists(),
+                              f"missing artifact: {name}")
+
+    def test_run_id_format(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        rid = build_run_id(
+            cfg,
+            created_at_utc=datetime(2024, 6, 15, 14, 30, 45,
+                                     tzinfo=timezone.utc),
+            cfg_hash="abc123def456",
+        )
+        # Format: <YYYYMMDDTHHMMSSZ>_<strategy>_<config_hash>
+        self.assertEqual(rid, "20240615T143045Z_sma_crossover_abc123def456")
+
+    # ---- byte-identical reproducibility -----------------------------
+
+    def test_repeated_runs_produce_identical_report_json(self):
+        """Same config + same result -> byte-identical report.json."""
+        cfg = _config()
+        result1 = _make_result_with_one_trade(cfg)
+        result2 = _make_result_with_one_trade(cfg)
+        # Use the same run_id + created_at to remove the only
+        # non-deterministic manifest fields.
+        ts = datetime(2024, 6, 15, 14, 30, 45, tzinfo=timezone.utc)
+        rid = build_run_id(cfg, created_at_utc=ts,
+                              cfg_hash=config_hash(cfg))
+        rd1 = write_results(result1, cfg, self.tmpdir / "a",
+                              run_id=rid, created_at_utc=ts)
+        rd2 = write_results(result2, cfg, self.tmpdir / "b",
+                              run_id=rid, created_at_utc=ts)
+        # report.json must be byte-identical
+        b1 = (rd1 / "report.json").read_bytes()
+        b2 = (rd2 / "report.json").read_bytes()
+        self.assertEqual(b1, b2,
+            "report.json must be byte-identical for same inputs")
+
+    def test_trades_csv_and_jsonl_have_same_row_count(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        csv_lines = (run_dir / "trades.csv").read_text().strip().splitlines()
+        # CSV has a header row
+        csv_rows = len(csv_lines) - 1
+        jsonl_rows = len((run_dir / "trades.jsonl")
+                            .read_text().strip().splitlines())
+        self.assertEqual(csv_rows, jsonl_rows)
+        self.assertEqual(csv_rows, len(result.trades))
+
+    # ---- manifest contents ------------------------------------------
+
+    def test_manifest_contains_required_fields(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        for field in ("run_id", "created_at_utc", "engine_version",
+                        "config", "config_hash", "coverage_metadata",
+                        "strategy_module_sha256", "git_head_sha",
+                        "python_version", "pandas_version", "numpy_version",
+                        "bars_processed", "trade_count", "warning_count"):
+            self.assertIn(field, manifest, f"missing manifest field: {field}")
+
+    def test_manifest_config_round_trips(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        # The echoed config can be re-parsed back into a BacktestConfig
+        # with the same hash.
+        re_parsed = parse_config_dict(manifest["config"])
+        self.assertEqual(config_hash(re_parsed), manifest["config_hash"])
+
+    def test_strategy_module_sha256_is_valid_hex(self):
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        sha = manifest["strategy_module_sha256"]
+        self.assertEqual(len(sha), 64)   # SHA256 hex digest
+        self.assertTrue(all(c in "0123456789abcdef" for c in sha))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
