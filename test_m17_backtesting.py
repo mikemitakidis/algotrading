@@ -823,5 +823,388 @@ class G4_StrategyAndLookahead(unittest.TestCase):
                         self.fail("strategy.py: shift(-N) is forward-looking")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Execution tests: shared fixtures for G5, G6, G7
+# ─────────────────────────────────────────────────────────────────────
+
+from bot.backtesting.execution import simulate
+from bot.backtesting.ledger import Ledger
+from bot.backtesting.portfolio import Portfolio
+from bot.backtesting.strategy import SIG_ENTRY, SIG_EXIT, SIG_FLAT
+
+
+def _make_bars(close_seq, *, open_offset=0.0, high_offset=1.0,
+                low_offset=-1.0):
+    """Build a bars DataFrame from a close-price sequence."""
+    n = len(close_seq)
+    return pd.DataFrame({
+        "ts_utc": pd.date_range("2024-01-01", periods=n, freq="D",
+                                  tz="UTC"),
+        "open":   [c + open_offset for c in close_seq],
+        "high":   [c + high_offset for c in close_seq],
+        "low":    [c + low_offset  for c in close_seq],
+        "close":  list(close_seq),
+        "volume": [1_000_000] * n,
+        "quality_flags": [0] * n,
+    })
+
+
+def _make_signals(n, *, entry_at, exit_at=None):
+    """Build a signals DataFrame with one entry signal at index
+    `entry_at` and (optionally) one exit signal at `exit_at`."""
+    sig = pd.Series(SIG_FLAT, index=range(n), dtype="int64")
+    direction = pd.Series("flat", index=range(n), dtype="object")
+    if entry_at is not None:
+        sig.iloc[entry_at] = SIG_ENTRY
+        direction.iloc[entry_at] = "long"
+    if exit_at is not None:
+        sig.iloc[exit_at] = SIG_EXIT
+    return pd.DataFrame({
+        "signal": sig,
+        "direction": direction,
+        "atr_at_signal":    pd.Series([np.nan] * n, dtype="float64"),
+        "entry_price_hint": pd.Series([100.0] * n, dtype="float64"),
+    })
+
+
+def _config(symbol="AAPL", initial_equity=10000.0, fee_bps=0,
+              slippage_bps=0, stop_loss_pct=None, take_profit_pct=None,
+              risk_per_trade_pct=0.01, max_position_pct=1.0):
+    """Build a BacktestConfig with knob-able execution settings."""
+    return parse_config_dict({
+        "request": {
+            "symbol": symbol, "timeframe": "1D",
+            "start": "2024-01-01", "end": "2024-12-31",
+        },
+        "strategy": {"name": "sma_crossover",
+                       "params": {"fast_window": 5, "slow_window": 20}},
+        "execution": {
+            "initial_equity":     initial_equity,
+            "fee_bps":            fee_bps,
+            "slippage_bps":       slippage_bps,
+            "stop_loss_pct":      stop_loss_pct,
+            "take_profit_pct":    take_profit_pct,
+            "risk_per_trade_pct": risk_per_trade_pct,
+            "max_position_pct":   max_position_pct,
+            "allow_short":        False,
+        },
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5 — Execution timing
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_ExecutionTiming(unittest.TestCase):
+    """Group 5: signal-to-fill timing. Entry/exit at NEXT bar open."""
+
+    def test_entry_fills_at_next_bar_open(self):
+        bars = _make_bars([100, 101, 102, 103, 104],
+                            open_offset=0.0, high_offset=0.5, low_offset=-0.5)
+        # Signal at index 1 -> entry at index 2 open
+        sigs = _make_signals(5, entry_at=1, exit_at=3)
+        cfg = _config()
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        self.assertEqual(len(ledger.trades), 1)
+        t = ledger.trades[0]
+        self.assertEqual(t.entry_ts_utc, bars.iloc[2]["ts_utc"].to_pydatetime())
+        # Entry fill = bar 2 open = 102 (slip=0, so identical)
+        self.assertAlmostEqual(t.entry_price, 102.0, places=6)
+
+    def test_exit_fills_at_next_bar_open_after_signal(self):
+        bars = _make_bars([100, 101, 102, 103, 104, 105])
+        sigs = _make_signals(6, entry_at=0, exit_at=3)
+        cfg = _config()
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        # Exit signal at bar 3 -> exit fill at bar 4 open = 104
+        self.assertEqual(t.exit_ts_utc, bars.iloc[4]["ts_utc"].to_pydatetime())
+        self.assertAlmostEqual(t.exit_price, 104.0, places=6)
+        self.assertEqual(t.exit_reason, "signal")
+
+    def test_no_same_bar_entry(self):
+        """Signal at bar i can NEVER trigger entry on bar i. Tests that
+        a signal at the last bar produces NO trade (no next bar to fill)."""
+        bars = _make_bars([100, 101, 102, 103, 104])
+        sigs = _make_signals(5, entry_at=4)   # signal at last bar
+        cfg = _config()
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        self.assertEqual(len(ledger.trades), 0,
+                          "signal on last bar must not produce a trade")
+
+    def test_eod_exit_at_last_close(self):
+        bars = _make_bars([100, 101, 102, 103, 104])
+        sigs = _make_signals(5, entry_at=1)
+        cfg = _config()
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        self.assertEqual(len(ledger.trades), 1)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "eod")
+        self.assertAlmostEqual(t.exit_price, 104.0, places=6)
+
+    def test_fees_applied_on_both_sides(self):
+        bars = _make_bars([100, 100, 100, 100, 100])
+        sigs = _make_signals(5, entry_at=0, exit_at=2)
+        # fee_bps=100 = 1% per side
+        cfg = _config(fee_bps=100, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        # Round-trip fee: 1% on entry notional + 1% on exit notional
+        # entry_notional = qty * 100
+        # 1% = qty (since price=100)
+        # exit_notional same -> total = 2*qty
+        expected = 2 * t.qty
+        self.assertAlmostEqual(t.fees_paid, expected, places=6)
+
+    def test_slippage_applied_on_both_sides_for_long(self):
+        bars = _make_bars([100, 100, 100, 100, 100])
+        sigs = _make_signals(5, entry_at=0, exit_at=2)
+        # slippage_bps=100 = 1% per side
+        cfg = _config(slippage_bps=100, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        # Entry fills 1% above open (long pays more): 100 * 1.01 = 101
+        # Exit fills 1% below open (long receives less): 100 * 0.99 = 99
+        self.assertAlmostEqual(t.entry_price, 101.0, places=6)
+        self.assertAlmostEqual(t.exit_price,  99.0,  places=6)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6 — Stop loss / take profit
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_StopLossTakeProfit(unittest.TestCase):
+    """Group 6: intrabar SL/TP with pessimistic SL-first + gap-aware fills."""
+
+    def test_stop_loss_hit_intrabar(self):
+        # Entry at bar 1 open = 100; SL at 100 * 0.95 = 95
+        # Bar 2 low = 94 -> SL touched
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 101, 100, 100],
+            "low":    [ 99,  99,  94,  99],   # bar 2 low = 94 < 95
+            "close":  [100, 100,  96, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=0.05, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        self.assertEqual(len(ledger.trades), 1)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "stop_loss")
+        # Open of bar 2 = 100; stop = 95; since open > stop, fill at stop
+        self.assertAlmostEqual(t.exit_price, 95.0, places=6)
+
+    def test_take_profit_hit_intrabar(self):
+        # Entry at bar 1 open = 100; TP at 100 * 1.05 = 105
+        # Bar 2 high = 106 -> TP touched
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 102, 100],
+            "high":   [101, 101, 106, 100],
+            "low":    [ 99,  99, 101,  99],
+            "close":  [100, 100, 105, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(take_profit_pct=0.05, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "take_profit")
+        self.assertAlmostEqual(t.exit_price, 105.0, places=6)
+
+    def test_sl_and_tp_both_touched_same_bar_pessimistic_sl_first(self):
+        # Both SL and TP touched in the same bar -> SL wins.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 101, 106, 100],   # touches TP at 105
+            "low":    [ 99,  99,  94, 100],   # touches SL at 95
+            "close":  [100, 100, 100, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=0.05, take_profit_pct=0.05,
+                       max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "stop_loss",
+                          "both SL and TP touched same bar -> SL wins")
+
+    def test_gap_below_stop_fills_at_open(self):
+        # Bar 2 OPENS at 90, below the stop at 95.
+        # Pessimistic gap-aware fill: fill at OPEN (90), not at stop (95).
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100,  90,  92],
+            "high":   [101, 101,  92,  93],
+            "low":    [ 99,  99,  88,  91],
+            "close":  [100, 100,  91,  92],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=0.05, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "stop_loss")
+        # Gap-aware: filled at the BAR OPEN (90), not at the stop (95)
+        self.assertAlmostEqual(t.exit_price, 90.0, places=6)
+
+    def test_no_sl_when_disabled(self):
+        # Same setup as test_stop_loss_hit_intrabar, but SL=None
+        # -> no SL exit; position rides to EOD.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 101, 100, 100],
+            "low":    [ 99,  99,  94,  99],
+            "close":  [100, 100,  96, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=None, take_profit_pct=None,
+                       max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "eod")
+
+    def test_entry_bar_does_not_check_sl_tp(self):
+        """SL/TP are NOT checked on the same bar as entry (entry bar's
+        OHLC is the entry bar; engine waits for the NEXT bar to enable
+        intrabar checking)."""
+        # Entry at bar 1 open = 100. Bar 1 ALSO has low=94 (would touch SL).
+        # If engine wrongly checked SL on the entry bar, exit_reason
+        # would be stop_loss. Correct behaviour: no exit on entry bar.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 102, 100, 100],
+            "low":    [ 99,  94,  99,  99],   # bar 1 low = 94 (entry bar)
+            "close":  [100, 101, 100, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=0.05, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        # Position survives bar 1 (entry bar). EOD exit at last bar close.
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "eod")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7 — Position sizing
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_PositionSizing(unittest.TestCase):
+    """Group 7: fixed-risk sizing with max-position cap, zero-size
+    rejection, insufficient-cash handling."""
+
+    def test_fixed_risk_size(self):
+        """
+        equity=10000, risk_per_trade=0.01 -> risk_amount=100
+        stop_loss_pct=0.05 at entry_price=100
+        stop_price=95 -> risk_per_share = 100-95 = 5
+        shares_by_risk = 100/5 = 20
+        max_position_pct=1.0 -> shares_by_cap = 10000/100 = 100
+        min -> 20 shares
+        """
+        from bot.backtesting.portfolio import Portfolio
+        from bot.backtesting.config import ExecutionConfig
+        cfg = ExecutionConfig(
+            initial_equity=10000.0, fee_bps=0, slippage_bps=0,
+            stop_loss_pct=0.05, take_profit_pct=None,
+            risk_per_trade_pct=0.01, max_position_pct=1.0,
+            allow_short=False,
+        )
+        p = Portfolio(cfg)
+        qty, warnings = p.compute_size(entry_price=100.0, stop_price=95.0,
+                                            mark_equity=10000.0)
+        self.assertEqual(qty, 20)
+        self.assertEqual(warnings, [])
+
+    def test_max_position_cap_binds(self):
+        """Tight stop wants 1000 shares, but cap allows only 50.
+        equity=10000, risk_amount=100, stop=99.9, rps=0.1
+        shares_by_risk = 100 / 0.1 = 1000
+        shares_by_cap  = 10000 * 0.5 / 100 = 50 -> CAP binds
+        """
+        from bot.backtesting.portfolio import Portfolio
+        from bot.backtesting.config import ExecutionConfig
+        cfg = ExecutionConfig(
+            initial_equity=10000.0, fee_bps=0, slippage_bps=0,
+            stop_loss_pct=None, take_profit_pct=None,
+            risk_per_trade_pct=0.01, max_position_pct=0.5,
+            allow_short=False,
+        )
+        p = Portfolio(cfg)
+        qty, _ = p.compute_size(entry_price=100.0, stop_price=99.9,
+                                   mark_equity=10000.0)
+        self.assertEqual(qty, 50)
+
+    def test_zero_size_warning(self):
+        """equity=100 cash, entry=$1000, cap=0.01 -> cap_shares=0.001
+        floor -> 0 shares -> zero-size warning."""
+        from bot.backtesting.portfolio import Portfolio
+        from bot.backtesting.config import ExecutionConfig
+        cfg = ExecutionConfig(
+            initial_equity=100.0, fee_bps=0, slippage_bps=0,
+            stop_loss_pct=None, take_profit_pct=None,
+            risk_per_trade_pct=0.01, max_position_pct=0.01,
+            allow_short=False,
+        )
+        p = Portfolio(cfg)
+        qty, warnings = p.compute_size(entry_price=1000.0, stop_price=None,
+                                            mark_equity=100.0)
+        self.assertEqual(qty, 0)
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0].code, "zero_size_skipped")
+
+    def test_zero_size_in_simulation_records_warning_no_trade(self):
+        bars = _make_bars([1000, 1000, 1000, 1000])
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(initial_equity=100.0, max_position_pct=0.01)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        # No trade; zero-size warning recorded.
+        self.assertEqual(len(ledger.trades), 0)
+        codes = [w.code for w in ledger.warnings]
+        self.assertIn("zero_size_skipped", codes)
+
+    def test_insufficient_cash_for_cap_falls_back_to_cash(self):
+        """Cap says 1000 shares but cash only covers 100 -> 100 shares."""
+        from bot.backtesting.portfolio import Portfolio
+        from bot.backtesting.config import ExecutionConfig
+        cfg = ExecutionConfig(
+            initial_equity=10000.0, fee_bps=0, slippage_bps=0,
+            stop_loss_pct=None, take_profit_pct=None,
+            risk_per_trade_pct=0.01, max_position_pct=1.0,
+            allow_short=False,
+        )
+        p = Portfolio(cfg)
+        p.cash = 100.0   # simulate prior loss
+        qty, _ = p.compute_size(entry_price=1.0, stop_price=None,
+                                   mark_equity=100.0)
+        self.assertEqual(qty, 100)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
