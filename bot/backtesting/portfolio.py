@@ -138,7 +138,13 @@ class Portfolio:
                     target_price: Optional[float],
                     fee: float, slippage: float) -> None:
         """Open a long position. Caller has already computed qty and
-        passed in the post-slippage entry_price."""
+        passed in the post-slippage entry_price.
+
+        `slippage` is the absolute $ slippage paid on entry
+        (= qty * (fill_price - bar_open) for a long). It is stored on
+        the Position so Trade.slippage_paid can record the full
+        round-trip (entry + exit) when the position closes.
+        """
         if self.has_open_position:
             raise RuntimeError(
                 "Portfolio.open_long called while a position is already "
@@ -157,6 +163,7 @@ class Portfolio:
             stop_price=stop_price,
             target_price=target_price,
             fees_paid=fee,
+            entry_slippage=slippage,
         )
 
     def close_long(self, *, exit_price: float, fee: float,

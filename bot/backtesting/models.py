@@ -50,6 +50,8 @@ class Position:
     stop_price: Optional[float] = None
     target_price: Optional[float] = None
     fees_paid: float = 0.0      # cumulative fees on entry (exit added on close)
+    entry_slippage: float = 0.0 # absolute $ slippage paid on entry
+                                # (added to Trade.slippage_paid on close)
 
     @property
     def is_open(self) -> bool:

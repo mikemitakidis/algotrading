@@ -986,6 +986,78 @@ class G5_ExecutionTiming(unittest.TestCase):
         self.assertAlmostEqual(t.entry_price, 101.0, places=6)
         self.assertAlmostEqual(t.exit_price,  99.0,  places=6)
 
+    def test_eod_exit_fee_reflected_in_final_equity(self):
+        """Regression for M17.A.fixup2 Issue 1: when a position rides
+        to EOD, the EOD exit charges an exit fee. metrics['final_equity']
+        and metrics['total_return_pct'] must reflect that fee.
+
+        Pre-fix bug: equity_curve was recorded mark-to-close at the
+        last bar BEFORE the post-loop EOD close ran, so the last
+        equity point was stale (overstated by the EOD exit fee).
+        """
+        from bot.backtesting.metrics import compute_metrics
+        # 5 bars, all close=100. Entry at bar 1 open, position rides to EOD.
+        bars = _make_bars([100.0] * 5)
+        sigs = _make_signals(5, entry_at=0)
+        # 1% fees per side, full position
+        cfg = _config(fee_bps=100, slippage_bps=0, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+
+        # The trade must have exited at EOD
+        self.assertEqual(len(ledger.trades), 1)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "eod")
+
+        # Compute metrics + verify final_equity matches post-EOD cash
+        m = compute_metrics(
+            ledger=ledger, bars=bars, exec_cfg=cfg.execution)
+        # Hand-reconstruct: initial=10000, cap=1.0, fee_rate=0.01.
+        # qty = floor(10000 / (100 * 1.01)) = 99
+        # entry: cash -= 99*100 + 99*100*0.01 = 9900 + 99 = 9999 -> cash = 1
+        # EOD exit (no slippage): cash += 99*100 - 99*100*0.01 = 9900 - 99 = 9801
+        # final cash = 1 + 9801 = 9802
+        expected_final_cash = 9802.0
+        self.assertAlmostEqual(
+            m["final_equity"], expected_final_cash, places=6,
+            msg="final_equity must reflect post-EOD-exit cash (incl. fee)")
+        # total_return_pct = 9802 / 10000 - 1 = -0.0198
+        self.assertAlmostEqual(
+            m["total_return_pct"], -0.0198, places=6,
+            msg="total_return_pct must use post-fee final equity")
+        # And the last equity point must be the same post-EOD value
+        self.assertAlmostEqual(
+            ledger.equity_curve[-1].equity, expected_final_cash, places=6)
+        self.assertEqual(ledger.equity_curve[-1].position_qty, 0.0)
+        # And equity-curve length still matches bars length (replacement,
+        # not append, so exposure-time math stays consistent)
+        self.assertEqual(len(ledger.equity_curve), len(bars))
+
+    def test_trade_slippage_paid_is_round_trip(self):
+        """Regression for M17.A.fixup2 Issue 2: Trade.slippage_paid
+        must record the ROUND-TRIP slippage (entry + exit). Pre-fix
+        it recorded exit-side only."""
+        from bot.backtesting.metrics import compute_metrics
+        # 1% slippage per side, fee=0 for clean accounting
+        bars = _make_bars([100.0] * 5)
+        sigs = _make_signals(5, entry_at=0, exit_at=2)
+        cfg = _config(slippage_bps=100, fee_bps=0, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        # Entry slippage per share = 101 - 100 = 1
+        # Exit  slippage per share = 100 - 99  = 1
+        # Round-trip slippage per share = 2 -> total = 2 * qty
+        expected_round_trip = 2.0 * t.qty
+        self.assertAlmostEqual(
+            t.slippage_paid, expected_round_trip, places=6,
+            msg="Trade.slippage_paid must be round-trip (entry + exit)")
+        # And metrics.total_slippage_paid sums to the same
+        m = compute_metrics(
+            ledger=ledger, bars=bars, exec_cfg=cfg.execution)
+        self.assertAlmostEqual(
+            m["total_slippage_paid"], expected_round_trip, places=6)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G6 — Stop loss / take profit
@@ -1097,13 +1169,14 @@ class G6_StopLossTakeProfit(unittest.TestCase):
         t = ledger.trades[0]
         self.assertEqual(t.exit_reason, "eod")
 
-    def test_entry_bar_does_not_check_sl_tp(self):
-        """SL/TP are NOT checked on the same bar as entry (entry bar's
-        OHLC is the entry bar; engine waits for the NEXT bar to enable
-        intrabar checking)."""
-        # Entry at bar 1 open = 100. Bar 1 ALSO has low=94 (would touch SL).
-        # If engine wrongly checked SL on the entry bar, exit_reason
-        # would be stop_loss. Correct behaviour: no exit on entry bar.
+    def test_entry_bar_low_hits_stop_closes_same_bar(self):
+        """Entry bar's low touches the stop -> SL fires on the entry
+        bar itself (same-bar entry+exit). The agreed model is:
+          * signal at bar i close
+          * entry at bar i+1 OPEN
+          * intrabar SL/TP via bar i+1 high/low — including the entry bar
+        """
+        # Entry at bar 1 open = 100, stop = 95. Bar 1 low = 94 -> SL hit.
         bars = pd.DataFrame({
             "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
             "open":   [100, 100, 100, 100],
@@ -1117,9 +1190,58 @@ class G6_StopLossTakeProfit(unittest.TestCase):
         cfg = _config(stop_loss_pct=0.05, max_position_pct=1.0)
         ledger = Ledger()
         simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
-        # Position survives bar 1 (entry bar). EOD exit at last bar close.
+        self.assertEqual(len(ledger.trades), 1)
         t = ledger.trades[0]
-        self.assertEqual(t.exit_reason, "eod")
+        self.assertEqual(t.exit_reason, "stop_loss")
+        self.assertAlmostEqual(t.exit_price, 95.0, places=6)
+        # Same-bar entry+exit -> entry_ts and exit_ts are bar 1's ts
+        self.assertEqual(t.entry_ts_utc, t.exit_ts_utc)
+
+    def test_entry_bar_high_hits_target_closes_same_bar(self):
+        """Entry bar's high touches the take-profit -> TP fires on the
+        entry bar itself."""
+        # Entry at bar 1 open = 100, target = 105. Bar 1 high = 106 -> TP hit.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 106, 100, 100],   # bar 1 high = 106 (entry bar)
+            "low":    [ 99,  99,  99,  99],
+            "close":  [100, 101, 100, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(take_profit_pct=0.05, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        self.assertEqual(len(ledger.trades), 1)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "take_profit")
+        self.assertAlmostEqual(t.exit_price, 105.0, places=6)
+        self.assertEqual(t.entry_ts_utc, t.exit_ts_utc)
+
+    def test_entry_bar_hits_both_sl_wins(self):
+        """Entry bar touches BOTH SL and TP -> pessimistic SL wins
+        (same rule as any other bar)."""
+        # Entry at bar 1 open = 100, SL = 95, TP = 105.
+        # Bar 1 low = 94 AND high = 106 -> both touched -> SL wins.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC"),
+            "open":   [100, 100, 100, 100],
+            "high":   [101, 106, 100, 100],   # touches TP at 105
+            "low":    [ 99,  94,  99,  99],   # touches SL at 95
+            "close":  [100, 101, 100, 100],
+            "volume": [1_000_000] * 4,
+            "quality_flags": [0] * 4,
+        })
+        sigs = _make_signals(4, entry_at=0)
+        cfg = _config(stop_loss_pct=0.05, take_profit_pct=0.05,
+                       max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        t = ledger.trades[0]
+        self.assertEqual(t.exit_reason, "stop_loss",
+                          "entry bar with both SL+TP touched -> SL wins")
 
 
 # ─────────────────────────────────────────────────────────────────────

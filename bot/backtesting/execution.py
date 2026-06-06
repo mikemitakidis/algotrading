@@ -28,7 +28,7 @@ import pandas as pd
 
 from bot.backtesting.config import BacktestConfig
 from bot.backtesting.ledger import Ledger
-from bot.backtesting.models import BacktestWarning
+from bot.backtesting.models import BacktestWarning, EquityPoint
 from bot.backtesting.portfolio import Portfolio
 from bot.backtesting.strategy import (SIG_ENTRY, SIG_EXIT, SIG_FLAT, Strategy)
 
@@ -134,14 +134,23 @@ def simulate(
             entry_bar_index = None
 
         # ---- 2. Intrabar SL/TP check on the currently-open position --
-        # IMPORTANT: only check on bars AFTER entry (i.e. not the bar
-        # we just opened on, because the entry already consumed
-        # bar_open and we'd be checking SL/TP against the same OHLC).
-        # Same-bar entry+SL/TP is a real edge case in markets but
-        # M17.A treats the entry bar as a no-SL/TP-check bar to keep
-        # the model conservative.
+        # SL/TP is evaluated whenever a position is open — INCLUDING
+        # the entry bar itself (i >= entry_bar_index). The entry bar's
+        # high/low is part of the executed model:
+        #
+        #   signal at bar i close
+        #   entry at bar i+1 OPEN
+        #   stop_loss / take_profit can trigger intrabar via
+        #     bar i+1 high/low — pessimistic SL-first if both touched
+        #
+        # The gap-aware-fill branch on the entry bar is degenerate
+        # (we just filled at bar_open, which sits between stop_price
+        # and target_price by construction), so it reduces to:
+        #   bar_low  <= stop_price   -> exit at stop_price (with slip)
+        #   bar_high >= target_price -> exit at target_price (with slip)
+        #   both -> SL wins.
         if portfolio.has_open_position and entry_bar_index is not None \
-                and i > entry_bar_index:
+                and i >= entry_bar_index:
             p = portfolio.position
             sl_hit = p.stop_price is not None and bar_low  <= p.stop_price
             tp_hit = p.target_price is not None and bar_high >= p.target_price
@@ -209,6 +218,23 @@ def simulate(
             exit_bar_index=n - 1,
         )
 
+        # The equity curve was recorded at the last bar's close BEFORE
+        # the EOD exit ran, so its last value is mark-to-close
+        # (= cash_pre_exit + qty * last_close). After the EOD close
+        # charges an exit fee, the actual final equity is
+        # post-close cash. Replace the last point so:
+        #   metrics.final_equity reflects the post-fee value
+        #   metrics.total_return_pct reflects the realised return
+        if ledger.equity_curve:
+            stale = ledger.equity_curve[-1]
+            ledger.equity_curve[-1] = EquityPoint(
+                ts_utc=stale.ts_utc,
+                equity=portfolio.cash,    # position is closed -> equity = cash
+                cash=portfolio.cash,
+                position_qty=0.0,
+                position_market_value=0.0,
+            )
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Exit helpers
@@ -267,19 +293,24 @@ def _close_and_record(portfolio, ledger, *, symbol, fill_price,
                          exit_ts, exit_reason, fee_rate,
                          slippage_per_share,
                          entry_bar_index, exit_bar_index):
-    """Close the position, record a Trade in the ledger."""
+    """Close the position, record a Trade in the ledger.
+
+    Trade.slippage_paid records the ROUND-TRIP $ slippage:
+        position.entry_slippage  (stored by open_long)
+      + qty * slippage_per_share (this exit)
+
+    Trade.fees_paid similarly records the round trip:
+        position.fees_paid  (entry fee, stored by open_long)
+      + qty * fill_price * fee_rate  (this exit's fee)
+    """
     p = portfolio.position
     qty = p.qty
     entry_fee = p.fees_paid
+    entry_slip = p.entry_slippage
     exit_notional = qty * fill_price
     exit_fee = exit_notional * fee_rate
     exit_slip_total = qty * slippage_per_share
 
-    # Capture entry-side slippage indirectly: we stored entry_price
-    # post-slippage; reconstruct entry-side slippage as
-    # (entry_price - (entry_price / (1 + slip_rate))) * qty,
-    # but Portfolio.total_slippage_paid already holds it. We just
-    # report exit-side here; the round-trip is the sum.
     pnl_abs, pnl_pct, _ = portfolio.close_long(
         exit_price=fill_price, fee=exit_fee,
         slippage=exit_slip_total,
@@ -294,11 +325,7 @@ def _close_and_record(portfolio, ledger, *, symbol, fill_price,
         exit_price=fill_price,
         exit_reason=exit_reason,
         fees_paid=entry_fee + exit_fee,
-        # Round-trip slippage (entry slippage was tracked in Portfolio):
-        # we sum the two; for simplicity record per-trade exit slippage
-        # plus the entry-side slip can be reconstructed from
-        # portfolio.total_slippage_paid. Conservative report here:
-        slippage_paid=exit_slip_total,
+        slippage_paid=entry_slip + exit_slip_total,   # round-trip
         pnl_absolute=pnl_abs,
         pnl_pct=pnl_pct,
         bars_held=bars_held,
