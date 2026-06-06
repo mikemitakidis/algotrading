@@ -1206,5 +1206,244 @@ class G7_PositionSizing(unittest.TestCase):
         self.assertEqual(qty, 100)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G8 — Metrics (Phase 6)
+# ─────────────────────────────────────────────────────────────────────
+
+from bot.backtesting.metrics import compute_metrics
+from bot.backtesting.config import ExecutionConfig
+from bot.backtesting.models import EquityPoint, Trade
+
+
+def _make_exec_cfg(initial_equity=10000.0):
+    return ExecutionConfig(
+        initial_equity=initial_equity, fee_bps=0, slippage_bps=0,
+        stop_loss_pct=None, take_profit_pct=None,
+        risk_per_trade_pct=0.01, max_position_pct=1.0,
+        allow_short=False,
+    )
+
+
+def _make_ledger_with_trades(trades_data):
+    """trades_data: list of (qty, entry_price, exit_price, fees,
+    slippage, bars_held) tuples."""
+    led = Ledger()
+    base_ts = pd.Timestamp("2024-01-01", tz="UTC")
+    for i, (qty, ep, xp, fees, slip, bh) in enumerate(trades_data):
+        cost_basis = qty * ep
+        pnl_abs = qty * (xp - ep) - fees
+        pnl_pct = pnl_abs / cost_basis if cost_basis > 0 else 0.0
+        led.record_trade(
+            symbol="AAPL", qty=qty,
+            entry_ts_utc=(base_ts + pd.Timedelta(days=i*10)).to_pydatetime(),
+            entry_price=ep,
+            exit_ts_utc=(base_ts + pd.Timedelta(days=i*10 + bh)).to_pydatetime(),
+            exit_price=xp,
+            exit_reason="signal",
+            fees_paid=fees, slippage_paid=slip,
+            pnl_absolute=pnl_abs, pnl_pct=pnl_pct,
+            bars_held=bh,
+        )
+    return led
+
+
+def _make_equity_curve(led: Ledger, equity_seq, dates=None):
+    """Append synthetic equity points to ledger."""
+    if dates is None:
+        dates = pd.date_range("2024-01-01", periods=len(equity_seq),
+                                freq="D", tz="UTC")
+    for ts, eq in zip(dates, equity_seq):
+        led.record_equity(
+            ts_utc=ts.to_pydatetime(),
+            equity=float(eq), cash=float(eq),
+            position_qty=0.0, position_market_value=0.0,
+        )
+
+
+class G8_Metrics(unittest.TestCase):
+    """Group 8: metric computations on known-input ledgers."""
+
+    # ---- 1. trade-level metrics --------------------------------------
+
+    def test_empty_ledger_all_zeros(self):
+        led = Ledger()
+        bars = _make_bars([100.0, 101.0, 102.0])
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertEqual(m["n_trades"], 0)
+        self.assertEqual(m["win_rate"], 0.0)
+        self.assertEqual(m["total_return_pct"], 0.0)
+        self.assertEqual(m["max_drawdown_pct"], 0.0)
+
+    def test_total_return_from_equity_curve(self):
+        led = _make_ledger_with_trades([
+            (10, 100.0, 110.0, 0.0, 0.0, 3),   # +100 pnl
+        ])
+        _make_equity_curve(led, [10000, 9900, 11000])
+        bars = _make_bars([100.0, 100.0, 100.0])
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        # initial=10000, final=11000 -> +10%
+        self.assertAlmostEqual(m["total_return_pct"], 0.10, places=6)
+
+    def test_win_rate_three_winners_one_loser(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 0, 0, 3),
+            (10, 100, 120, 0, 0, 3),
+            (10, 100, 105, 0, 0, 3),
+            (10, 100,  90, 0, 0, 3),
+        ])
+        bars = _make_bars([100.0] * 4)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertEqual(m["n_trades"], 4)
+        self.assertEqual(m["n_winners"], 3)
+        self.assertEqual(m["n_losers"], 1)
+        self.assertAlmostEqual(m["win_rate"], 0.75, places=6)
+
+    def test_profit_factor_normal_case(self):
+        # winners: +100, +200 = 300; losers: -100, -50 = -150
+        # PF = 300 / 150 = 2.0
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 0, 0, 3),   # +100
+            (10, 100, 120, 0, 0, 3),   # +200
+            (10, 100,  90, 0, 0, 3),   # -100
+            (10, 100,  95, 0, 0, 3),   # -50
+        ])
+        bars = _make_bars([100.0] * 4)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertAlmostEqual(m["profit_factor"], 2.0, places=6)
+
+    def test_profit_factor_no_losers_returns_inf(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 0, 0, 3),
+            (10, 100, 120, 0, 0, 3),
+        ])
+        bars = _make_bars([100.0] * 2)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertEqual(m["profit_factor"], "inf")
+
+    def test_expectancy_equals_mean_pnl(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 0, 0, 3),   # +100
+            (10, 100,  90, 0, 0, 3),   # -100
+        ])
+        bars = _make_bars([100.0] * 2)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertAlmostEqual(m["expectancy"], 0.0, places=6)
+
+    def test_avg_win_and_avg_loss(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 120, 0, 0, 3),   # +200
+            (10, 100, 110, 0, 0, 3),   # +100
+            (10, 100,  90, 0, 0, 3),   # -100
+        ])
+        bars = _make_bars([100.0] * 3)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertAlmostEqual(m["avg_win"], 150.0, places=6)
+        self.assertAlmostEqual(m["avg_loss"], -100.0, places=6)
+
+    # ---- 2. drawdown -------------------------------------------------
+
+    def test_max_drawdown_simple(self):
+        # 10000 -> 12000 -> 9000: peak=12000, trough=9000
+        # DD = (9000 - 12000) / 12000 = -0.25 -> reported as 0.25
+        led = Ledger()
+        _make_equity_curve(led, [10000, 12000, 9000])
+        bars = _make_bars([100.0, 100.0, 100.0])
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertAlmostEqual(m["max_drawdown_pct"], 0.25, places=6)
+
+    def test_max_drawdown_zero_when_monotonic_up(self):
+        led = Ledger()
+        _make_equity_curve(led, [10000, 11000, 12000, 13000])
+        bars = _make_bars([100.0] * 4)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertAlmostEqual(m["max_drawdown_pct"], 0.0, places=6)
+
+    # ---- 3. exposure / fees / slippage -------------------------------
+
+    def test_exposure_time_pct(self):
+        led = Ledger()
+        ts = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+        # 2 of 4 bars have position
+        for i, t in enumerate(ts):
+            qty = 10.0 if i in (1, 2) else 0.0
+            led.record_equity(ts_utc=t.to_pydatetime(),
+                                equity=10000.0, cash=10000.0,
+                                position_qty=qty,
+                                position_market_value=qty * 100.0)
+        bars = _make_bars([100.0] * 4)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertAlmostEqual(m["exposure_time_pct"], 0.5, places=6)
+
+    def test_fees_and_slippage_summed(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 1.0, 0.5, 3),
+            (10, 100,  90, 2.0, 1.5, 3),
+        ])
+        bars = _make_bars([100.0] * 2)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg())
+        self.assertAlmostEqual(m["total_fees_paid"],     3.0, places=6)
+        self.assertAlmostEqual(m["total_slippage_paid"], 2.0, places=6)
+
+    # ---- 4. sharpe / sortino gates ----------------------------------
+
+    def test_sharpe_None_when_too_few_trades(self):
+        led = _make_ledger_with_trades([
+            (10, 100, 110, 0, 0, 3),   # only 1 trade < 30
+        ])
+        _make_equity_curve(led,
+            list(range(10000, 10000 + 100 * 100, 100)))  # 100 days
+        bars = _make_bars([100.0] * 100)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertIsNone(m["sharpe_annualised"])
+        self.assertIsNone(m["sortino_annualised"])
+        self.assertIn("insufficient_trades", m["sample_size_note"])
+
+    def test_sharpe_None_when_too_few_days(self):
+        # 30 trades but only 30 days -> still gated.
+        led = _make_ledger_with_trades(
+            [(10, 100, 110, 0, 0, 1) for _ in range(30)])
+        _make_equity_curve(led, [10000 + i*10 for i in range(30)])
+        bars = _make_bars([100.0] * 30)
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertIsNone(m["sharpe_annualised"])
+        self.assertIn("insufficient_days", m["sample_size_note"])
+
+    # ---- 5. buy-and-hold benchmark ----------------------------------
+
+    def test_buy_and_hold_benchmark_total_return(self):
+        # 100 -> 110: +10%
+        led = Ledger()
+        _make_equity_curve(led, [10000, 10000, 10000])
+        bars = _make_bars([100.0, 105.0, 110.0])
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertAlmostEqual(m["benchmark"]["total_return_pct"], 0.10,
+                                  places=6)
+        self.assertEqual(m["benchmark"]["name"], "buy_and_hold")
+
+    def test_buy_and_hold_benchmark_drawdown(self):
+        # 100 -> 150 -> 100: peak=150, trough=100, DD = 1/3
+        led = Ledger()
+        _make_equity_curve(led, [10000] * 3)
+        bars = _make_bars([100.0, 150.0, 100.0])
+        m = compute_metrics(ledger=led, bars=bars,
+                              exec_cfg=_make_exec_cfg(10000.0))
+        self.assertAlmostEqual(m["benchmark"]["max_drawdown_pct"],
+                                  1.0/3.0, places=6)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
