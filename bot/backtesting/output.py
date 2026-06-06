@@ -45,6 +45,10 @@ import pandas as pd
 
 from bot.backtesting import ENGINE_VERSION
 from bot.backtesting.config import BacktestConfig, config_hash, config_to_dict
+# M16 schema version is re-exported by data_loader so output.py
+# doesn't have to import bot.historical directly. G10 asserts only
+# data_loader.py imports bot.historical.
+from bot.backtesting.data_loader import M16_SCHEMA_VERSION
 from bot.backtesting.models import BacktestResult
 
 
@@ -134,6 +138,7 @@ def _build_manifest(*, result: BacktestResult, cfg: BacktestConfig,
         "config":                config_to_dict(cfg),
         "config_hash":           cfg_hash,
         "coverage_metadata":     _serialise_coverage(result.coverage_metadata),
+        "bot_historical_schema_version": M16_SCHEMA_VERSION,
         "strategy_module_sha256": _module_sha256("bot/backtesting/strategy.py"),
         "git_head_sha":          _git_head_sha(),
         "python_version":        platform.python_version(),

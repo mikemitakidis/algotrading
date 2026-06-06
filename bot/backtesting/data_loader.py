@@ -50,9 +50,18 @@ from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-# The ONE import that this module is allowed to make from bot.historical.
-# G2 / G10 AST scans assert nothing else imports from there.
+# The ONE module that bot.backtesting is allowed to import from
+# bot.historical. G10 AST scan asserts no other bot/backtesting/*.py
+# imports bot.historical or any submodule. Re-exposing
+# M16_SCHEMA_VERSION here lets output.py read the schema version
+# without violating that invariant.
 from bot.historical import store as _m16_store
+from bot.historical import schema as _m16_schema
+
+# Public re-export of the M16 historical-store schema version. The
+# manifest writer reads this from bot.backtesting.data_loader; it
+# never imports bot.historical directly.
+M16_SCHEMA_VERSION: int = _m16_schema.SCHEMA_VERSION
 
 from bot.backtesting.config import BacktestConfig
 from bot.backtesting.errors import MissingDataError
@@ -143,7 +152,8 @@ def load_backtest_bars(
             cfg,
             reason=(f"M16 bars contain duplicate timestamps for "
                      f"{cfg.request.symbol} {cfg.request.timeframe}. "
-                     f"Schema invariant violated — run M16 repair."),
+                     f"Schema invariant violated."),
+            op="force-rebuild",
         ))
 
     # NaN OHLC = fail.
@@ -156,6 +166,7 @@ def load_backtest_bars(
                      f"({len(nan_rows)} bad rows) for "
                      f"{cfg.request.symbol} {cfg.request.timeframe}. "
                      f"First bad ts: {nan_rows.iloc[0]['ts_utc']}."),
+            op="force-rebuild",
         ))
 
     # Range coverage check at the bar level (in case coverage table is
@@ -241,7 +252,8 @@ def validate_coverage(cfg: BacktestConfig) -> Dict[str, Any]:
             reason=(f"M16 coverage reports missing_count="
                      f"{int(missing_count)} bars for "
                      f"{cfg.request.symbol} {cfg.request.timeframe}. "
-                     f"Run M16 repair to fill gaps."),
+                     f"Bars present but incomplete; gaps need filling."),
+            op="repair",
         ))
 
     qstatus = cov.get("quality_status")
@@ -250,7 +262,8 @@ def validate_coverage(cfg: BacktestConfig) -> Dict[str, Any]:
             cfg,
             reason=(f"M16 coverage reports quality_status='error' for "
                      f"{cfg.request.symbol} {cfg.request.timeframe}. "
-                     f"Data is corrupt; run M16 force-rebuild."),
+                     f"Data is corrupt."),
+            op="force-rebuild",
         ))
 
     return cov
@@ -268,18 +281,58 @@ def _cli_date_to_utc(d: date) -> datetime:
     return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
 
 
-def _refresh_message(cfg: BacktestConfig, *, reason: str) -> str:
-    """Build the MissingDataError message body with the exact M16 CLI
-    command the operator needs to run."""
+def _refresh_message(cfg: BacktestConfig, *, reason: str,
+                       op: str = "backfill") -> str:
+    """Build the MissingDataError message body with a VALID M16 CLI
+    command for the operator.
+
+    `op` selects the M16 subcommand based on the failure mode:
+      * 'backfill'      — no coverage, or coverage range too narrow,
+                          or empty bars (data missing entirely)
+      * 'repair'        — known gaps (missing_count > 0); the bars
+                          are present but incomplete
+      * 'force-rebuild' — corrupt data (quality_status='error',
+                          duplicate timestamps, NaN OHLC); delete
+                          and re-ingest
+
+    M16 CLI flag invariants (`python -m bot.historical.cli <op> -h`):
+      backfill:      --symbols (plural), --timeframes (plural),
+                      --lookback (optional)
+      repair:        --symbols (plural), --timeframes (plural)
+      force-rebuild: --symbol  (SINGULAR, required),
+                      --timeframe (SINGULAR, required),
+                      --lookback (optional)
+
+    There is NO --start / --end flag on any M16 subcommand. The
+    operator constrains the window via --lookback when relevant.
+    """
+    if op not in ("backfill", "repair", "force-rebuild"):
+        # Defensive — caller bug, but don't drop the message.
+        op = "backfill"
+
+    if op == "force-rebuild":
+        # SINGULAR flags — verified against `python -m bot.historical.cli
+        # force-rebuild --help` which shows
+        # `--symbol SYMBOL --timeframe TIMEFRAME` (no plural form
+        # supported).
+        cmd = (f"  python -m bot.historical.cli {op} "
+                f"--symbol {cfg.request.symbol} "
+                f"--timeframe {cfg.request.timeframe}")
+    else:
+        # backfill and repair both use plural flags.
+        cmd = (f"  python -m bot.historical.cli {op} "
+                f"--symbols {cfg.request.symbol} "
+                f"--timeframes {cfg.request.timeframe}")
+        if op == "backfill":
+            # --lookback is optional; M16 defaults to provider max.
+            # Suggest it so the operator can constrain the window
+            # if they want, but don't require it.
+            cmd += "\n  (optionally: --lookback 730d to constrain the window)"
     return (
         f"{reason}\n"
         f"Run this first:\n"
-        f"  python -m bot.historical.cli backfill "
-        f"--symbols {cfg.request.symbol} "
-        f"--timeframes {cfg.request.timeframe} "
-        f"--start {cfg.request.start.isoformat()} "
-        f"--end {cfg.request.end.isoformat()}"
+        f"{cmd}"
     )
 
 
-__all__ = ["load_backtest_bars", "validate_coverage"]
+__all__ = ["load_backtest_bars", "validate_coverage", "M16_SCHEMA_VERSION"]

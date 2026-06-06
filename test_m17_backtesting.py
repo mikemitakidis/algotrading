@@ -499,6 +499,114 @@ class G2_DataLoader(unittest.TestCase):
             self.assertEqual(kw["adjusted"], True)
             self.assertEqual(kw["provider"], "yfinance")
 
+    # ---- Issue A regression: M16 refresh commands are VALID ---------
+
+    def test_refresh_command_uses_no_invalid_start_or_end_flags(self):
+        """Regression for M17.A.fixup3 Issue A. M16's
+        `python -m bot.historical.cli backfill` does NOT accept
+        --start or --end flags (only --symbols, --timeframes,
+        --lookback). Every refresh message we generate must avoid
+        those non-existent flags."""
+        cfg = parse_config_dict(_good_config_dict())
+        # Trigger all five failure paths in the loader and assert
+        # no message contains '--start' or '--end' anywhere.
+        cases = [
+            # (coverage, bars, label)
+            (None, pd.DataFrame(), "no_coverage_row"),
+            (_good_coverage(start="2024-06-01"),  _good_bars(), "starts_late"),
+            (_good_coverage(end="2024-06-01"),    _good_bars(), "ends_early"),
+            (_good_coverage(missing_count=5),     _good_bars(), "missing_gt_zero"),
+            (_good_coverage(quality_status="error"), _good_bars(), "quality_error"),
+        ]
+        for cov, bars, label in cases:
+            with self._patched(coverage=cov, bars=bars):
+                try:
+                    data_loader.load_backtest_bars(cfg)
+                    self.fail(f"{label}: expected MissingDataError")
+                except MissingDataError as e:
+                    msg = str(e)
+                    self.assertNotIn(
+                        "--start", msg,
+                        f"{label}: message must not contain --start")
+                    self.assertNotIn(
+                        "--end", msg,
+                        f"{label}: message must not contain --end")
+                    self.assertIn(
+                        "python -m bot.historical.cli", msg,
+                        f"{label}: message must include the M16 CLI invocation")
+
+    def test_refresh_command_subcommand_matches_failure_mode(self):
+        """Regression for M17.A.fixup3 Issue A. The M16 subcommand in
+        the refresh message should match the failure semantics, and
+        the flag form (plural vs singular) must match each subcommand's
+        actual CLI:
+          * no coverage / range too narrow / empty -> 'backfill'
+              with --symbols / --timeframes (plural)
+          * missing_count > 0                       -> 'repair'
+              with --symbols / --timeframes (plural)
+          * quality_status='error' / NaN / dup ts   -> 'force-rebuild'
+              with --symbol / --timeframe (SINGULAR, per M16 CLI)
+        """
+        cfg = parse_config_dict(_good_config_dict())
+
+        # backfill: no coverage
+        with self._patched(coverage=None, bars=pd.DataFrame()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("backfill", msg)
+        self.assertIn("--symbols AAPL", msg)
+        self.assertIn("--timeframes 1D", msg)
+
+        # backfill: starts late
+        with self._patched(coverage=_good_coverage(start="2024-06-01"),
+                              bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("backfill", str(ctx.exception))
+
+        # repair: missing_count > 0
+        with self._patched(coverage=_good_coverage(missing_count=5),
+                              bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("repair", msg)
+        self.assertIn("--symbols AAPL", msg)
+        self.assertIn("--timeframes 1D", msg)
+        # And the repair message must NOT suggest backfill
+        self.assertNotIn("backfill", msg)
+
+        # force-rebuild: quality_status='error'
+        # SINGULAR --symbol / --timeframe per M16 CLI surface
+        with self._patched(coverage=_good_coverage(quality_status="error"),
+                              bars=_good_bars()):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("force-rebuild", msg)
+        self.assertIn("--symbol AAPL", msg)
+        self.assertIn("--timeframe 1D", msg)
+        # Must NOT use the plural flags (which force-rebuild rejects)
+        self.assertNotIn("--symbols AAPL", msg)
+        self.assertNotIn("--timeframes 1D", msg)
+
+        # force-rebuild: NaN OHLC
+        bars_nan = _good_bars(n=100)
+        bars_nan.loc[50, "close"] = float("nan")
+        with self._patched(coverage=_good_coverage(), bars=bars_nan):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("force-rebuild", str(ctx.exception))
+
+        # force-rebuild: duplicate timestamps
+        bars_dup = _good_bars(n=100)
+        bars_dup.loc[50, "ts_utc"] = bars_dup.loc[51, "ts_utc"]
+        with self._patched(coverage=_good_coverage(), bars=bars_dup):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        self.assertIn("force-rebuild", str(ctx.exception))
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G3 — Indicators (Phase 3)
@@ -1716,10 +1824,31 @@ class G9_OutputReproducibility(unittest.TestCase):
         manifest = json.loads((run_dir / "manifest.json").read_text())
         for field in ("run_id", "created_at_utc", "engine_version",
                         "config", "config_hash", "coverage_metadata",
+                        "bot_historical_schema_version",
                         "strategy_module_sha256", "git_head_sha",
                         "python_version", "pandas_version", "numpy_version",
                         "bars_processed", "trade_count", "warning_count"):
             self.assertIn(field, manifest, f"missing manifest field: {field}")
+
+    def test_manifest_bot_historical_schema_version_is_int_and_matches(self):
+        """Regression for M17.A.fixup3 Issue B: the manifest must
+        include the M16 historical-store schema version as an int.
+
+        The value must equal bot.historical.schema.SCHEMA_VERSION at
+        the time of writing — verified by reading it through
+        bot.backtesting.data_loader.M16_SCHEMA_VERSION (the only
+        approved re-export path, to keep G10's
+        'only-data_loader-imports-bot.historical' invariant intact).
+        """
+        from bot.backtesting.data_loader import M16_SCHEMA_VERSION
+        cfg = _config()
+        result = _make_result_with_one_trade(cfg)
+        run_dir = write_results(result, cfg, self.tmpdir)
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        v = manifest["bot_historical_schema_version"]
+        self.assertIsInstance(v, int)
+        self.assertGreater(v, 0)
+        self.assertEqual(v, M16_SCHEMA_VERSION)
 
     def test_manifest_config_round_trips(self):
         cfg = _config()
@@ -1879,6 +2008,25 @@ class G9_GoldenPathE2E(unittest.TestCase):
             "--output-dir", str(self.tmpdir / "out"),
         ])
         self.assertEqual(rc, 3)
+
+    def test_cli_missing_config_file_exit_3(self):
+        """Regression for M17.A.fixup3 Issue C: a --config path that
+        doesn't exist must surface as ConfigError -> exit code 3,
+        not as an unexpected FileNotFoundError -> exit 1."""
+        import io
+        from contextlib import redirect_stderr
+        nonexistent = self.tmpdir / "does_not_exist.json"
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = cli_main([
+                "run", "--config", str(nonexistent),
+                "--output-dir", str(self.tmpdir / "out"),
+            ])
+        stderr = buf.getvalue()
+        self.assertEqual(rc, 3,
+            f"missing config -> expected exit 3 (ConfigError), got {rc}\n"
+            f"stderr: {stderr}")
+        self.assertIn("config file not found", stderr.lower())
 
     # ---- end-to-end reproducibility --------------------------------
 

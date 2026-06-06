@@ -70,9 +70,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _build_config_dict(args: argparse.Namespace) -> Dict[str, Any]:
     """Build a config dict from a --config file (if given), then
-    apply inline arg overrides."""
+    apply inline arg overrides.
+
+    A missing --config path raises ConfigError (caught by _cmd_run
+    and surfaced as exit code 3). A malformed JSON file raises
+    json.JSONDecodeError (also surfaced as exit 3 in _cmd_run).
+    """
     if args.config is not None:
-        raw = json.loads(Path(args.config).read_text())
+        cfg_path = Path(args.config)
+        if not cfg_path.exists():
+            raise ConfigError(f"config file not found: {cfg_path}")
+        raw = json.loads(cfg_path.read_text())
     else:
         raw = {"request": {}, "data": {}, "strategy": {}, "execution": {}}
 
