@@ -297,6 +297,18 @@ class G1_ConfigValidation(unittest.TestCase):
         self.assertIsInstance(ENGINE_VERSION, str)
         self.assertTrue(ENGINE_VERSION.startswith("M17"))
 
+    def test_public_api_run_is_reexported_at_package_root(self):
+        """bot.backtesting.run should be the same function as
+        bot.backtesting.runner.run — single orchestration path,
+        ergonomic top-level access."""
+        import bot.backtesting as bk
+        import bot.backtesting.runner as runner_mod
+        self.assertIs(bk.run, runner_mod.run)
+        self.assertIs(bk.run_and_write, runner_mod.run_and_write)
+        # __all__ documents the public surface
+        self.assertEqual(set(bk.__all__),
+                          {"ENGINE_VERSION", "run", "run_and_write"})
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G2 — Data loader (Phase 2)
@@ -1204,6 +1216,22 @@ class G7_PositionSizing(unittest.TestCase):
         qty, _ = p.compute_size(entry_price=1.0, stop_price=None,
                                    mark_equity=100.0)
         self.assertEqual(qty, 100)
+
+    def test_cash_never_goes_negative_even_with_max_position_and_fees(self):
+        """Invariant: after open_long, Portfolio.cash >= 0.
+        Reproduces the original pre-fix bug: max_position_pct=1.0
+        with non-zero fees previously left cash negative by the fee
+        amount because compute_size didn't reserve for the entry fee."""
+        bars = _make_bars([100.0] * 5)
+        sigs = _make_signals(5, entry_at=0)
+        cfg = _config(fee_bps=100, max_position_pct=1.0)
+        ledger = Ledger()
+        simulate(bars=bars, signals=sigs, cfg=cfg, ledger=ledger)
+        # Walk the equity curve: cash must never be < 0
+        for ep in ledger.equity_curve:
+            self.assertGreaterEqual(
+                ep.cash, 0.0,
+                f"cash went negative at {ep.ts_utc}: cash={ep.cash}")
 
 
 # ─────────────────────────────────────────────────────────────────────

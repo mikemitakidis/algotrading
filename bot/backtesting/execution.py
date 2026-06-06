@@ -96,6 +96,7 @@ def simulate(
                 entry_price=fill_price,
                 stop_price=stop_price,
                 mark_equity=equity_mark,
+                fee_rate=fee_rate,
             )
             for w in sizing_warnings:
                 # Attach the bar's ts so the warning is locatable.

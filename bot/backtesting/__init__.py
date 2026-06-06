@@ -42,4 +42,11 @@ from __future__ import annotations
 # sizing, fees, slippage, output format).
 ENGINE_VERSION = "M17.A.1"
 
-__all__ = ["ENGINE_VERSION"]
+# Re-export the public entry points so callers can write
+#   `bot.backtesting.run(config)`
+#   `bot.backtesting.run_and_write(config, output_dir=...)`
+# rather than having to reach into the runner submodule. The single
+# orchestration path lives in bot.backtesting.runner.
+from bot.backtesting.runner import run, run_and_write   # noqa: E402
+
+__all__ = ["ENGINE_VERSION", "run", "run_and_write"]

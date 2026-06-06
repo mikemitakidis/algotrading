@@ -68,11 +68,17 @@ class Portfolio:
     def compute_size(self, *, entry_price: float,
                        stop_price: Optional[float],
                        mark_equity: float,
+                       fee_rate: float = 0.0,
                        ) -> Tuple[int, List[BacktestWarning]]:
         """Compute share count for a long entry. Returns (qty, warnings).
 
         qty == 0 means trade rejected; warnings explains why.
         qty > 0 means proceed with the trade at this size.
+
+        `fee_rate` is the per-side fee as a fraction (e.g. 0.0005 for
+        5 bps). When > 0 the affordability check reserves cash for the
+        entry fee so that `cash - shares*entry - fee >= 0` after
+        open_long() — i.e. cash NEVER goes negative due to fees.
         """
         warnings: List[BacktestWarning] = []
 
@@ -106,16 +112,20 @@ class Portfolio:
                           f"trade rejected")))
             return 0, warnings
 
-        # Affordability check: do we have cash for `shares * entry`?
-        notional = shares * entry_price
-        if notional > self.cash:
-            # Try to shrink to what we can afford (still under the cap).
-            shares = int(math.floor(self.cash / entry_price))
+        # Affordability check INCLUDING entry fee:
+        #     cash >= shares * entry_price * (1 + fee_rate)
+        # => shares <= cash / (entry_price * (1 + fee_rate))
+        affordable = int(math.floor(
+            self.cash / (entry_price * (1.0 + fee_rate))))
+        if shares > affordable:
+            shares = affordable
             if shares <= 0:
                 warnings.append(BacktestWarning(
                     code="insufficient_cash",
-                    message=(f"cash={self.cash:.2f} cannot afford even 1 "
-                              f"share at {entry_price:.2f}; trade rejected")))
+                    message=(f"cash={self.cash:.2f} cannot afford 1 "
+                              f"share at {entry_price:.2f} "
+                              f"with fee_rate={fee_rate}; "
+                              f"trade rejected")))
                 return 0, warnings
 
         return shares, warnings
