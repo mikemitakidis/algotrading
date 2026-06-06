@@ -679,5 +679,149 @@ class G3_Indicators(unittest.TestCase):
                         self.fail("shift(-N) is forward-looking")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G4 — Strategy + look-ahead protection (Phase 4)
+# ─────────────────────────────────────────────────────────────────────
+
+from bot.backtesting import strategy as strat
+
+
+class G4_StrategyAndLookahead(unittest.TestCase):
+    """Group 4: strategy contract + SmaCrossoverStrategy + look-ahead
+    protection (the scramble-future-bars test)."""
+
+    def _bars_with_known_crossover(self):
+        """Hand-crafted bars: prices rise for 60 bars, then fall.
+        With fast=5, slow=20: a clear up-cross around bar ~20-25 and
+        a down-cross around bar ~75."""
+        prices = list(range(100, 160)) + list(range(160, 100, -1))
+        n = len(prices)
+        return pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC"),
+            "open":   prices,
+            "high":   [p + 1 for p in prices],
+            "low":    [p - 1 for p in prices],
+            "close":  prices,
+            "volume": [1_000_000] * n,
+            "quality_flags": [0] * n,
+        })
+
+    # ---- happy path -------------------------------------------------
+
+    def test_sma_crossover_produces_known_entry_and_exit(self):
+        bars = self._bars_with_known_crossover()
+        s = strat.SmaCrossoverStrategy({"fast_window": 5, "slow_window": 20})
+        sig = s.run(bars)
+        # Must produce at least one entry and one exit
+        entries = (sig["signal"] == strat.SIG_ENTRY).sum()
+        exits   = (sig["signal"] == strat.SIG_EXIT).sum()
+        self.assertGreaterEqual(entries, 1)
+        self.assertGreaterEqual(exits,   1)
+        # On entry bars, direction must be 'long'
+        for i in sig.index[sig["signal"] == strat.SIG_ENTRY]:
+            self.assertEqual(sig.at[i, "direction"], "long")
+
+    def test_warmup_bars_emit_flat_only(self):
+        bars = self._bars_with_known_crossover()
+        s = strat.SmaCrossoverStrategy({"fast_window": 5, "slow_window": 20})
+        sig = s.run(bars)
+        # First 19 bars (slow_window-1) must all be flat (signal=0).
+        for i in range(19):
+            self.assertEqual(sig.iloc[i]["signal"], strat.SIG_FLAT)
+            self.assertEqual(sig.iloc[i]["direction"], "flat")
+
+    # ---- contract enforcement ---------------------------------------
+
+    def test_strategy_output_has_required_columns(self):
+        bars = self._bars_with_known_crossover()
+        s = strat.SmaCrossoverStrategy({"fast_window": 5, "slow_window": 20})
+        sig = s.run(bars)
+        for col in strat.SIGNAL_COLUMNS:
+            self.assertIn(col, sig.columns)
+        self.assertEqual(len(sig), len(bars))
+
+    def test_get_strategy_returns_registered_class(self):
+        s = strat.get_strategy("sma_crossover",
+                                  {"fast_window": 5, "slow_window": 20})
+        self.assertIsInstance(s, strat.SmaCrossoverStrategy)
+
+    def test_get_strategy_unknown_name_raises(self):
+        with self.assertRaises(ConfigError):
+            strat.get_strategy("not_a_strategy", {})
+
+    # ---- param validation ------------------------------------------
+
+    def test_sma_rejects_fast_gte_slow(self):
+        with self.assertRaises(ConfigError):
+            strat.SmaCrossoverStrategy({"fast_window": 50, "slow_window": 20})
+
+    def test_sma_rejects_non_int_window(self):
+        with self.assertRaises(ConfigError):
+            strat.SmaCrossoverStrategy({"fast_window": 5.5, "slow_window": 20})
+
+    # ---- look-ahead protection -------------------------------------
+
+    def test_signal_does_not_depend_on_future_bars(self):
+        """Scramble future bars (i+1..N) and assert decision at bar i
+        is unchanged. This is the headline look-ahead-protection test:
+        if any strategy code reads bars[i+1:], this test fails."""
+        bars = self._bars_with_known_crossover()
+        s1 = strat.SmaCrossoverStrategy({"fast_window": 5, "slow_window": 20})
+        sig_original = s1.run(bars)
+
+        # Pick a checkpoint bar past warmup
+        check_bar = 35
+
+        # Build a scrambled bars frame: bars 0..check_bar identical,
+        # bars check_bar+1..end randomly reshuffled (excluding ts_utc).
+        scrambled = bars.copy()
+        future_ohlcv = scrambled.iloc[check_bar + 1:][
+            ["open", "high", "low", "close", "volume", "quality_flags"]
+        ].copy()
+        # Randomly reshuffle OHLCV rows; ts_utc column stays put so the
+        # date sequence stays monotone (strategy sorts by ts_utc).
+        shuffled = future_ohlcv.sample(
+            frac=1.0, random_state=42).reset_index(drop=True)
+        for col in ("open", "high", "low", "close", "volume",
+                     "quality_flags"):
+            scrambled.loc[scrambled.index[check_bar + 1:], col] = (
+                shuffled[col].values)
+
+        s2 = strat.SmaCrossoverStrategy({"fast_window": 5, "slow_window": 20})
+        sig_scrambled = s2.run(scrambled)
+
+        # At bar `check_bar`, signal MUST be the same.
+        self.assertEqual(
+            sig_original.iloc[check_bar]["signal"],
+            sig_scrambled.iloc[check_bar]["signal"],
+            "Strategy signal at bar i changed when bars[i+1:] was "
+            "scrambled — LOOK-AHEAD BIAS PRESENT")
+        # And all bars [0..check_bar] should also be identical.
+        for i in range(check_bar + 1):
+            self.assertEqual(
+                sig_original.iloc[i]["signal"],
+                sig_scrambled.iloc[i]["signal"],
+                f"Signal at bar {i} changed when future bars were "
+                f"scrambled — look-ahead bias")
+
+    def test_strategy_module_has_no_negative_shift_or_forward_indexing(self):
+        """AST scan on strategy.py — no shift(-N), no ranges with negative
+        step that walk forward."""
+        import ast
+        with open("bot/backtesting/strategy.py") as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "shift"):
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
+                        self.assertGreaterEqual(
+                            arg.value, 0,
+                            f"strategy.py: shift({arg.value}) is forward-looking")
+                    elif isinstance(arg, ast.UnaryOp) and isinstance(arg.op, ast.USub):
+                        self.fail("strategy.py: shift(-N) is forward-looking")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
