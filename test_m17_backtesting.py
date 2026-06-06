@@ -1591,5 +1591,168 @@ class G9_OutputReproducibility(unittest.TestCase):
         self.assertTrue(all(c in "0123456789abcdef" for c in sha))
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G9 — Golden-path E2E (Phase 8)
+# Runner + CLI integration tests with mocked M16 store.
+# ─────────────────────────────────────────────────────────────────────
+
+import subprocess
+
+from bot.backtesting import runner
+from bot.backtesting.cli import main as cli_main
+
+
+class G9_GoldenPathE2E(unittest.TestCase):
+    """End-to-end runs through runner.run() and the CLI, with M16
+    store mocked. No network, no real M16 data."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="m17_g9e2e_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _bars_with_crossover(self):
+        """200 daily bars with a clear SMA crossover region."""
+        prices = (list(range(100, 130)) +          # up to bar 30
+                    list(range(130, 100, -1)) +     # down to bar 60
+                    list(range(100, 170)) +         # up to bar 130
+                    list(range(170, 100, -1)))      # down to bar 200
+        n = len(prices)
+        return pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=n, freq="D",
+                                      tz="UTC"),
+            "open":   [float(p) for p in prices],
+            "high":   [float(p) + 1.0 for p in prices],
+            "low":    [float(p) - 1.0 for p in prices],
+            "close":  [float(p) for p in prices],
+            "volume": [1_000_000] * n,
+            "quality_flags": [0] * n,
+        })
+
+    def _patched_loader(self, bars):
+        cov = _good_coverage(start="2023-01-01", end="2025-01-01")
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(return_value=cov)
+        fake.get_bars     = MagicMock(return_value=bars)
+        return patch.object(data_loader, "_m16_store", fake)
+
+    # ---- runner.run -------------------------------------------------
+
+    def test_runner_run_returns_BacktestResult_with_trades(self):
+        cfg = _config()
+        bars = self._bars_with_crossover()
+        with self._patched_loader(bars):
+            result = runner.run(cfg)
+        self.assertGreaterEqual(result.trade_count, 1)
+        self.assertEqual(result.bars_processed, len(bars))
+        self.assertIn("n_trades", result.metrics)
+        self.assertEqual(result.metrics["n_trades"], result.trade_count)
+
+    def test_runner_run_then_write_produces_full_artifact_set(self):
+        cfg = _config()
+        bars = self._bars_with_crossover()
+        with self._patched_loader(bars):
+            run_dir = runner.run_and_write(cfg, output_dir=self.tmpdir)
+        for name in ("manifest.json", "report.json",
+                       "trades.csv", "trades.jsonl",
+                       "equity_curve.csv", "warnings.json"):
+            self.assertTrue((run_dir / name).exists())
+
+    # ---- CLI --------------------------------------------------------
+
+    def test_cli_run_with_config_file_exit_0(self):
+        # Write a temporary config file
+        cfg_path = self.tmpdir / "cfg.json"
+        cfg_path.write_text(json.dumps(_good_config_dict()))
+        bars = self._bars_with_crossover()
+        with self._patched_loader(bars):
+            rc = cli_main([
+                "run", "--config", str(cfg_path),
+                "--output-dir", str(self.tmpdir / "out"),
+            ])
+        self.assertEqual(rc, 0)
+        # Output directory must contain exactly one run dir.
+        run_dirs = list((self.tmpdir / "out").iterdir())
+        self.assertEqual(len(run_dirs), 1)
+
+    def test_cli_run_inline_args_exit_0(self):
+        bars = self._bars_with_crossover()
+        with self._patched_loader(bars):
+            rc = cli_main([
+                "run",
+                "--symbol", "AAPL", "--timeframe", "1D",
+                "--from", "2024-01-01", "--to", "2024-12-31",
+                "--strategy", "sma_crossover",
+                "--fast", "5", "--slow", "20",
+                "--initial-equity", "10000",
+                "--fee-bps", "5", "--slippage-bps", "5",
+                "--stop-loss-pct", "0.03",
+                "--take-profit-pct", "0.06",
+                "--risk-per-trade-pct", "0.01",
+                "--max-position-pct", "0.25",
+                "--output-dir", str(self.tmpdir / "out"),
+            ])
+        self.assertEqual(rc, 0)
+
+    def test_cli_missing_data_exit_2_with_refresh_command(self):
+        """When M16 has no coverage, CLI must exit 2 and stderr must
+        contain the M16 refresh command."""
+        import io
+        from contextlib import redirect_stderr
+        cfg_path = self.tmpdir / "cfg.json"
+        cfg_path.write_text(json.dumps(_good_config_dict()))
+        # Mock M16 to return no coverage
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(return_value=None)
+        fake.get_bars     = MagicMock(return_value=pd.DataFrame())
+        with patch.object(data_loader, "_m16_store", fake):
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                rc = cli_main([
+                    "run", "--config", str(cfg_path),
+                    "--output-dir", str(self.tmpdir / "out"),
+                ])
+            stderr = buf.getvalue()
+        self.assertEqual(rc, 2)
+        self.assertIn("python -m bot.historical.cli backfill", stderr)
+        self.assertIn("--symbols AAPL", stderr)
+
+    def test_cli_bad_config_exit_3(self):
+        # ConfigError path: unknown strategy
+        cfg_path = self.tmpdir / "cfg.json"
+        bad = _good_config_dict()
+        bad["strategy"]["name"] = "scanner_replica"   # M17.B, not M17.A
+        cfg_path.write_text(json.dumps(bad))
+        rc = cli_main([
+            "run", "--config", str(cfg_path),
+            "--output-dir", str(self.tmpdir / "out"),
+        ])
+        self.assertEqual(rc, 3)
+
+    # ---- end-to-end reproducibility --------------------------------
+
+    def test_two_runs_same_bars_produce_byte_identical_report(self):
+        """Two full runs through runner.run_and_write with identical
+        config + identical bars produce byte-identical report.json."""
+        cfg = _config()
+        bars = self._bars_with_crossover()
+
+        with self._patched_loader(bars):
+            run_dir_a = runner.run_and_write(cfg, output_dir=self.tmpdir / "a")
+        with self._patched_loader(bars):
+            run_dir_b = runner.run_and_write(cfg, output_dir=self.tmpdir / "b")
+
+        # report.json must be byte-identical (no per-run metadata in it)
+        b_a = (run_dir_a / "report.json").read_bytes()
+        b_b = (run_dir_b / "report.json").read_bytes()
+        self.assertEqual(b_a, b_b)
+
+        # trades.csv must be byte-identical
+        t_a = (run_dir_a / "trades.csv").read_bytes()
+        t_b = (run_dir_b / "trades.csv").read_bytes()
+        self.assertEqual(t_a, t_b)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

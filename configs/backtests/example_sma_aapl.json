@@ -1,0 +1,29 @@
+{
+  "request": {
+    "symbol":    "AAPL",
+    "timeframe": "1D",
+    "start":     "2024-01-01",
+    "end":       "2024-12-31"
+  },
+  "data": {
+    "adjusted": true,
+    "provider": "yfinance"
+  },
+  "strategy": {
+    "name":   "sma_crossover",
+    "params": {
+      "fast_window": 20,
+      "slow_window": 50
+    }
+  },
+  "execution": {
+    "initial_equity":     10000.0,
+    "fee_bps":            5,
+    "slippage_bps":       5,
+    "stop_loss_pct":      0.03,
+    "take_profit_pct":    0.06,
+    "risk_per_trade_pct": 0.01,
+    "max_position_pct":   0.25,
+    "allow_short":        false
+  }
+}
