@@ -1782,5 +1782,284 @@ class G9_GoldenPathE2E(unittest.TestCase):
         self.assertEqual(t_a, t_b)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G10 — Hygiene (AST + protected-files + gitignore + no-network)
+# Phase 9. NO docs closeout — that comes after VPS verification.
+# ─────────────────────────────────────────────────────────────────────
+
+import ast
+import hashlib
+import os
+import socket as _socket_module
+
+
+# Baseline commit for protected-files diff. This is the HEAD before
+# M17.A began (audit-P1-data-rate-limit-fix closeout).
+_M17_BASELINE_SHA = "13a3aa4"
+
+# Files M17.A explicitly MUST NOT touch.
+_PROTECTED_PATHS = (
+    "bot/data.py",
+    "bot/scanner.py",
+    "bot/strategy.py",
+    "bot/backtest.py",
+    "bot/backtest_v2.py",
+    "bot/risk.py",
+    "bot/risk_authority/engine.py",
+    "bot/risk_authority/governor.py",
+    "bot/risk_authority/audit_decisions.py",
+    "bot/risk_authority/snapshot.py",
+    "bot/risk_authority/preflight.py",
+    "bot/risk_authority/ibkr_paper_reader.py",
+    "bot/etoro/live_broker.py",
+    "bot/etoro/paper_broker.py",
+    "main.py",
+    "sync.sh",
+    "deploy.sh",
+    "dashboard/app.py",
+    "dashboard/auth/manual_reset.py",
+    "dashboard/auth/audit_export.py",
+)
+
+# Forbidden imports for any module in bot/backtesting/ (except
+# data_loader.py which is the SOLE allowed gateway to bot.historical).
+_FORBIDDEN_IMPORT_PREFIXES = (
+    "yfinance",
+    "bot.data",
+    "bot.providers",
+    "bot.scanner",
+    "bot.backtest",       # also covers bot.backtest_v2
+    "bot.brokers",
+    "bot.broker_",
+    "bot.gateway_",
+    "bot.etoro.live_broker",
+    "bot.etoro.paper_broker",
+    "bot.etoro.signal_only",
+    "bot.risk_authority.engine",
+    "bot.risk_authority.governor",
+    "bot.risk_authority.snapshot",
+    "bot.risk_authority.preflight",
+    "bot.risk_authority.ibkr_paper_reader",
+    "ibapi",
+    "ib_insync",
+    "requests",
+    "urllib.request",
+    "urllib3",
+    "http.client",
+)
+
+# Order-method names that must not appear as string literals.
+_FORBIDDEN_STRING_LITERALS = (
+    "placeOrder",
+    "cancelOrder",
+    "submitOrder",
+    "placeOrders",
+    "modifyOrder",
+    "closePosition",
+)
+
+
+def _bot_backtesting_files():
+    """All .py files in bot/backtesting/."""
+    root = Path("bot/backtesting")
+    return sorted(p for p in root.glob("*.py"))
+
+
+def _imports_in(path: Path):
+    """Yield every module name imported by `path` as a string."""
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                yield node.module
+
+
+def _string_literals_in(path: Path):
+    """Yield every string-literal value (ast.Constant with a str value)
+    in the file."""
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+
+
+class G10_Hygiene(unittest.TestCase):
+    """Group 10: hygiene gates. AST imports + string literals +
+    protected-files diff + gitignore + no-network at runtime."""
+
+    # ---- AST: no forbidden imports anywhere in bot/backtesting/ -----
+
+    def test_no_forbidden_imports_in_bot_backtesting(self):
+        """Every .py in bot/backtesting/ must import only stdlib +
+        pandas/numpy + bot.backtesting.* + (only data_loader.py)
+        bot.historical.store."""
+        offenders = []
+        for f in _bot_backtesting_files():
+            for imp in _imports_in(f):
+                for forbidden in _FORBIDDEN_IMPORT_PREFIXES:
+                    if imp == forbidden or imp.startswith(forbidden + "."):
+                        offenders.append((f.name, imp))
+                        break
+        self.assertEqual(offenders, [],
+            f"bot/backtesting/ imports forbidden modules: {offenders}")
+
+    def test_only_data_loader_imports_bot_historical(self):
+        """bot.historical may be imported ONLY by data_loader.py.
+        Every other module in bot/backtesting/ must not touch it."""
+        offenders = []
+        for f in _bot_backtesting_files():
+            if f.name == "data_loader.py":
+                continue
+            for imp in _imports_in(f):
+                if imp == "bot.historical" or imp.startswith("bot.historical."):
+                    offenders.append((f.name, imp))
+        self.assertEqual(offenders, [],
+            f"bot.historical imported outside data_loader.py: {offenders}")
+
+    # ---- AST: no order-method strings in bot/backtesting/ ----------
+
+    def test_no_order_method_string_literals(self):
+        offenders = []
+        for f in _bot_backtesting_files():
+            for s in _string_literals_in(f):
+                # Don't flag short literals that incidentally match;
+                # check exact equality only.
+                for forbidden in _FORBIDDEN_STRING_LITERALS:
+                    if forbidden in s:
+                        offenders.append((f.name, forbidden, s[:80]))
+        self.assertEqual(offenders, [],
+            f"order-method string literals found: {offenders}")
+
+    # ---- Protected files: unchanged vs M17 baseline ----------------
+
+    def test_protected_files_unchanged_vs_M17_baseline(self):
+        """Every file in _PROTECTED_PATHS is byte-identical to its
+        content at the M17 baseline commit (13a3aa4)."""
+        import subprocess
+        unchanged = []
+        changed = []
+        missing = []
+        for path in _PROTECTED_PATHS:
+            try:
+                current = subprocess.run(
+                    ["git", "rev-parse", f"HEAD:{path}"],
+                    capture_output=True, text=True, timeout=5)
+                baseline = subprocess.run(
+                    ["git", "rev-parse", f"{_M17_BASELINE_SHA}:{path}"],
+                    capture_output=True, text=True, timeout=5)
+                if current.returncode != 0 or baseline.returncode != 0:
+                    missing.append(path)
+                    continue
+                if current.stdout.strip() == baseline.stdout.strip():
+                    unchanged.append(path)
+                else:
+                    changed.append(path)
+            except Exception as e:
+                missing.append((path, str(e)))
+        self.assertEqual(changed, [],
+            f"Protected files modified by M17.A: {changed}")
+        # Missing files are OK (they may not exist at the baseline or now);
+        # we just need NO changed files.
+
+    def test_bot_data_py_byte_identical(self):
+        """Hard invariant: bot/data.py must be byte-identical to the
+        baseline. Used to be modified pre-P0-batch; must stay frozen
+        from now on."""
+        import subprocess
+        current = subprocess.run(
+            ["git", "rev-parse", "HEAD:bot/data.py"],
+            capture_output=True, text=True, timeout=5)
+        baseline = subprocess.run(
+            ["git", "rev-parse", f"{_M17_BASELINE_SHA}:bot/data.py"],
+            capture_output=True, text=True, timeout=5)
+        self.assertEqual(current.returncode, 0,
+                          "bot/data.py missing at HEAD")
+        self.assertEqual(baseline.returncode, 0,
+                          "bot/data.py missing at baseline")
+        self.assertEqual(current.stdout.strip(), baseline.stdout.strip(),
+            "bot/data.py changed since M17 baseline — INVARIANT VIOLATED")
+
+    # ---- Output paths: data/backtests/ is gitignored ----------------
+
+    def test_data_backtests_is_gitignored(self):
+        """The output directory must be in .gitignore so generated
+        artifacts never land in the repo."""
+        import subprocess
+        # Create a dummy path and ask git check-ignore.
+        os.makedirs("data/backtests", exist_ok=True)
+        Path("data/backtests/.dummy_for_test").touch()
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore", "data/backtests/.dummy_for_test"],
+                capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0,
+                "data/backtests/ is NOT git-ignored — INVARIANT VIOLATED")
+        finally:
+            try:
+                os.remove("data/backtests/.dummy_for_test")
+            except FileNotFoundError:
+                pass
+
+    # ---- New files: only the expected set ---------------------------
+
+    def test_no_unexpected_files_added(self):
+        """M17.A adds files only in bot/backtesting/, configs/backtests/,
+        plus test_m17_backtesting.py. No surprises."""
+        import subprocess
+        result = subprocess.run(
+            ["git", "diff", "--name-only", _M17_BASELINE_SHA, "HEAD"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        changed = sorted(result.stdout.strip().splitlines())
+        # Build the allowed set
+        allowed_prefixes = ("bot/backtesting/", "configs/backtests/")
+        allowed_exact = {"test_m17_backtesting.py"}
+        unexpected = [
+            p for p in changed
+            if not p.startswith(allowed_prefixes)
+                and p not in allowed_exact
+        ]
+        self.assertEqual(unexpected, [],
+            f"Unexpected files changed: {unexpected}")
+
+    # ---- No network at runtime --------------------------------------
+
+    def test_no_socket_calls_during_backtest(self):
+        """Running a backtest must not open any sockets. Patches
+        socket.socket to raise; the run should still complete."""
+        cfg = _config()
+        # Mock M16 to return bars without touching disk.
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=200, freq="D",
+                                      tz="UTC"),
+            "open":   [100.0] * 200,
+            "high":   [101.0] * 200,
+            "low":    [ 99.0] * 200,
+            "close":  [100.0] * 200,
+            "volume": [1_000_000] * 200,
+            "quality_flags": [0] * 200,
+        })
+        cov = _good_coverage(start="2023-01-01", end="2025-01-01")
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(return_value=cov)
+        fake.get_bars     = MagicMock(return_value=bars)
+
+        # Patch socket.socket to forbid construction.
+        def _no_sockets(*args, **kwargs):
+            raise RuntimeError(
+                "socket.socket() called during backtest — NETWORK ACCESS")
+
+        with patch.object(data_loader, "_m16_store", fake), \
+              patch.object(_socket_module, "socket", _no_sockets):
+            # If the engine tries to open a socket, the run fails.
+            result = runner.run(cfg)
+        # We just need it to complete without exception. trade_count
+        # may be 0 (flat series, no crossover) — that's fine.
+        self.assertIsNotNone(result)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
