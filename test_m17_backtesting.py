@@ -1078,6 +1078,206 @@ class G3_Indicators(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G3 — M17.B.1 indicator parity (Sharpened Rule #1 tolerances)
+# ─────────────────────────────────────────────────────────────────────
+#
+# Test-only import of bot.feature_engine for parity assertions. Per
+# Sharpened Rule #4 + Q12, live modules MAY be imported into the test
+# file but MUST NOT be imported into bot/backtesting/*. The G10 AST
+# scan enforces the production-side ban; this import is intentional
+# and audited.
+from bot.feature_engine import compute_features as _live_compute_features
+
+# Approved tolerance constants (Sharpened Rule #1):
+#   * Identical-bars synthetic parity   -> rtol=1e-9 + atol=1e-8
+#   * vs feature_engine on synthetic    -> rtol=1e-9 + atol=1e-8
+#   * Real candidate_snapshots replay   -> rtol=1e-4 + atol=1e-8
+# The atol floor handles values near zero where relative tolerance
+# alone becomes ill-defined (e.g. macd_hist crossings).
+_PARITY_RTOL_SYNTH      = 1e-9
+_PARITY_RTOL_REAL_REPLAY = 1e-4
+_PARITY_ATOL             = 1e-8
+
+
+def _trending_bars(n: int = 200, seed: int = 1) -> pd.DataFrame:
+    """Synthetic OHLCV with mild trend + noise — enough variability
+    that all M17.B indicator branches get exercised.
+
+    Same shape used by both live feature_engine and M17.B indicators."""
+    rng = np.random.default_rng(seed)
+    base   = 100.0 + np.linspace(0, 20, n)            # rising trend
+    noise  = rng.normal(0, 1.0, n)
+    close  = base + noise.cumsum() * 0.1
+    open_  = close + rng.normal(0, 0.2, n)
+    high   = np.maximum(open_, close) + rng.uniform(0.1, 0.5, n)
+    low    = np.minimum(open_, close) - rng.uniform(0.1, 0.5, n)
+    volume = rng.integers(800_000, 1_200_000, n).astype(float)
+    return pd.DataFrame({
+        "ts_utc": pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC"),
+        "open":   open_,
+        "high":   high,
+        "low":    low,
+        "close":  close,
+        "volume": volume,
+        "quality_flags": [0] * n,
+    })
+
+
+class G3_IndicatorParity(unittest.TestCase):
+    """Group 3 (M17.B.1 addition): indicator parity between
+    bot.backtesting.indicators and bot.feature_engine.compute_features
+    (the live scanner's last-bar engine).
+
+    Each test asserts the M17.B last-bar value matches the live
+    decision-dict value within tolerance _PARITY_RTOL_SYNTH +
+    _PARITY_ATOL. Tests run on identical synthetic OHLCV so there is
+    NO adjusted-close drift between the two — values should match to
+    floating-point precision."""
+
+    def _live(self, bars):
+        fs = _live_compute_features(bars)
+        self.assertIsNotNone(fs,
+            "live feature_engine returned None on synthetic bars — "
+            "fixture insufficient")
+        return fs.decision
+
+    def test_rsi_sma_gain_loss_matches_feature_engine(self):
+        """rsi(..., mode='sma_gain_loss') last value matches the live
+        scanner's RSI to floating-point precision."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        m17b = ind.rsi(bars["close"], period=14,
+                         mode="sma_gain_loss").iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b, live["rsi"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"RSI mismatch: m17b={m17b!r} live={live['rsi']!r}")
+
+    def test_rsi_wilder_mode_unchanged_from_m17_a(self):
+        """rsi default mode='wilder' still produces M17.A semantics
+        (Sharpened Rule #2 — defaults preserved). Asserts the value
+        diverges from the SMA mode (it must, else the modes are not
+        actually different)."""
+        bars = _trending_bars()
+        wilder = ind.rsi(bars["close"], period=14).iloc[-1]   # default
+        sma_gl = ind.rsi(bars["close"], period=14,
+                           mode="sma_gain_loss").iloc[-1]
+        self.assertFalse(
+            np.isclose(wilder, sma_gl,
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            "wilder and sma_gain_loss must diverge — if equal, the "
+            "two modes aren't actually different formulas")
+
+    def test_atr_sma_true_range_matches_feature_engine(self):
+        """atr(..., mode='sma_true_range') matches live ATR."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        m17b = ind.atr(bars["high"], bars["low"], bars["close"],
+                         period=14, mode="sma_true_range").iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b, live["atr"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"ATR mismatch: m17b={m17b!r} live={live['atr']!r}")
+
+    def test_atr_wilder_mode_unchanged_from_m17_a(self):
+        bars = _trending_bars()
+        wilder = ind.atr(bars["high"], bars["low"], bars["close"],
+                           period=14).iloc[-1]
+        sma_tr = ind.atr(bars["high"], bars["low"], bars["close"],
+                           period=14, mode="sma_true_range").iloc[-1]
+        self.assertFalse(
+            np.isclose(wilder, sma_tr,
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            "wilder and sma_true_range ATR must diverge")
+
+    def test_ema20_ema50_match_feature_engine(self):
+        """EMA(span=N, adjust=False) is identical in both libs — sanity
+        check that no upstream change broke this."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        ema20 = ind.ema(bars["close"], window=20).iloc[-1]
+        ema50 = ind.ema(bars["close"], window=50).iloc[-1]
+        self.assertTrue(np.isclose(ema20, live["ema20"],
+                                       rtol=_PARITY_RTOL_SYNTH,
+                                       atol=_PARITY_ATOL),
+            f"EMA20 mismatch: m17b={ema20!r} live={live['ema20']!r}")
+        self.assertTrue(np.isclose(ema50, live["ema50"],
+                                       rtol=_PARITY_RTOL_SYNTH,
+                                       atol=_PARITY_ATOL),
+            f"EMA50 mismatch: m17b={ema50!r} live={live['ema50']!r}")
+
+    def test_macd_hist_matches_feature_engine(self):
+        """MACD(12,26,9) hist last value matches live."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        macd_df = ind.macd(bars["close"], fast=12, slow=26, signal=9)
+        m17b_hist = macd_df["hist"].iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b_hist, live["macd_hist"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"MACD hist mismatch: m17b={m17b_hist!r} "
+            f"live={live['macd_hist']!r}")
+
+    def test_vwap_dev_matches_feature_engine(self):
+        """Cumulative VWAP deviation matches the live scanner's value
+        to floating-point precision (both use +1e-9 epsilon protection)."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        m17b = ind.vwap_dev(bars["close"], bars["volume"]).iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b, live["vwap_dev"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"VWAP-dev mismatch: m17b={m17b!r} live={live['vwap_dev']!r}")
+
+    def test_bb_pos_matches_feature_engine(self):
+        """Bollinger position matches live scanner's bb_pos."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        m17b = ind.bb_pos(bars["close"], window=20, num_std=2.0).iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b, live["bb_pos"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"bb_pos mismatch: m17b={m17b!r} live={live['bb_pos']!r}")
+
+    def test_volume_ratio_matches_feature_engine(self):
+        """volume_ratio last value matches live (modulo the
+        documented epsilon-vs-NaN difference for zero-volume cases —
+        the synthetic fixture has non-zero volume throughout)."""
+        bars = _trending_bars()
+        live = self._live(bars)
+        m17b = ind.volume_ratio(bars["volume"], window=20).iloc[-1]
+        self.assertTrue(
+            np.isclose(m17b, live["vol_ratio"],
+                         rtol=_PARITY_RTOL_SYNTH, atol=_PARITY_ATOL),
+            f"vol_ratio mismatch: m17b={m17b!r} "
+            f"live={live['vol_ratio']!r}")
+
+    def test_vwap_dev_input_validation(self):
+        """Defensive: vwap_dev() rejects bad inputs cleanly."""
+        c = pd.Series([1.0, 2.0, 3.0])
+        v = pd.Series([100.0, 200.0])  # length mismatch
+        with self.assertRaises(ValueError):
+            ind.vwap_dev(c, v)
+        with self.assertRaises(TypeError):
+            ind.vwap_dev([1.0, 2.0, 3.0], v)
+        with self.assertRaises(TypeError):
+            ind.vwap_dev(c, [100.0, 200.0, 300.0])
+
+    def test_rsi_rejects_unknown_mode(self):
+        c = pd.Series(np.linspace(100, 110, 50))
+        with self.assertRaises(ValueError) as ctx:
+            ind.rsi(c, period=14, mode="not_a_mode")
+        self.assertIn("mode", str(ctx.exception))
+
+    def test_atr_rejects_unknown_mode(self):
+        bars = _trending_bars(n=50)
+        with self.assertRaises(ValueError) as ctx:
+            ind.atr(bars["high"], bars["low"], bars["close"],
+                       period=14, mode="not_a_mode")
+        self.assertIn("mode", str(ctx.exception))
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G4 — Strategy + look-ahead protection (Phase 4)
 # ─────────────────────────────────────────────────────────────────────
 
@@ -2380,11 +2580,31 @@ _PROTECTED_PATHS = (
 
 # Forbidden imports for any module in bot/backtesting/ (except
 # data_loader.py which is the SOLE allowed gateway to bot.historical).
+# Forbidden imports inside bot/backtesting/*.
+#
+# M17.A baseline (lines below the divider): yfinance, old data
+# provider paths, broker/eToro/IBKR/risk-authority writes, raw
+# network libraries. Asserted by G10 since e437f79.
+#
+# M17.B additions (above the divider): the live scanner stack.
+# scanner_replica must reproduce live scanner logic BY CODE, never
+# by importing it. Test-file imports (`from bot.scanner import
+# score_timeframe` inside test_m17_backtesting.py for parity
+# assertions) are NOT scanned by this rule because the AST walker
+# only visits bot/backtesting/*.py (see _bot_backtesting_files).
 _FORBIDDEN_IMPORT_PREFIXES = (
+    # --- M17.B additions (Sharpened Rule #4 — added early, before
+    #     any M17.B production code that might tempt to import them)
+    "bot.scanner",
+    "bot.strategy",
+    "bot.feature_engine",
+    "bot.indicators",
+    "bot.sentiment",
+    "bot.flywheel",
+    # --- M17.A baseline (do not weaken)
     "yfinance",
     "bot.data",
     "bot.providers",
-    "bot.scanner",
     "bot.backtest",       # also covers bot.backtest_v2
     "bot.brokers",
     "bot.broker_",
@@ -2404,6 +2624,33 @@ _FORBIDDEN_IMPORT_PREFIXES = (
     "urllib3",
     "http.client",
 )
+
+# M17.A baseline forbidden prefixes — used to prove via test that the
+# M17.A invariants were not silently weakened when M17.B added entries.
+_M17_A_BASELINE_FORBIDDEN = frozenset({
+    "yfinance",
+    "bot.data",
+    "bot.providers",
+    "bot.scanner",        # was already in M17.A list
+    "bot.backtest",
+    "bot.brokers",
+    "bot.broker_",
+    "bot.gateway_",
+    "bot.etoro.live_broker",
+    "bot.etoro.paper_broker",
+    "bot.etoro.signal_only",
+    "bot.risk_authority.engine",
+    "bot.risk_authority.governor",
+    "bot.risk_authority.snapshot",
+    "bot.risk_authority.preflight",
+    "bot.risk_authority.ibkr_paper_reader",
+    "ibapi",
+    "ib_insync",
+    "requests",
+    "urllib.request",
+    "urllib3",
+    "http.client",
+})
 
 # Order-method names that must not appear as string literals.
 _FORBIDDEN_STRING_LITERALS = (
@@ -2475,6 +2722,22 @@ class G10_Hygiene(unittest.TestCase):
                     offenders.append((f.name, imp))
         self.assertEqual(offenders, [],
             f"bot.historical imported outside data_loader.py: {offenders}")
+
+    def test_m17_a_forbidden_baseline_preserved(self):
+        """Regression for M17.B.1 Sharpened Rule #4: the M17.A
+        baseline forbidden-import set must still be a subset of the
+        active forbidden-import set. M17.B may ADD entries (e.g.,
+        bot.strategy, bot.feature_engine, bot.indicators, bot.sentiment,
+        bot.flywheel) but MAY NOT silently remove any M17.A entry.
+
+        If a later sub-milestone needs to weaken this list, that's an
+        explicit operator decision — visible in a test diff, not a
+        silent slide."""
+        active = set(_FORBIDDEN_IMPORT_PREFIXES)
+        missing = _M17_A_BASELINE_FORBIDDEN - active
+        self.assertEqual(missing, set(),
+            f"M17.A forbidden-import baseline silently weakened — "
+            f"missing entries: {sorted(missing)}")
 
     # ---- AST: no order-method strings in bot/backtesting/ ----------
 
