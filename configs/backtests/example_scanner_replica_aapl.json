@@ -1,0 +1,47 @@
+{
+  "_comment": "M17.B.7 example for scanner_replica. Date range is intentionally narrow because yfinance 15m bars have ~60-day retention from the VPS IP; longer ranges will hit M16 coverage gaps and exit code 2. To run a longer scanner_replica backtest, first ensure M16 has wider 15m coverage via 'python -m bot.historical.cli backfill --symbols AAPL --timeframes 15m'.",
+  "request": {
+    "symbol":    "AAPL",
+    "timeframe": "15m",
+    "start":     "2026-04-08",
+    "end":       "2026-05-09"
+  },
+  "data": {
+    "adjusted": true,
+    "provider": "yfinance"
+  },
+  "strategy": {
+    "name":   "scanner_replica",
+    "params": {
+      "timeframes":  ["1D", "4H", "1H", "15m"],
+      "anchor_tf":   "15m",
+      "confluence":  {"min_valid_tfs": 3},
+      "long": {
+        "rsi_min":        30.0,
+        "rsi_max":        75.0,
+        "macd_hist_gt":   0.0,
+        "ema_tolerance":  0.005,
+        "vwap_dev_min":  -0.015,
+        "vol_ratio_min":  0.6
+      },
+      "short": {
+        "rsi_min":        50.0,
+        "macd_hist_lt":   0.0,
+        "ema_tolerance":  0.005,
+        "vwap_dev_max":   0.015,
+        "vol_ratio_min":  0.6
+      }
+    }
+  },
+  "execution": {
+    "initial_equity":     10000.0,
+    "fee_bps":            5,
+    "slippage_bps":       5,
+    "risk_per_trade_pct": 0.01,
+    "max_position_pct":   0.25,
+    "allow_short":        false,
+    "stop_mode":          "atr",
+    "stop_atr_mult":      2.0,
+    "target_atr_mult":    3.0
+  }
+}
