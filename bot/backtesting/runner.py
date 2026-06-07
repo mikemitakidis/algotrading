@@ -30,14 +30,21 @@ from typing import Union
 from bot.backtesting.config import (
     BacktestConfig, config_hash, config_to_dict,
 )
-from bot.backtesting.data_loader import load_backtest_bars
-from bot.backtesting.errors import BacktestError
+from bot.backtesting.data_loader import (
+    load_backtest_bars,
+    load_multi_tf_bars,
+)
+from bot.backtesting.errors import BacktestError, StrategyError
 from bot.backtesting.execution import simulate
 from bot.backtesting.ledger import Ledger
 from bot.backtesting.metrics import compute_metrics
 from bot.backtesting.models import BacktestResult
+from bot.backtesting.mtf_context import MultiTimeframeContext
 from bot.backtesting.output import build_run_id, write_results
-from bot.backtesting.strategy import get_strategy
+from bot.backtesting.strategy import (
+    MultiTimeframeStrategy,
+    get_strategy,
+)
 
 
 def run(cfg: BacktestConfig) -> BacktestResult:
@@ -47,23 +54,50 @@ def run(cfg: BacktestConfig) -> BacktestResult:
         raise BacktestError(
             f"runner.run expects BacktestConfig, got {type(cfg).__name__}")
 
-    # 1. Load bars + coverage from M16.
-    bars, coverage, load_warnings = load_backtest_bars(cfg)
-
-    # 2. Generate signals.
+    # 1. Instantiate strategy first so we know whether to load single
+    #    or multi-TF bars (M17.B.4 — scanner_replica needs multi-TF;
+    #    M17.A SmaCrossoverStrategy stays on the single-TF path).
     strategy = get_strategy(cfg.strategy.name, cfg.strategy.params)
+
+    # 2. Load bars + coverage from M16, single or multi-TF as required.
+    if isinstance(strategy, MultiTimeframeStrategy):
+        # Multi-TF path: strategy.params['timeframes'] declares which
+        # TFs to load. cfg.request.timeframe MUST be the anchor TF
+        # (== strategy.params['anchor_tf']) and MUST be in the list.
+        timeframes = strategy.params["timeframes"]
+        anchor_tf  = strategy.params["anchor_tf"]
+        if cfg.request.timeframe != anchor_tf:
+            raise StrategyError(
+                f"{strategy.name}: cfg.request.timeframe="
+                f"{cfg.request.timeframe!r} must equal "
+                f"strategy.params.anchor_tf={anchor_tf!r}; the request "
+                f"timeframe identifies the cycle anchor for the "
+                f"multi-TF run")
+        mtf = load_multi_tf_bars(cfg, timeframes,
+                                    allow_partial_tfs=False)  # strict
+        bars     = mtf.per_tf_bars[anchor_tf]
+        coverage = mtf.per_tf_coverage[anchor_tf]
+        load_warnings = mtf.warnings
+        context = MultiTimeframeContext(
+            mtf.per_tf_bars, anchor_tf=anchor_tf)
+        strategy.attach_context(context)
+    else:
+        # M17.A single-TF path — byte-identical to before M17.B.4.
+        bars, coverage, load_warnings = load_backtest_bars(cfg)
+
+    # 3. Generate signals.
     signals = strategy.run(bars)
 
-    # 3. Simulate.
+    # 4. Simulate.
     ledger = Ledger()
     ledger.extend_warnings(load_warnings)
     simulate(bars=bars, signals=signals, cfg=cfg, ledger=ledger)
 
-    # 4. Metrics.
+    # 5. Metrics.
     metrics = compute_metrics(
         ledger=ledger, bars=bars, exec_cfg=cfg.execution)
 
-    # 5. Assemble.
+    # 6. Assemble.
     cfg_hash = config_hash(cfg)
     created_at = datetime.now(timezone.utc)
     return BacktestResult(

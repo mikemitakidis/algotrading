@@ -66,10 +66,13 @@ from bot.backtesting.errors import ConfigError
 # bot.historical is data_loader.py.
 _ALLOWED_TIMEFRAMES = ("1D", "4H", "1H", "15m")
 
-# --- Registered strategy names (M17.A) --------------------------------
-# scanner_replica (and friends) land in M17.B; tests assert this is the
-# exact set of names accepted in M17.A.
-_M17A_STRATEGIES = frozenset({"sma_crossover"})
+# --- Registered strategy names ----------------------------------------
+# Updated for M17.B.4 — scanner_replica registered. Tests assert this
+# is the exact set of names accepted by the config parser.
+_REGISTERED_STRATEGIES = frozenset({"sma_crossover", "scanner_replica"})
+# Backwards-compat alias for any internal reference still using the
+# old name. Will be removed in M17.B.7 cleanup.
+_M17A_STRATEGIES = _REGISTERED_STRATEGIES
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -204,11 +207,10 @@ def parse_config_dict(raw: Dict[str, Any]) -> BacktestConfig:
     name = strat_raw.get("name")
     if not isinstance(name, str):
         raise ConfigError("config.strategy.name must be a string")
-    if name not in _M17A_STRATEGIES:
+    if name not in _REGISTERED_STRATEGIES:
         raise ConfigError(
-            f"unknown strategy {name!r}. M17.A registered strategies: "
-            f"{sorted(_M17A_STRATEGIES)}. scanner_replica and friends "
-            f"land in M17.B.")
+            f"unknown strategy {name!r}. Registered strategies: "
+            f"{sorted(_REGISTERED_STRATEGIES)}.")
     params = strat_raw.get("params", {}) or {}
     if not isinstance(params, dict):
         raise ConfigError("config.strategy.params must be a dict")
