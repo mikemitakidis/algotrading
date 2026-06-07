@@ -293,12 +293,16 @@ After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safet
 - **Hard constraint:** NO CODE CHANGES during the audit phase. Inspection only.
 - **Rationale:** the M16 work surfaced multiple class-of-issues that ChatGPT's line-by-line review caught after VPS verification (rate-limit classification, two separate migration-order bugs, missing incremental no-op). The pattern suggests an audit of the prior M1–M15 surface area before another large coding milestone (M17 Outcome Learning Loop) begins.
 
-#### Milestone 17 — Backtesting + parameter rules (1-2 weeks) — DEFERRED PENDING AUDIT PASS
-- **Note 2026-06-05:** Title-inconsistency between this section ("Backtesting + parameter rules") and `MILESTONE_STATUS.md` future-milestones table ("Outcome Learning Loop / Closed-Loop ML") is a pre-existing doc drift. The audit-only pass over M1–M16 (above) is the right place to surface this and decide which numbering is authoritative. No code change here.
-- Backtest harness that uses the EXACT live strategy. Any backtest-only forking of strategy logic is a P0 bug (permanent rule: "Backtesting using the same live strategy").
-- Parameter rules + sweep infrastructure.
-- Per-regime / per-symbol breakdown.
-- Reproducibility (same seed → same outputs).
+#### Milestone 17 — Backtesting + parameter rules
+**Sub-milestone status:**
+- **M17.A — Backtesting Engine Foundation: CLOSED 2026-06-07 at HEAD `a05f160`.** Single-symbol M16-only backtest engine, SMA crossover foundation strategy, strict missing-data semantics with non-trading-day boundary tolerance, next-open execution + intrabar SL/TP, fees + slippage on round-trip, deterministic filesystem artifacts (manifest/report/CSV/JSONL/equity/warnings), `python -m bot.backtesting.cli`. 233-test combined regression OK on VPS. Authoritative reference: `docs/M17_A_closeout.md`.
+- **M17.B — `scanner_replica` + multi-timeframe confluence + live equivalence: PENDING (next).** Implement `scanner_replica` as a backtest strategy that produces signals identical to the live `bot/scanner.py` for the same bars and parameters; load + align 1D / 4H / 1H / 15m bars per symbol; reproduce the `min_valid_tfs ≥ 3` confluence gate; indicator parity test vs `bot.indicators.compute()`; replay real `candidate_snapshots` rows for live-vs-backtest equivalence (supplement with a synthetic golden trace if the live dataset is too thin); add ATR-based exits. Carry-forward scope recorded in `docs/NEXT_WORK_REGISTER.md`.
+
+- **Note 2026-06-05:** Title-inconsistency between this section ("Backtesting + parameter rules") and `MILESTONE_STATUS.md` future-milestones table ("Outcome Learning Loop / Closed-Loop ML") was a pre-existing doc drift. As of 2026-06-07 (M17.A closeout) the MILESTONE_STATUS table was corrected to "Backtesting + parameter rules" so both files now agree. The earlier "Outcome Learning Loop / Closed-Loop ML" sketch is repositioned post-M18, where the dataset bottleneck (`candidate_snapshots` flywheel) has had time to accumulate.
+- Backtest harness that uses the EXACT live strategy (M17.B). Any backtest-only forking of strategy logic is a P0 bug (permanent rule: "Backtesting using the same live strategy").
+- Parameter rules + sweep infrastructure (deferred beyond M17.B).
+- Per-regime / per-symbol breakdown (deferred beyond M17.B).
+- Reproducibility (same seed → same outputs) — **shipped in M17.A**, byte-identical `report.json` asserted by `G9_OutputReproducibility`.
 
 #### Milestone 18 — Advanced signal scoring + paper-trade automation (2-4 weeks)
 - Ranked multi-factor signal scoring.

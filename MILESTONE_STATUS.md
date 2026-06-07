@@ -601,13 +601,99 @@ Any further `backtest_cli.py` work would be a fresh sub-milestone.
 
 ---
 
+### Milestone 17.A — Backtesting Engine Foundation (CLOSED 2026-06-07)
+
+**Single-symbol M16-only backtest engine — strict missing-data semantics, next-open execution with intrabar SL/TP, fees + slippage on round-trip, deterministic artifacts. SMA crossover is the M17.A foundation strategy. `scanner_replica` + multi-timeframe confluence are deferred to M17.B.**
+
+**Commit chain on `origin/main` (14 commits, no squashes, per design decision D10):**
+- `5b37194` — M17.A.1: foundation (package skeleton, errors, models, config validation)
+- `3d81e3f` — M17.A.2: data loader (strict M16 coverage gate, UTC normalisation)
+- `9a71444` — M17.A.3: vectorized indicators (SMA, EMA, RSI, MACD, ATR, Bollinger, volume)
+- `7815c97` — M17.A.4: strategy contract + SmaCrossoverStrategy + look-ahead protection
+- `dd2470b` — M17.A.5: execution + portfolio + ledger (bar loop, SL/TP, fees, slippage, sizing)
+- `2284912` — M17.A.6: metrics (pure (ledger, bars, exec_cfg) → dict)
+- `a850ece` — M17.A.7: output (manifest + report + CSV/JSONL artifacts + reproducibility)
+- `98988d1` — M17.A.8: runner + CLI (orchestration, example config, golden-path E2E)
+- `97e2836` — M17.A.fixup1: pre-Phase-9 quick-inspection fixups (public API + cash-never-negative)
+- `e437f79` — M17.A.9: Phase 9 hygiene tests (G10 — AST, protected files, gitignore, no-network)
+- `925b79b` — M17.A.fixup2: EOD final equity, round-trip slippage, entry-bar SL/TP eligibility
+- `7c7eb97` — M17.A.fixup3: valid M16 refresh commands, manifest schema version, missing-config exit code
+- `60cd6c3` — M17.A.fixup4: strict bar-level range check (truncated loaded bars now fail)
+- `a05f160` — **M17.A.fixup5: boundary tolerance for non-trading-day start/end (final HEAD)**
+
+**Architecture shipped (per approved pre-code checklist + 5 ChatGPT-review fixup rounds):**
+- Package `bot/backtesting/` (canonical name per D1). Single-symbol, M16-only foundation.
+- Only `bot/backtesting/data_loader.py` imports `bot.historical`; AST-asserted by G10. Manifest schema version reaches `output.py` via a `M16_SCHEMA_VERSION` re-export in `data_loader.py`, preserving the invariant.
+- 4 hard-failure data modes (no coverage / range too narrow / NaN OHLC / duplicate timestamps / quality_status='error'), 2 soft-warning modes (quality_status='warn', freshness non-fresh), plus a 7-day non-trading-day boundary tolerance (codes `boundary_non_trading_start` / `boundary_non_trading_end`) gated on clean coverage. Refresh-command messages emit VALID `bot.historical.cli` invocations (`backfill` / `repair` / `force-rebuild`) with correct plural-vs-singular flag forms per subcommand.
+- Execution model (D4): signal at bar i close → entry at bar i+1 open; intrabar SL/TP via high/low including the entry bar; pessimistic SL-first if both touched; gap-aware fills (open beyond stop → fill at open); fees + slippage applied to entry AND exit and round-trip recorded on each `Trade.slippage_paid`; EOD exit at last bar close charges fees and the equity curve's last point is replaced post-fee.
+- Fixed-risk sizing with `max_position_pct` cap; zero-size rejected as `sizing_zero` warning rather than producing a bad trade; cash never goes negative due to fees (fixup1).
+- Metrics: total return, max drawdown, win rate, profit factor, expectancy, average win/loss, average bars held, exposure-time %, fees and slippage totals, Sharpe and Sortino (NaN under a `MIN_RETURN_SAMPLES_FOR_SHARPE=20` gate), B&H benchmark.
+- Filesystem artifacts under `data/backtests/<YYYYMMDDTHHMMSSZ>_<strategy>_<config_hash>/`: `manifest.json` (includes `bot_historical_schema_version`, `engine_version='M17.A.1'`, `config_hash`, `strategy_module_sha256`, `git_head_sha`, runtime metadata), `report.json`, `trades.csv`, `trades.jsonl`, `equity_curve.csv`, `warnings.json`. `data/backtests/` git-ignored by the existing `data/` rule.
+- Deterministic reproducibility: identical config + identical M16 fixture → byte-identical `report.json` (asserted by `G9_OutputReproducibility`).
+- CLI `python -m bot.backtesting.cli run --config …` exits 0 on success, 2 on missing data with a valid refresh command in stderr, 3 on bad/missing config, 1 on unexpected.
+- 140 tests across G1..G10, FutureWarning-clean under warnings-as-errors.
+
+**VPS evidence (2026-06-07, operator-verified at HEAD `a05f160`):**
+- HEAD = `a05f160` (= expected)
+- M16 + audit-P1 + M17 combined regression: **`Ran 233 tests in 99.798s — OK (skipped=1)`** (70 M16 + 23 audit-P1 + 140 M17; the 1 skip is the pre-existing live-yfinance smoke gated on `M16_LIVE=1`)
+- Example backtest exit code = 0
+- Run dir created: `data/backtests/20260607T011518Z_sma_crossover_88578b71038d`
+- 6 artifacts present: `equity_curve.csv`, `manifest.json`, `report.json`, `trades.csv`, `trades.jsonl`, `warnings.json`
+- `manifest.json` contains `"bot_historical_schema_version": 2`
+- `warnings.json` = `[]` (clean — example dates 2024-01-02..2024-12-31 are both trading days; boundary path not triggered by the example)
+- `bot/data.py` sha256 = `03f488c73feba19a9088b779722ee53515e936f2` (byte-identical to baseline)
+- Production: `algo-trader-dashboard.service` active, `caddy.service` active, `https://algotrading.marketwarrior.club/api/health` HTTP 200
+- `git status` clean
+
+**Hard-constraint evidence:**
+- Protected files modified by M17.A vs `13a3aa4` baseline: **0 / 20**
+- Cumulative protected files modified vs `ceb8cd5` (pre-P0 baseline): **2 / 20** (unchanged — `main.py` + `bot/risk.py` from `audit-P0-4` only)
+- `bot/data.py`: byte-identical to baseline (sha above)
+- AST scan of `bot/backtesting/*`: zero forbidden imports (yfinance / `bot.data` / `bot.providers` / `bot.scanner` / `bot.backtest` / `bot.backtest_v2` / broker_/gateway_/`bot.etoro.live_broker` / `bot.etoro.paper_broker` / `bot.etoro.signal_only_broker` / `bot.risk_authority.engine` / `bot.risk_authority.governor` / `bot.risk_authority.snapshot` / `bot.risk_authority.preflight` / `bot.risk_authority.ibkr_paper_reader` / ibapi / ib_insync / requests / urllib.request / urllib3 / http.client). Asserted by `G10.test_no_forbidden_imports_in_bot_backtesting`.
+- `bot.historical` imported by exactly one file in `bot/backtesting/*`: `data_loader.py`. Asserted by `G10.test_only_data_loader_imports_bot_historical`.
+- String-literal scan for order-method names (`placeOrder`, `cancelOrder`, etc.) anywhere in `bot/backtesting/*`: 0 occurrences.
+- Socket-call scan during a full mocked backtest run: 0 (asserted by `G10.test_no_socket_calls_during_backtest` patching `socket.socket`).
+- `data/backtests/` git-ignored: yes.
+- No new files outside `bot/backtesting/*`, `configs/backtests/*`, `test_m17_backtesting.py`, `docs/M17_A_closeout.md`, and doc-only updates.
+- No `.env`, no service unit files, no generated runtime data, no new dependencies, no `bot/backtest.py` or `bot/backtest_v2.py` modifications.
+
+**M17.A proves end-to-end:**
+1. M16 historical bars are the only data source (no yfinance, no `bot.data` provider calls).
+2. Coverage gate + bar-level range check enforce strict missing-data semantics with a tight non-trading-day boundary tolerance.
+3. Signals translate to executable trades via a next-open + intrabar-SL/TP + EOD model with realistic fee/slippage accounting.
+4. Metrics + filesystem artifacts are byte-identical across runs with the same inputs.
+5. Operator-actionable error messages include a VALID `bot.historical.cli` refresh command for every hard-fail mode (no `--start`/`--end` flags ever, plural vs singular flag forms correctly per subcommand).
+6. The engine cannot reach the network or open a socket during a run; AST + runtime tests guarantee it.
+7. No protected files touched; `bot/data.py` byte-identical to baseline; no broker, scanner, strategy-engine, or eToro/IBKR code reached.
+
+**Authoritative operator reference:** [`docs/M17_A_closeout.md`](docs/M17_A_closeout.md).
+
+**Open known limitations (carry-forward to M17.B):**
+- `scanner_replica` strategy + multi-timeframe (1D / 4H / 1H / 15m) confluence with `min_valid_tfs ≥ 3`: deferred (this is the M17.B core scope).
+- Indicator parity test against `bot.indicators.compute()`: deferred to M17.B (where `scanner_replica` requires it).
+- Live-vs-backtest signal-equivalence proof against real `candidate_snapshots` rows: deferred to M17.B.
+- ATR-based exits (live scanner uses ATR; M17.A is percentage-only): deferred to M17.B.
+- `test_m13_5_reconcile` and `test_m14_risk` errors under `python -m unittest discover` are pre-existing (broken at M17.A baseline `13a3aa4`, same at acceptance HEAD `a05f160`). Both suites pass when run as standalone scripts; their unittest-discovery compatibility is out of M17.A scope. Flagged here so a future audit picks it up.
+
+**Open audit backlog (unchanged from M16 closeout — none closed by M17.A):**
+- `audit-P1-broker-permId-fallback` — DEFERRED
+- `audit-P1-portfolio-ctx-engine-bypass` — DEFERRED
+- `audit-P2-batch` (9 items) — DEFERRED
+- `audit-P3-batch` (6 items) — DEFERRED
+- `M14-extension-to-scanner-path` — BLOCKER FOR M22 (unrelated to M17.B; M17.B is not blocked on it)
+- See `docs/NEXT_WORK_REGISTER.md` for the full active list.
+
+**M17.B has NOT started.** Carry-forward scope recorded in `docs/NEXT_WORK_REGISTER.md` under "M17.B — scanner_replica + multi-timeframe confluence + live equivalence (PROPOSED, AFTER M17.A)".
+
+---
+
 ## Future milestones (M17–M23)
 
-Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The M1–M16 audit-only pass is CLOSED 2026-06-05 (P0 batch + the first P1 sub-milestone `audit-P1-data-rate-limit-fix`); remaining P1 / P2 / P3 backlog stays open per `docs/NEXT_WORK_REGISTER.md`.
+Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The M1–M16 audit-only pass is CLOSED 2026-06-05 (P0 batch + the first P1 sub-milestone `audit-P1-data-rate-limit-fix`); remaining P1 / P2 / P3 backlog stays open per `docs/NEXT_WORK_REGISTER.md`. **M17.A is CLOSED 2026-06-07** (see section above); M17.B is the next active scope.
 
 | # | Title | Status | Note |
 |---|---|---|---|
-| 17 | Outcome Learning Loop / Closed-Loop ML | PENDING | hooks `ml_train.py` into scanner as a live filter; dataset quality is the bottleneck (`candidate_snapshots` flywheel still accumulating) |
+| 17 | Backtesting + parameter rules | **M17.A CLOSED 2026-06-07** at HEAD `a05f160`; M17.B PENDING | M17.A shipped the engine foundation (single-symbol M16-only, SMA crossover, strict missing-data, next-open + intrabar SL/TP, deterministic artifacts). M17.B covers `scanner_replica` + multi-timeframe (1D/4H/1H/15m) confluence + indicator parity + live-vs-backtest equivalence + ATR exits. See `docs/M17_A_closeout.md` and the M17.B carry-forward entry in `docs/NEXT_WORK_REGISTER.md`. |
 | 18 | News / Sentiment / Macro | PENDING | aggregation across multiple providers + macro overlay |
 | 19 | Universe Diagnostics & Discovery | PENDING | why-no-signal explainer, liquidity/spread filters |
 | 20 | Optimiser / Adaptive Sizing | PENDING | confidence-adjusted + volatility-targeted |

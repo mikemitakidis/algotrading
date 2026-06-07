@@ -205,14 +205,33 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Until then:** IBKR live submissions in production must remain operator-supervised; do not enable any unattended automation that bypasses operator review.
 - **Reference:** [`docs/M14_FINAL_AUDIT.md` §12](M14_FINAL_AUDIT.md) (full text); MILESTONE_STATUS.md M14 detail section "Known coverage gap"; ROADMAP.md M22 line "Requires M14 engine extension to scanner path."
 
-### M17 — Backtesting + parameter rules (PROPOSED — audit pass NOW CLEARED 2026-06-05)
-- **Status:** Not started. The M1–M16 audit-only pass is now CLOSED (see entry above) and the P0 batch is VPS-verified. M17 is unblocked from an audit-prerequisite standpoint; whether to start it now is an operator decision.
-- **Scope sketch:** per the M15 strategic-direction restructure (2026-06-04), the authoritative M17 is **"Backtesting + parameter rules using M16 historical data"**. The earlier sketch ("Outcome Learning Loop / Closed-Loop ML") was repositioned later in the sequence — it now sits as a post-M18 step, after the dataset bottleneck (`candidate_snapshots` flywheel) has accumulated more data. Permanent rule "Backtesting using the same live strategy" applies: the M17 backtest engine must consume the same feature/strategy code path as the live scanner.
-- **Hard pre-requisite carried OVER from the audit pass:** none of the open `audit-P1-*` / `audit-P2-*` / `audit-P3-*` items block M17 specifically. The `M14-extension-to-scanner-path` BLOCKER applies to M22 only, NOT M17.
-- **Reference:** ROADMAP.md "Backtesting + parameter rules" section; M16 closeout discussion 2026-06-05; this register's "M1–M16 audit-only pass (CLOSED)" entry above.
+### M17.B — scanner_replica + multi-timeframe confluence + live equivalence (PROPOSED, AFTER M17.A)
+- **Status:** Not started. M17.A is CLOSED at HEAD `a05f160` (2026-06-07) and VPS-verified — see `docs/M17_A_closeout.md` and the M17.A section of `MILESTONE_STATUS.md`. M17.B is the next active sub-milestone whenever the operator authorises it. A planning-only audit was produced at M17.A closeout (delivered in chat alongside the closeout commit) covering current scanner logic, indicator/rule replication, data requirements, confluence handling, test strategy, gaps/risks, proposed phases, pre-code checklist, and the no-touch list.
+- **Scope (M17.B, not M17.A):**
+  - Register a new strategy `scanner_replica` in `bot/backtesting/strategy.py` that reproduces the live `bot/scanner.py` signal output for the same bars and parameters, OR a documented divergence with a recorded reason.
+  - Load + align bars from all four timeframes the live scanner uses (1D / 4H / 1H / 15m) for a given symbol; reproduce the `min_valid_tfs ≥ 3` confluence gate.
+  - Indicator parity test: every indicator value computed by `scanner_replica` matches `bot.indicators.compute()` on the same bars (or NaN at warmup on both sides).
+  - Live-vs-backtest equivalence proof: replay the ~10 real LONG `candidate_snapshots` rows currently in `data/signals.db` through `scanner_replica` and assert per-snapshot signal identity. Because that dataset is thin (memory: ~10 rows, all LONG, 1 symbol), supplement with a synthetic golden trace fixture as the durable regression guard.
+  - ATR-based exits (live scanner uses ATR for both stops and targets; M17.A is percentage-only). Add as a strategy parameter so SMA crossover can still use percentage-based exits.
+- **What stays deferred beyond M17.B** (NOT included in this sub-milestone):
+  - Multi-symbol portfolio backtests; optimisation / parameter sweeps / walk-forward; ML signal filter (M9 closed-loop); paper-trade automation (M18); dashboard backtest UI; short selling; options/futures; retirement of legacy `bot/backtest.py` / `bot/backtest_v2.py` (separate sub-milestone).
+- **Hard constraints inherited from M17.A** (operator-authoritative, do not relax in M17.B):
+  - No protected files touched. `bot/data.py` byte-identical.
+  - No scanner / strategy / broker / eToro / dashboard / `.env` / service / generated-data changes.
+  - `bot.historical` continues to be imported only by `bot/backtesting/data_loader.py`.
+  - No `bot.scanner` or `bot.strategy` IMPORT inside `bot/backtesting/*` (per the live-vs-backtest separation contract). `scanner_replica` reproduces the logic by code, not by import — same as how M17.A's `SmaCrossoverStrategy` reproduces SMA crossover without importing scanner code. **If the operator decides that direct re-use via import is the right path, that flips a foundational architecture decision and needs explicit operator approval before any M17.B code lands.**
+  - No new dependencies.
+- **Acceptance criteria when undeferred:**
+  - `scanner_replica` registered and selectable via `--strategy scanner_replica` in `bot.backtesting.cli`.
+  - Indicator parity test passes against `bot.indicators.compute()` for at least RSI, MACD, EMA, Bollinger on the AAPL 1D fixture.
+  - Multi-timeframe loader takes a list of timeframes and returns aligned bars; the confluence gate reproduces the live scanner's score reduction.
+  - Equivalence test: for every replayable `candidate_snapshots` row (where M16 has the required bars), `scanner_replica` produces the same direction as the live record (or a documented controlled divergence).
+  - VPS regression: M16 + audit-P1 + M17 sweep stays OK; example backtest still exits 0 with the existing example config.
+  - Hard constraints above all hold.
+- **Reference:** `docs/M17_A_closeout.md` §7 ("What is explicitly deferred to M17.B"); planning-only M17.B audit delivered in the M17.A closeout chat session.
 
-### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17)
-- **Status:** Not started. Sequenced after M17. Pre-code Q-style checklist required.
+### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17.B)
+- **Status:** Not started. Sequenced after M17.B. Pre-code Q-style checklist required.
 - **Scope sketch:** ranked signal scoring (multi-factor); automated paper-trade execution on IBKR paper (M11 path already wired); flywheel data accumulation accelerated; integration with the M14 risk authority engine for sizing/gating.
 - **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 2-4 weeks.
 
@@ -239,6 +258,17 @@ What is the next major work after M15.3.B + M15.3.C ship: **M16 (historical data
 ---
 
 ## Closed items
+
+### M17.A — Backtesting Engine Foundation (CLOSED 2026-06-07)
+- **Closing commit / final HEAD:** `a05f160` (M17.A.fixup5). Full 14-commit chain on `origin/main` from `5b37194` (M17.A.1) to `a05f160` — listed in `docs/M17_A_closeout.md` §2 and `MILESTONE_STATUS.md`.
+- **VPS evidence (2026-06-07, operator-verified):** HEAD = `a05f160`; M16 + audit-P1 + M17 combined regression `Ran 233 tests in 99.798s — OK (skipped=1)`; example backtest exit 0 with run dir `data/backtests/20260607T011518Z_sma_crossover_88578b71038d` and all 6 artifacts; `manifest.json` contains `"bot_historical_schema_version": 2`; `warnings.json = []`; `bot/data.py` sha = `03f488c73feba19a9088b779722ee53515e936f2`; dashboard active; caddy active; `/api/health` HTTP 200; `git status` clean.
+- **What shipped:** new package `bot/backtesting/` (foundation only) — single-symbol M16-only backtest engine with SMA crossover strategy, strict missing-data semantics, 7-day non-trading-day boundary tolerance, next-open execution + intrabar SL/TP, fees + slippage on round-trip, deterministic filesystem artifacts (manifest/report/CSV/JSONL/equity/warnings), `python -m bot.backtesting.cli` with exit codes 0/2/3/1, 140 tests across G1..G10 including AST/no-network/protected-files G10 hygiene.
+- **Hard-constraint evidence:** 0/20 protected files modified; `bot/data.py` byte-identical; AST-clean (no yfinance / `bot.data` / scanner / broker / eToro / risk-engine / network imports anywhere in `bot/backtesting/*`); only `data_loader.py` imports `bot.historical`; no order-method string literals; no sockets during runtime; `data/backtests/` git-ignored; no new dependencies.
+- **Authoritative operator reference:** [`M17_A_closeout.md`](M17_A_closeout.md).
+- **Carry-forward to M17.B** (active entry above): `scanner_replica` + multi-timeframe (1D/4H/1H/15m) confluence + indicator parity test vs `bot.indicators.compute()` + live-vs-backtest equivalence on real `candidate_snapshots` rows + ATR-based exits.
+- **Honest residuals** (recorded in `M17_A_closeout.md` §9):
+  - Example config dates were aligned to confirmed trading days (`2024-01-02..2024-12-31`); the boundary-tolerance path is exercised by G2 unit tests against mocked M16 fixtures, not by the live example.
+  - `test_m13_5_reconcile` and `test_m14_risk` errors under `unittest discover` are pre-existing (broken at M17 baseline, same at M17.A acceptance); both pass standalone. Out of M17.A scope; flagged for a future audit pass.
 
 ### M15.3.A.cutover — Caddy/TLS + 127.0.0.1 bind (CLOSED 2026-06-04)
 - **Closing chain:** Caddy install + `/etc/caddy/Caddyfile` + ACME issuance for `algotrading.marketwarrior.club` → `224e8a3` (production-code bind-host fix: `app.run(host=_m153a_bind_host, ...)` replaces hardcoded `'0.0.0.0'`) → `383bec0` (test-fixture dotenv-isolation against post-cutover VPS `.env`, mirrors M15.3.A.2 fix-1 `7ab7555` and proactively fixes `test_m13_4a_allocation.py` with the same pattern).
