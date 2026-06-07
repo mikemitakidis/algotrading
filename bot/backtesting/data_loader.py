@@ -33,20 +33,27 @@ enforce:
     * loaded df is empty                        → nothing in window
     * loaded df contains NaN OHLC               → corrupt rows
     * loaded df has duplicate timestamps        → schema violation
-    * actual first bar after  request.start     → truncated start
-                                                   (coverage row may
-                                                    be stale)
-    * actual last  bar before request.end       → truncated end
-                                                   (coverage row may
-                                                    be stale)
+    * actual first bar > request.start AND
+       gap > _BOUNDARY_TOLERANCE_DAYS OR
+       coverage not clean / missing_count > 0   → truncated start
+    * actual last  bar < request.end AND
+       gap > _BOUNDARY_TOLERANCE_DAYS OR
+       coverage not clean / missing_count > 0   → truncated end
 
   WARNINGS (recorded in result.warnings, never block):
     * quality_status == 'warn'                  → soft quality issue
     * freshness_status != 'fresh'               → data is stale
+    * actual first bar > request.start by
+       <= _BOUNDARY_TOLERANCE_DAYS, coverage
+       clean, missing_count == 0                → boundary_non_trading_start
+    * actual last  bar < request.end by
+       <= _BOUNDARY_TOLERANCE_DAYS, coverage
+       clean, missing_count == 0                → boundary_non_trading_end
 
-Note: M17.A V1 is STRICT — there is no "starts a bit late, that's OK"
-warning path. Operator must use --lookback or extend the M16 store
-until the loaded bars fully cover the requested range.
+Note: M17.A V1 is strict on REAL truncation but tolerates small
+non-trading-day boundary gaps (e.g. a request starting 2024-01-01
+that returns a first bar at 2024-01-02 because Jan 1 is a US market
+holiday). Tolerance ONLY applies when coverage quality is clean.
 
 Returned DataFrame is sorted ascending by ts_utc, UTC-aware, with
 columns: ts_utc, open, high, low, close, volume, quality_flags.
@@ -70,6 +77,15 @@ from bot.historical import schema as _m16_schema
 # manifest writer reads this from bot.backtesting.data_loader; it
 # never imports bot.historical directly.
 M16_SCHEMA_VERSION: int = _m16_schema.SCHEMA_VERSION
+
+# How many calendar days of gap between requested-start and
+# actual-first-bar (or requested-end and actual-last-bar) we tolerate
+# as a non-trading-day boundary rather than a real truncation. 7 days
+# covers any single US-market holiday cluster (e.g. a 4-day
+# Thanksgiving weekend) without quietly accepting >1-week truncated
+# datasets. Only applies when coverage quality is 'clean' AND
+# missing_count == 0 — see load_backtest_bars().
+_BOUNDARY_TOLERANCE_DAYS: int = 7
 
 from bot.backtesting.config import BacktestConfig
 from bot.backtesting.errors import MissingDataError
@@ -180,9 +196,22 @@ def load_backtest_bars(
     # Range coverage check at the BAR level (the M16 coverage row may
     # be stale or out of sync with the actual parquet store, so we
     # verify the returned bars themselves cover the requested period).
-    # M17.A V1 is STRICT — any truncation is a hard fail, never a
-    # warning. Operator decision: missing/partial data = fail; we do
-    # NOT silently run a shorter backtest than requested.
+    #
+    # M17.A V1 is STRICT on real truncation but tolerates SMALL boundary
+    # gaps that come from non-trading days at the requested start/end.
+    # Example: a request for 2024-01-01..2024-12-31 with AAPL 1D will
+    # legitimately return a first bar at 2024-01-02 (Jan 1 is a US market
+    # holiday). Without this tolerance the loader would reject every
+    # holiday-aligned request.
+    #
+    # Boundary tolerance only applies when:
+    #   * gap_days <= _BOUNDARY_TOLERANCE_DAYS                (small)
+    #   * coverage['quality_status'] == 'clean'              (trustworthy)
+    #   * coverage.get('missing_count', 0) == 0              (no known gaps)
+    # If a gap qualifies, a BacktestWarning is recorded
+    # ('boundary_non_trading_start' or 'boundary_non_trading_end') and
+    # the loader continues. Otherwise the gap is treated as truncation
+    # and raised as MissingDataError.
     actual_first_ts = pd.Timestamp(df.iloc[0]["ts_utc"])
     if actual_first_ts.tz is None:
         actual_first_ts = actual_first_ts.tz_localize("UTC")
@@ -194,28 +223,75 @@ def load_backtest_bars(
     else:
         actual_last_ts = actual_last_ts.tz_convert("UTC")
 
+    cov_clean    = coverage.get("quality_status") == "clean"
+    cov_no_gaps  = (coverage.get("missing_count") or 0) == 0
+    boundary_ok  = cov_clean and cov_no_gaps
+
     if actual_first_ts.date() > cfg.request.start:
-        raise MissingDataError(_refresh_message(
-            cfg,
-            reason=(f"M16 returned bars for {cfg.request.symbol} "
-                     f"{cfg.request.timeframe} starting at "
-                     f"{actual_first_ts.date()}, after requested start "
-                     f"{cfg.request.start}. Loaded bars do not cover "
-                     f"the requested period — coverage row may be "
-                     f"stale or out of sync."),
-            op="backfill",
-        ))
+        gap_days = (actual_first_ts.date() - cfg.request.start).days
+        if boundary_ok and gap_days <= _BOUNDARY_TOLERANCE_DAYS:
+            warnings.append(BacktestWarning(
+                code="boundary_non_trading_start",
+                message=(f"Requested start {cfg.request.start} is "
+                          f"{gap_days} day(s) before first available bar "
+                          f"{actual_first_ts.date()} for "
+                          f"{cfg.request.symbol} {cfg.request.timeframe}; "
+                          f"treated as a non-trading-day boundary "
+                          f"(tolerance: {_BOUNDARY_TOLERANCE_DAYS} days)."),
+                ts_utc=actual_first_ts.to_pydatetime(),
+                extras={"gap_days": gap_days,
+                          "tolerance_days": _BOUNDARY_TOLERANCE_DAYS,
+                          "actual_first_date": actual_first_ts.date().isoformat(),
+                          "requested_start":   cfg.request.start.isoformat()},
+            ))
+        else:
+            raise MissingDataError(_refresh_message(
+                cfg,
+                reason=(f"M16 returned bars for {cfg.request.symbol} "
+                         f"{cfg.request.timeframe} starting at "
+                         f"{actual_first_ts.date()}, "
+                         f"{gap_days} day(s) after requested start "
+                         f"{cfg.request.start} "
+                         f"(exceeds boundary tolerance of "
+                         f"{_BOUNDARY_TOLERANCE_DAYS} days OR coverage "
+                         f"quality/missing_count not clean). Loaded "
+                         f"bars do not cover the requested period — "
+                         f"coverage row may be stale or out of sync."),
+                op="backfill",
+            ))
+
     if actual_last_ts.date() < cfg.request.end:
-        raise MissingDataError(_refresh_message(
-            cfg,
-            reason=(f"M16 returned bars for {cfg.request.symbol} "
-                     f"{cfg.request.timeframe} ending at "
-                     f"{actual_last_ts.date()}, before requested end "
-                     f"{cfg.request.end}. Loaded bars do not cover "
-                     f"the requested period — coverage row may be "
-                     f"stale or out of sync."),
-            op="backfill",
-        ))
+        gap_days = (cfg.request.end - actual_last_ts.date()).days
+        if boundary_ok and gap_days <= _BOUNDARY_TOLERANCE_DAYS:
+            warnings.append(BacktestWarning(
+                code="boundary_non_trading_end",
+                message=(f"Requested end {cfg.request.end} is "
+                          f"{gap_days} day(s) after last available bar "
+                          f"{actual_last_ts.date()} for "
+                          f"{cfg.request.symbol} {cfg.request.timeframe}; "
+                          f"treated as a non-trading-day boundary "
+                          f"(tolerance: {_BOUNDARY_TOLERANCE_DAYS} days)."),
+                ts_utc=actual_last_ts.to_pydatetime(),
+                extras={"gap_days": gap_days,
+                          "tolerance_days": _BOUNDARY_TOLERANCE_DAYS,
+                          "actual_last_date": actual_last_ts.date().isoformat(),
+                          "requested_end":    cfg.request.end.isoformat()},
+            ))
+        else:
+            raise MissingDataError(_refresh_message(
+                cfg,
+                reason=(f"M16 returned bars for {cfg.request.symbol} "
+                         f"{cfg.request.timeframe} ending at "
+                         f"{actual_last_ts.date()}, "
+                         f"{gap_days} day(s) before requested end "
+                         f"{cfg.request.end} "
+                         f"(exceeds boundary tolerance of "
+                         f"{_BOUNDARY_TOLERANCE_DAYS} days OR coverage "
+                         f"quality/missing_count not clean). Loaded "
+                         f"bars do not cover the requested period — "
+                         f"coverage row may be stale or out of sync."),
+                op="backfill",
+            ))
 
     return df, coverage, warnings
 

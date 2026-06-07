@@ -314,12 +314,16 @@ class G1_ConfigValidation(unittest.TestCase):
 # G2 — Data loader (Phase 2)
 # ─────────────────────────────────────────────────────────────────────
 
+import shutil
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from bot.backtesting import data_loader
+# `runner` is also imported later for G9; importing here makes
+# G2_ExampleConfig (fixup5) usable without forward-reference gymnastics.
+from bot.backtesting import runner as _runner_for_g2
 
 
 def _good_coverage(start="2023-01-01", end="2025-01-01",
@@ -702,6 +706,184 @@ class G2_DataLoader(unittest.TestCase):
         self.assertNotIn("data_starts_late", codes,
             "fixup4 removed the data_starts_late soft warning; "
             "range truncation is now MissingDataError, not a warning")
+
+    # ---- Fixup5 regression: non-trading-day boundary tolerance -----
+
+    def test_boundary_non_trading_start_allowed_with_warning(self):
+        """Regression for M17.A.fixup5. A small gap at the start
+        (within _BOUNDARY_TOLERANCE_DAYS) caused by a non-trading
+        day must NOT fail; it must be recorded as a warning.
+
+        Example: request 2024-01-01..2024-12-31 with AAPL 1D. Jan 1
+        is a US market holiday so the first bar is 2024-01-02 (one
+        day gap). Pre-fixup5 this hard-failed; now it warns and
+        continues."""
+        cfg = parse_config_dict(_good_config_dict())  # 2024-01-01..2024-12-31
+        cov = _good_coverage()  # clean, missing_count=0
+        # Bars start 1 day after request (boundary), fully cover end
+        bars = _good_bars(n=400, start_date=date(2024, 1, 2))
+        with self._patched(coverage=cov, bars=bars):
+            df, _, warnings = data_loader.load_backtest_bars(cfg)
+        # No exception; bars returned
+        self.assertGreater(len(df), 0)
+        codes = [w.code for w in warnings]
+        self.assertIn("boundary_non_trading_start", codes)
+        # Verify the warning carries useful structured info
+        bw = next(w for w in warnings if w.code == "boundary_non_trading_start")
+        self.assertEqual(bw.extras["gap_days"], 1)
+        self.assertEqual(bw.extras["actual_first_date"], "2024-01-02")
+        self.assertEqual(bw.extras["requested_start"],   "2024-01-01")
+
+    def test_boundary_non_trading_end_allowed_with_warning(self):
+        """Regression for M17.A.fixup5. Same as start, but for end."""
+        cfg = parse_config_dict(_good_config_dict())  # 2024-01-01..2024-12-31
+        cov = _good_coverage()
+        # 364 bars from 2024-01-01 -> last bar at 2024-12-29 (Sunday).
+        # request.end = 2024-12-31, so gap = 2 days (within tolerance).
+        bars = _good_bars(n=364, start_date=date(2024, 1, 1))
+        with self._patched(coverage=cov, bars=bars):
+            df, _, warnings = data_loader.load_backtest_bars(cfg)
+        self.assertGreater(len(df), 0)
+        codes = [w.code for w in warnings]
+        self.assertIn("boundary_non_trading_end", codes)
+        bw = next(w for w in warnings if w.code == "boundary_non_trading_end")
+        self.assertEqual(bw.extras["gap_days"], 2)
+
+    def test_start_gap_just_beyond_tolerance_still_fails(self):
+        """Regression for M17.A.fixup5. A gap >= 8 days at the start
+        (one beyond the 7-day tolerance) MUST still hard-fail. Verifies
+        the tolerance doesn't quietly accept real truncation."""
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        # 8 days past requested start
+        bars = _good_bars(n=400, start_date=date(2024, 1, 9))
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("starting at",        msg)
+        self.assertIn("2024-01-09",          msg)
+        self.assertIn("exceeds boundary tolerance", msg)
+        # Still produces a valid backfill command, no --start/--end
+        self.assertIn("python -m bot.historical.cli backfill", msg)
+        self.assertNotIn("--start ", msg)
+        self.assertNotIn("--end ",   msg)
+
+    def test_end_gap_just_beyond_tolerance_still_fails(self):
+        """Regression for M17.A.fixup5. A gap >= 8 days at the end
+        MUST still hard-fail."""
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        # 358 bars from 2024-01-01 -> last bar 2024-12-23, gap=8 days
+        bars = _good_bars(n=358, start_date=date(2024, 1, 1))
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        self.assertIn("ending at",   msg)
+        self.assertIn("exceeds boundary tolerance", msg)
+
+    def test_boundary_tolerance_only_when_quality_clean(self):
+        """Regression for M17.A.fixup5. Even a small (1-day) boundary
+        gap must HARD-FAIL when coverage quality is not 'clean' (e.g.
+        'warn'). The tolerance is conditional on a trustworthy
+        coverage row, per operator decision."""
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(quality_status="warn")  # NOT clean
+        bars = _good_bars(n=400, start_date=date(2024, 1, 2))
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        # The reason must reference the boundary tolerance rule
+        self.assertIn("exceeds boundary tolerance", str(ctx.exception))
+
+    def test_boundary_tolerance_only_when_missing_count_zero(self):
+        """Regression for M17.A.fixup5. A small boundary gap with
+        missing_count > 0 must HARD-FAIL — gaps in the body of the
+        data are a separate failure mode from a clean boundary."""
+        # Note: missing_count > 0 fails at the coverage gate first
+        # (before bar-level checks even run), so this verifies the
+        # check ordering: coverage-missing fires before boundary
+        # evaluation. Either way the request fails — that's the point.
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage(missing_count=5)
+        bars = _good_bars(n=400, start_date=date(2024, 1, 2))
+        with self._patched(coverage=cov, bars=bars):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        # Falls through the coverage gate's 'missing_count=5' message
+        self.assertIn("missing_count=5", str(ctx.exception))
+
+
+class G2_ExampleConfig(unittest.TestCase):
+    """Group 2 (fixup5 sub-group): verify configs/backtests/
+    example_sma_aapl.json runs through the engine cleanly under
+    mocked M16 bars. Catches the kind of config-vs-checker mismatch
+    that broke the VPS example backtest after fixup4."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="m17_g2_ex_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_example_config_succeeds_with_mocked_m16(self):
+        """The shipped example config must succeed end-to-end against
+        a covering M16 fixture. This is the regression for the VPS
+        example-backtest failure caused by fixup4."""
+        # Load the actual shipped config
+        cfg = parse_config_file("configs/backtests/example_sma_aapl.json")
+        self.assertEqual(cfg.request.symbol, "AAPL")
+        self.assertEqual(cfg.request.timeframe, "1D")
+
+        # Build bars covering the example config's request range plus
+        # warmup. Need >= (request.end - request.start) + warmup days.
+        # Use the same crossover-friendly price series shape we use
+        # elsewhere.
+        prices = (list(range(100, 130)) + list(range(130, 100, -1)) +
+                    list(range(100, 170)) + list(range(170, 100, -1)) +
+                    list(range(100, 160)) + list(range(160, 110, -1)) +
+                    list(range(110, 150)) + list(range(150, 100, -1)))
+        n = len(prices)
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range(
+                start=pd.Timestamp(cfg.request.start, tz="UTC"),
+                periods=n, freq="D"),
+            "open":   [float(p) for p in prices],
+            "high":   [float(p) + 1.0 for p in prices],
+            "low":    [float(p) - 1.0 for p in prices],
+            "close":  [float(p) for p in prices],
+            "volume": [1_000_000] * n,
+            "quality_flags": [0] * n,
+        })
+        cov = {
+            "symbol": "AAPL", "timeframe": "1D", "provider": "yfinance",
+            "first_ts_utc": pd.Timestamp("2023-01-01", tz="UTC"),
+            "last_ts_utc":  pd.Timestamp("2025-12-31", tz="UTC"),
+            "bar_count":     500, "missing_count": 0, "duplicate_count": 0,
+            "quality_status": "clean", "freshness_status": "fresh",
+            "last_refresh_at_utc": pd.Timestamp("2025-01-02", tz="UTC"),
+            "last_refresh_id":     "abc",
+            "provider_limit_note": None,
+            "source_timeframe":    "1D",
+            "derivation_method":   "native",
+            "resample_rule_version": None,
+        }
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(return_value=cov)
+        fake.get_bars     = MagicMock(return_value=bars)
+        with patch.object(data_loader, "_m16_store", fake):
+            run_dir = _runner_for_g2.run_and_write(cfg, output_dir=self.tmpdir)
+        # All 6 artifacts written
+        for name in ("manifest.json", "report.json",
+                       "trades.csv", "trades.jsonl",
+                       "equity_curve.csv", "warnings.json"):
+            self.assertTrue((run_dir / name).exists(),
+                              f"missing artifact: {name}")
+        # report.json reflects a real backtest
+        report = json.loads((run_dir / "report.json").read_text())
+        self.assertGreaterEqual(report["metrics"]["n_trades"], 0)
+        self.assertGreater(report["bars_processed"], 0)
 
 
 # ─────────────────────────────────────────────────────────────────────
