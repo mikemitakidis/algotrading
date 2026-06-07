@@ -345,9 +345,14 @@ def _good_coverage(start="2023-01-01", end="2025-01-01",
     }
 
 
-def _good_bars(n=300, start_date=date(2024, 1, 1)):
+def _good_bars(n=400, start_date=date(2024, 1, 1)):
     """Build n synthetic daily bars starting from start_date.
-    All columns present, no NaN, no duplicates, sorted ascending."""
+    All columns present, no NaN, no duplicates, sorted ascending.
+
+    Default n=400 (was 300) so the fixture covers the standard test
+    request range 2024-01-01..2024-12-31 (~366 days) under M17.A's
+    strict bar-level range check introduced in fixup4.
+    """
     rng = pd.date_range(start=pd.Timestamp(start_date, tz="UTC"),
                           periods=n, freq="D")
     return pd.DataFrame({
@@ -461,7 +466,9 @@ class G2_DataLoader(unittest.TestCase):
     def test_nan_ohlc_in_bars_raises(self):
         cfg = parse_config_dict(_good_config_dict())
         cov = _good_coverage()
-        bars = _good_bars(n=100)
+        # Use default n=400 so the strict bar-level range check passes
+        # and the NaN check is the failure we actually test.
+        bars = _good_bars()
         bars.loc[50, "close"] = float("nan")
         with self._patched(coverage=cov, bars=bars):
             with self.assertRaises(MissingDataError) as ctx:
@@ -471,7 +478,9 @@ class G2_DataLoader(unittest.TestCase):
     def test_duplicate_timestamps_in_bars_raises(self):
         cfg = parse_config_dict(_good_config_dict())
         cov = _good_coverage()
-        bars = _good_bars(n=100)
+        # Use default n=400 so the strict bar-level range check passes
+        # and the duplicate-ts check is the failure we actually test.
+        bars = _good_bars()
         bars.loc[50, "ts_utc"] = bars.loc[51, "ts_utc"]  # duplicate
         with self._patched(coverage=cov, bars=bars):
             with self.assertRaises(MissingDataError) as ctx:
@@ -592,7 +601,8 @@ class G2_DataLoader(unittest.TestCase):
         self.assertNotIn("--timeframes 1D", msg)
 
         # force-rebuild: NaN OHLC
-        bars_nan = _good_bars(n=100)
+        # default n=400 covers the request range; NaN is the trigger.
+        bars_nan = _good_bars()
         bars_nan.loc[50, "close"] = float("nan")
         with self._patched(coverage=_good_coverage(), bars=bars_nan):
             with self.assertRaises(MissingDataError) as ctx:
@@ -600,12 +610,98 @@ class G2_DataLoader(unittest.TestCase):
         self.assertIn("force-rebuild", str(ctx.exception))
 
         # force-rebuild: duplicate timestamps
-        bars_dup = _good_bars(n=100)
+        bars_dup = _good_bars()
         bars_dup.loc[50, "ts_utc"] = bars_dup.loc[51, "ts_utc"]
         with self._patched(coverage=_good_coverage(), bars=bars_dup):
             with self.assertRaises(MissingDataError) as ctx:
                 data_loader.load_backtest_bars(cfg)
         self.assertIn("force-rebuild", str(ctx.exception))
+
+    # ---- Fixup4 regression: strict bar-level range check ------------
+
+    def test_actual_first_bar_after_request_start_raises(self):
+        """Regression for M17.A.fixup4. If M16's coverage row claims
+        a valid range but the actual returned bars start AFTER the
+        requested start, the data loader must fail loudly. M17.A V1
+        is strict — no silent shorter backtests."""
+        cfg = parse_config_dict(_good_config_dict())  # 2024-01-01..2024-12-31
+        # Coverage row CLAIMS a valid range (passes the coverage gate)
+        cov = _good_coverage(start="2023-01-01", end="2025-01-01")
+        # But actual returned bars start at 2024-03-01 (60 days late)
+        bars_late = _good_bars(n=400, start_date=date(2024, 3, 1))
+        with self._patched(coverage=cov, bars=bars_late):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        # Must call out the actual-vs-requested mismatch
+        self.assertIn("starting at", msg)
+        self.assertIn("2024-03-01", msg)
+        self.assertIn("after requested start", msg)
+        # Must include a valid M16 backfill command (Issue A semantics)
+        self.assertIn("python -m bot.historical.cli backfill", msg)
+        self.assertIn("--symbols AAPL", msg)
+        self.assertIn("--timeframes 1D", msg)
+        # Must NOT use the invalid --start / --end flags
+        self.assertNotIn("--start", msg)
+        self.assertNotIn("--end", msg)
+
+    def test_actual_last_bar_before_request_end_raises(self):
+        """Regression for M17.A.fixup4. If M16's coverage row claims
+        a valid range but the actual returned bars end BEFORE the
+        requested end, the data loader must fail loudly."""
+        cfg = parse_config_dict(_good_config_dict())  # 2024-01-01..2024-12-31
+        # Coverage row CLAIMS a valid range
+        cov = _good_coverage(start="2023-01-01", end="2025-01-01")
+        # But actual returned bars only go to 2024-06-30 (~180 bars)
+        bars_short = _good_bars(n=180, start_date=date(2024, 1, 1))
+        with self._patched(coverage=cov, bars=bars_short):
+            with self.assertRaises(MissingDataError) as ctx:
+                data_loader.load_backtest_bars(cfg)
+        msg = str(ctx.exception)
+        # Must call out the actual-vs-requested mismatch
+        self.assertIn("ending at", msg)
+        self.assertIn("before requested end", msg)
+        # Must include a valid M16 backfill command
+        self.assertIn("python -m bot.historical.cli backfill", msg)
+        self.assertIn("--symbols AAPL", msg)
+        self.assertIn("--timeframes 1D", msg)
+        # Must NOT use the invalid --start / --end flags
+        self.assertNotIn("--start", msg)
+        self.assertNotIn("--end", msg)
+
+    def test_actual_range_truncation_fails_even_with_clean_quality(self):
+        """Regression for M17.A.fixup4. Even when coverage row reports
+        clean status / fresh / no missing_count, range truncation in
+        the actual returned bars is a HARD failure (was a soft
+        'data_starts_late' warning pre-fix)."""
+        cfg = parse_config_dict(_good_config_dict())
+        # Coverage row looks pristine
+        cov = _good_coverage(
+            start="2023-01-01", end="2025-01-01",
+            missing_count=0, quality_status="clean",
+            freshness_status="fresh",
+        )
+        # But actual bars start 30 days late — would previously have
+        # been only a warning, now a hard fail
+        bars_late = _good_bars(n=400, start_date=date(2024, 2, 1))
+        with self._patched(coverage=cov, bars=bars_late):
+            with self.assertRaises(MissingDataError):
+                data_loader.load_backtest_bars(cfg)
+
+    def test_no_data_starts_late_warning_code_emitted(self):
+        """Regression for M17.A.fixup4. The legacy 'data_starts_late'
+        warning code MUST NOT appear in result.warnings — that path
+        was removed in favour of hard MissingDataError. Verifies the
+        soft path is gone."""
+        cfg = parse_config_dict(_good_config_dict())
+        cov = _good_coverage()
+        # Bars fully cover the request: no failure expected, no warning.
+        with self._patched(coverage=cov, bars=_good_bars()):
+            df, _, warnings = data_loader.load_backtest_bars(cfg)
+        codes = [w.code for w in warnings]
+        self.assertNotIn("data_starts_late", codes,
+            "fixup4 removed the data_starts_late soft warning; "
+            "range truncation is now MissingDataError, not a warning")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1892,11 +1988,20 @@ class G9_GoldenPathE2E(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _bars_with_crossover(self):
-        """200 daily bars with a clear SMA crossover region."""
+        """~400 daily bars with two clear SMA crossover regions.
+
+        Extended from 200 to ~400 bars (fixup4) so the fixture covers
+        the standard test request range 2024-01-01..2024-12-31 under
+        M17.A's strict bar-level range check.
+        """
         prices = (list(range(100, 130)) +          # up to bar 30
                     list(range(130, 100, -1)) +     # down to bar 60
                     list(range(100, 170)) +         # up to bar 130
-                    list(range(170, 100, -1)))      # down to bar 200
+                    list(range(170, 100, -1)) +     # down to bar 200
+                    list(range(100, 160)) +         # up to bar 260
+                    list(range(160, 110, -1)) +     # down to bar 310
+                    list(range(110, 150)) +         # up to bar 350
+                    list(range(150, 100, -1)))      # down to bar 400
         n = len(prices)
         return pd.DataFrame({
             "ts_utc": pd.date_range("2024-01-01", periods=n, freq="D",
@@ -2301,16 +2406,19 @@ class G10_Hygiene(unittest.TestCase):
         """Running a backtest must not open any sockets. Patches
         socket.socket to raise; the run should still complete."""
         cfg = _config()
-        # Mock M16 to return bars without touching disk.
+        # Mock M16 to return bars without touching disk. Use 400 bars
+        # so the fixture spans the full 2024-01-01..2024-12-31 request
+        # range under fixup4's strict bar-level check.
+        N = 400
         bars = pd.DataFrame({
-            "ts_utc": pd.date_range("2024-01-01", periods=200, freq="D",
+            "ts_utc": pd.date_range("2024-01-01", periods=N, freq="D",
                                       tz="UTC"),
-            "open":   [100.0] * 200,
-            "high":   [101.0] * 200,
-            "low":    [ 99.0] * 200,
-            "close":  [100.0] * 200,
-            "volume": [1_000_000] * 200,
-            "quality_flags": [0] * 200,
+            "open":   [100.0] * N,
+            "high":   [101.0] * N,
+            "low":    [ 99.0] * N,
+            "close":  [100.0] * N,
+            "volume": [1_000_000] * N,
+            "quality_flags": [0] * N,
         })
         cov = _good_coverage(start="2023-01-01", end="2025-01-01")
         fake = MagicMock()

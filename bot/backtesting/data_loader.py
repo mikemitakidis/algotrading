@@ -33,12 +33,20 @@ enforce:
     * loaded df is empty                        → nothing in window
     * loaded df contains NaN OHLC               → corrupt rows
     * loaded df has duplicate timestamps        → schema violation
+    * actual first bar after  request.start     → truncated start
+                                                   (coverage row may
+                                                    be stale)
+    * actual last  bar before request.end       → truncated end
+                                                   (coverage row may
+                                                    be stale)
 
   WARNINGS (recorded in result.warnings, never block):
     * quality_status == 'warn'                  → soft quality issue
     * freshness_status != 'fresh'               → data is stale
-    * coverage row's last_ts_utc is significantly
-       past request.end                          (informational only)
+
+Note: M17.A V1 is STRICT — there is no "starts a bit late, that's OK"
+warning path. Operator must use --lookback or extend the M16 store
+until the loaded bars fully cover the requested range.
 
 Returned DataFrame is sorted ascending by ts_utc, UTC-aware, with
 columns: ts_utc, open, high, low, close, volume, quality_flags.
@@ -169,18 +177,44 @@ def load_backtest_bars(
             op="force-rebuild",
         ))
 
-    # Range coverage check at the bar level (in case coverage table is
-    # stale but bars are correct, or vice versa).
-    expected_start = pd.Timestamp(cfg.request.start, tz="UTC")
-    if df.iloc[0]["ts_utc"] > expected_start + timedelta(days=7):
-        # More than a week of warmup gap from requested start — warn,
-        # don't fail. Operator may be intentionally backtesting from a
-        # warmup-padded start.
-        warnings.append(BacktestWarning(
-            code="data_starts_late",
-            message=(f"First available bar is "
-                      f"{df.iloc[0]['ts_utc']}, more than 7 days "
-                      f"after requested start {cfg.request.start}."),
+    # Range coverage check at the BAR level (the M16 coverage row may
+    # be stale or out of sync with the actual parquet store, so we
+    # verify the returned bars themselves cover the requested period).
+    # M17.A V1 is STRICT — any truncation is a hard fail, never a
+    # warning. Operator decision: missing/partial data = fail; we do
+    # NOT silently run a shorter backtest than requested.
+    actual_first_ts = pd.Timestamp(df.iloc[0]["ts_utc"])
+    if actual_first_ts.tz is None:
+        actual_first_ts = actual_first_ts.tz_localize("UTC")
+    else:
+        actual_first_ts = actual_first_ts.tz_convert("UTC")
+    actual_last_ts = pd.Timestamp(df.iloc[-1]["ts_utc"])
+    if actual_last_ts.tz is None:
+        actual_last_ts = actual_last_ts.tz_localize("UTC")
+    else:
+        actual_last_ts = actual_last_ts.tz_convert("UTC")
+
+    if actual_first_ts.date() > cfg.request.start:
+        raise MissingDataError(_refresh_message(
+            cfg,
+            reason=(f"M16 returned bars for {cfg.request.symbol} "
+                     f"{cfg.request.timeframe} starting at "
+                     f"{actual_first_ts.date()}, after requested start "
+                     f"{cfg.request.start}. Loaded bars do not cover "
+                     f"the requested period — coverage row may be "
+                     f"stale or out of sync."),
+            op="backfill",
+        ))
+    if actual_last_ts.date() < cfg.request.end:
+        raise MissingDataError(_refresh_message(
+            cfg,
+            reason=(f"M16 returned bars for {cfg.request.symbol} "
+                     f"{cfg.request.timeframe} ending at "
+                     f"{actual_last_ts.date()}, before requested end "
+                     f"{cfg.request.end}. Loaded bars do not cover "
+                     f"the requested period — coverage row may be "
+                     f"stale or out of sync."),
+            op="backfill",
         ))
 
     return df, coverage, warnings
