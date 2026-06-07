@@ -2563,8 +2563,31 @@ class G10_Hygiene(unittest.TestCase):
     # ---- New files: only the expected set ---------------------------
 
     def test_no_unexpected_files_added(self):
-        """M17.A adds files only in bot/backtesting/, configs/backtests/,
-        plus test_m17_backtesting.py. No surprises."""
+        """M17 adds files only in bot/backtesting/, configs/backtests/,
+        the test file itself, the M17 milestone docs (closeout doc per
+        sub-milestone), and the three repo-level docs that every
+        milestone closeout updates (MILESTONE_STATUS.md, ROADMAP.md,
+        docs/NEXT_WORK_REGISTER.md).
+
+        Whitelist policy:
+          * bot/backtesting/*               implementation area
+          * configs/backtests/*             example configs
+          * test_m17_backtesting.py         tests
+          * docs/M17_*.md                   per-sub-milestone closeout
+                                              docs (M17.A landed
+                                              docs/M17_A_closeout.md
+                                              at f6bf24e; M17.B will
+                                              add its own)
+          * MILESTONE_STATUS.md             every closeout updates
+          * ROADMAP.md                      every closeout updates
+          * docs/NEXT_WORK_REGISTER.md      every closeout updates
+
+        Anything else slipping in is the surprise this test exists to
+        catch (e.g. an accidental edit to a scanner/broker/dashboard
+        file). The whitelist is intentionally precise — bumping it
+        requires an explicit decision, not a silent slide.
+        """
+        import re
         import subprocess
         result = subprocess.run(
             ["git", "diff", "--name-only", _M17_BASELINE_SHA, "HEAD"],
@@ -2573,11 +2596,20 @@ class G10_Hygiene(unittest.TestCase):
         changed = sorted(result.stdout.strip().splitlines())
         # Build the allowed set
         allowed_prefixes = ("bot/backtesting/", "configs/backtests/")
-        allowed_exact = {"test_m17_backtesting.py"}
+        allowed_exact = {
+            "test_m17_backtesting.py",
+            "MILESTONE_STATUS.md",
+            "ROADMAP.md",
+            "docs/NEXT_WORK_REGISTER.md",
+        }
+        # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
+        # docs/M17_B_closeout.md, etc.
+        allowed_doc_regex = re.compile(r"^docs/M17_[A-Z](?:_[\w]+)?\.md$")
         unexpected = [
             p for p in changed
             if not p.startswith(allowed_prefixes)
                 and p not in allowed_exact
+                and not allowed_doc_regex.match(p)
         ]
         self.assertEqual(unexpected, [],
             f"Unexpected files changed: {unexpected}")
