@@ -112,8 +112,24 @@ class StrategyConfig:
 class ExecutionConfig:
     """Money mechanics: fees, slippage, sizing, SL/TP, initial equity.
 
-    SL/TP are percentage-based in M17.A (ATR-based ships with
-    scanner_replica in M17.B). `None` means the channel is disabled.
+    Two stop/target modes (Sharpened Rule #11, M17.B.5):
+      * stop_mode='pct'  (default — M17.A semantics, UNCHANGED):
+          stop   = fill_price * (1 - stop_loss_pct)
+          target = fill_price * (1 + take_profit_pct)
+        Set stop_loss_pct / take_profit_pct to a fraction (e.g. 0.02
+        for 2%). None on either disables that channel.
+
+      * stop_mode='atr' (M17.B.5 addition — scanner_replica style):
+          stop   = fill_price - stop_atr_mult   * atr_at_signal
+          target = fill_price + target_atr_mult * atr_at_signal
+        Where atr_at_signal is the per-bar ATR populated by the strategy
+        (scanner_replica fills it from the highest-TF available at the
+        anchor). If atr_at_signal is NaN, the trade is SKIPPED and a
+        warning 'atr_unavailable_at_signal' is recorded — the engine
+        will not enter a position without a stop.
+
+    Default stop_mode='pct' keeps SmaCrossoverStrategy byte-identical.
+    Setting allow_short stays False in M17 (asserted by validate).
     """
     initial_equity:     float = 10_000.0
     fee_bps:            float = 5.0      # per side
@@ -123,6 +139,10 @@ class ExecutionConfig:
     risk_per_trade_pct: float = 0.01     # fraction of equity risked per trade
     max_position_pct:   float = 0.25     # cap on notional / equity
     allow_short:        bool = False     # M17.A: must be False
+    # M17.B.5: ATR-based exits (opt-in; default preserves M17.A)
+    stop_mode:          str   = "pct"    # 'pct' | 'atr'
+    stop_atr_mult:      Optional[float] = None
+    target_atr_mult:    Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -275,6 +295,32 @@ def _parse_execution(raw: Dict[str, Any]) -> ExecutionConfig:
             "config.execution.allow_short=True is rejected in M17.A. "
             "Short selling lands in a later sub-milestone.")
 
+    # M17.B.5: ATR exit support. stop_mode='pct' (default) preserves
+    # M17.A behaviour exactly; stop_mode='atr' opt-in for scanner_replica
+    # and other strategies that populate atr_at_signal.
+    stop_mode = raw.get("stop_mode", "pct")
+    if stop_mode not in ("pct", "atr"):
+        raise ConfigError(
+            f"config.execution.stop_mode={stop_mode!r} must be "
+            f"'pct' or 'atr'")
+    stop_atr_mult   = _num("stop_atr_mult",
+                              raw.get("stop_atr_mult"),
+                              min_v=0.0, max_v=100.0,
+                              allow_none=True)
+    target_atr_mult = _num("target_atr_mult",
+                              raw.get("target_atr_mult"),
+                              min_v=0.0, max_v=100.0,
+                              allow_none=True)
+    if stop_mode == "atr":
+        if stop_atr_mult is None or stop_atr_mult <= 0:
+            raise ConfigError(
+                "config.execution.stop_mode='atr' requires "
+                "stop_atr_mult > 0")
+        # target_atr_mult may legitimately be None (disable TP channel)
+        if target_atr_mult is not None and target_atr_mult <= 0:
+            raise ConfigError(
+                "config.execution.target_atr_mult must be > 0 when set")
+
     # If stop_loss_pct is None, risk-per-trade sizing falls back to
     # cap-only sizing — but that's a strategy concern, not invalid here.
     return ExecutionConfig(
@@ -286,6 +332,9 @@ def _parse_execution(raw: Dict[str, Any]) -> ExecutionConfig:
         risk_per_trade_pct=risk_per_trade_pct,
         max_position_pct=max_position_pct,
         allow_short=allow_short,
+        stop_mode=stop_mode,
+        stop_atr_mult=stop_atr_mult,
+        target_atr_mult=target_atr_mult,
     )
 
 

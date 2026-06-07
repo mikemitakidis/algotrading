@@ -64,6 +64,18 @@ def simulate(
     # action to take at bar i open, derived from bar i-1's signal.
     exec_signal = signals["signal"].shift(1, fill_value=SIG_FLAT).astype("int64")
 
+    # M17.B.5: also shift atr_at_signal by 1 so atr at row i represents
+    # the ATR computed at the bar that GENERATED the signal (i.e. one
+    # bar before the executing bar). For strategies that don't populate
+    # atr_at_signal (e.g. M17.A SmaCrossoverStrategy in 'pct' mode),
+    # the column is all NaN — that's fine; ATR-mode entries would skip
+    # via the 'atr_unavailable_at_signal' warning.
+    if "atr_at_signal" in signals.columns:
+        _exec_atr_at_signal = signals["atr_at_signal"].shift(1).astype(float)
+    else:
+        _exec_atr_at_signal = pd.Series(
+            [float("nan")] * len(signals), index=signals.index, dtype=float)
+
     symbol = cfg.request.symbol
     n = len(bars)
 
@@ -87,35 +99,98 @@ def simulate(
             fill_price = bar_open * (1.0 + slip_rate)
             slippage_per_share = fill_price - bar_open
 
-            # Compute SL/TP at the fill price.
-            stop_price   = (fill_price * (1.0 - sl_pct)) if sl_pct is not None else None
-            target_price = (fill_price * (1.0 + tp_pct)) if tp_pct is not None else None
+            # Compute SL/TP. M17.B.5: two modes.
+            #  * 'pct' (default — M17.A semantics, unchanged):
+            #      stop   = fill_price * (1 - stop_loss_pct)
+            #      target = fill_price * (1 + take_profit_pct)
+            #  * 'atr':
+            #      stop   = fill_price - stop_atr_mult   * atr_signal
+            #      target = fill_price + target_atr_mult * atr_signal
+            #    If atr_signal is NaN at this bar -> SKIP this trade and
+            #    record a warning. An ATR-mode strategy that didn't
+            #    populate atr_at_signal should not enter blind.
+            if exec_cfg.stop_mode == "atr":
+                # The signal at bar i-1 close drives entry at bar i open;
+                # exec_signal already shift(1)'d, so atr_at_signal we
+                # want is at row i-1 of the ORIGINAL signals DataFrame
+                # (i.e. one row earlier than the executing bar). We
+                # capture this via signals.shift(1) on atr_at_signal
+                # too — see _exec_atr_at_signal above.
+                atr_signal_val = _exec_atr_at_signal.iloc[i]
+                _atr_skip = False
+                if pd.isna(atr_signal_val):
+                    ledger.record_warning(BacktestWarning(
+                        code="atr_unavailable_at_signal",
+                        message=(
+                            f"ATR mode requested but atr_at_signal is "
+                            f"NaN at bar {i} ({bar_ts}); skipping entry "
+                            f"(an ATR-mode strategy must populate "
+                            f"atr_at_signal at every SIG_ENTRY)."),
+                        ts_utc=bar_ts,
+                        extras={"bar_index": i},
+                    ))
+                    _atr_skip = True
+                if not _atr_skip:
+                    stop_price = (
+                        fill_price - exec_cfg.stop_atr_mult * float(atr_signal_val))
+                    target_price = (
+                        fill_price + exec_cfg.target_atr_mult * float(atr_signal_val)
+                        if exec_cfg.target_atr_mult is not None else None)
+                    # Defensive: stop must be < fill (long); else the trade
+                    # would be exited immediately at entry, which signals a
+                    # bad ATR value or corrupt config.
+                    if stop_price >= fill_price:
+                        ledger.record_warning(BacktestWarning(
+                            code="atr_stop_above_fill",
+                            message=(
+                                f"ATR-derived stop_price={stop_price:.4f} >= "
+                                f"fill_price={fill_price:.4f} at bar {i} "
+                                f"({bar_ts}); skipping entry."),
+                            ts_utc=bar_ts,
+                            extras={"bar_index": i,
+                                      "atr": float(atr_signal_val)},
+                        ))
+                        _atr_skip = True
+                if _atr_skip:
+                    # Fall through WITHOUT opening a position. Per-bar
+                    # equity record at the bottom of the loop still
+                    # runs; intrabar SL/TP is a no-op when no position
+                    # is open. We deliberately do NOT use `continue` —
+                    # that would skip the equity point.
+                    stop_price = None       # not used
+                    target_price = None
+                    fill_price = None       # signals the "skipped" branch below
+            else:
+                # M17.A pct mode — unchanged semantics.
+                stop_price   = (fill_price * (1.0 - sl_pct)) if sl_pct is not None else None
+                target_price = (fill_price * (1.0 + tp_pct)) if tp_pct is not None else None
 
-            equity_mark = portfolio.equity(bar_open)
-            qty, sizing_warnings = portfolio.compute_size(
-                entry_price=fill_price,
-                stop_price=stop_price,
-                mark_equity=equity_mark,
-                fee_rate=fee_rate,
-            )
-            for w in sizing_warnings:
-                # Attach the bar's ts so the warning is locatable.
-                ledger.record_warning(BacktestWarning(
-                    code=w.code, message=w.message,
-                    ts_utc=bar_ts, extras=w.extras))
-
-            if qty > 0:
-                notional = qty * fill_price
-                fee = notional * fee_rate
-                slippage = qty * slippage_per_share
-                portfolio.open_long(
-                    ts_utc=bar_ts, symbol=symbol, qty=qty,
+            if fill_price is not None:
+                equity_mark = portfolio.equity(bar_open)
+                qty, sizing_warnings = portfolio.compute_size(
                     entry_price=fill_price,
                     stop_price=stop_price,
-                    target_price=target_price,
-                    fee=fee, slippage=slippage,
+                    mark_equity=equity_mark,
+                    fee_rate=fee_rate,
                 )
-                entry_bar_index = i
+                for w in sizing_warnings:
+                    # Attach the bar's ts so the warning is locatable.
+                    ledger.record_warning(BacktestWarning(
+                        code=w.code, message=w.message,
+                        ts_utc=bar_ts, extras=w.extras))
+
+                if qty > 0:
+                    notional = qty * fill_price
+                    fee = notional * fee_rate
+                    slippage = qty * slippage_per_share
+                    portfolio.open_long(
+                        ts_utc=bar_ts, symbol=symbol, qty=qty,
+                        entry_price=fill_price,
+                        stop_price=stop_price,
+                        target_price=target_price,
+                        fee=fee, slippage=slippage,
+                    )
+                    entry_bar_index = i
 
         # 1b. STRATEGY EXIT at this bar's OPEN (if a position is open)
         elif action == SIG_EXIT and portfolio.has_open_position:
