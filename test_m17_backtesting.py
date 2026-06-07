@@ -1447,6 +1447,261 @@ class G3_IndicatorParity(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G3.5 — M17.B.3 MultiTimeframeContext
+# ─────────────────────────────────────────────────────────────────────
+
+from bot.backtesting.mtf_context import (
+    MultiTimeframeContext as _MTFContext,
+    SnapshotBar as _SnapshotBar,
+    MtfContextError as _MtfContextError,
+)
+
+
+def _multi_tf_bars(*, anchor_periods=200,
+                       higher_tf_freqs=(("1D","1D"),("1H","1h"))):
+    """Build a deterministic per-TF bars dict for context tests.
+
+    Default: anchor_tf '15m' has anchor_periods bars; '1H' and '1D'
+    align on the same start timestamp."""
+    per_tf = {}
+    per_tf["15m"] = pd.DataFrame({
+        "ts_utc": pd.date_range("2024-01-01", periods=anchor_periods,
+                                  freq="15min", tz="UTC"),
+        "open":  [100.0] * anchor_periods,
+        "high":  [101.0] * anchor_periods,
+        "low":   [ 99.0] * anchor_periods,
+        "close": [100.0] * anchor_periods,
+        "volume":[1_000_000] * anchor_periods,
+        "quality_flags":[0] * anchor_periods,
+    })
+    # Coarse TFs: enough bars to span the 15m range
+    span_minutes = anchor_periods * 15
+    for tf_label, pandas_freq in higher_tf_freqs:
+        # Period count: enough to cover span_minutes
+        if pandas_freq.endswith("h"):
+            hours = int(pandas_freq.rstrip("h") or "1")
+            n = max(2, span_minutes // (hours * 60) + 2)
+        elif pandas_freq.endswith("D"):
+            days = int(pandas_freq.rstrip("D") or "1")
+            n = max(2, span_minutes // (days * 1440) + 2)
+        elif pandas_freq.endswith("min"):
+            mins = int(pandas_freq.rstrip("min") or "1")
+            n = max(2, span_minutes // mins + 2)
+        else:
+            n = anchor_periods
+        per_tf[tf_label] = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=n,
+                                      freq=pandas_freq, tz="UTC"),
+            "open":  [100.0] * n,
+            "high":  [101.0] * n,
+            "low":   [ 99.0] * n,
+            "close": [100.0] * n,
+            "volume":[1_000_000] * n,
+            "quality_flags":[0] * n,
+        })
+    return per_tf
+
+
+class G3_MtfContext(unittest.TestCase):
+    """Group 3.5 (M17.B.3): MultiTimeframeContext anchor enumeration
+    + look-ahead-safe snapshot lookup. Per Sharpened Rule #2:
+    pre-computed; O(log n) per anchor; no rolling recompute."""
+
+    def test_basic_construction_and_properties(self):
+        per_tf = _multi_tf_bars(anchor_periods=100)
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        self.assertEqual(ctx.anchor_tf, "15m")
+        self.assertEqual(set(ctx.available_timeframes), {"15m", "1H", "1D"})
+        self.assertEqual(ctx.num_anchors, 100)
+
+    def test_snapshot_at_anchor_returns_anchor_bar_itself(self):
+        """At anchor_ts == bar_close on the anchor TF, the snapshot's
+        anchor-TF bar idx is the anchor's own bar index — not the one
+        before it. This is the 'at or before, inclusive' semantics."""
+        per_tf = _multi_tf_bars(anchor_periods=20)
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        anchors = list(ctx.anchors())
+        for i, a in enumerate(anchors):
+            snap = ctx.snapshot_at(a)
+            self.assertEqual(snap["15m"].idx, i,
+                f"anchor {i}: 15m idx should be {i}, got {snap['15m'].idx}")
+            self.assertEqual(snap["15m"].ts_utc, a)
+
+    def test_no_lookahead_higher_tf_is_at_or_before_anchor(self):
+        """Higher TF (1H/1D) snapshot bar must have ts_utc <= anchor.
+        This is the critical look-ahead guarantee."""
+        per_tf = _multi_tf_bars(anchor_periods=100)
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        for a in ctx.anchors():
+            snap = ctx.snapshot_at(a)
+            for tf, sb in snap.items():
+                if sb is None:
+                    continue
+                self.assertLessEqual(
+                    sb.ts_utc, a,
+                    f"look-ahead VIOLATED at anchor {a}: {tf} bar "
+                    f"ts_utc={sb.ts_utc} is AFTER anchor")
+
+    def test_higher_tf_idx_only_advances_when_anchor_crosses_bar_close(self):
+        """1H idx should advance by 1 every 4 anchors (since 4×15m=1h)
+        starting from the second hourly close. Confirms 'most recent
+        closed bar' semantics — no jitter, no skip-ahead."""
+        per_tf = _multi_tf_bars(anchor_periods=20)  # 5 hours of 15m
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        anchors = list(ctx.anchors())
+        # Anchor 0: 00:00 -> 1H idx=0 (the 00:00 hourly bar exists)
+        # Anchor 1: 00:15 -> 1H idx=0 (still the 00:00 bar)
+        # Anchor 2: 00:30 -> 1H idx=0
+        # Anchor 3: 00:45 -> 1H idx=0
+        # Anchor 4: 01:00 -> 1H idx=1 (just crossed)
+        expected_1h_idx = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2,
+                            2, 2, 3, 3, 3, 3, 4, 4, 4, 4]
+        actual = []
+        for a in anchors:
+            actual.append(ctx.snapshot_at(a)["1H"].idx)
+        self.assertEqual(actual, expected_1h_idx,
+            "1H idx must advance only on anchor crossings, not jitter")
+
+    def test_missing_anchor_tf_raises(self):
+        per_tf = {"1D": pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC"),
+            "open":[100.0]*5, "high":[101.0]*5, "low":[99.0]*5,
+            "close":[100.0]*5,"volume":[1_000_000]*5,"quality_flags":[0]*5,
+        })}
+        with self.assertRaises(_MtfContextError):
+            _MTFContext(per_tf, anchor_tf="15m")   # 15m not in dict
+
+    def test_none_or_empty_anchor_tf_raises(self):
+        per_tf = _multi_tf_bars(anchor_periods=10)
+        per_tf["15m"] = None
+        with self.assertRaises(_MtfContextError):
+            _MTFContext(per_tf, anchor_tf="15m")
+        per_tf["15m"] = pd.DataFrame()
+        with self.assertRaises(_MtfContextError):
+            _MTFContext(per_tf, anchor_tf="15m")
+
+    def test_partial_mode_none_entries_dropped_silently(self):
+        """A None/empty entry in per_tf_bars (PARTIAL mode placeholder)
+        is dropped from available_timeframes; the context still works
+        with the remaining TFs."""
+        per_tf = _multi_tf_bars(anchor_periods=20)
+        per_tf["1D"] = None     # 1D unavailable
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        self.assertEqual(set(ctx.available_timeframes), {"15m", "1H"})
+        # snapshot_at must not include 1D in its output
+        snap = ctx.snapshot_at(next(iter(ctx.anchors())))
+        self.assertNotIn("1D", snap)
+
+    def test_snapshot_returns_none_for_tf_with_no_bar_at_or_before_anchor(self):
+        """If a TF's first bar is AFTER the anchor, that TF gets None
+        in the snapshot (the caller treats it as TF-unavailable-at-this-
+        anchor)."""
+        per_tf = {
+            "15m": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-01", periods=10,
+                                          freq="15min", tz="UTC"),
+                "open":[100.0]*10,"high":[101.0]*10,"low":[99.0]*10,
+                "close":[100.0]*10,"volume":[1_000_000]*10,"quality_flags":[0]*10,
+            }),
+            # 1H bars START LATER than 15m
+            "1H": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-02", periods=5,
+                                          freq="1h", tz="UTC"),
+                "open":[100.0]*5,"high":[101.0]*5,"low":[99.0]*5,
+                "close":[100.0]*5,"volume":[1_000_000]*5,"quality_flags":[0]*5,
+            }),
+        }
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        first_anchor = next(iter(ctx.anchors()))
+        snap = ctx.snapshot_at(first_anchor)
+        # 1H has no bar at or before 2024-01-01 -> None
+        self.assertIsNone(snap["1H"],
+            "1H bar starts after first 15m anchor -> snapshot[1H] should be None")
+
+    def test_snapshot_returns_snapshotbar_dataclass(self):
+        """Frozen dataclass with the documented contract."""
+        per_tf = _multi_tf_bars(anchor_periods=10)
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        snap = ctx.snapshot_at(next(iter(ctx.anchors())))
+        sb = snap["15m"]
+        self.assertIsInstance(sb, _SnapshotBar)
+        self.assertEqual(sb.timeframe, "15m")
+        self.assertEqual(sb.idx,       0)
+        # Frozen — should not be mutable
+        with self.assertRaises((AttributeError, Exception)):
+            sb.idx = 999  # type: ignore[misc]
+
+    def test_performance_budget_year_scale(self):
+        """Sharpened Rule #2 performance discipline: a 1-year backtest
+        scale (252 trading days × 26 15m bars/day ≈ 6,500 anchors)
+        across 4 TFs must complete the anchor-iteration + snapshot
+        loop in well under 10 seconds on the dev box.
+
+        This is a SOFT engineering budget per Sharpened Rule #2 — the
+        test asserts under 2 seconds (5x headroom). If this ever
+        breaches we stop and report rather than letting performance
+        decay silently."""
+        import time
+        # 1 year of 15m bars ≈ 6,552 anchors (26/day × 252 trading days)
+        # We use 6,600 calendar-spaced 15m bars to be conservative.
+        N_15M = 6_600
+        per_tf = {
+            "15m": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-01", periods=N_15M,
+                                          freq="15min", tz="UTC"),
+                "open":[100.0]*N_15M,"high":[101.0]*N_15M,
+                "low":[99.0]*N_15M,"close":[100.0]*N_15M,
+                "volume":[1_000_000]*N_15M,"quality_flags":[0]*N_15M,
+            }),
+            "1H": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-01", periods=N_15M // 4 + 2,
+                                          freq="1h", tz="UTC"),
+                "open":[100.0]*(N_15M//4+2),"high":[101.0]*(N_15M//4+2),
+                "low":[99.0]*(N_15M//4+2),"close":[100.0]*(N_15M//4+2),
+                "volume":[1_000_000]*(N_15M//4+2),
+                "quality_flags":[0]*(N_15M//4+2),
+            }),
+            "4H": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-01", periods=N_15M // 16 + 2,
+                                          freq="4h", tz="UTC"),
+                "open":[100.0]*(N_15M//16+2),"high":[101.0]*(N_15M//16+2),
+                "low":[99.0]*(N_15M//16+2),"close":[100.0]*(N_15M//16+2),
+                "volume":[1_000_000]*(N_15M//16+2),
+                "quality_flags":[0]*(N_15M//16+2),
+            }),
+            "1D": pd.DataFrame({
+                "ts_utc": pd.date_range("2024-01-01", periods=300,
+                                          freq="D", tz="UTC"),
+                "open":[100.0]*300,"high":[101.0]*300,
+                "low":[99.0]*300,"close":[100.0]*300,
+                "volume":[1_000_000]*300,"quality_flags":[0]*300,
+            }),
+        }
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        start = time.perf_counter()
+        # Drive the full loop the way scanner_replica will.
+        for a in ctx.anchors():
+            _ = ctx.snapshot_at(a)
+        elapsed = time.perf_counter() - start
+        # Sharpened Rule #2: 10-second soft budget on the dev box.
+        # This test asserts 2 seconds (5x headroom) to stay clear of
+        # CI jitter. If it ever flakes near the bound, that's a real
+        # performance regression to investigate.
+        self.assertLess(elapsed, 2.0,
+            f"MultiTimeframeContext.snapshot_at loop too slow: "
+            f"{elapsed:.3f}s for {ctx.num_anchors} anchors × "
+            f"{len(ctx.available_timeframes)} TFs (Sharpened Rule #2 "
+            f"budget is 10s soft, this test enforces 2s = 5x headroom)")
+
+    def test_anchor_ts_is_utc_aware(self):
+        per_tf = _multi_tf_bars(anchor_periods=5)
+        ctx = _MTFContext(per_tf, anchor_tf="15m")
+        for a in ctx.anchors():
+            self.assertIsNotNone(a.tz, f"anchor {a} is not tz-aware")
+            self.assertEqual(str(a.tz), "UTC")
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G4 — Strategy + look-ahead protection (Phase 4)
 # ─────────────────────────────────────────────────────────────────────
 
