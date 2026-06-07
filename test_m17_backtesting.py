@@ -887,6 +887,175 @@ class G2_ExampleConfig(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G2 — M17.B.2 multi-timeframe loader
+# ─────────────────────────────────────────────────────────────────────
+
+from bot.backtesting.data_loader import (
+    load_multi_tf_bars as _load_multi_tf_bars,
+    MultiTfBars as _MultiTfBars,
+)
+
+
+class G2_MultiTfLoader(unittest.TestCase):
+    """Group 2 (M17.B.2 addition): load_multi_tf_bars exercises every
+    M17.A integrity gate per timeframe and supports STRICT (default)
+    and PARTIAL (opt-in) modes per Sharpened Rule #3."""
+
+    def _patched_multi_tf(self, *, coverage_by_tf, bars_by_tf):
+        """Context manager: patch _m16_store so per-TF calls return
+        the requested coverage / bars dict entries."""
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(
+            side_effect=lambda symbol, timeframe, *, provider=None:
+                coverage_by_tf.get(timeframe))
+        fake.get_bars = MagicMock(
+            side_effect=lambda *, symbol, timeframe, start_utc, end_utc,
+                                 provider, adjusted:
+                bars_by_tf.get(timeframe, pd.DataFrame()))
+        return patch.object(data_loader, "_m16_store", fake)
+
+    def _good_cov_for_tf(self, tf):
+        c = _good_coverage()
+        c["timeframe"] = tf
+        return c
+
+    def test_strict_success_all_tfs_load(self):
+        """STRICT mode (default): all 4 TFs load cleanly -> bars dict
+        populated, no errors, warnings empty (no boundary triggered)."""
+        cfg = parse_config_dict(_good_config_dict())
+        tfs = ["1D", "4H", "1H", "15m"]
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf) for tf in tfs}
+        bars_by_tf = {tf: _good_bars() for tf in tfs}
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            result = _load_multi_tf_bars(cfg, tfs)
+        self.assertIsInstance(result, _MultiTfBars)
+        self.assertEqual(result.symbol, "AAPL")
+        self.assertEqual(result.requested_timeframes, tuple(tfs))
+        self.assertEqual(result.loaded_timeframes,    tuple(tfs))
+        for tf in tfs:
+            self.assertIsNotNone(result.per_tf_bars[tf])
+            self.assertEqual(len(result.per_tf_bars[tf]), len(_good_bars()))
+            self.assertIsNotNone(result.per_tf_coverage[tf])
+        self.assertEqual(result.warnings, [])
+        self.assertFalse(result.allow_partial_tfs)
+
+    def test_strict_fails_when_any_tf_unavailable(self):
+        """STRICT mode: a single missing TF raises MissingDataError
+        with the M16 refresh command for THAT specific TF."""
+        cfg = parse_config_dict(_good_config_dict())
+        tfs = ["1D", "4H", "1H", "15m"]
+        # 4H has no coverage row -> the per-TF call raises
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf) for tf in tfs}
+        coverage_by_tf["4H"] = None
+        bars_by_tf = {tf: _good_bars() for tf in tfs}
+        bars_by_tf["4H"] = pd.DataFrame()
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            with self.assertRaises(MissingDataError) as ctx:
+                _load_multi_tf_bars(cfg, tfs)
+        msg = str(ctx.exception)
+        # Multi-TF wrapper identifies which TF failed
+        self.assertIn("Multi-TF load failed at timeframe '4H'", msg)
+        # Underlying M16 refresh command still surfaces
+        self.assertIn("python -m bot.historical.cli backfill", msg)
+        # Suggests partial mode escape hatch (visible, not silent)
+        self.assertIn("allow_partial_tfs=True", msg)
+
+    def test_partial_mode_records_warning_and_continues(self):
+        """PARTIAL mode (opt-in): missing TFs become warnings, the
+        other TFs still load. Bars dict has None for the unavailable
+        TF — explicit, not omitted."""
+        cfg = parse_config_dict(_good_config_dict())
+        tfs = ["1D", "4H", "1H", "15m"]
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf) for tf in tfs}
+        coverage_by_tf["4H"] = None
+        bars_by_tf = {tf: _good_bars() for tf in tfs}
+        bars_by_tf["4H"] = pd.DataFrame()
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            result = _load_multi_tf_bars(cfg, tfs,
+                                            allow_partial_tfs=True)
+        self.assertTrue(result.allow_partial_tfs)
+        # Unavailable TF is explicit None — not silently dropped
+        self.assertIn("4H", result.per_tf_bars)
+        self.assertIsNone(result.per_tf_bars["4H"])
+        self.assertIsNone(result.per_tf_coverage["4H"])
+        # Other TFs loaded successfully
+        for tf in ("1D", "1H", "15m"):
+            self.assertIsNotNone(result.per_tf_bars[tf])
+        self.assertEqual(result.loaded_timeframes, ("1D", "1H", "15m"))
+        # A 'partial_tf_unavailable' warning was recorded with timeframe
+        # in extras
+        codes = [w.code for w in result.warnings]
+        self.assertIn("partial_tf_unavailable", codes)
+        w = next(w for w in result.warnings
+                  if w.code == "partial_tf_unavailable")
+        self.assertEqual(w.extras["timeframe"], "4H")
+        self.assertEqual(w.extras["symbol"],     "AAPL")
+
+    def test_per_tf_warnings_get_timeframe_tag(self):
+        """Per-TF boundary/quality warnings should be re-emitted with
+        a [tf] message prefix and 'timeframe' added to extras, so the
+        caller can attribute each warning to the right TF."""
+        cfg = parse_config_dict(_good_config_dict())  # 2024-01-01..2024-12-31
+        tfs = ["1D", "1H"]
+        # 1D bars start 1 day late -> boundary_non_trading_start warning
+        bars_1d = _good_bars(n=400, start_date=date(2024, 1, 2))
+        bars_1h = _good_bars()  # clean
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf) for tf in tfs}
+        bars_by_tf = {"1D": bars_1d, "1H": bars_1h}
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            result = _load_multi_tf_bars(cfg, tfs)
+        codes = [w.code for w in result.warnings]
+        self.assertIn("boundary_non_trading_start", codes)
+        # The re-emitted warning carries the [1D] message prefix and
+        # 'timeframe' in extras
+        bw = next(w for w in result.warnings
+                   if w.code == "boundary_non_trading_start")
+        self.assertTrue(bw.message.startswith("[1D]"))
+        self.assertEqual(bw.extras["timeframe"], "1D")
+
+    def test_empty_timeframe_list_raises_value_error(self):
+        cfg = parse_config_dict(_good_config_dict())
+        with self.assertRaises(ValueError):
+            _load_multi_tf_bars(cfg, [])
+
+    def test_duplicate_timeframes_deduplicated_in_order(self):
+        """Duplicates in the input list are silently de-duplicated;
+        original order preserved. Useful as a defensive contract
+        because scanner_replica may otherwise pass overlapping TF
+        lists by accident."""
+        cfg = parse_config_dict(_good_config_dict())
+        tfs = ["1D", "4H", "1D", "1H", "4H"]  # 2 dups
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf)
+                            for tf in ("1D", "4H", "1H")}
+        bars_by_tf = {tf: _good_bars()
+                        for tf in ("1D", "4H", "1H")}
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            result = _load_multi_tf_bars(cfg, tfs)
+        self.assertEqual(result.requested_timeframes,
+                          ("1D", "4H", "1H"))
+
+    def test_does_not_load_cfg_timeframe_unless_requested(self):
+        """cfg.request.timeframe is just a template — it's NOT loaded
+        unless it appears in the timeframes list. This means the
+        multi-TF call doesn't have a hidden 5th TF leaking through."""
+        cfg = parse_config_dict(_good_config_dict())  # cfg.request.timeframe = '1D'
+        # Only request 1H + 15m. cfg's own '1D' must NOT be loaded.
+        tfs = ["1H", "15m"]
+        coverage_by_tf = {tf: self._good_cov_for_tf(tf) for tf in tfs}
+        bars_by_tf = {tf: _good_bars() for tf in tfs}
+        with self._patched_multi_tf(
+                coverage_by_tf=coverage_by_tf, bars_by_tf=bars_by_tf):
+            result = _load_multi_tf_bars(cfg, tfs)
+        self.assertEqual(set(result.per_tf_bars.keys()), {"1H", "15m"})
+        self.assertNotIn("1D", result.per_tf_bars)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G3 — Indicators (Phase 3)
 # ─────────────────────────────────────────────────────────────────────
 

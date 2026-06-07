@@ -61,7 +61,7 @@ columns: ts_utc, open, high, low, close, volume, quality_flags.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -445,4 +445,149 @@ def _refresh_message(cfg: BacktestConfig, *, reason: str,
     )
 
 
-__all__ = ["load_backtest_bars", "validate_coverage", "M16_SCHEMA_VERSION"]
+__all__ = ["load_backtest_bars", "validate_coverage",
+            "M16_SCHEMA_VERSION",
+            "load_multi_tf_bars", "MultiTfBars",
+            "_BOUNDARY_TOLERANCE_DAYS"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# M17.B.2 — Multi-timeframe loader (strict-per-TF by default)
+# ─────────────────────────────────────────────────────────────────────
+
+from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
+from dataclasses import replace as _dc_replace
+
+
+@_dataclass(frozen=True)
+class MultiTfBars:
+    """Result of load_multi_tf_bars().
+
+    For each requested timeframe, holds the loaded bars + coverage
+    metadata OR (in PARTIAL mode) a None placeholder with a warning.
+
+    STRICT mode (allow_partial_tfs=False, default per Sharpened Rule
+    #3): any per-TF MissingDataError is re-raised immediately; this
+    object is never constructed. PARTIAL mode: failing TFs are recorded
+    with bars=None and an explicit 'partial_tf_unavailable' warning is
+    appended.
+    """
+    symbol:               str
+    requested_timeframes: Tuple[str, ...]
+    per_tf_bars:          Dict[str, Optional[pd.DataFrame]]
+    per_tf_coverage:      Dict[str, Optional[Dict[str, Any]]]
+    warnings:             List[BacktestWarning]
+    allow_partial_tfs:    bool
+
+    @property
+    def loaded_timeframes(self) -> Tuple[str, ...]:
+        """TFs for which bars were actually loaded (PARTIAL mode skips
+        unavailable ones)."""
+        return tuple(
+            tf for tf in self.requested_timeframes
+            if self.per_tf_bars.get(tf) is not None
+        )
+
+
+def load_multi_tf_bars(
+    cfg: BacktestConfig,
+    timeframes: List[str],
+    *,
+    allow_partial_tfs: bool = False,
+) -> MultiTfBars:
+    """Load M16 bars for one symbol across N timeframes.
+
+    Wraps load_backtest_bars per-TF via dataclasses.replace so every
+    M17.A integrity gate (coverage row check, NaN/dup-ts/empty checks,
+    bar-level range check with non-trading-day boundary tolerance)
+    fires identically on each TF. No M17.A validation logic is
+    duplicated here.
+
+    Args:
+        cfg:               the full BacktestConfig. Used as a template:
+                           request.symbol, request.start/end, data.adjusted,
+                           data.provider are all preserved per-TF;
+                           request.timeframe is replaced per call.
+                           cfg.request.timeframe is NOT itself loaded
+                           unless it appears in `timeframes`.
+        timeframes:        list of TF labels (e.g. ['1D','4H','1H','15m']).
+                           Order is preserved in the result.
+        allow_partial_tfs: STRICT default (False). When True, per-TF
+                           MissingDataError is caught and recorded as
+                           a 'partial_tf_unavailable' warning instead
+                           of raising. Per Sharpened Rule #3 partial
+                           mode is OPT-IN and never silent.
+
+    Returns:
+        MultiTfBars
+
+    Raises (STRICT mode only):
+        MissingDataError if ANY requested TF fails to load. The error
+        message is the M16 refresh command for that TF.
+    """
+    if not timeframes:
+        raise ValueError("timeframes must contain at least one TF label")
+    # Preserve duplicate-free ordering
+    seen = []
+    for tf in timeframes:
+        if tf not in seen:
+            seen.append(tf)
+    timeframes = seen
+
+    per_tf_bars:     Dict[str, Optional[pd.DataFrame]]    = {}
+    per_tf_coverage: Dict[str, Optional[Dict[str, Any]]] = {}
+    warnings:        List[BacktestWarning]                = []
+
+    for tf in timeframes:
+        per_tf_cfg = _dc_replace(
+            cfg, request=_dc_replace(cfg.request, timeframe=tf))
+        try:
+            bars, coverage, tf_warnings = load_backtest_bars(per_tf_cfg)
+        except MissingDataError as e:
+            if not allow_partial_tfs:
+                # STRICT: propagate. Wrap the per-TF message with the
+                # request context so the operator sees WHICH TF failed
+                # without losing the M16 refresh command.
+                raise MissingDataError(
+                    f"Multi-TF load failed at timeframe {tf!r} "
+                    f"(strict mode; pass allow_partial_tfs=True to "
+                    f"continue with the remaining TFs):\n{e}"
+                ) from e
+            # PARTIAL: record placeholder + warning
+            per_tf_bars[tf]     = None
+            per_tf_coverage[tf] = None
+            warnings.append(BacktestWarning(
+                code="partial_tf_unavailable",
+                message=(f"Timeframe {tf} unavailable for "
+                          f"{cfg.request.symbol}; multi-TF run "
+                          f"continues with reduced TF set "
+                          f"(allow_partial_tfs=True). Original "
+                          f"failure: {e}"),
+                extras={"timeframe": tf,
+                          "symbol":   cfg.request.symbol,
+                          "underlying_error": str(e)[:500]},
+            ))
+            continue
+        per_tf_bars[tf]     = bars
+        per_tf_coverage[tf] = coverage
+        # Re-tag per-TF warnings with their timeframe so the caller
+        # can tell which TF generated which boundary/quality warning.
+        for w in tf_warnings:
+            extras = dict(w.extras) if w.extras else {}
+            extras.setdefault("timeframe", tf)
+            warnings.append(BacktestWarning(
+                code=w.code,
+                message=f"[{tf}] {w.message}",
+                ts_utc=w.ts_utc,
+                extras=extras,
+            ))
+
+    return MultiTfBars(
+        symbol=cfg.request.symbol,
+        requested_timeframes=tuple(timeframes),
+        per_tf_bars=per_tf_bars,
+        per_tf_coverage=per_tf_coverage,
+        warnings=warnings,
+        allow_partial_tfs=allow_partial_tfs,
+    )
