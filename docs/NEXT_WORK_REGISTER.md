@@ -205,33 +205,38 @@ All M15 sub-milestones (M15.0-pre, M15.0, M15.1, M15.2, M15.3.A, M15.3.A.2, M15.
 - **Until then:** IBKR live submissions in production must remain operator-supervised; do not enable any unattended automation that bypasses operator review.
 - **Reference:** [`docs/M14_FINAL_AUDIT.md` §12](M14_FINAL_AUDIT.md) (full text); MILESTONE_STATUS.md M14 detail section "Known coverage gap"; ROADMAP.md M22 line "Requires M14 engine extension to scanner path."
 
-### M17.B — scanner_replica + multi-timeframe confluence + live equivalence (PROPOSED, AFTER M17.A)
-- **Status:** Not started. M17.A is CLOSED at HEAD `a05f160` (2026-06-07) and VPS-verified — see `docs/M17_A_closeout.md` and the M17.A section of `MILESTONE_STATUS.md`. M17.B is the next active sub-milestone whenever the operator authorises it. A planning-only audit was produced at M17.A closeout (delivered in chat alongside the closeout commit) covering current scanner logic, indicator/rule replication, data requirements, confluence handling, test strategy, gaps/risks, proposed phases, pre-code checklist, and the no-touch list.
-- **Scope (M17.B, not M17.A):**
-  - Register a new strategy `scanner_replica` in `bot/backtesting/strategy.py` that reproduces the live `bot/scanner.py` signal output for the same bars and parameters, OR a documented divergence with a recorded reason.
-  - Load + align bars from all four timeframes the live scanner uses (1D / 4H / 1H / 15m) for a given symbol; reproduce the `min_valid_tfs ≥ 3` confluence gate.
-  - Indicator parity test: every indicator value computed by `scanner_replica` matches `bot.indicators.compute()` on the same bars (or NaN at warmup on both sides).
-  - Live-vs-backtest equivalence proof: replay the ~10 real LONG `candidate_snapshots` rows currently in `data/signals.db` through `scanner_replica` and assert per-snapshot signal identity. Because that dataset is thin (memory: ~10 rows, all LONG, 1 symbol), supplement with a synthetic golden trace fixture as the durable regression guard.
-  - ATR-based exits (live scanner uses ATR for both stops and targets; M17.A is percentage-only). Add as a strategy parameter so SMA crossover can still use percentage-based exits.
-- **What stays deferred beyond M17.B** (NOT included in this sub-milestone):
-  - Multi-symbol portfolio backtests; optimisation / parameter sweeps / walk-forward; ML signal filter (M9 closed-loop); paper-trade automation (M18); dashboard backtest UI; short selling; options/futures; retirement of legacy `bot/backtest.py` / `bot/backtest_v2.py` (separate sub-milestone).
-- **Hard constraints inherited from M17.A** (operator-authoritative, do not relax in M17.B):
-  - No protected files touched. `bot/data.py` byte-identical.
-  - No scanner / strategy / broker / eToro / dashboard / `.env` / service / generated-data changes.
-  - `bot.historical` continues to be imported only by `bot/backtesting/data_loader.py`.
-  - No `bot.scanner` or `bot.strategy` IMPORT inside `bot/backtesting/*` (per the live-vs-backtest separation contract). `scanner_replica` reproduces the logic by code, not by import — same as how M17.A's `SmaCrossoverStrategy` reproduces SMA crossover without importing scanner code. **If the operator decides that direct re-use via import is the right path, that flips a foundational architecture decision and needs explicit operator approval before any M17.B code lands.**
-  - No new dependencies.
-- **Acceptance criteria when undeferred:**
-  - `scanner_replica` registered and selectable via `--strategy scanner_replica` in `bot.backtesting.cli`.
-  - Indicator parity test passes against `bot.indicators.compute()` for at least RSI, MACD, EMA, Bollinger on the AAPL 1D fixture.
-  - Multi-timeframe loader takes a list of timeframes and returns aligned bars; the confluence gate reproduces the live scanner's score reduction.
-  - Equivalence test: for every replayable `candidate_snapshots` row (where M16 has the required bars), `scanner_replica` produces the same direction as the live record (or a documented controlled divergence).
-  - VPS regression: M16 + audit-P1 + M17 sweep stays OK; example backtest still exits 0 with the existing example config.
-  - Hard constraints above all hold.
-- **Reference:** `docs/M17_A_closeout.md` §7 ("What is explicitly deferred to M17.B"); planning-only M17.B audit delivered in the M17.A closeout chat session.
+### scanner_replica real intraday E2E — provider/data blocked (PROPOSED, carry-forward from M17.B)
+- **Status:** Not started. Carried forward from M17.B closeout 2026-06-07. M17.B IMPLEMENTATION itself is CLOSED at HEAD `3f1079e` — scanner_replica is operational, parity is proven, and the strict-per-TF gate is verified. The only piece that did NOT complete on the VPS at M17.B acceptance is a real intraday end-to-end run of the `example_scanner_replica_aapl.json` config, because M16 lacks AAPL 4H/1H/15m coverage on the VPS and yfinance rate-limited the intraday backfill attempts. The strict-per-TF gate (Sharpened Rule #3) behaved exactly as specified — exit code 2 with `MissingDataError` referencing the right `bot.historical.cli backfill` command.
+- **Recorded VPS state at M17.B acceptance (2026-06-07):**
+  - AAPL 1D coverage: present, 11,462 bars clean
+  - AAPL 4H coverage: ABSENT
+  - AAPL 1H coverage: ABSENT
+  - AAPL 15m coverage: ABSENT
+  - 1H backfill attempt: `YFRateLimitError`, status `failed`, `rate_limited=1`, `rate_limit_count=6`, exit 1
+  - 15m backfill attempt: `YFRateLimitError`, same pattern, exit 1
+  - 4H backfill attempt: status ok but `no_data=1` (4H is resampled from 1H at write time; without 1H source, no bars are produced)
+  - Legacy `data/bar_cache` / `data/bt_v2_cache` present on VPS but NOT consumed by `bot/backtesting/*` (AST-asserted; falling back would have violated the M17.A "M16 sole data source" architecture decision).
+- **Condition to close this entry:**
+  - M16 intraday coverage for AAPL exists on the VPS via EITHER:
+    - (a) yfinance backfill succeeding without rate-limit failures (likely requires either an off-peak retry window, a different VPS egress IP, or rate-limit-aware backfill pacing — none of which are M17.B-in-scope), OR
+    - (b) an alternate provider integrated behind the `bot.historical` `BaseProvider` interface (M6 left this contract in place specifically to make provider addition a one-file change; the cost decision and provider selection are operator's to make).
+  - With coverage present, `python -m bot.backtesting.cli run --config configs/backtests/example_scanner_replica_aapl.json` exits **0** on VPS and writes the standard 6 artifacts (`manifest.json`, `report.json`, `trades.csv`, `trades.jsonl`, `equity_curve.csv`, `warnings.json`) under `data/backtests/<timestamp>_scanner_replica_*/`.
+  - The M17.B.6 candidate_snapshots replay diagnostic produces K > 0 with `failed=0` (recall: K=0 is an accepted-pass per Sharpened Rule #5; the carry-forward is about supplementing the synthetic equivalence proof with real-bar replay evidence, not about replacing it).
+- **What stays explicitly DEFERRED beyond this entry:**
+  - Engineering rate-limit-aware yfinance pacing for intraday backfill OR integrating a paid provider — both are separate sub-milestones with their own pre-code Q-checklists.
+  - Shorts in scanner_replica (execution layer is long-only).
+  - Multi-symbol portfolio backtests, optimisation / parameter sweeps / walk-forward, dashboard backtest UI, retirement of legacy `bot/backtest.py` / `bot/backtest_v2.py`.
+- **What MUST NOT be done in response** (hard rules, operator-pinned at M17.B closeout):
+  - No code workaround inside `bot/backtesting/*` to fake intraday data.
+  - No fallback to `data/bar_cache` / `data/bt_v2_cache`.
+  - No weakening of strict-per-TF.
+  - No automatic provider switching.
+  - No silent partial-mode default.
+  - No yfinance retry pattern that masks rate-limit signal without addressing the underlying pacing.
+- **Reference:** `docs/M17_B_closeout.md` §5 (honest residual) and §7 (carry-forward). Recorded as part of the M17.B docs-closeout 2026-06-07.
 
-### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17.B)
-- **Status:** Not started. Sequenced after M17.B. Pre-code Q-style checklist required.
+### M18 — Advanced signal scoring + paper-trade automation (2-4 weeks; PROPOSED, AFTER M17 + intraday carry-forward)
+- **Status:** Not started. Sequenced after M17 (both M17.A and M17.B are CLOSED 2026-06-07); the intraday carry-forward above is sequencing-adjacent, not blocking. Pre-code Q-style checklist required.
 - **Scope sketch:** ranked signal scoring (multi-factor); automated paper-trade execution on IBKR paper (M11 path already wired); flywheel data accumulation accelerated; integration with the M14 risk authority engine for sizing/gating.
 - **Reference:** Mike's request 2026-06-04 at M15.3.A.cutover closeout. Timing estimate 2-4 weeks.
 
@@ -258,6 +263,14 @@ What is the next major work after M15.3.B + M15.3.C ship: **M16 (historical data
 ---
 
 ## Closed items
+
+### M17.B — scanner_replica + Multi-Timeframe Confluence (CLOSED 2026-06-07)
+- **Closing commit / final HEAD:** `3f1079e` (M17.B.7). Full 8-commit chain on `origin/main` from `1b9e3ec` (M17.B.pre-phase) to `3f1079e` — listed in `docs/M17_B_closeout.md` §2 and `MILESTONE_STATUS.md`.
+- **VPS evidence (2026-06-07, operator-verified):** HEAD = `3f1079e`; 8 M17.B commits present `f6bf24e..3f1079e`; `bot/data.py` sha = `03f488c73feba19a9088b779722ee53515e936f2` (byte-identical to M17.A baseline, unchanged at every M17.B commit); combined M17 + M16 + audit-P1 regression exit code 0 (expected composition 200 M17 + 70 M16 + 23 audit-P1 = 293 tests OK, skipped=2); M17.B.6 replay diagnostic exit 0 (K-replayed varies per VPS M16 coverage; `failed=0` invariant holds; per Sharpened Rule #5 no equivalence claim is made when K=0); SMA example E2E exit 0 (M17.A baseline reproducibility preserved); dashboard active; caddy active; `/api/health` HTTP 200; `git status` clean.
+- **What shipped:** indicator parity helpers (RSI `mode='sma_gain_loss'`, ATR `mode='sma_true_range'`, `vwap_dev`, `bb_pos`); strict multi-TF M16 loader (`load_multi_tf_bars` + `MultiTfBars` with `allow_partial_tfs=False` default); `MultiTimeframeContext` with look-ahead-safe O(log n) snapshot lookup; `ScannerReplicaStrategy` reproducing `bot/scanner.score_timeframe` algebra by code; ATR-based exits opt-in in `ExecutionConfig` (default `stop_mode='pct'` preserves M17.A byte-identically); `candidate_snapshots` replay diagnostic (smoke-only; K=0 accepted-pass); `configs/backtests/example_scanner_replica_aapl.json`; G10 AST forbidden-import list extended with `bot.scanner` / `bot.strategy` / `bot.feature_engine` / `bot.indicators` / `bot.sentiment` / `bot.flywheel`; `_M17_A_BASELINE_FORBIDDEN` regression asserts M17.A baseline preserved.
+- **Hard-constraint evidence:** 0/20 protected files modified; `bot/data.py` byte-identical; AST-clean (no live scanner/strategy/indicators/feature_engine/sentiment/flywheel imports inside `bot/backtesting/*`); only `data_loader.py` imports `bot.historical`; legacy `data/bar_cache` / `data/bt_v2_cache` NOT consumed; no order-method string literals; no sockets during runtime; no new dependencies; no `.env` / service / generated-data changes; `bk.ENGINE_VERSION == 'M17.A.1'` unchanged (Sharpened Rule #2 honoured).
+- **Authoritative operator reference:** [`M17_B_closeout.md`](M17_B_closeout.md).
+- **Honest residual** (recorded in `M17_B_closeout.md` §5 + Active carry-forward above): real intraday end-to-end on VPS NOT verified at M17.B acceptance. M16 lacks AAPL 4H/1H/15m coverage on the VPS; yfinance rate-limited intraday backfill attempts (`YFRateLimitError`, `rate_limited=1`, `rate_limit_count=6`, exit 1 on 1H and 15m); 4H wrote no data because its 1H source is missing. Strict-per-TF gate fired correctly with exit code 2 + `MissingDataError` referencing the right backfill command. Equivalence is proven by synthetic per-rule parity (G3_IndicatorParity, G4_ScannerReplicaScoringParity, G4_ScannerReplicaConfluenceScaler, G4_ScannerReplicaIntegration); real-bar replay against `candidate_snapshots` is a carry-forward Active entry, not a blocker. NO code workaround, NO fallback to legacy caches, NO weakening of strict-per-TF was done in response.
 
 ### M17.A — Backtesting Engine Foundation (CLOSED 2026-06-07)
 - **Closing commit / final HEAD:** `a05f160` (M17.A.fixup5). Full 14-commit chain on `origin/main` from `5b37194` (M17.A.1) to `a05f160` — listed in `docs/M17_A_closeout.md` §2 and `MILESTONE_STATUS.md`.
