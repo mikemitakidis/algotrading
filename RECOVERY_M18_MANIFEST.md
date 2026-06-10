@@ -16,12 +16,12 @@
 
 | Item | Value |
 |---|---|
-| Transcripts found | 9 `*m18*.txt` files, 7.5 MB total + `journal.txt` (16 KB) |
-| Date range of transcripts | 2026-06-08 21:55 to 2026-06-09 23:34 UTC |
-| Phases covered in transcripts (high confidence) | M18.A.pre-phase, M18.A.1, M18.A.2, M18.A.3, M18.A.4, M18.A.5, M18.A.6, M18.A.7 |
-| Phases NOT covered in transcripts | M18.A.8 (registry), M18.A.9 (CLI), M18.A.10 (docs) — those sessions finished after the last transcript was finalised; their content must come from this chat session's history |
-| Files reconstructable from transcripts | ~40 of the ~55 production files in `bot/ml/` |
-| Files that MUST come from chat history (not in transcripts) | ~15 (registry package, evaluation extension modules, docs/M18_status.md, config examples) — see § 4 |
+| Transcripts found | **10** `*m18*.txt` files, 8.5 MB total + `journal.txt` (16 KB) — a 10th transcript appeared from today's session at `/mnt/transcripts/2026-06-10-18-38-47-m18-recovery-from-transcripts.txt` |
+| Date range of transcripts | 2026-06-08 21:55 to 2026-06-09 22:55 UTC (10th transcript backfills 2026-06-09 19:43 → 22:55 with M18.A.7 amend AND M18.A.8 implementation) |
+| Phases FULLY covered in transcripts | M18.A.pre-phase, M18.A.1, M18.A.2, M18.A.3, M18.A.4, M18.A.5, M18.A.6, M18.A.7 (v1 + v2 amend), **M18.A.8 (initial + 2 Q20 amends)** |
+| Phases NOT covered in transcripts | M18.A.9 (CLI rewrite), M18.A.10 (docs prep) — these happened in a session whose transcript was not yet finalised when `/mnt/transcripts/` was snapshotted; content must come from this chat session's history |
+| Files reconstructable from transcripts | **~50** of the ~55 production files in `bot/ml/` (up from earlier estimate of 40) |
+| Files that MUST come from chat history (not in transcripts) | ~10: M18.A.9 CLI rewrite, configs/ml/dataset.example.json, configs/ml/train.example.json, docs/M18_status.md, MILESTONE_STATUS.md M18 section, M18.A.10 G10 regex alignment in test files. Plus possibly `baseline_compare.py`, `binary_metrics_extended.py`, `features/benchmark.py` if they actually exist (zero transcript mentions; my chat-history memory may have been over-imaginative about these) |
 
 ---
 
@@ -368,3 +368,139 @@ the affected file:
 4. After push, await operator's go-ahead before starting Step 4.
 
 No code will be reconstructed until this manifest is committed and pushed.
+
+---
+
+## 10. Deeper-scan addendum (post-initial-manifest commit)
+
+After committing the initial manifest, a second-pass scan turned up
+significant additional recovery sources:
+
+### 10.1 The 10th transcript (today's session, captures M18.A.7/A.8 work)
+
+`/mnt/transcripts/2026-06-10-18-38-47-m18-recovery-from-transcripts.txt`
+(992 KB, 5 chunks) is THIS chat session's transcript-in-progress.
+Despite its filename, its content backfills earlier work:
+
+| Chunk | Time range | Content |
+|---|---|---|
+| 1 | 2026-06-09 20:46 → 20:55 | M18.A.7 v2 amend final: `ml_metrics.py` (6,891 chars) |
+| 2 | 2026-06-09 21:07 → 21:17 | **M18.A.8 initial implementation**: all 6 registry files via `create_file` — `__init__.py` (2,822), `entry.py` (6,928), `gates.py` (6,060), `storage.py` (6,212), `registry.py` (21,058), `predictions.py` (12,154). Plus 1 immediate `str_replace` on registry.py |
+| 3 | 2026-06-09 21:21 → 21:31 | M18.A.8 commit message draft (no source code) |
+| 4 | 2026-06-09 22:15 → 22:29 | **M18.A.8 first Q20 amend**: str_replace on registry.py + predictions.py + test_m18_ml.py |
+| 5 | 2026-06-09 22:44 → 22:55 | **M18.A.8 second Q20 amend**: 3× str_replace on predictions.py + 1× on test_m18_ml.py |
+
+All registry source IS recoverable byte-faithfully via the `create_file` +
+`str_replace` chain in this transcript.
+
+### 10.2 The A.10 transcript file (transcript #9, 23:34 file) details
+
+`recovery_inputs/m18_transcripts/2026-06-09-23-34-05-2026-06-09-m18-a10-final-hardening.txt`
+has 3 chunks. Despite the "a10" name, content is M18.A.7:
+
+| Chunk | Time range | Content |
+|---|---|---|
+| 1 | 2026-06-09 19:43 → 19:58 | **M18.A.7 v1**: 5 evaluation files (`__init__`, `calibration`, `trading_metrics`, `report`, `evaluator`) + g6 test block draft |
+| 2 | 2026-06-09 20:28 → 20:41 | **M18.A.7 v2 amend started**: `ml_metrics.py` v1 (4,134 chars) + g7 test block + amend commit msg draft |
+| 3 | 2026-06-09 20:46 → 20:55 | **M18.A.7 v2 amend final**: `ml_metrics.py` final (6,891 chars) — same content as 10th transcript's chunk 1 |
+
+This transcript ALSO contains crucial `view` operations that captured
+the FULL source of 4 evaluation extension files that I previously
+flagged as `missing_uncertain`:
+
+| File | Recovered via view tool_result | Size |
+|---|---|---|
+| `bot/ml/evaluation/drift.py` | view (FULL) in A.10 file | 7,197 chars |
+| `bot/ml/evaluation/permutation_importance.py` | view (FULL) in A.10 file | 12,649 chars |
+| `bot/ml/evaluation/threshold_metrics.py` | view (FULL) in A.10 file | 3,629 chars |
+| `bot/ml/evaluation/breakdowns.py` | view (FULL) in A.10 file | 14,355 chars |
+
+The `view` tool_result text is line-numbered (`    1\tcontent`). I will
+strip the prefix during reconstruction to recover the raw file body.
+Recoverability tag: `view_full_recovered`.
+
+### 10.3 Updated per-phase recovery map
+
+| Phase | Hash | Source transcript(s) | Recoverability |
+|---|---|---|---|
+| M18.A.pre-phase | `c76e4f1` | #1 / #2 (M17.B G10 whitelist extension) | `str_replace` ✓ |
+| M18.A.1 | `5ed45e4` | #2 (skeleton, schemas, CLI stub, errors) — `bot/ml/__init__.py`, `bot/ml/schemas.py`, `bot/ml/cli.py` (stub form), `bot/ml/errors.py` via bash heredocs in transcripts #3 / #4 | `bash_heredoc` + later `str_replace` amendments |
+| M18.A.2 | `be6c0bf` | #5 (10 create_file blocks for dataset loader + 5 safe feature groups) | `create_file_full` ✓ |
+| M18.A.3 | `7c8f3db` | #5 (5 extended feature groups + symbol_metadata.example.json) | `create_file_full` ✓ — except `features/benchmark.py` (ZERO mentions; likely never existed) |
+| M18.A.4 | `cf5b4b7` | #5 + #6 (6 label files; re-created in #6 with locked label-ids) | `create_file_full` ✓ |
+| M18.A.5 | `156f94b` | #6 (7 dataset-assembler files; one (`_m16_backfill.py`) finalised in #7) | `create_file_full + str_replace` ✓ |
+| M18.A.6 | `23c376d` | #7 (6 model/trainer files) | `create_file_full + str_replace` ✓ |
+| M18.A.7 v1 | `b671e70` (superseded) | #9 chunk 1 (5 evaluation files) | `create_file_full` ✓ |
+| M18.A.7 v2 amend | `2ca0b46` | #9 chunks 2-3 (ml_metrics.py) + #9 view tool_results (drift, permutation_importance, threshold_metrics, breakdowns) | `create_file_full + view_full_recovered` ✓ |
+| M18.A.8 initial | `b671e70` then `ae7ca4b` | **#10** chunk 2 (6 registry files via create_file) | `create_file_full + str_replace` ✓ |
+| M18.A.8 Q20 amend 1 | `ae7ca4b` (amend) | **#10** chunk 4 (Q20 envelope on registry.py + schema on predictions.py + tests) | `str_replace_sequence` ✓ |
+| M18.A.8 Q20 amend 2 | `ae7ca4b` (final amend) | **#10** chunk 5 (back-compat aliases on predictions.py + more tests) | `str_replace_sequence` ✓ |
+| M18.A.9 | `cd4ce36` | **NONE** — current chat session only | `NOT_BYTE_IDENTICAL` (CLI rewrite, 2 config examples) |
+| M18.A.10 | `a06fcfe` | **NONE** — current chat session only | `NOT_BYTE_IDENTICAL` (docs/M18_status.md, MILESTONE_STATUS.md M18 section, 1-char regex fix in 2 test files) |
+
+### 10.4 Files NOT recoverable from any transcript (final list)
+
+These will be reconstructed from this chat session's context (the
+operator's last 3 messages contain the design and the constraints) and
+tagged `RECONSTRUCTED_FROM_TRANSCRIPT_NOT_BYTE_IDENTICAL`:
+
+| File | Status |
+|---|---|
+| `bot/ml/cli.py` (M18.A.9 rewrite — wired predict + registry list/show/promote; stubbed build-dataset/train/evaluate/registry-demote) | NOT_BYTE_IDENTICAL |
+| `configs/ml/dataset.example.json` | NOT_BYTE_IDENTICAL |
+| `configs/ml/train.example.json` | NOT_BYTE_IDENTICAL |
+| `docs/M18_status.md` | NOT_BYTE_IDENTICAL |
+| `MILESTONE_STATUS.md` (M18 section additions) | NOT_BYTE_IDENTICAL |
+| `test_m18_ml.py` + `test_m17_backtesting.py` G10 regex (1-char) | NOT_BYTE_IDENTICAL |
+| `bot/ml/evaluation/baseline_compare.py` | ZERO transcript mentions — may have been a back-compat alias inside `evaluator.py` rather than a separate file; will verify when reconstructing evaluation/__init__.py |
+| `bot/ml/evaluation/binary_metrics_extended.py` | Same as above |
+| `bot/ml/features/benchmark.py` | ZERO transcript mentions — likely never existed as a separate file (my earlier chat-history summary may have been wrong); will verify during M18.A.3 reconstruction |
+
+### 10.5 Files possibly NOT existing as separate modules
+
+For `baseline_compare.py`, `binary_metrics_extended.py`, and
+`features/benchmark.py` — the conservative approach is: **if the
+recovered `evaluation/__init__.py` and `evaluator.py` don't import
+them, they don't exist**. I will verify this during the M18.A.7
+reconstruction step before declaring them missing.
+
+---
+
+## 11. Reconstruction execution plan (post-deeper-scan)
+
+Order of operations, each pushed as a separate checkpoint commit:
+
+1. **Push manifest + addendum** (this commit) — establishes the recovery
+   plan on origin BEFORE any code lands.
+2. **M18.A.pre-phase** — single `str_replace` on `test_m17_backtesting.py`
+   for the G10 whitelist extension.
+3. **M18.A.1** — `bot/ml/{__init__,errors,schemas,cli}.py` foundation;
+   minimal `test_m18_ml.py` skeleton with G1_CLI + G10_Hygiene starter
+   tests. Source: transcript #2/#3/#4 bash heredocs + transcript #5
+   `str_replace` follow-ups.
+4. **M18.A.2** — dataset loader + 5 safe feature groups + foundation
+   `features/__init__.py` and `base.py`. Source: transcript #5.
+5. **M18.A.3** — 5 extended feature groups + `configs/ml/symbol_metadata.example.json`.
+   Source: transcript #5.
+6. **M18.A.4** — 6 label files. Source: transcript #5 (initial) + #6
+   (label-id realignment).
+7. **M18.A.5** — 7 dataset-assembler files. Source: transcript #6 +
+   transcript #7's A.5-followup edits.
+8. **M18.A.6** — 6 model/trainer files. Source: transcript #7.
+9. **M18.A.7 (v1 + v2 amend, combined)** — 10 evaluation files:
+   - From transcript #9 chunk 1 (create_file × 5)
+   - From transcript #9 chunk 3 + transcript #10 chunk 1 (`ml_metrics.py` create_file)
+   - From transcript #9 view tool_results (drift, permutation_importance, threshold_metrics, breakdowns — strip line-number prefix)
+   Plus the G7 test block via str_replace.
+10. **M18.A.8 (initial + 2 Q20 amends, combined)** — 6 registry files +
+    Q20 amends. Source: transcript #10 chunks 2, 4, 5.
+11. **M18.A.9** — `bot/ml/cli.py` rewrite + 2 config examples — from
+    chat-session memory. Tagged NOT_BYTE_IDENTICAL.
+12. **M18.A.10** — docs + 1-char regex alignment — from chat-session
+    memory. Tagged NOT_BYTE_IDENTICAL.
+13. **Final acceptance** — run full test_m18_ml + M18 G10 + M17.B G10 +
+    M17.B full + protected-file diff + dependency diff + forbidden
+    import check + no-live-path check.
+
+Every checkpoint commits ONLY the files for that phase and gets pushed
+immediately when a PAT is available.
