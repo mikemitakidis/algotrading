@@ -4137,6 +4137,12 @@ class G10_Hygiene(unittest.TestCase):
                 and p not in allowed_exact
                 and not allowed_doc_regex.match(p)
         ]
+        # M18.A.pre-phase: filter out files under M18 whitelist roots.
+        unexpected = [
+            p for p in unexpected
+            if not any(p.startswith(r) for r in _M18_ALLOWED_ROOTS)
+            and p not in ('RECOVERY_M18_MANIFEST.md', '.gitignore')
+        ]
         self.assertEqual(unexpected, [],
             f"Unexpected files changed: {unexpected}")
 

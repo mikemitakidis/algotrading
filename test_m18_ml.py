@@ -82,6 +82,24 @@ def _walk_bot_ml_py_files():
 # G10 whitelist — directories M18 is allowed to add files in.
 # Anything created outside these directories is flagged by G10's
 # test_no_unexpected_files_added.
+
+def _imports_in_file(path):
+    """Yield every fully-qualified module name imported by `path`.
+
+    Uses ast to walk Import / ImportFrom nodes; for ImportFrom with
+    `module='bot.historical', names=['store']`, yields 'bot.historical'
+    (not 'bot.historical.store') so callers can do prefix checks
+    against 'bot.historical' cleanly.
+    """
+    tree = ast.parse(Path(path).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield alias.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                yield node.module
+
 _M18_WHITELIST_PREFIXES = (
     "bot/ml/",
     "configs/ml/",
