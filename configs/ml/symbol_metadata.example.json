@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "description": "Per-symbol static metadata for the symbol_meta feature group. Loaded by bot.ml.features.symbol_meta at dataset-build time. Missing symbols fall back to all-NaN feature rows (not an error). Operator-maintained.",
+  "symbols": {
+    "AAPL": {
+      "sector":            "technology",
+      "industry":          "consumer_electronics",
+      "market_cap_bucket": "mega",
+      "asset_class":       "equity",
+      "country":           "US",
+      "ipo_year":          1980,
+      "etf":               false
+    },
+    "MSFT": {
+      "sector":            "technology",
+      "industry":          "software",
+      "market_cap_bucket": "mega",
+      "asset_class":       "equity",
+      "country":           "US",
+      "ipo_year":          1986,
+      "etf":               false
+    },
+    "NVDA": {
+      "sector":            "technology",
+      "industry":          "semiconductors",
+      "market_cap_bucket": "mega",
+      "asset_class":       "equity",
+      "country":           "US",
+      "ipo_year":          1999,
+      "etf":               false
+    },
+    "TSLA": {
+      "sector":            "consumer_discretionary",
+      "industry":          "auto_manufacturers",
+      "market_cap_bucket": "mega",
+      "asset_class":       "equity",
+      "country":           "US",
+      "ipo_year":          2010,
+      "etf":               false
+    },
+    "SPY": {
+      "sector":            "etf_broad_market",
+      "industry":          "etf",
+      "market_cap_bucket": "etf",
+      "asset_class":       "etf",
+      "country":           "US",
+      "ipo_year":          1993,
+      "etf":               true
+    },
+    "QQQ": {
+      "sector":            "etf_broad_market",
+      "industry":          "etf",
+      "market_cap_bucket": "etf",
+      "asset_class":       "etf",
+      "country":           "US",
+      "ipo_year":          1999,
+      "etf":               true
+    }
+  },
+  "encodings": {
+    "sector": {
+      "technology":               0,
+      "consumer_discretionary":   1,
+      "consumer_staples":         2,
+      "energy":                   3,
+      "financials":               4,
+      "healthcare":               5,
+      "industrials":              6,
+      "materials":                7,
+      "real_estate":              8,
+      "telecom":                  9,
+      "utilities":               10,
+      "etf_broad_market":        11,
+      "etf_sector":              12,
+      "unknown":                 99
+    },
+    "market_cap_bucket": {
+      "micro":  0,
+      "small":  1,
+      "mid":    2,
+      "large":  3,
+      "mega":   4,
+      "etf":    5,
+      "unknown": 99
+    },
+    "asset_class": {
+      "equity": 0,
+      "etf":    1,
+      "adr":    2,
+      "unknown": 99
+    }
+  }
+}

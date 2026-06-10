@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Protocol, Tuple
 
+import numpy as np
 import pandas as pd
 
 from bot.ml.schemas import FeatureSpec
@@ -61,17 +62,17 @@ def compute_log_return(close: pd.Series, periods: int) -> pd.Series:
     Implementation here keeps it in one place so all callers agree
     on edge cases (e.g. zero-or-negative prices → NaN).
     """
-    import numpy as np
     if periods <= 0:
         raise ValueError(f"periods must be positive, got {periods}")
     prev = close.shift(periods)
-    # log returns require strictly positive prices; replace
-    # non-positive with NaN to avoid -inf / NaN-in-log noise.
+    # log returns require strictly positive prices; non-positive
+    # values produce NaN rather than -inf / NaN-in-log noise.
     safe_close = close.where(close > 0)
     safe_prev = prev.where(prev > 0)
-    return (safe_close / safe_prev).apply(
-        lambda x: float("nan") if pd.isna(x) else float(
-            __import__("math").log(x)))
+    ratio = safe_close / safe_prev
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return pd.Series(np.log(ratio.to_numpy(dtype=float)),
+                          index=close.index)
 
 
 def compute_simple_return(close: pd.Series, periods: int) -> pd.Series:

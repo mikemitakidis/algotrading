@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict
 
@@ -28,9 +28,17 @@ from bot.ml import schemas as ml_schemas
 from bot.ml import hashing as ml_hashing
 from bot.ml import cli as ml_cli
 from bot.ml.dataset import m16_loader
+from bot.ml.dataset import flywheel_reader
 from bot.ml.features import (
     price_return, trend, momentum, vol_regime, volume_liquidity,
+    mtf_confluence, scanner_replica, market_context, symbol_meta,
+    signal_history,
 )
+from bot.ml.labels import (
+    triple_barrier, forward_returns, mfe_mae, risk_adjusted,
+)
+from bot.ml.labels.base import assert_label_resolved_after_anchor
+import sqlite3
 
 
 # Path constants
@@ -698,6 +706,971 @@ class G2_FutureBarScramble(unittest.TestCase):
                                   f"differ across scramble (leak!)")
 
 
+# ═════════════════════════════════════════════════════════════════════
+# G2 — M18.A.3 feature groups: multi-TF, benchmark, metadata, flywheel
+# ═════════════════════════════════════════════════════════════════════
+
+
+def _make_multi_tf_bars(seed: int = 1, n_15m: int = 400):
+    """Generate aligned multi-TF synthetic bars at 15m/1H/4H/1D.
+
+    Each TF gets its own RNG seed so the resulting series differ;
+    timestamps start from the same anchor and use the requested
+    cadence so that snapshot_at() will find at-or-before bars at
+    every 15m anchor.
+    """
+    def _one(n, freq, seed_, start="2024-01-02"):
+        rng = np.random.default_rng(seed_)
+        ts = pd.date_range(start, periods=n, freq=freq, tz="UTC")
+        close = 100.0 * np.exp(np.cumsum(
+            rng.normal(0.0001, 0.005, n)))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        spread = np.abs(rng.normal(0, 0.005, n)) * close + 0.01
+        high = np.maximum(open_, close) + spread / 2.0
+        low  = np.minimum(open_, close) - spread / 2.0
+        vol = rng.integers(1_000_000, 10_000_000, n).astype(float)
+        return pd.DataFrame({"ts_utc": ts, "open": open_, "high": high,
+                              "low": low, "close": close, "volume": vol,
+                              "quality_flags": 0})
+
+    # 15m anchor; coarser TFs at proportional sample counts.
+    b15 = _one(n_15m,            "15min", seed * 11)
+    b1h = _one(max(80, n_15m//4), "1h",    seed * 13)
+    b4h = _one(max(30, n_15m//16), "4h",   seed * 17)
+    b1d = _one(max(20, n_15m//96), "1D",   seed * 19)
+    return {"15m": b15, "1H": b1h, "4H": b4h, "1D": b1d}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G2_SymbolMeta
+# ─────────────────────────────────────────────────────────────────────
+
+class G2_SymbolMeta(unittest.TestCase):
+
+    EXAMPLE = "configs/ml/symbol_metadata.example.json"
+
+    def test_load_example_file_succeeds(self):
+        data = symbol_meta.load_metadata(self.EXAMPLE)
+        self.assertEqual(data["schema_version"], 1)
+        self.assertIn("symbols", data)
+        self.assertIn("encodings", data)
+        # Must contain at least one example symbol.
+        self.assertIn("AAPL", data["symbols"])
+
+    def test_known_symbol_lookup(self):
+        bars = _make_synthetic_bars(n=10)
+        out = symbol_meta.compute(bars, symbol="AAPL",
+                                    metadata_path=self.EXAMPLE)
+        # AAPL: sector=technology(0), market_cap=mega(4),
+        #       asset_class=equity(0), etf=false, ipo=1980
+        self.assertEqual(int(out["symbol_meta.sector_code"].iloc[0]), 0)
+        self.assertEqual(int(out["symbol_meta.market_cap_code"].iloc[0]),
+                          4)
+        self.assertEqual(int(out["symbol_meta.asset_class_code"].iloc[0]),
+                          0)
+        self.assertEqual(int(out["symbol_meta.is_etf"].iloc[0]), 0)
+        self.assertEqual(int(out["symbol_meta.ipo_year"].iloc[0]), 1980)
+
+    def test_etf_symbol_marked_correctly(self):
+        bars = _make_synthetic_bars(n=10)
+        out = symbol_meta.compute(bars, symbol="SPY",
+                                    metadata_path=self.EXAMPLE)
+        self.assertEqual(int(out["symbol_meta.is_etf"].iloc[0]), 1)
+        self.assertEqual(int(out["symbol_meta.market_cap_code"].iloc[0]),
+                          5)
+
+    def test_unknown_symbol_falls_back_to_unknown_codes(self):
+        bars = _make_synthetic_bars(n=10)
+        out = symbol_meta.compute(bars, symbol="NEVER_SEEN_BEFORE_XYZ",
+                                    metadata_path=self.EXAMPLE)
+        # unknown sector → 99, unknown cap → 99, unknown asset → 99,
+        # unknown ipo → 0, unknown etf → -1
+        self.assertEqual(int(out["symbol_meta.sector_code"].iloc[0]),
+                          99)
+        self.assertEqual(int(out["symbol_meta.market_cap_code"].iloc[0]),
+                          99)
+        self.assertEqual(int(out["symbol_meta.asset_class_code"].iloc[0]),
+                          99)
+        self.assertEqual(int(out["symbol_meta.ipo_year"].iloc[0]), 0)
+        self.assertEqual(int(out["symbol_meta.is_etf"].iloc[0]), -1)
+
+    def test_constant_across_rows(self):
+        """Every row should have the same value (static metadata)."""
+        bars = _make_synthetic_bars(n=50)
+        out = symbol_meta.compute(bars, symbol="AAPL",
+                                    metadata_path=self.EXAMPLE)
+        for col in out.columns:
+            self.assertEqual(out[col].nunique(), 1,
+                f"{col} is not constant across rows")
+
+    def test_specs_all_safe_leak_class(self):
+        for s in symbol_meta.SPECS:
+            self.assertEqual(s.leak_class, "safe",
+                f"{s.feature_id} must be leak_class='safe'")
+
+    def test_schema_validation_rejects_bad_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "bad.json"
+            bad.write_text('{"schema_version": 99, "symbols": {}, '
+                           '"encodings": {}}')
+            with self.assertRaises(ValueError):
+                symbol_meta.load_metadata(bad)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G2_MTFConfluence
+# ─────────────────────────────────────────────────────────────────────
+
+class G2_MTFConfluence(unittest.TestCase):
+
+    def test_basic_compute_shape(self):
+        per_tf = _make_multi_tf_bars(seed=1)
+        out = mtf_confluence.compute(per_tf["15m"], per_tf_bars=per_tf)
+        self.assertEqual(len(out), len(per_tf["15m"]))
+        self.assertEqual(
+            set(out.columns),
+            {"mtf_confluence.available_tf_count",
+              "mtf_confluence.tf_15m_present",
+              "mtf_confluence.tf_1h_present",
+              "mtf_confluence.tf_4h_present",
+              "mtf_confluence.tf_1d_present"})
+
+    def test_full_availability_after_warmup(self):
+        per_tf = _make_multi_tf_bars(seed=1, n_15m=600)
+        out = mtf_confluence.compute(per_tf["15m"], per_tf_bars=per_tf)
+        # After enough 15m bars to also have 1D/4H/1H snapshots, every
+        # TF must be present at the LAST anchor.
+        last = out.iloc[-1]
+        self.assertEqual(int(last["mtf_confluence.available_tf_count"]),
+                          4)
+        for col in ("tf_15m_present", "tf_1h_present",
+                      "tf_4h_present", "tf_1d_present"):
+            self.assertEqual(int(last[f"mtf_confluence.{col}"]), 1)
+
+    def test_only_anchor_tf_at_first_anchor(self):
+        # At the very first 15m anchor, the coarser TFs (1H/4H/1D) may
+        # NOT yet have a bar at-or-before (since their bars start at
+        # the same UTC date but the first 1H bar's ts is later than
+        # the first 15m bar's ts). Verify available_tf_count is
+        # consistent with the snapshot semantics.
+        per_tf = _make_multi_tf_bars(seed=1)
+        out = mtf_confluence.compute(per_tf["15m"], per_tf_bars=per_tf)
+        # The 15m TF MUST be present at every anchor (it's the anchor).
+        self.assertTrue((out["mtf_confluence.tf_15m_present"] == 1).all())
+        # available_tf_count >= 1 always (15m present)
+        self.assertTrue(
+            (out["mtf_confluence.available_tf_count"] >= 1).all())
+
+    def test_leak_safety_future_15m_scramble(self):
+        per_tf = _make_multi_tf_bars(seed=2)
+        anchor_idx = len(per_tf["15m"]) - 50
+        scram_15m = per_tf["15m"].copy()
+        rng = np.random.default_rng(987)
+        future_n = len(scram_15m) - anchor_idx - 1
+        scram_15m.loc[anchor_idx + 1:, "close"] = rng.uniform(
+            1, 1000, future_n)
+        scram_15m.loc[anchor_idx + 1:, "high"] = rng.uniform(
+            1000, 2000, future_n)
+        scram_15m.loc[anchor_idx + 1:, "low"] = rng.uniform(
+            0.1, 1, future_n)
+        scram_15m.loc[anchor_idx + 1:, "volume"] = rng.uniform(
+            1, 1e9, future_n)
+        scram_per_tf = dict(per_tf)
+        scram_per_tf["15m"] = scram_15m
+
+        a = mtf_confluence.compute(per_tf["15m"], per_tf_bars=per_tf)
+        b = mtf_confluence.compute(scram_15m,
+                                     per_tf_bars=scram_per_tf)
+        # Features at or before anchor_idx must be identical.
+        for col in a.columns:
+            np.testing.assert_array_equal(
+                a.iloc[:anchor_idx + 1][col].to_numpy(),
+                b.iloc[:anchor_idx + 1][col].to_numpy(),
+                err_msg=f"mtf_confluence/{col}: scramble leaked future")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G2_ScannerReplica
+# ─────────────────────────────────────────────────────────────────────
+
+class G2_ScannerReplica(unittest.TestCase):
+
+    def test_basic_compute_shape(self):
+        per_tf = _make_multi_tf_bars(seed=3)
+        out = scanner_replica.compute(per_tf["15m"],
+                                        per_tf_bars=per_tf)
+        self.assertEqual(len(out), len(per_tf["15m"]))
+        self.assertEqual(out.shape[1], len(scanner_replica.SPECS))
+
+    def test_signal_fires_parity_vs_M17B_strategy(self):
+        """The binary signal column we produce must equal the M17.B
+        strategy's signal output (== SIG_ENTRY -> 1)."""
+        per_tf = _make_multi_tf_bars(seed=4, n_15m=600)
+        out = scanner_replica.compute(per_tf["15m"],
+                                        per_tf_bars=per_tf)
+        # Pull M17.B's canonical signal df via the parity helper
+        sig_df = scanner_replica.parity_check_with_strategy(
+            per_tf["15m"], per_tf_bars=per_tf)
+        # SIG_ENTRY constant in M17.B; per the strategy it's used as
+        # signal == SIG_ENTRY for entries. We just compare zero/non-zero.
+        m18_fires = out["scanner_replica.signal_fires"].to_numpy() == 1
+        m17_fires = sig_df["signal"].to_numpy() != 0
+        np.testing.assert_array_equal(
+            m18_fires, m17_fires,
+            err_msg="M18 scanner_replica.signal_fires must match "
+                    "M17.B ScannerReplicaStrategy.generate signal column")
+
+    def test_long_count_within_bounds(self):
+        per_tf = _make_multi_tf_bars(seed=5)
+        out = scanner_replica.compute(per_tf["15m"],
+                                        per_tf_bars=per_tf)
+        lc = out["scanner_replica.long_count"]
+        avail = out["scanner_replica.available_tf_count"]
+        # long_count must be <= available_tf_count at every anchor
+        self.assertTrue((lc <= avail).all(),
+            "long_count cannot exceed available_tf_count")
+        # Both within [0, 4]
+        self.assertTrue(((lc >= 0) & (lc <= 4)).all())
+        self.assertTrue(((avail >= 0) & (avail <= 4)).all())
+
+    def test_signal_implies_long_count_meets_min_valid(self):
+        """When signal_fires=1, long_count >= confluence_min_valid."""
+        per_tf = _make_multi_tf_bars(seed=6, n_15m=600)
+        out = scanner_replica.compute(per_tf["15m"],
+                                        per_tf_bars=per_tf)
+        fires = out["scanner_replica.signal_fires"] == 1
+        lc = out.loc[fires, "scanner_replica.long_count"]
+        mv = out.loc[fires, "scanner_replica.confluence_min_valid"]
+        self.assertTrue((lc >= mv).all(),
+            "signal fired but long_count < confluence_min_valid")
+
+    def test_leak_safety_future_15m_scramble(self):
+        per_tf = _make_multi_tf_bars(seed=7, n_15m=500)
+        anchor_idx = len(per_tf["15m"]) - 50
+        scram_15m = per_tf["15m"].copy()
+        rng = np.random.default_rng(54321)
+        future_n = len(scram_15m) - anchor_idx - 1
+        for col, lo, hi in (("close", 1, 1000), ("high", 1000, 2000),
+                              ("low", 0.1, 1), ("volume", 1, 1e9)):
+            scram_15m.loc[anchor_idx + 1:, col] = rng.uniform(
+                lo, hi, future_n)
+        scram_per_tf = dict(per_tf)
+        scram_per_tf["15m"] = scram_15m
+
+        a = scanner_replica.compute(per_tf["15m"], per_tf_bars=per_tf)
+        b = scanner_replica.compute(scram_15m,
+                                      per_tf_bars=scram_per_tf)
+        for col in a.columns:
+            np.testing.assert_array_equal(
+                a.iloc[:anchor_idx + 1][col].to_numpy(),
+                b.iloc[:anchor_idx + 1][col].to_numpy(),
+                err_msg=f"scanner_replica/{col}: scramble leaked future")
+
+    def test_specs_all_safe_leak_class(self):
+        for s in scanner_replica.SPECS:
+            self.assertEqual(s.leak_class, "safe",
+                f"{s.feature_id} must be leak_class='safe'")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G2_MarketContext
+# ─────────────────────────────────────────────────────────────────────
+
+class G2_MarketContext(unittest.TestCase):
+
+    @staticmethod
+    def _make_spy_qqq(n=300, seed=10, start="2023-01-01"):
+        rng = np.random.default_rng(seed)
+        ts = pd.date_range(start, periods=n, freq="1D", tz="UTC")
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, n)))
+        return pd.DataFrame({
+            "ts_utc": ts, "open": close, "high": close * 1.005,
+            "low": close * 0.995, "close": close,
+            "volume": np.full(n, 1e8), "quality_flags": 0,
+        })
+
+    def test_benchmark_available_when_both_provided(self):
+        bars = _make_synthetic_bars(n=50)
+        spy = self._make_spy_qqq(n=400, seed=10)
+        qqq = self._make_spy_qqq(n=400, seed=11)
+        out = market_context.compute(
+            bars, benchmark_bars={"SPY": spy, "QQQ": qqq})
+        # benchmark_data_available should be 1 across the bars window
+        # (both SPY and QQQ have rows at-or-before every bar).
+        self.assertTrue(
+            (out["market_context.benchmark_data_available"] == 1).all())
+
+    def test_benchmark_unavailable_when_missing(self):
+        bars = _make_synthetic_bars(n=50)
+        out = market_context.compute(bars, benchmark_bars={})
+        self.assertTrue(
+            (out["market_context.benchmark_data_available"] == 0).all())
+        # SPY/QQQ-derived float features must be NaN
+        self.assertTrue(
+            out["market_context.spy_drawdown_pct_60d"].isna().all())
+        self.assertTrue(
+            out["market_context.qqq_log_ret_1d_at_anchor"].isna().all())
+
+    def test_spy_above_ema200_uptrend(self):
+        # Sustained uptrend SPY → close > EMA200 once warmup completes
+        bars = _make_synthetic_bars(n=50)
+        n = 400
+        close = 100.0 + np.arange(n) * 0.5
+        spy = pd.DataFrame({
+            "ts_utc": pd.date_range("2022-01-01", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": close, "high": close, "low": close, "close": close,
+            "volume": np.full(n, 1e8), "quality_flags": 0,
+        })
+        out = market_context.compute(
+            bars, benchmark_bars={"SPY": spy})
+        # spy_above_ema200_1d must be 1 at every anchor (uptrend +
+        # benchmark warmup complete before bars start)
+        self.assertTrue(
+            (out["market_context.spy_above_ema200_1d"] == 1).all())
+
+    def test_leak_safety_future_spy_scramble(self):
+        bars = _make_synthetic_bars(n=50)
+        spy = self._make_spy_qqq(n=400, seed=10)
+        qqq = self._make_spy_qqq(n=400, seed=11)
+
+        # Scramble SPY bars beyond the anchor of last `bars` row.
+        last_anchor = bars["ts_utc"].iloc[-25]
+        rng = np.random.default_rng(444)
+        scram_spy = spy.copy()
+        mask = scram_spy["ts_utc"] > last_anchor
+        nscram = int(mask.sum())
+        scram_spy.loc[mask, "close"] = rng.uniform(1, 1000, nscram)
+        scram_spy.loc[mask, "open"]  = rng.uniform(1, 1000, nscram)
+        scram_spy.loc[mask, "high"]  = rng.uniform(1000, 2000, nscram)
+        scram_spy.loc[mask, "low"]   = rng.uniform(0.1, 1, nscram)
+
+        a = market_context.compute(
+            bars, benchmark_bars={"SPY": spy, "QQQ": qqq})
+        b = market_context.compute(
+            bars, benchmark_bars={"SPY": scram_spy, "QQQ": qqq})
+        # The first 25 bars (whose anchors are all before last_anchor)
+        # must not be affected by the SPY scramble.
+        n_keep = 25   # bars[:n_keep] all have ts_utc <= last_anchor
+        for col in a.columns:
+            av = a[col].iloc[:n_keep].to_numpy()
+            bv = b[col].iloc[:n_keep].to_numpy()
+            np.testing.assert_array_equal(
+                np.isnan(av), np.isnan(bv),
+                err_msg=f"market_context/{col}: NaN mask diff")
+            m = ~np.isnan(av)
+            np.testing.assert_array_equal(av[m], bv[m],
+                err_msg=f"market_context/{col}: SPY scramble leaked")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G2_SignalHistory
+# ─────────────────────────────────────────────────────────────────────
+
+class G2_SignalHistory(unittest.TestCase):
+
+    @staticmethod
+    def _build_signal_outcomes_db(path, rows):
+        """Create a real sqlite3 DB with the (subset of) flywheel
+        schema this reader needs, then insert the provided rows."""
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute("""
+                CREATE TABLE signal_outcomes (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    signal_id        INTEGER NOT NULL DEFAULT 0,
+                    intent_id        INTEGER DEFAULT NULL,
+                    symbol           TEXT    NOT NULL DEFAULT '',
+                    direction        TEXT    NOT NULL DEFAULT '',
+                    entry_price      REAL,
+                    exit_price       REAL,
+                    return_pct       REAL,
+                    outcome          TEXT    DEFAULT NULL,
+                    bars_held        INTEGER DEFAULT NULL,
+                    resolved_at      TEXT    DEFAULT NULL,
+                    resolution_method TEXT   DEFAULT NULL
+                )
+            """)
+            for r in rows:
+                conn.execute(
+                    "INSERT INTO signal_outcomes "
+                    "(symbol, direction, return_pct, outcome, "
+                    " resolved_at) VALUES (?, ?, ?, ?, ?)",
+                    (r["symbol"], r.get("direction", "long"),
+                      r.get("return_pct"), r["outcome"],
+                      r["resolved_at"]))
+            conn.commit()
+
+    def test_no_db_returns_all_nan(self):
+        bars = _make_synthetic_bars(n=10)
+        out = signal_history.compute(bars, symbol="AAPL")
+        self.assertTrue(
+            (out["signal_history.signals_count_30d"] == 0).all())
+        self.assertTrue(
+            out["signal_history.win_rate_30d"].isna().all())
+        self.assertTrue(
+            out["signal_history.avg_return_pct_90d"].isna().all())
+
+    def test_nonexistent_db_returns_all_nan(self):
+        bars = _make_synthetic_bars(n=5)
+        out = signal_history.compute(bars, symbol="AAPL",
+            db_path="/tmp/this_path_does_not_exist_xyz.db")
+        self.assertTrue(
+            (out["signal_history.signals_count_30d"] == 0).all())
+
+    def test_specs_use_requires_past_flywheel_leak_class(self):
+        for s in signal_history.SPECS:
+            self.assertEqual(s.leak_class,
+                              "requires_past_flywheel_only",
+                f"{s.feature_id} should be "
+                f"leak_class='requires_past_flywheel_only'")
+
+    def test_point_in_time_correctness_real_db(self):
+        """Build a real DB with outcomes at known timestamps; compute
+        signal_history at an anchor; verify only outcomes resolved
+        BEFORE the anchor are counted."""
+        from contextlib import closing
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "test.db"
+            anchor = pd.Timestamp("2024-06-01", tz="UTC")
+            rows = [
+                # Resolved BEFORE anchor — within 30d → count for 30d/90d
+                {"symbol": "AAPL", "outcome": "WIN",
+                  "return_pct": 0.05,
+                  "resolved_at": "2024-05-20T10:00:00+00:00"},
+                {"symbol": "AAPL", "outcome": "LOSS",
+                  "return_pct": -0.02,
+                  "resolved_at": "2024-05-25T10:00:00+00:00"},
+                # Resolved BEFORE anchor — in 30-90d window (not 30d)
+                {"symbol": "AAPL", "outcome": "WIN",
+                  "return_pct": 0.08,
+                  "resolved_at": "2024-04-10T10:00:00+00:00"},
+                # Resolved AT anchor — strict <, so excluded
+                {"symbol": "AAPL", "outcome": "WIN",
+                  "return_pct": 0.10,
+                  "resolved_at": "2024-06-01T00:00:00+00:00"},
+                # Resolved AFTER anchor — excluded (future)
+                {"symbol": "AAPL", "outcome": "LOSS",
+                  "return_pct": -0.04,
+                  "resolved_at": "2024-06-15T10:00:00+00:00"},
+                # Different symbol — excluded
+                {"symbol": "MSFT", "outcome": "WIN",
+                  "return_pct": 0.20,
+                  "resolved_at": "2024-05-20T10:00:00+00:00"},
+                # OPEN — excluded (future leak)
+                {"symbol": "AAPL", "outcome": "OPEN",
+                  "return_pct": None,
+                  "resolved_at": "2024-05-22T10:00:00+00:00"},
+            ]
+            self._build_signal_outcomes_db(db, rows)
+
+            # Bars: single anchor at 2024-06-01
+            bars = pd.DataFrame({
+                "ts_utc": [anchor],
+                "open": [100.0], "high": [101.0], "low": [99.0],
+                "close": [100.0], "volume": [1e6],
+                "quality_flags": [0],
+            })
+            out = signal_history.compute(bars, symbol="AAPL",
+                                           db_path=db)
+            # 30d: AAPL closed in [2024-05-02, 2024-06-01)
+            # → WIN (5/20), LOSS (5/25) = 2 outcomes, 1 win
+            #   → win_rate_30d = 0.5
+            self.assertEqual(int(out["signal_history.signals_count_30d"]
+                                    .iloc[0]), 2)
+            self.assertAlmostEqual(
+                float(out["signal_history.win_rate_30d"].iloc[0]),
+                0.5, places=10)
+            # 90d: same 2 plus the 4/10 WIN = 3 outcomes, 2 wins
+            #   → win_rate_90d = 2/3, avg_return = (0.05 -0.02 +0.08)/3
+            self.assertEqual(int(out["signal_history.signals_count_90d"]
+                                    .iloc[0]), 3)
+            self.assertAlmostEqual(
+                float(out["signal_history.win_rate_90d"].iloc[0]),
+                2.0 / 3.0, places=10)
+            self.assertAlmostEqual(
+                float(out["signal_history.avg_return_pct_90d"]
+                        .iloc[0]),
+                (0.05 - 0.02 + 0.08) / 3.0, places=10)
+
+    def test_flywheel_reader_is_read_only(self):
+        """Open a writable DB but verify the reader's connection
+        rejects writes."""
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "ro_test.db"
+            self._build_signal_outcomes_db(db, [
+                {"symbol": "AAPL", "outcome": "WIN",
+                  "return_pct": 0.01,
+                  "resolved_at": "2024-05-01T00:00:00+00:00"}])
+            reader = flywheel_reader.FlywheelReader(db)
+            self.assertTrue(reader.is_available())
+            # Open the reader's connection internally and try a write
+            conn = reader._open_ro()
+            try:
+                with self.assertRaises(sqlite3.OperationalError):
+                    conn.execute("DELETE FROM signal_outcomes")
+                    conn.commit()
+            finally:
+                conn.close()
+
+
+# ═════════════════════════════════════════════════════════════════════
+# G3 — Label compute groups (M18.A.4)
+# ═════════════════════════════════════════════════════════════════════
+
+
+def _trending_bars_for_labels(direction: str = "up", n: int = 80,
+                                bar_size: float = 1.0,
+                                hl_spread: float = 0.5):
+    """Build a deterministic bars frame with a strict monotone
+    direction at a fixed bar size. Used to verify which barrier
+    (target / stop) gets hit in the triple-barrier label."""
+    if direction not in ("up", "down", "flat"):
+        raise ValueError(direction)
+    sign = {"up": 1.0, "down": -1.0, "flat": 0.0}[direction]
+    base = 100.0
+    closes = np.array([base + sign * i * bar_size for i in range(n)])
+    opens  = np.concatenate([[base], closes[:-1]])
+    highs  = np.maximum(opens, closes) + hl_spread
+    lows   = np.minimum(opens, closes) - hl_spread
+    return pd.DataFrame({
+        "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                  freq="1D", tz="UTC"),
+        "open":   opens,
+        "high":   highs,
+        "low":    lows,
+        "close":  closes,
+        "volume": np.full(n, 1_000_000.0),
+        "quality_flags": 0,
+    })
+
+
+def _atr_at_start(bars: pd.DataFrame, value: float) -> pd.Series:
+    """A constant ATR series — useful for analytical fixture tests
+    where we want predictable target/stop levels."""
+    return pd.Series(np.full(len(bars), value), index=bars.index)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_TripleBarrier
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_TripleBarrier(unittest.TestCase):
+
+    LID = "triple_barrier_atr_2_3_50"
+
+    def test_target_hit_in_uptrend(self):
+        """Monotone uptrend at +1 per bar with HL spread 0.5 and
+        ATR=1.0 → target = entry + 2.0 (close after 2 bars), stop =
+        entry - 3.0 (never hit). Expect every resolved row to have
+        label = +1."""
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=1.0, hl_spread=0.5)
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        resolved = out[out[f"{self.LID}.is_pending"] == 0]
+        # In a strict uptrend with ATR=1, target=entry+2 is reached
+        # within 2-3 bars; stop=entry-3 is unreachable. All should be +1.
+        self.assertTrue((resolved[self.LID] == 1.0).all(),
+            f"uptrend → expected all +1, got distribution "
+            f"{resolved[self.LID].value_counts().to_dict()}")
+
+    def test_stop_hit_in_downtrend(self):
+        bars = _trending_bars_for_labels(direction="down", n=80,
+                                            bar_size=1.0, hl_spread=0.5)
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        resolved = out[out[f"{self.LID}.is_pending"] == 0]
+        self.assertTrue((resolved[self.LID] == -1.0).all(),
+            f"downtrend → expected all -1, got distribution "
+            f"{resolved[self.LID].value_counts().to_dict()}")
+
+    def test_timeout_in_flat_market_with_wide_atr(self):
+        """Flat bars with small HL spread and WIDE ATR → neither
+        target (+2*ATR) nor stop (-3*ATR) ever reached → all
+        resolved rows are 0 (timeout)."""
+        bars = _trending_bars_for_labels(direction="flat", n=80,
+                                            bar_size=0.0, hl_spread=0.1)
+        atr = _atr_at_start(bars, 10.0)   # way too wide to hit
+        out = triple_barrier.compute(bars, atr_series=atr)
+        resolved = out[out[f"{self.LID}.is_pending"] == 0]
+        self.assertGreater(len(resolved), 0,
+            "expected some rows to resolve as timeout")
+        self.assertTrue((resolved[self.LID] == 0.0).all(),
+            f"flat market w/ wide ATR → expected all 0 (timeout), "
+            f"got {resolved[self.LID].value_counts().to_dict()}")
+
+    def test_pending_for_last_window(self):
+        """The last 50 anchors cannot resolve (need 50 forward bars).
+        Plus the very last row also has no i+1 entry bar."""
+        bars = _trending_bars_for_labels(direction="up", n=100,
+                                            bar_size=0.5, hl_spread=0.2)
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        # Anchor i needs i+1..i+50 forward bars → resolves only if
+        # i+50 < 100, i.e., i < 50. So last 50 rows are pending.
+        pending_count = int(out[f"{self.LID}.is_pending"].sum())
+        self.assertEqual(pending_count, 50,
+            f"expected exactly 50 pending rows, got {pending_count}")
+        # Pending rows must have NaN label and NaT resolved_ts
+        pending_rows = out[out[f"{self.LID}.is_pending"] == 1]
+        self.assertTrue(pending_rows[self.LID].isna().all())
+        self.assertTrue(
+            pd.isna(pending_rows[f"{self.LID}.resolved_ts"]).all())
+
+    def test_same_bar_tie_pessimistic_stop_first(self):
+        """Construct a bar where high >= target AND low <= stop on
+        the SAME bar. Pessimistic convention = label is -1."""
+        # Bar 0: entry happens on bar 1's open.
+        # Construct so bar 1's open=100, atr=1.0 →
+        #   target = 102, stop = 97
+        # Bar 1 itself: high=103 (>=target), low=96 (<=stop) → tie
+        n = 60
+        opens  = np.full(n, 100.0)
+        closes = np.full(n, 100.0)
+        highs  = np.full(n, 100.5)
+        lows   = np.full(n,  99.5)
+        # Override bar 1 (the entry bar) to have the tie
+        opens[1]  = 100.0
+        highs[1]  = 103.0   # >= 102 target
+        lows[1]   = 96.0    # <= 97 stop
+        closes[1] = 100.0
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open":   opens, "high": highs, "low": lows, "close": closes,
+            "volume": np.full(n, 1_000_000.0),
+            "quality_flags": 0,
+        })
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        # Anchor 0 → entry bar 1 → tie → label=-1, resolved at bar 1
+        self.assertEqual(float(out[self.LID].iloc[0]), -1.0,
+            "same-bar tie must resolve pessimistic_stop_first → -1")
+        self.assertEqual(
+            int(out[f"{self.LID}.bars_to_resolution"].iloc[0]), 1)
+
+    def test_resolved_ts_strictly_after_anchor(self):
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=0.6, hl_spread=0.3)
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        assert_label_resolved_after_anchor(bars, self.LID, out)
+
+    def test_nan_atr_yields_pending(self):
+        bars = _trending_bars_for_labels(direction="up", n=80)
+        atr = pd.Series(np.full(len(bars), np.nan), index=bars.index)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        # No anchor can resolve without a valid ATR.
+        self.assertTrue(
+            (out[f"{self.LID}.is_pending"] == 1).all(),
+            "every row must be pending when ATR is all NaN")
+
+    def test_specs_use_future_label_only_leak_class(self):
+        for s in triple_barrier.SPECS:
+            self.assertEqual(s.leak_class, "future_label_only")
+            self.assertEqual(s.label_class, "classification_3way")
+            self.assertEqual(s.tp_mult, 2.0)
+            self.assertEqual(s.sl_mult, 3.0)
+            self.assertEqual(s.horizon_bars, 50)
+            self.assertEqual(s.tie_breaker, "pessimistic_stop_first")
+            self.assertEqual(s.entry_price_source,
+                              "next_bar_open_after_anchor")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_ForwardReturns (raw + cost-adjusted)
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_ForwardReturns(unittest.TestCase):
+
+    def test_fwd_log_ret_known_geometric_series(self):
+        # close[i+5] = open[i+1] * 1.01^5 → fwd_log_ret_5 = 5*ln(1.01)
+        n = 30
+        close = 100.0 * np.power(1.01, np.arange(n))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": open_, "high": close * 1.005,
+            "low": close * 0.995, "close": close,
+            "volume": np.full(n, 1e6), "quality_flags": 0,
+        })
+        out = forward_returns.compute(bars)
+        # fwd_log_ret_5 at anchor 0: entry=open[1]=close[0]=100,
+        # exit=close[5]=100*1.01^5 → log = 5*ln(1.01)
+        expected = 5.0 * np.log(1.01)
+        self.assertAlmostEqual(float(out["fwd_log_ret_5"].iloc[0]),
+                                 expected, places=12)
+        # fwd_log_ret_20 at anchor 0: but n=30, so 0+20=20 < 30 — OK
+        expected20 = 20.0 * np.log(1.01)
+        self.assertAlmostEqual(float(out["fwd_log_ret_20"].iloc[0]),
+                                 expected20, places=12)
+
+    def test_cost_adjusted_subtracts_10bps(self):
+        n = 30
+        close = 100.0 * np.power(1.01, np.arange(n))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": open_, "high": close, "low": close, "close": close,
+            "volume": np.full(n, 1e6), "quality_flags": 0,
+        })
+        out = forward_returns.compute(bars)
+        diff_5  = (out["fwd_log_ret_5"]
+                    - out["fwd_log_ret_5_cost_10bps"]).dropna()
+        diff_20 = (out["fwd_log_ret_20"]
+                    - out["fwd_log_ret_20_cost_10bps"]).dropna()
+        # Every resolved row must show exactly 0.0010 cost subtracted.
+        np.testing.assert_allclose(diff_5.to_numpy(),
+                                     0.0010, atol=1e-12)
+        np.testing.assert_allclose(diff_20.to_numpy(),
+                                     0.0010, atol=1e-12)
+
+    def test_pending_for_tail_rows(self):
+        n = 30
+        bars = _trending_bars_for_labels(direction="up", n=n)
+        out = forward_returns.compute(bars)
+        # fwd_log_ret_5 pending: anchors where i+5 >= n → i >= 25
+        # → 5 pending rows
+        self.assertEqual(int(out["fwd_log_ret_5.is_pending"].sum()), 5)
+        # fwd_log_ret_20 pending: i+20 >= n → i >= 10 → 20 pending
+        self.assertEqual(int(out["fwd_log_ret_20.is_pending"].sum()),
+                          20)
+        # fwd_log_ret_1 pending: i+1 >= n → i >= 29 → 1 pending
+        self.assertEqual(int(out["fwd_log_ret_1.is_pending"].sum()), 1)
+
+    def test_resolved_ts_invariant_all_labels(self):
+        bars = _trending_bars_for_labels(direction="up", n=60)
+        out = forward_returns.compute(bars)
+        for h in (1, 5, 20):
+            assert_label_resolved_after_anchor(
+                bars, f"fwd_log_ret_{h}", out)
+            assert_label_resolved_after_anchor(
+                bars, f"fwd_log_ret_{h}_cost_10bps", out)
+
+    def test_specs_use_future_label_only(self):
+        for s in forward_returns.SPECS:
+            self.assertEqual(s.leak_class, "future_label_only")
+            self.assertEqual(s.label_class, "regression")
+        cost_adj = [s for s in forward_returns.SPECS
+                      if s.cost_model_applied]
+        self.assertEqual(len(cost_adj), 3,
+            "expected 3 cost-adjusted labels (1, 5, 20 horizons)")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_MFE_MAE
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_MFE_MAE(unittest.TestCase):
+
+    def test_mfe_zero_in_strict_downtrend(self):
+        """Strict downtrend: every bar makes a new low. Entry at
+        bar 1's open. The forward window's highs never exceed entry
+        (since prices only fall), so MFE = 0."""
+        bars = _trending_bars_for_labels(direction="down", n=80,
+                                            bar_size=1.0, hl_spread=0.0)
+        out = mfe_mae.compute(bars)
+        resolved = out[out["mfe_20.is_pending"] == 0]
+        # MFE should be ~0 (window highs <= entry); MAE should be
+        # large and positive.
+        self.assertTrue((resolved["mfe_20"] <= 1e-9).all(),
+            f"MFE should be 0 in strict downtrend; got max "
+            f"{resolved['mfe_20'].max()}")
+        self.assertTrue((resolved["mae_20"] > 0).all(),
+            f"MAE should be > 0 in strict downtrend; got min "
+            f"{resolved['mae_20'].min()}")
+
+    def test_mae_zero_in_strict_uptrend(self):
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=1.0, hl_spread=0.0)
+        out = mfe_mae.compute(bars)
+        resolved = out[out["mae_20.is_pending"] == 0]
+        self.assertTrue((resolved["mae_20"] <= 1e-9).all())
+        self.assertTrue((resolved["mfe_20"] > 0).all())
+
+    def test_pct_versions_are_fraction_of_entry(self):
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=0.5,
+                                            hl_spread=0.3)
+        out = mfe_mae.compute(bars)
+        resolved = out[out["mfe_20.is_pending"] == 0]
+        # mfe_pct_20 == mfe_20 / entry_price (== open[i+1])
+        bar_open = bars["open"].astype(float).values
+        for i in resolved.index:
+            entry = bar_open[i + 1]
+            expected_pct = resolved.loc[i, "mfe_20"] / entry
+            self.assertAlmostEqual(
+                float(resolved.loc[i, "mfe_pct_20"]),
+                expected_pct, places=10)
+
+    def test_atr_normalized_requires_atr(self):
+        bars = _trending_bars_for_labels(direction="up", n=80)
+        # Without atr_series, the over_atr labels must be all NaN.
+        out = mfe_mae.compute(bars)
+        self.assertTrue(out["mfe_over_atr_20"].isna().all())
+        self.assertTrue(out["mae_over_atr_20"].isna().all())
+        # With a constant ATR, they should be finite where resolved.
+        out2 = mfe_mae.compute(bars,
+                                 atr_series=_atr_at_start(bars, 1.0))
+        resolved = out2[out2["mfe_20.is_pending"] == 0]
+        self.assertFalse(resolved["mfe_over_atr_20"].isna().any())
+
+    def test_resolved_ts_invariant(self):
+        bars = _trending_bars_for_labels(direction="up", n=80)
+        out = mfe_mae.compute(bars,
+                                atr_series=_atr_at_start(bars, 1.0))
+        for lid in ("mfe_20", "mae_20", "mfe_pct_20", "mae_pct_20",
+                      "mfe_over_atr_20", "mae_over_atr_20"):
+            assert_label_resolved_after_anchor(bars, lid, out)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_RiskAdjusted
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_RiskAdjusted(unittest.TestCase):
+
+    def test_over_atr_division(self):
+        """fwd_log_ret_20_over_atr = fwd_log_ret_20 / (ATR/entry).
+        With constant per-bar log return r and constant ATR a:
+        fwd_log_ret_20 = 20r; over_atr = 20r / (a / entry).
+        """
+        n = 50
+        close = 100.0 * np.power(1.005, np.arange(n))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": open_, "high": close, "low": close, "close": close,
+            "volume": np.full(n, 1e6), "quality_flags": 0,
+        })
+        atr = pd.Series(np.full(n, 1.0), index=bars.index)
+        out = risk_adjusted.compute(bars, atr_series=atr)
+        # Anchor 0: entry=open[1]=100.5 (since close[0]=100,
+        # close[1]=100*1.005); actually open[1]=close[0]=100.
+        # exit close[20] = 100*1.005**20
+        # fwd_log_ret_20 = log(close[20]/100) = 20*log(1.005)
+        # over_atr = 20*log(1.005) / (1.0/100) = 2000 * log(1.005)
+        expected = 20 * np.log(1.005) / (1.0 / 100.0)
+        self.assertAlmostEqual(
+            float(out["fwd_log_ret_20_over_atr"].iloc[0]),
+            expected, places=10)
+
+    def test_over_rvol_division(self):
+        n = 50
+        close = 100.0 * np.power(1.005, np.arange(n))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        bars = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": open_, "high": close, "low": close, "close": close,
+            "volume": np.full(n, 1e6), "quality_flags": 0,
+        })
+        rvol = pd.Series(np.full(n, 0.01), index=bars.index)
+        out = risk_adjusted.compute(bars, atr_series=None,
+                                       rvol_series=rvol)
+        # fwd_log_ret_20 / 0.01 at anchor 0
+        expected = (20 * np.log(1.005)) / 0.01
+        self.assertAlmostEqual(
+            float(out["fwd_log_ret_20_over_rvol"].iloc[0]),
+            expected, places=10)
+
+    def test_nan_denominator_yields_nan_value(self):
+        n = 50
+        bars = _trending_bars_for_labels(direction="up", n=n)
+        # ATR = all NaN → over_atr all NaN even where resolved
+        atr = pd.Series(np.full(n, np.nan), index=bars.index)
+        rvol = pd.Series(np.full(n, np.nan), index=bars.index)
+        out = risk_adjusted.compute(bars, atr_series=atr,
+                                       rvol_series=rvol)
+        self.assertTrue(out["fwd_log_ret_20_over_atr"].isna().all())
+        self.assertTrue(out["fwd_log_ret_20_over_rvol"].isna().all())
+        # But resolved_ts / is_pending should NOT mark the rows as
+        # pending — the forward window resolved, the denominator is
+        # just undefined.
+        non_pending = (out["fwd_log_ret_20_over_atr.is_pending"]
+                          == 0).sum()
+        # n - 20 anchors have a valid forward window
+        self.assertEqual(int(non_pending), n - 20)
+
+    def test_resolved_ts_invariant(self):
+        n = 50
+        bars = _trending_bars_for_labels(direction="up", n=n)
+        atr = _atr_at_start(bars, 1.0)
+        rvol = _atr_at_start(bars, 0.01)
+        out = risk_adjusted.compute(bars, atr_series=atr,
+                                       rvol_series=rvol)
+        for lid in ("fwd_log_ret_20_over_atr",
+                      "fwd_log_ret_20_over_rvol"):
+            assert_label_resolved_after_anchor(bars, lid, out)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_LabelLeakSafety — past-bar scramble
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_LabelLeakSafety(unittest.TestCase):
+    """Labels look only AT or AFTER the anchor (entry = open[i+1],
+    forward window from i+1). Scrambling bars STRICTLY BEFORE the
+    anchor must not change the label at the anchor — provided we
+    hold the ATR series constant (since computed ATR depends on
+    past bars; that dependency is correctly handled by passing
+    pre-computed ATR through, not by the label group recomputing
+    ATR internally).
+    """
+
+    def test_past_bar_scramble_does_not_change_labels(self):
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=0.6,
+                                            hl_spread=0.3)
+        atr = _atr_at_start(bars, 1.0)
+
+        # Scramble bars 0..30 (strictly before the anchors we'll check
+        # at index 40 onwards).
+        anchor_lo = 40
+        rng = np.random.default_rng(31415)
+        scrambled = bars.copy()
+        scrambled.loc[:30, "open"]   = rng.uniform(1, 1000, 31)
+        scrambled.loc[:30, "high"]   = rng.uniform(1000, 2000, 31)
+        scrambled.loc[:30, "low"]    = rng.uniform(0.1, 1, 31)
+        scrambled.loc[:30, "close"]  = rng.uniform(1, 1000, 31)
+
+        for mod_name, kwargs in [
+            ("triple_barrier", {"atr_series": atr}),
+            ("forward_returns", {}),
+            ("mfe_mae", {"atr_series": atr}),
+            ("risk_adjusted", {"atr_series": atr,
+                                 "rvol_series": _atr_at_start(
+                                     bars, 0.01)}),
+        ]:
+            mod = {"triple_barrier": triple_barrier,
+                    "forward_returns": forward_returns,
+                    "mfe_mae": mfe_mae,
+                    "risk_adjusted": risk_adjusted}[mod_name]
+            a = mod.compute(bars, **kwargs)
+            b = mod.compute(scrambled, **kwargs)
+            # Compare every label-value column at anchor_lo..end
+            for col in a.columns:
+                if col.endswith(".resolved_ts") \
+                        or col.endswith(".is_pending"):
+                    continue
+                if col.endswith(".bars_to_resolution") \
+                        or col.endswith(".return_log_at_resolution"):
+                    continue
+                av = a[col].iloc[anchor_lo:].to_numpy()
+                bv = b[col].iloc[anchor_lo:].to_numpy()
+                np.testing.assert_array_equal(
+                    np.isnan(av), np.isnan(bv),
+                    err_msg=f"{mod_name}/{col}: NaN mask differs "
+                              f"under past-bar scramble")
+                m = ~np.isnan(av)
+                np.testing.assert_allclose(
+                    av[m], bv[m],
+                    rtol=1e-12, atol=1e-12,
+                    err_msg=f"{mod_name}/{col}: past-bar scramble "
+                              f"changed label values (leak!)")
 
 
 class G10_Hygiene(unittest.TestCase):
