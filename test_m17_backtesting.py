@@ -3941,6 +3941,18 @@ class G6_CandidateSnapshotReplay(unittest.TestCase):
                        for s, t, n, m in failures))
 
 
+# ---- M18 path whitelist (M18.A.pre-phase) -------------
+# M18 adds source files under these roots ONLY. The G10 file-scope
+# test in test_m18_ml.py asserts no surprises; this constant is the
+# documented contract.
+_M18_ALLOWED_ROOTS = (
+    'bot/ml/',
+    'configs/ml/',
+    'docs/M18',
+    'test_m18_ml.py',
+)
+
+
 class G10_Hygiene(unittest.TestCase):
     """Group 10: hygiene gates. AST imports + string literals +
     protected-files diff + gitignore + no-network at runtime."""

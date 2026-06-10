@@ -840,3 +840,27 @@ These are the project's permanent ground rules (per user constitution):
 - Be honest about what is verified vs not verified.
 - Every deployment path must be self-contained.
 - Git hygiene is critical; secrets gitignored; managed via `.env`.
+
+---
+
+## M18 — ML Pipeline / Closed-Loop ML
+
+**Status:** M18.A complete locally (HEAD recovered to equivalent of
+`a06fcfe`). Push pending operator authorisation.
+
+**Sub-milestones delivered:**
+M18.A.pre-phase, M18.A.1 .. M18.A.10. See `docs/M18_status.md` for
+the full deliverable list, hard invariants, and locked Q-decisions.
+
+**Branch:** `m18-recovery-from-transcripts` (a recovery branch — the
+original 11-commit chain `c76e4f1 → a06fcfe` was never pushed and the
+git objects are lost; the implementation source is recoverable from
+`/mnt/transcripts/*m18*.txt` for pre-phase through A.8, and from this
+chat session for A.9 and A.10).
+
+**Read-only / shadow-only throughout:** no live promotion attempted.
+`ALWAYS_FALSE_APPROVED_FOR_LIVE = False` on every registry entry.
+
+**Coming next:** M18.B and beyond (closed-loop ML toward live-readiness).
+M13.4A (Dashboard Broker Allocation + Budget Controls) remains
+deferred per its design handoff document.
