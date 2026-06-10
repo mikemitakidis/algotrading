@@ -46,6 +46,23 @@ from bot.ml.labels import (
     triple_barrier, forward_returns, mfe_mae, risk_adjusted,
 )
 from bot.ml.labels.base import assert_label_resolved_after_anchor
+from bot.ml.models import (
+    Trainer as ModelTrainer,
+    TrainOutputs,
+    ThinnessThresholds,
+    evaluate_thinness,
+    MajorityClassTrainer,
+    ScannerReplicaTrainer,
+    LogisticRegressionTrainer,
+    LightGBMTrainer,
+    is_lightgbm_available,
+    SCANNER_FIRES_COLUMN,
+    select_feature_columns,
+    select_label_columns,
+    get_label_class,
+    extract_xy_for_split,
+)
+from bot.ml.schemas import TrainConfig, ALLOWED_MODEL_TYPES
 import sqlite3
 
 
@@ -152,7 +169,7 @@ class G2_M16Loader(unittest.TestCase):
                 m16_loader.load_bars(
                     "NONEXISTENT_SYMBOL_XYZ", "1D", min_rows=1)
             msg = str(cm.exception)
-            self.assertIn("bot.historical.cli refresh", msg,
+            self.assertIn("bot.historical.cli backfill", msg,
                 "error message must include explicit backfill command")
             self.assertIn("NONEXISTENT_SYMBOL_XYZ", msg)
 
