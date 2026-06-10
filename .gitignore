@@ -47,3 +47,4 @@ data/*.parquet.tmp.*
 data/.historical_refresh.lock
 data/.historical_refresh.lock.*
 recovery_inputs/
+recovery_extracted/
