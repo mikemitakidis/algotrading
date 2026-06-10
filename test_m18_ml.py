@@ -62,7 +62,7 @@ from bot.ml.models import (
     get_label_class,
     extract_xy_for_split,
 )
-from bot.ml.schemas import TrainConfig, ALLOWED_MODEL_TYPES
+from bot.ml.schemas import TrainConfig, ALLOWED_MODEL_TYPES, ALLOWED_TRAIN_MODES
 import sqlite3
 
 
