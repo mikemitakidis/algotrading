@@ -1,13 +1,17 @@
 """bot.ml.dataset — dataset assembly subpackage.
 
 Houses:
-  m16_loader.py   sole bot.historical importer in production bot/ml/*
-                  (SR-7 — enforced by G10 AST guard in test_m18_ml.py).
-                  Reads OHLCV bars from M16's Parquet store. NO writes,
-                  NO provider calls, NO yfinance.
-
-Future modules (lands in later M18 phases):
-  assembler.py    feature/label join + manifest emission (M18.A.5)
+  m16_loader.py           sole bot.historical importer in production
+                            bot/ml/* (SR-7 — enforced by G10 AST guard)
+  flywheel_reader.py      read-only sqlite3 access to the live
+                            signal_outcomes table (M18.A.3)
+  anchors.py              Model A / Model B anchor enumeration (Q18)
+  coverage.py             intraday-coverage assessment (Q19)
+  manifest.py             dataset hash + manifest schema
+  walk_forward.py         purged train/val/test split with embargo
+  adversarial_validation.py
+                          sklearn-based LR + CV AUC + 0.55 gate
+  assembler.py            end-to-end orchestrator
 """
 from __future__ import annotations
 

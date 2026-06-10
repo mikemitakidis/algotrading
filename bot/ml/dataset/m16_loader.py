@@ -100,11 +100,14 @@ def load_bars(
         )
         if start_utc is not None or end_utc is not None:
             msg += f" in window [{start_utc}, {end_utc})"
+        # Use the canonical M16-CLI helper so this error string can
+        # never drift from the actual CLI surface (verified by
+        # G4_M16Backfill.test_command_matches_actual_m16_cli).
+        from bot.ml.dataset._m16_backfill import format_backfill_command
         msg += (
             f"; need at least {min_rows}. "
             f"To backfill, run on the VPS:\n"
-            f"    python -m bot.historical.cli refresh "
-            f"--symbol {symbol} --timeframe {timeframe}"
+            f"{format_backfill_command(symbol, timeframe)}"
         )
         raise M16CoverageError(msg)
 

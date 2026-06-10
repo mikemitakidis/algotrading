@@ -29,6 +29,14 @@ from bot.ml import hashing as ml_hashing
 from bot.ml import cli as ml_cli
 from bot.ml.dataset import m16_loader
 from bot.ml.dataset import flywheel_reader
+from bot.ml.dataset import (
+    anchors as ds_anchors,
+    coverage as ds_coverage,
+    manifest as ds_manifest,
+    walk_forward as ds_walk_forward,
+    adversarial_validation as ds_av,
+    assembler as ds_assembler,
+)
 from bot.ml.features import (
     price_return, trend, momentum, vol_regime, volume_liquidity,
     mtf_confluence, scanner_replica, market_context, symbol_meta,
