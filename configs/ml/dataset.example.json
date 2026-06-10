@@ -1,0 +1,35 @@
+{
+    "symbol": "AAPL",
+    "timeframes": ["1h", "4h", "1d"],
+    "anchor_tf": "1h",
+    "anchor_set": "model_a_scanner_replica",
+    "feature_groups": [
+        "price_return",
+        "trend",
+        "momentum",
+        "vol_regime",
+        "volume_liquidity",
+        "mtf_confluence",
+        "scanner_replica",
+        "market_context",
+        "signal_history",
+        "symbol_meta"
+    ],
+    "label_ids": [
+        "triple_barrier_v1_won",
+        "forward_returns_5bar",
+        "mfe_mae_10bar",
+        "risk_adjusted_sharpe_10bar"
+    ],
+    "bar_window_start_utc": "2022-01-01",
+    "bar_window_end_utc":   "2025-12-31",
+    "walk_forward": {
+        "n_splits":         5,
+        "train_size_bars":  5000,
+        "val_size_bars":    1000,
+        "test_size_bars":   1000,
+        "embargo_bars":     20,
+        "purge_bars":       10
+    },
+    "fixture_mode": false
+}

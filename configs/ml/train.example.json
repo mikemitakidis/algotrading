@@ -1,0 +1,22 @@
+{
+    "dataset_id": "REPLACE_WITH_ASSEMBLED_DATASET_ID",
+    "model_type": "M_lightgbm",
+    "train_mode": "model_a_meta_label",
+    "target_label_id": "triple_barrier_v1_won",
+    "hyperparameters": {
+        "n_estimators":     200,
+        "learning_rate":    0.05,
+        "max_depth":        6,
+        "num_leaves":       31,
+        "min_child_samples": 50,
+        "reg_alpha":        0.0,
+        "reg_lambda":       0.0,
+        "subsample":        0.9,
+        "colsample_bytree": 0.9,
+        "deterministic":    true,
+        "force_col_wise":   true,
+        "verbose":          -1
+    },
+    "seed":         42,
+    "fixture_mode": false
+}
