@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from bot.ml.hashing import hash_canonical
+from bot.ml.hashing import canonical_json, sha256_hex
 
 
 MANIFEST_SCHEMA_VERSION = 1
@@ -211,7 +211,7 @@ def compute_dataset_hash(
         "fixture_mode_invocation": bool(fixture_mode_invocation),
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
     }
-    return sha256_hex(canonical_json(payload).encode("utf-8"))
+    return sha256_hex(canonical_json(payload))
 
 
 def compute_feature_specs_hash(feature_groups: Dict[str, Any]) -> str:
@@ -231,7 +231,7 @@ def compute_feature_specs_hash(feature_groups: Dict[str, Any]) -> str:
                 "lookback_unit":         s.lookback_unit,
             })
     items.sort(key=lambda r: r["feature_id"])
-    return sha256_hex(canonical_json(items).encode("utf-8"))
+    return sha256_hex(canonical_json(items))
 
 
 def compute_label_specs_hash(label_groups: Dict[str, Any]) -> str:
@@ -252,7 +252,7 @@ def compute_label_specs_hash(label_groups: Dict[str, Any]) -> str:
                 "tie_breaker":          s.tie_breaker,
             })
     items.sort(key=lambda r: r["label_id"])
-    return sha256_hex(canonical_json(items).encode("utf-8"))
+    return sha256_hex(canonical_json(items))
 
 
 def current_utc_iso() -> str:

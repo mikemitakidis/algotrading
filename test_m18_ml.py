@@ -1825,6 +1825,1768 @@ class G3_LockedLabelRegistry(unittest.TestCase):
                     three_way.append(s.label_id)
         self.assertEqual(three_way, ["triple_barrier_atr_2_3_50"])
 
+# ═════════════════════════════════════════════════════════════════════
+# G4 — Dataset assembler + walk-forward + adversarial validation (M18.A.5)
+# ═════════════════════════════════════════════════════════════════════
+
+
+def _multi_tf_for_assembler(n_15m: int = 600, seed: int = 1,
+                              start: str = "2024-01-02"):
+    """Build aligned 15m / 1H / 4H / 1D bars suitable for the assembler.
+
+    Uses different seeds per TF so the series don't collide; same time
+    origin so MultiTimeframeContext.snapshot_at finds bars at every
+    15m anchor."""
+    def _one(n, freq, seed_):
+        rng = np.random.default_rng(seed_)
+        ts = pd.date_range(start, periods=n, freq=freq, tz="UTC")
+        close = 100 * np.exp(np.cumsum(
+            rng.normal(0.0001, 0.012, n)))
+        open_ = np.concatenate([[100.0], close[:-1]])
+        spread = np.abs(rng.normal(0, 0.008, n)) * close + 0.01
+        high = np.maximum(open_, close) + spread / 2
+        low  = np.minimum(open_, close) - spread / 2
+        return pd.DataFrame({
+            "ts_utc": ts, "open": open_, "high": high,
+            "low": low, "close": close,
+            "volume": rng.integers(1_000_000, 10_000_000, n
+                                     ).astype(float),
+            "quality_flags": 0,
+        })
+    return {
+        "15m": _one(n_15m,                  "15min", seed * 11),
+        "1H":  _one(max(300, n_15m // 4),   "1h",    seed * 13),
+        "4H":  _one(max(300, n_15m // 16),  "4h",    seed * 17),
+        "1D":  _one(max(300, n_15m // 96),  "1D",    seed * 19),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_Anchors — Model A and Model B enumeration (Q18)
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_Anchors(unittest.TestCase):
+
+    def test_model_a_returns_only_fires(self):
+        fires = pd.Series([0, 1, 0, 1, 1, 0, 0, 1], dtype="int8")
+        idx = ds_anchors.enumerate_model_a_anchors(fires)
+        np.testing.assert_array_equal(idx, np.array([1, 3, 4, 7]))
+
+    def test_model_a_empty_when_no_fires(self):
+        fires = pd.Series([0] * 10, dtype="int8")
+        idx = ds_anchors.enumerate_model_a_anchors(fires)
+        self.assertEqual(len(idx), 0)
+
+    def test_model_b_is_union_of_1h_and_scanner(self):
+        # 8 anchor bars at 15-min cadence
+        anchor_ts = pd.Series(
+            pd.date_range("2024-01-02", periods=8, freq="15min",
+                            tz="UTC"))
+        # 1H bars at positions 0, 4 (15min * 4 = 1H apart). They
+        # close at the same ts as anchor[0] and anchor[4].
+        one_hour_ts = pd.Series(
+            pd.date_range("2024-01-02", periods=2, freq="1h",
+                            tz="UTC"))
+        # Scanner fires only at positions 2 and 5.
+        fires = pd.Series([0, 0, 1, 0, 0, 1, 0, 0], dtype="int8")
+        idx = ds_anchors.enumerate_model_b_anchors(
+            anchor_ts=anchor_ts,
+            one_hour_ts=one_hour_ts,
+            scanner_replica_fires=fires,
+        )
+        # Union: 1H indices {0, 4} ∪ scanner indices {2, 5}
+        np.testing.assert_array_equal(idx, np.array([0, 2, 4, 5]))
+
+    def test_model_b_degenerates_to_scanner_when_no_1h_bars(self):
+        anchor_ts = pd.Series(
+            pd.date_range("2024-01-02", periods=5, freq="15min",
+                            tz="UTC"))
+        empty_1h = pd.Series([], dtype="datetime64[ns, UTC]")
+        fires = pd.Series([1, 0, 0, 1, 0], dtype="int8")
+        idx = ds_anchors.enumerate_model_b_anchors(
+            anchor_ts=anchor_ts,
+            one_hour_ts=empty_1h,
+            scanner_replica_fires=fires,
+        )
+        np.testing.assert_array_equal(idx, np.array([0, 3]))
+
+    def test_enumerate_dispatch_unknown_set_raises(self):
+        with self.assertRaises(ValueError):
+            ds_anchors.enumerate_anchors(
+                anchor_set="not_a_real_anchor_set",
+                anchor_ts=pd.Series([], dtype="datetime64[ns, UTC]"),
+                scanner_replica_fires=pd.Series([], dtype="int8"),
+            )
+
+    def test_model_b_dispatch_requires_one_hour_ts(self):
+        with self.assertRaises(ValueError):
+            ds_anchors.enumerate_anchors(
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                anchor_ts=pd.Series([], dtype="datetime64[ns, UTC]"),
+                scanner_replica_fires=pd.Series([], dtype="int8"),
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_Coverage — Q19 intraday-coverage gate
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_Coverage(unittest.TestCase):
+
+    @staticmethod
+    def _stub_bars(n):
+        return pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-02", periods=n,
+                                      freq="1D", tz="UTC"),
+            "open": np.ones(n), "high": np.ones(n),
+            "low": np.ones(n), "close": np.ones(n),
+            "volume": np.ones(n), "quality_flags": 0,
+        })
+
+    def test_full_coverage(self):
+        per_tf = {tf: self._stub_bars(250)
+                   for tf in ("15m", "1H", "4H", "1D")}
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        self.assertFalse(rpt.coverage_degraded)
+        self.assertIsNone(rpt.degradation_warning)
+        self.assertEqual(set(rpt.present_tfs),
+                          {"15m", "1H", "4H", "1D"})
+        self.assertEqual(rpt.degraded_tfs, ())
+        self.assertEqual(rpt.missing_tfs, ())
+
+    def test_missing_tf_is_degraded(self):
+        per_tf = {"15m": self._stub_bars(250),
+                   "1H":  self._stub_bars(250),
+                   "1D":  self._stub_bars(250)}    # 4H missing
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        self.assertTrue(rpt.coverage_degraded)
+        self.assertIn("4H", rpt.missing_tfs)
+
+    def test_below_min_bars_is_degraded(self):
+        per_tf = {tf: self._stub_bars(250)
+                   for tf in ("15m", "1H", "1D")}
+        per_tf["4H"] = self._stub_bars(50)   # below 200 min
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        self.assertTrue(rpt.coverage_degraded)
+        self.assertIn("4H", rpt.degraded_tfs)
+        self.assertEqual(rpt.missing_tfs, ())
+
+    def test_assert_promotable_or_raise_passes_on_full(self):
+        per_tf = {tf: self._stub_bars(250)
+                   for tf in ("15m", "1H", "4H", "1D")}
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        # Must not raise
+        rpt.assert_promotable_or_raise(symbol="TESTSYM")
+
+    def test_assert_promotable_or_raise_raises_on_degraded(self):
+        per_tf = {tf: self._stub_bars(250)
+                   for tf in ("15m", "1H", "1D")}     # 4H missing
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        with self.assertRaises(
+                ml_errors.InsufficientIntradayCoverageError):
+            rpt.assert_promotable_or_raise(symbol="TESTSYM")
+
+    def test_bar_counts_recorded(self):
+        per_tf = {"15m": self._stub_bars(500),
+                   "1H":  self._stub_bars(300),
+                   "4H":  self._stub_bars(250),
+                   "1D":  self._stub_bars(200)}
+        rpt = ds_coverage.assess_intraday_coverage(per_tf)
+        self.assertEqual(rpt.bar_counts,
+                          {"15m": 500, "1H": 300, "4H": 250, "1D": 200})
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_Manifest — deterministic dataset hash
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_Manifest(unittest.TestCase):
+
+    @staticmethod
+    def _kw():
+        return dict(
+            symbol="AAPL", timeframes=["15m", "1H", "4H", "1D"],
+            anchor_tf="15m", anchor_set="model_a_scanner_replica",
+            bars_digest={"15m": {"n_bars": 100,
+                                  "first_ts": "2024-01-02",
+                                  "last_ts": "2024-01-03",
+                                  "close_sum_str": "10000.0",
+                                  "close_sum_sq_str": "1000000.0"}},
+            feature_specs_hash="aa" * 32,
+            label_specs_hash="bb" * 32,
+            train_frac=0.6, val_frac=0.2, test_frac=0.2,
+            embargo_bars=130, fixture_mode_invocation=False,
+        )
+
+    def test_hash_is_deterministic(self):
+        h1 = ds_manifest.compute_dataset_hash(**self._kw())
+        h2 = ds_manifest.compute_dataset_hash(**self._kw())
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
+
+    def test_hash_changes_with_anchor_set(self):
+        kw = self._kw()
+        h1 = ds_manifest.compute_dataset_hash(**kw)
+        kw["anchor_set"] = "model_b_1h_union_candidates"
+        h2 = ds_manifest.compute_dataset_hash(**kw)
+        self.assertNotEqual(h1, h2)
+
+    def test_hash_changes_with_embargo(self):
+        kw = self._kw()
+        h1 = ds_manifest.compute_dataset_hash(**kw)
+        kw["embargo_bars"] = 50
+        h2 = ds_manifest.compute_dataset_hash(**kw)
+        self.assertNotEqual(h1, h2)
+
+    def test_hash_changes_with_feature_specs_hash(self):
+        kw = self._kw()
+        h1 = ds_manifest.compute_dataset_hash(**kw)
+        kw["feature_specs_hash"] = "ff" * 32
+        h2 = ds_manifest.compute_dataset_hash(**kw)
+        self.assertNotEqual(h1, h2)
+
+    def test_feature_specs_hash_stable(self):
+        from bot.ml.features import ALL_FEATURE_GROUPS
+        h1 = ds_manifest.compute_feature_specs_hash(ALL_FEATURE_GROUPS)
+        h2 = ds_manifest.compute_feature_specs_hash(ALL_FEATURE_GROUPS)
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
+
+    def test_label_specs_hash_stable(self):
+        from bot.ml.labels import ALL_LABEL_GROUPS
+        h1 = ds_manifest.compute_label_specs_hash(ALL_LABEL_GROUPS)
+        h2 = ds_manifest.compute_label_specs_hash(ALL_LABEL_GROUPS)
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_WalkForward — single split + embargo + label-overlap purge
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_WalkForward(unittest.TestCase):
+
+    @staticmethod
+    def _make_inputs(n=100, embargo=10, label_horizon=5):
+        anchor_indices = np.arange(n).astype(np.int64)
+        anchor_ts = pd.date_range("2024-01-02", periods=n,
+                                    freq="1D", tz="UTC").to_numpy()
+        # Resolved at i + label_horizon (clamped to n-1)
+        resolved_idx = np.minimum(
+            anchor_indices + label_horizon, n - 1)
+        resolved_ts_series = pd.Series(
+            pd.to_datetime(anchor_ts[resolved_idx], utc=True))
+        return anchor_indices, anchor_ts, resolved_ts_series, embargo
+
+    def test_split_fractions(self):
+        n = 100
+        anchor_indices, anchor_ts, resolved, embargo = \
+            self._make_inputs(n=n, embargo=0, label_horizon=0)
+        split = ds_walk_forward.make_walk_forward_split(
+            anchor_indices=anchor_indices,
+            anchor_ts=anchor_ts,
+            label_resolved_ts={"lbl": resolved},
+            train_frac=0.6, val_frac=0.2, test_frac=0.2,
+            embargo_bars=0,
+        )
+        # With horizon=0 and embargo=0: 60/20/20 split exactly.
+        self.assertEqual(len(split.train_anchor_indices), 60)
+        self.assertEqual(len(split.val_anchor_indices),   20)
+        self.assertEqual(len(split.test_anchor_indices),  20)
+        self.assertEqual(split.purged_count,    0)
+        self.assertEqual(split.embargoed_count, 0)
+
+    def test_embargo_removes_train_rows_near_val(self):
+        n = 100
+        anchor_indices, anchor_ts, resolved, _ = \
+            self._make_inputs(n=n, label_horizon=0)
+        split = ds_walk_forward.make_walk_forward_split(
+            anchor_indices=anchor_indices,
+            anchor_ts=anchor_ts,
+            label_resolved_ts={"lbl": resolved},
+            train_frac=0.6, val_frac=0.2, test_frac=0.2,
+            embargo_bars=10,
+        )
+        # Train would have been [0, 60); embargo removes last 10 →
+        # [0, 50) → 50 rows.
+        self.assertEqual(len(split.train_anchor_indices), 50)
+        self.assertEqual(split.embargoed_count, 10)
+
+    def test_label_resolved_ts_overlap_purges_train(self):
+        """Train anchor whose label resolves past val_start_ts must
+        be purged."""
+        n = 100
+        # Horizon=20 means anchor i resolves at i+20. Train is
+        # [0, 60); val starts at index 60. Any train anchor i with
+        # i+20 >= 60 has label resolved at-or-after val_start →
+        # purged. That's i in [40, 60) → 20 candidates.
+        # Embargo=0 so no extra removal.
+        anchor_indices, anchor_ts, resolved, _ = \
+            self._make_inputs(n=n, label_horizon=20)
+        split = ds_walk_forward.make_walk_forward_split(
+            anchor_indices=anchor_indices,
+            anchor_ts=anchor_ts,
+            label_resolved_ts={"lbl": resolved},
+            train_frac=0.6, val_frac=0.2, test_frac=0.2,
+            embargo_bars=0,
+        )
+        self.assertEqual(split.purged_count, 20)
+        self.assertEqual(len(split.train_anchor_indices), 40)
+
+    def test_embargo_and_purge_combine(self):
+        n = 100
+        # horizon=15, embargo=5. Train [0, 60); embargo removes [55, 60)
+        # → 5 embargoed. Then purge: among remaining [0, 55), those
+        # with resolved_ts >= val_start_ts (i.e. i+15 >= 60 → i >= 45)
+        # are purged → i in [45, 55) → 10 purged.
+        anchor_indices, anchor_ts, resolved, _ = \
+            self._make_inputs(n=n, label_horizon=15)
+        split = ds_walk_forward.make_walk_forward_split(
+            anchor_indices=anchor_indices,
+            anchor_ts=anchor_ts,
+            label_resolved_ts={"lbl": resolved},
+            train_frac=0.6, val_frac=0.2, test_frac=0.2,
+            embargo_bars=5,
+        )
+        self.assertEqual(split.embargoed_count, 5)
+        self.assertEqual(split.purged_count, 10)
+        self.assertEqual(len(split.train_anchor_indices), 45)
+
+    def test_split_too_small_raises(self):
+        # At n=2, train_hi=int(2*0.6)=1, val_hi=int(2*0.8)=1 — val
+        # slice collapses (val_hi <= train_hi), guard raises.
+        n = 2
+        anchor_indices, anchor_ts, resolved, _ = \
+            self._make_inputs(n=n, label_horizon=0)
+        with self.assertRaises(ValueError):
+            ds_walk_forward.make_walk_forward_split(
+                anchor_indices=anchor_indices,
+                anchor_ts=anchor_ts,
+                label_resolved_ts={"lbl": resolved},
+                train_frac=0.6, val_frac=0.2, test_frac=0.2,
+                embargo_bars=0,
+            )
+
+    def test_default_embargo_bars_5_trading_days(self):
+        # 5 trading days at 15m = 5 * 26 = 130 bars
+        self.assertEqual(
+            ds_walk_forward.default_embargo_bars("15m", 5), 130)
+        # 5 days at 1D = 5
+        self.assertEqual(
+            ds_walk_forward.default_embargo_bars("1D", 5), 5)
+        # 1 day at 1H = 7 (rounded up to capture session-close gap)
+        self.assertEqual(
+            ds_walk_forward.default_embargo_bars("1H", 1), 7)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_AdversarialValidation — sklearn LR + CV AUC + 0.55 gate
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_AdversarialValidation(unittest.TestCase):
+
+    def test_indistinguishable_sets_auc_near_05(self):
+        """When X_train and X_holdout are drawn from the SAME
+        distribution, AUC should be near 0.5 and the gate passes."""
+        rng = np.random.default_rng(0)
+        n = 300
+        X_train   = pd.DataFrame(rng.normal(0, 1, (n, 8)),
+                                   columns=[f"f{i}" for i in range(8)])
+        X_holdout = pd.DataFrame(rng.normal(0, 1, (n, 8)),
+                                   columns=[f"f{i}" for i in range(8)])
+        res = ds_av.run_adversarial_validation(
+            X_train, X_holdout, threshold=0.55, cv_folds=5)
+        self.assertEqual(res.classifier, "logistic_regression")
+        self.assertLess(res.auc_mean, 0.60,
+            f"identical distributions should give AUC near 0.5, "
+            f"got {res.auc_mean:.4f}")
+        self.assertTrue(res.passed)
+
+    def test_well_separable_sets_auc_high_and_gate_fails(self):
+        """When holdout is clearly shifted, AUC should be high (> 0.9)
+        and the gate should FAIL."""
+        rng = np.random.default_rng(0)
+        n = 300
+        X_train   = pd.DataFrame(rng.normal(0, 1, (n, 8)),
+                                   columns=[f"f{i}" for i in range(8)])
+        # Holdout: same shape but shifted by +3 std on every feature
+        X_holdout = pd.DataFrame(rng.normal(3, 1, (n, 8)),
+                                   columns=[f"f{i}" for i in range(8)])
+        res = ds_av.run_adversarial_validation(
+            X_train, X_holdout, threshold=0.55, cv_folds=5)
+        self.assertGreater(res.auc_mean, 0.95,
+            f"shifted distributions should give high AUC, "
+            f"got {res.auc_mean:.4f}")
+        self.assertFalse(res.passed)
+
+    def test_determinism(self):
+        """Same inputs + same seed → same AUC bit-for-bit."""
+        rng = np.random.default_rng(42)
+        X_train   = pd.DataFrame(rng.normal(0, 1, (200, 5)),
+                                   columns=list("abcde"))
+        X_holdout = pd.DataFrame(rng.normal(0.5, 1, (200, 5)),
+                                   columns=list("abcde"))
+        r1 = ds_av.run_adversarial_validation(
+            X_train, X_holdout, random_state=123)
+        r2 = ds_av.run_adversarial_validation(
+            X_train, X_holdout, random_state=123)
+        self.assertEqual(r1.auc_mean, r2.auc_mean)
+        self.assertEqual(r1.auc_per_fold, r2.auc_per_fold)
+
+    def test_drops_constant_features(self):
+        rng = np.random.default_rng(0)
+        n = 200
+        X_train = pd.DataFrame({
+            "useful":   rng.normal(0, 1, n),
+            "constant": np.full(n, 5.0),
+        })
+        X_holdout = pd.DataFrame({
+            "useful":   rng.normal(3, 1, n),
+            "constant": np.full(n, 5.0),
+        })
+        res = ds_av.run_adversarial_validation(
+            X_train, X_holdout, cv_folds=3)
+        self.assertIn("constant", res.dropped_features)
+        self.assertEqual(res.feature_count_used, 1)
+
+    def test_drops_all_nan_features(self):
+        rng = np.random.default_rng(0)
+        n = 200
+        X_train = pd.DataFrame({
+            "useful":  rng.normal(0, 1, n),
+            "allnan":  np.full(n, np.nan),
+        })
+        X_holdout = pd.DataFrame({
+            "useful":  rng.normal(3, 1, n),
+            "allnan":  np.full(n, np.nan),
+        })
+        res = ds_av.run_adversarial_validation(
+            X_train, X_holdout, cv_folds=3)
+        self.assertIn("allnan", res.dropped_features)
+
+    def test_too_few_rows_raises(self):
+        X_train   = pd.DataFrame({"f": [1.0, 2.0, 3.0]})
+        X_holdout = pd.DataFrame({"f": [4.0, 5.0, 6.0]})
+        with self.assertRaises(
+                ds_av.AdversarialValidationError):
+            ds_av.run_adversarial_validation(
+                X_train, X_holdout, cv_folds=5)
+
+    def test_no_usable_features_raises(self):
+        # All features are constant in both sets
+        X_train   = pd.DataFrame({"a": [1.0] * 200,
+                                    "b": [2.0] * 200})
+        X_holdout = pd.DataFrame({"a": [1.0] * 200,
+                                    "b": [2.0] * 200})
+        with self.assertRaises(
+                ds_av.AdversarialValidationError):
+            ds_av.run_adversarial_validation(X_train, X_holdout)
+
+    def test_psi_separate_from_av(self):
+        """PSI is a separate diagnostic — distinct function name."""
+        rng = np.random.default_rng(0)
+        n = 200
+        X_train   = pd.DataFrame(rng.normal(0, 1, (n, 3)),
+                                   columns=list("abc"))
+        X_holdout = pd.DataFrame(rng.normal(0, 1, (n, 3)),
+                                   columns=list("abc"))
+        psi = ds_av.distribution_shift_proxy_psi(
+            X_train, X_holdout)
+        # All small (same distribution)
+        for col, val in psi.items():
+            self.assertLess(val, 0.5, f"{col} PSI={val}")
+        # And shifted case yields higher PSI
+        X_holdout2 = pd.DataFrame(rng.normal(3, 1, (n, 3)),
+                                    columns=list("abc"))
+        psi2 = ds_av.distribution_shift_proxy_psi(
+            X_train, X_holdout2)
+        for col in "abc":
+            self.assertGreater(psi2[col], psi[col],
+                f"{col}: shifted PSI ({psi2[col]}) should exceed "
+                f"unshifted PSI ({psi[col]})")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_Assembler — end-to-end
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_Assembler(unittest.TestCase):
+
+    def test_end_to_end_model_a(self):
+        per_tf = _multi_tf_for_assembler(n_15m=600, seed=2)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="TESTSYM", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True,
+            embargo_bars_override=10,
+            adversarial_cv_folds=3,
+        )
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        m = res.manifest
+        # Shape sanity
+        self.assertEqual(res.dataset.shape[0], 600)
+        self.assertEqual(m.feature_count, 68)   # M18.A.2/A.3 total
+        self.assertEqual(m.label_count, 10)     # M18.A.4 locked
+        # Manifest sanity
+        self.assertFalse(m.coverage_degraded)
+        self.assertIsNone(m.degradation_warning)
+        self.assertEqual(m.anchor_set,
+                          "model_a_scanner_replica")
+        # train+val+test+purged+embargoed+pending must NOT exceed
+        # the raw anchor count (the inequality is strict because
+        # purged/embargoed rows came FROM train, which is itself a
+        # subset of the after-pending-exclusion total).
+        self.assertLessEqual(
+            m.anchor_count_train + m.anchor_count_val
+            + m.anchor_count_test + m.anchor_count_purged
+            + m.anchor_count_embargoed,
+            m.anchor_count_total + m.anchor_count_purged
+            + m.anchor_count_embargoed)
+        # Dataset hash valid hex
+        self.assertEqual(len(m.dataset_hash_sha256), 64)
+
+    def test_end_to_end_model_b_has_larger_anchor_set(self):
+        """Model B (1H ∪ scanner) must have >= as many raw anchors
+        as Model A (scanner only) on the same bars."""
+        per_tf = _multi_tf_for_assembler(n_15m=600, seed=3)
+        cfg_a = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        cfg_b = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        r_a = ds_assembler.DatasetAssembler(cfg_a).build(
+            per_tf_bars=per_tf)
+        r_b = ds_assembler.DatasetAssembler(cfg_b).build(
+            per_tf_bars=per_tf)
+        self.assertGreaterEqual(
+            r_b.manifest.anchor_count_raw,
+            r_a.manifest.anchor_count_raw,
+            "Model B (1H ∪ scanner) must not be smaller than "
+            "Model A (scanner only)")
+
+    def test_dataset_hash_deterministic(self):
+        per_tf = _multi_tf_for_assembler(n_15m=500, seed=4)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=8,
+            adversarial_cv_folds=3)
+        asm = ds_assembler.DatasetAssembler(cfg)
+        r1 = asm.build(per_tf_bars=per_tf)
+        r2 = asm.build(per_tf_bars=per_tf)
+        self.assertEqual(
+            r1.manifest.dataset_hash_sha256,
+            r2.manifest.dataset_hash_sha256)
+
+    def test_dataset_hash_changes_with_anchor_set(self):
+        per_tf = _multi_tf_for_assembler(n_15m=500, seed=5)
+        cfg_a = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=8,
+            adversarial_cv_folds=3)
+        cfg_b = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=8,
+            adversarial_cv_folds=3)
+        h_a = ds_assembler.DatasetAssembler(cfg_a).build(
+            per_tf_bars=per_tf).manifest.dataset_hash_sha256
+        h_b = ds_assembler.DatasetAssembler(cfg_b).build(
+            per_tf_bars=per_tf).manifest.dataset_hash_sha256
+        self.assertNotEqual(h_a, h_b,
+            "anchor_set difference must change the dataset hash")
+
+    def test_q19_degraded_blocks_when_require_intraday_true(self):
+        # No 4H bars → Q19 degraded
+        per_tf = _multi_tf_for_assembler(n_15m=300, seed=6)
+        per_tf["4H"] = pd.DataFrame(columns=per_tf["4H"].columns)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        with self.assertRaises(
+                ml_errors.InsufficientIntradayCoverageError):
+            ds_assembler.DatasetAssembler(cfg).build(
+                per_tf_bars=per_tf)
+
+    def test_q19_degraded_allowed_when_require_intraday_false(self):
+        per_tf = _multi_tf_for_assembler(n_15m=300, seed=7)
+        per_tf["4H"] = pd.DataFrame(columns=per_tf["4H"].columns)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=False, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        # Must succeed (does not raise) AND mark as degraded.
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        self.assertTrue(res.manifest.coverage_degraded)
+        self.assertIsNotNone(res.manifest.degradation_warning)
+
+    def test_manifest_records_adversarial_validation_when_run(self):
+        per_tf = _multi_tf_for_assembler(n_15m=600, seed=8)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        # AV result should be populated (Model B usually has enough rows)
+        self.assertIsNotNone(res.adversarial_validation)
+        self.assertEqual(
+            res.adversarial_validation.classifier,
+            "logistic_regression")
+        # Manifest dict-form mirrors it
+        self.assertIsNotNone(
+            res.manifest.adversarial_validation)
+        self.assertEqual(
+            res.manifest.adversarial_validation["classifier"],
+            "logistic_regression")
+
+    def test_label_count_matches_locked_plan(self):
+        per_tf = _multi_tf_for_assembler(n_15m=500, seed=9)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        self.assertEqual(res.manifest.label_count, 10,
+            "M18.A.4 locked label_count is 10")
+
+    def test_pending_excluded_from_split(self):
+        per_tf = _multi_tf_for_assembler(n_15m=400, seed=10)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3)
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        m = res.manifest
+        # anchor_count_total = anchor_count_raw - pending excluded
+        self.assertEqual(
+            m.anchor_count_total,
+            m.anchor_count_raw - m.anchor_count_pending_excluded)
+        # train/val/test indices should map to rows where every
+        # is_pending == 0 in the dataset (no pending leaked into
+        # any split)
+        if res.split is not None:
+            for idxs in (res.split.train_anchor_indices,
+                          res.split.val_anchor_indices,
+                          res.split.test_anchor_indices):
+                pending_cols = [c for c in res.dataset.columns
+                                if c.endswith(".is_pending")]
+                if len(idxs) > 0:
+                    sub = res.dataset.iloc[idxs][pending_cols]
+                    self.assertTrue(
+                        (sub == 0).all().all(),
+                        "pending row leaked into a split")
+
+# ─────────────────────────────────────────────────────────────────────
+# G4_M16Backfill — centralised M16 backfill CLI helper + drift guard
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_M16Backfill(unittest.TestCase):
+    """Single source of truth for the M16 backfill CLI command string
+    used in M18 error messages (coverage.py, assembler.py,
+    m16_loader.py).
+
+    test_command_matches_actual_m16_cli below shells out to the real
+    M16 CLI's --help to verify that the subcommand and argument
+    names emitted by the helper still exist. If the M16 CLI surface
+    changes, this test fails and the helper module is the single
+    file that needs updating.
+    """
+
+    def test_helper_single_timeframe(self):
+        from bot.ml.dataset._m16_backfill import format_backfill_command
+        cmd = format_backfill_command("AAPL", "4H")
+        self.assertEqual(cmd,
+            "    python -m bot.historical.cli backfill "
+            "--symbols AAPL --timeframes 4H")
+
+    def test_helper_multi_timeframe_csv(self):
+        from bot.ml.dataset._m16_backfill import format_backfill_command
+        # Preserves caller order; does NOT sort
+        cmd = format_backfill_command("MSFT", ["1H", "4H", "15m"])
+        self.assertEqual(cmd,
+            "    python -m bot.historical.cli backfill "
+            "--symbols MSFT --timeframes 1H,4H,15m")
+
+    def test_helper_custom_indent(self):
+        from bot.ml.dataset._m16_backfill import format_backfill_command
+        cmd = format_backfill_command("X", "1D", indent="")
+        self.assertTrue(cmd.startswith("python -m"),
+            "indent='' should drop the leading whitespace")
+
+    def test_command_matches_actual_m16_cli(self):
+        """DRIFT GUARD: shells out to the real M16 CLI --help and
+        verifies that the subcommand + flag names emitted by the
+        helper actually exist."""
+        import subprocess, sys
+        from bot.ml.dataset import _m16_backfill as h
+
+        # 1. Top-level --help must list the backfill subcommand.
+        top = subprocess.run(
+            [sys.executable, "-m", h.M16_CLI_MODULE, "--help"],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(top.returncode, 0,
+            f"`python -m {h.M16_CLI_MODULE} --help` failed:\n"
+            f"{top.stderr}")
+        self.assertIn(h.M16_BACKFILL_SUBCOMMAND, top.stdout,
+            f"backfill subcommand missing from CLI top-level --help:\n"
+            f"{top.stdout}")
+
+        # 2. The backfill subcommand's --help must mention BOTH flag
+        #    names the helper emits.
+        sub = subprocess.run(
+            [sys.executable, "-m", h.M16_CLI_MODULE,
+              h.M16_BACKFILL_SUBCOMMAND, "--help"],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(sub.returncode, 0,
+            f"`{h.M16_BACKFILL_SUBCOMMAND} --help` failed:\n"
+            f"{sub.stderr}")
+        self.assertIn(h.M16_BACKFILL_SYMBOLS_FLAG, sub.stdout,
+            f"{h.M16_BACKFILL_SYMBOLS_FLAG} flag not found in "
+            f"backfill --help:\n{sub.stdout}")
+        self.assertIn(h.M16_BACKFILL_TIMEFRAMES_FLAG, sub.stdout,
+            f"{h.M16_BACKFILL_TIMEFRAMES_FLAG} flag not found in "
+            f"backfill --help:\n{sub.stdout}")
+
+    def test_helper_is_used_by_coverage_module(self):
+        """Belt-and-suspenders: coverage.py's error message must
+        delegate to the helper (no hand-rolled CLI string)."""
+        from pathlib import Path
+        src = Path("bot/ml/dataset/coverage.py").read_text()
+        self.assertIn("format_backfill_command", src,
+            "coverage.py must use format_backfill_command, not a "
+            "hand-rolled CLI string")
+        # Negative check: the old broken form must NOT be present
+        self.assertNotIn("bot.historical.cli refresh", src)
+        self.assertNotIn("--tf ", src)
+
+    def test_helper_is_used_by_assembler_module(self):
+        from pathlib import Path
+        src = Path("bot/ml/dataset/assembler.py").read_text()
+        self.assertIn("format_backfill_command", src,
+            "assembler.py must use format_backfill_command for the "
+            "anchor-TF-missing error")
+        self.assertNotIn("bot.historical.cli refresh", src)
+        self.assertNotIn("--tf ", src)
+
+    def test_helper_is_used_by_m16_loader_module(self):
+        from pathlib import Path
+        src = Path("bot/ml/dataset/m16_loader.py").read_text()
+        self.assertIn("format_backfill_command", src,
+            "m16_loader.py must use format_backfill_command, not a "
+            "hand-rolled CLI string (fixed in M18.A.5)")
+        self.assertNotIn("bot.historical.cli refresh", src)
+
+# ═════════════════════════════════════════════════════════════════════
+# G5 — Model trainers + thinness gates + promotion gate (M18.A.6)
+# ═════════════════════════════════════════════════════════════════════
+
+
+def _assemble_for_training(*, n_15m=1000, av_threshold=1.0,
+                              require_intraday=True, drop_4h=False,
+                              symbol="X", seed=11):
+    """Build an AssemblerResult suitable for trainer tests.
+
+    Defaults give 1000 anchor bars (enough for a non-degenerate split)
+    and av_threshold=1.0 so the adversarial gate always passes —
+    isolating the trainer's own gate behaviour from the dataset's."""
+    per_tf = _multi_tf_for_assembler(n_15m=n_15m, seed=seed)
+    if drop_4h:
+        per_tf["4H"] = pd.DataFrame(columns=per_tf["4H"].columns)
+    cfg = ds_assembler.AssemblerConfig(
+        symbol=symbol, anchor_tf="15m",
+        anchor_set=ds_anchors
+            .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+        require_intraday=require_intraday,
+        embargo_bars_override=10,
+        adversarial_cv_folds=3,
+        adversarial_threshold=av_threshold,
+    )
+    return ds_assembler.DatasetAssembler(cfg).build(per_tf_bars=per_tf)
+
+
+def _make_train_config(model_type: str, *,
+                          dataset_id: str,
+                          target_label_id: str
+                            = "triple_barrier_atr_2_3_50_won",
+                          train_mode: str = "model_b_candidate_quality",
+                          hyperparameters=None,
+                          seed: int = 42,
+                          fixture_mode: bool = False) -> TrainConfig:
+    return TrainConfig(
+        dataset_id=dataset_id,
+        model_type=model_type,
+        train_mode=train_mode,
+        target_label_id=target_label_id,
+        hyperparameters=hyperparameters or {},
+        seed=seed,
+        fixture_mode=fixture_mode,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_FeatureSelect — column slicing helpers
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_FeatureSelect(unittest.TestCase):
+
+    def test_select_feature_columns_matches_known_feature_ids(self):
+        res = _assemble_for_training()
+        cols = list(res.dataset.columns)
+        feats = select_feature_columns(cols)
+        # 68 features per M18.A.2/A.3 (verified by G4_Assembler)
+        self.assertEqual(len(feats), 68)
+        # ts_utc and label columns must NOT be in feature list
+        self.assertNotIn("ts_utc", feats)
+        self.assertNotIn("triple_barrier_atr_2_3_50_won", feats)
+        self.assertNotIn("triple_barrier_atr_2_3_50", feats)
+
+    def test_select_label_columns_includes_label_aux(self):
+        res = _assemble_for_training()
+        cols = list(res.dataset.columns)
+        lbls = select_label_columns(cols)
+        # 10 labels + their aux columns
+        self.assertIn("triple_barrier_atr_2_3_50_won", lbls)
+        self.assertIn("triple_barrier_atr_2_3_50_won.is_pending", lbls)
+        self.assertIn("triple_barrier_atr_2_3_50.resolved_ts", lbls)
+        self.assertIn("fwd_return_5b", lbls)
+        # ts_utc must NOT be in label list
+        self.assertNotIn("ts_utc", lbls)
+
+    def test_get_label_class_known(self):
+        self.assertEqual(
+            get_label_class("triple_barrier_atr_2_3_50_won"), "binary")
+        self.assertEqual(
+            get_label_class("triple_barrier_atr_2_3_50"),
+            "classification_3way")
+        self.assertEqual(
+            get_label_class("fwd_return_5b"), "regression")
+
+    def test_get_label_class_unknown_raises(self):
+        with self.assertRaises(ml_errors.M18ConfigError):
+            get_label_class("not_a_real_label_id")
+
+    def test_extract_xy_split_dimensions(self):
+        res = _assemble_for_training()
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        X, y = extract_xy_for_split(
+            res.dataset, res.split.train_anchor_indices,
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            feature_columns=feat_cols)
+        self.assertEqual(X.shape[0], len(res.split.train_anchor_indices))
+        self.assertEqual(X.shape[1], len(feat_cols))
+        self.assertEqual(y.shape[0], X.shape[0])
+        # No NaN in target (pending excluded by the assembler)
+        self.assertFalse(np.isnan(y).any())
+
+    def test_extract_xy_empty_indices(self):
+        res = _assemble_for_training()
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        X, y = extract_xy_for_split(
+            res.dataset, np.array([], dtype=np.int64),
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            feature_columns=feat_cols)
+        self.assertEqual(X.shape, (0, len(feat_cols)))
+        self.assertEqual(y.shape, (0,))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_ThinnessGates — sample-count, minority-class, feature-ratio
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_ThinnessGates(unittest.TestCase):
+
+    def test_full_pass(self):
+        rpt = evaluate_thinness(
+            y_train=np.array([0, 1] * 200),   # 400 rows balanced
+            n_val=100, n_test=100, n_features=50,
+            label_class="binary")
+        self.assertTrue(rpt["passed"])
+        self.assertEqual(rpt["failed_checks"], [])
+
+    def test_train_sample_count_failure(self):
+        rpt = evaluate_thinness(
+            y_train=np.zeros(50),   # below default 200
+            n_val=100, n_test=100, n_features=10,
+            label_class="binary")
+        self.assertFalse(rpt["passed"])
+        self.assertIn("sample_count_train", rpt["failed_checks"])
+
+    def test_val_test_sample_count_failures(self):
+        rpt = evaluate_thinness(
+            y_train=np.array([0, 1] * 200),
+            n_val=10, n_test=10, n_features=10,
+            label_class="binary")
+        self.assertIn("sample_count_val", rpt["failed_checks"])
+        self.assertIn("sample_count_test", rpt["failed_checks"])
+
+    def test_minority_class_failure(self):
+        # 250 train, only 5 of class 1
+        y = np.concatenate([np.zeros(245), np.ones(5)])
+        rpt = evaluate_thinness(
+            y_train=y, n_val=100, n_test=100, n_features=10,
+            label_class="binary")
+        self.assertIn("minority_class_count_train",
+                       rpt["failed_checks"])
+
+    def test_feature_to_train_ratio_failure(self):
+        # 100 train, 60 features → ratio 0.6 > 0.5 default
+        rpt = evaluate_thinness(
+            y_train=np.array([0, 1] * 50),
+            n_val=100, n_test=100, n_features=60,
+            label_class="binary")
+        self.assertIn("feature_to_train_ratio",
+                       rpt["failed_checks"])
+
+    def test_regression_minority_check_is_na(self):
+        rpt = evaluate_thinness(
+            y_train=np.random.RandomState(0).normal(0, 1, 500),
+            n_val=100, n_test=100, n_features=10,
+            label_class="regression")
+        # Minority-class check is N/A; must NOT fail it
+        self.assertNotIn("minority_class_count_train",
+                          rpt["failed_checks"])
+        self.assertTrue(
+            rpt["checks"]["minority_class_count_train"]["passed"])
+
+    def test_custom_thresholds(self):
+        th = ThinnessThresholds(min_train_samples=10,
+                                  min_val_samples=5,
+                                  min_test_samples=5,
+                                  min_minority_class_train=3,
+                                  max_features_to_train_ratio=10.0)
+        rpt = evaluate_thinness(
+            y_train=np.array([0]*7 + [1]*3),   # 10 train, 3 minority
+            n_val=5, n_test=5, n_features=5,
+            label_class="binary", thresholds=th)
+        self.assertTrue(rpt["passed"], rpt)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_MajorityBaseline (B0)
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_MajorityBaseline(unittest.TestCase):
+
+    def test_predicts_class_1_prior_train_rate(self):
+        """B0_majority emits the train rate of class 1 (DummyClassifier
+        strategy='prior' semantics)."""
+        trainer = MajorityClassTrainer()
+        y = np.concatenate([np.zeros(70), np.ones(30)])   # 30% class 1
+        trainer.fit(y, label_class="binary", seed=42)
+        proba = trainer.predict_proba(5)
+        self.assertEqual(proba.shape, (5,))
+        np.testing.assert_allclose(proba, 0.30, rtol=1e-12)
+
+    def test_at_50_50_split_proba_is_05(self):
+        trainer = MajorityClassTrainer()
+        y = np.concatenate([np.zeros(50), np.ones(50)])
+        trainer.fit(y, label_class="binary", seed=42)
+        np.testing.assert_allclose(
+            trainer.predict_proba(3), 0.5, rtol=1e-12)
+
+    def test_regression_returns_train_mean(self):
+        trainer = MajorityClassTrainer()
+        y = np.array([1.0, 2.0, 3.0, 4.0])
+        trainer.fit(y, label_class="regression", seed=42)
+        np.testing.assert_allclose(
+            trainer.predict_proba(3), 2.5, rtol=1e-12)
+
+    def test_majority_class_recorded_deterministically(self):
+        trainer = MajorityClassTrainer()
+        y = np.concatenate([np.zeros(60), np.ones(40)])
+        trainer.fit(y, label_class="binary", seed=42)
+        self.assertEqual(trainer.majority_class_, 0.0)
+        # Tie-break: when counts equal, smaller class wins
+        y_tie = np.concatenate([np.zeros(50), np.ones(50)])
+        t2 = MajorityClassTrainer()
+        t2.fit(y_tie, label_class="binary", seed=42)
+        self.assertEqual(t2.majority_class_, 0.0)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_ScannerReplicaBaseline (B1)
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_ScannerReplicaBaseline(unittest.TestCase):
+
+    def test_passthrough_returns_signal_fires(self):
+        trainer = ScannerReplicaTrainer()
+        sf_train = np.array([0, 1, 0, 1, 1], dtype=np.int8)
+        trainer.fit(sf_train, seed=42)
+        sf_test = np.array([1, 0, 0, 1], dtype=np.int8)
+        proba = trainer.predict_proba(sf_test)
+        np.testing.assert_array_equal(proba, sf_test.astype(float))
+
+    def test_records_train_positive_rate(self):
+        trainer = ScannerReplicaTrainer()
+        trainer.fit(np.array([0, 0, 1, 1, 1, 0, 1]), seed=42)
+        self.assertAlmostEqual(trainer.train_positive_rate_,
+                                 4/7, places=12)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_LogisticBaseline (B2)
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_LogisticBaseline(unittest.TestCase):
+
+    def _separable_data(self, n=400, seed=0):
+        """A small, perfectly-separable dataset for which LR should
+        learn AUC near 1.0."""
+        rng = np.random.default_rng(seed)
+        X = rng.normal(0, 1, (n, 4))
+        y = (X[:, 0] + X[:, 1] > 0).astype(float)
+        return X, y
+
+    def test_fit_predict_proba_basic(self):
+        X, y = self._separable_data(n=400)
+        trainer = LogisticRegressionTrainer()
+        trainer.fit(X, y, label_class="binary", seed=42)
+        proba = trainer.predict_proba(X)
+        self.assertEqual(proba.shape, (X.shape[0],))
+        # Probabilities in [0, 1]
+        self.assertTrue(np.all(proba >= 0))
+        self.assertTrue(np.all(proba <= 1))
+        # Should be highly informative on separable data
+        from sklearn.metrics import roc_auc_score
+        self.assertGreater(roc_auc_score(y, proba), 0.95)
+
+    def test_determinism_same_seed(self):
+        X, y = self._separable_data(n=300, seed=1)
+        t1 = LogisticRegressionTrainer()
+        t1.fit(X, y, label_class="binary", seed=42)
+        t2 = LogisticRegressionTrainer()
+        t2.fit(X, y, label_class="binary", seed=42)
+        np.testing.assert_array_equal(
+            t1.predict_proba(X), t2.predict_proba(X))
+
+    def test_refuses_non_binary_target(self):
+        X, y = self._separable_data()
+        trainer = LogisticRegressionTrainer()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            trainer.fit(X, y, label_class="regression", seed=42)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            trainer.fit(X, y, label_class="classification_3way",
+                          seed=42)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_LightGBM (gated on availability)
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_LightGBM(unittest.TestCase):
+
+    def test_is_lightgbm_available_returns_bool(self):
+        # Don't assert which value — depends on the venv
+        self.assertIsInstance(is_lightgbm_available(), bool)
+
+    def test_missing_lightgbm_raises_clear_error(self):
+        if is_lightgbm_available():
+            self.skipTest("lightgbm IS installed — this test "
+                          "checks the unavailable path")
+        trainer = LightGBMTrainer()
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            trainer.fit(np.array([[1.0]]), np.array([0]),
+                          label_class="binary", seed=42)
+        msg = str(ctx.exception)
+        self.assertIn("lightgbm is not installed", msg)
+        self.assertIn("pip install lightgbm", msg)
+        self.assertIn("M18.A.6", msg)
+        self.assertIn("B2_logistic", msg)
+
+    @unittest.skipUnless(is_lightgbm_available(),
+                          "lightgbm not installed")
+    def test_lightgbm_determinism_when_available(self):
+        rng = np.random.default_rng(0)
+        X = rng.normal(0, 1, (300, 4))
+        y = (X[:, 0] > 0).astype(float)
+        t1 = LightGBMTrainer()
+        t1.fit(X, y, label_class="binary", seed=42)
+        t2 = LightGBMTrainer()
+        t2.fit(X, y, label_class="binary", seed=42)
+        np.testing.assert_array_equal(
+            t1.predict_proba(X), t2.predict_proba(X))
+
+    @unittest.skipUnless(is_lightgbm_available(),
+                          "lightgbm not installed")
+    def test_lightgbm_refuses_to_override_determinism_flags(self):
+        trainer = LightGBMTrainer()
+        bad_hps = {"deterministic": False, "n_estimators": 50}
+        with self.assertRaises(ml_errors.M18ConfigError):
+            trainer.fit(np.array([[1.0]]), np.array([0]),
+                          label_class="binary", seed=42,
+                          hyperparameters=bad_hps)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_TrainerOrchestrator — end-to-end with TrainConfig + AssemblerResult
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_TrainerOrchestrator(unittest.TestCase):
+
+    def test_b0_majority_end_to_end(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertEqual(out.model_type, "B0_majority")
+        self.assertEqual(out.target_label_class, "binary")
+        # B0 produces a constant prediction → AUC = 0.5
+        self.assertEqual(out.metrics_val["roc_auc"], 0.5)
+        self.assertEqual(out.metrics_test["roc_auc"], 0.5)
+        # Prediction lengths match split sizes
+        self.assertEqual(len(out.pred_train),
+                          len(res.split.train_anchor_indices))
+        self.assertEqual(len(out.pred_val),
+                          len(res.split.val_anchor_indices))
+        self.assertEqual(len(out.pred_test),
+                          len(res.split.test_anchor_indices))
+
+    def test_b1_scanner_replica_end_to_end(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B1_scanner_replica",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertEqual(out.model_type, "B1_scanner_replica")
+        # B1 emits the raw signal_fires column for test split — verify
+        # the prediction matches that column directly.
+        sf_test = res.dataset.iloc[res.split.test_anchor_indices][
+            SCANNER_FIRES_COLUMN].to_numpy(dtype=float)
+        np.testing.assert_array_equal(
+            np.array(out.pred_test), sf_test)
+
+    def test_b2_logistic_end_to_end(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertEqual(out.model_type, "B2_logistic")
+        # Probabilities in [0, 1]
+        self.assertTrue(all(0 <= p <= 1 for p in out.pred_test))
+        # library_versions records sklearn
+        self.assertIn("sklearn", out.library_versions)
+
+    def test_dataset_identity_propagates_to_output(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertEqual(out.dataset_id, res.manifest.dataset_id)
+        self.assertEqual(out.dataset_hash_sha256,
+                          res.manifest.dataset_hash_sha256)
+
+    def test_no_split_raises_insufficient_data(self):
+        """If the assembler couldn't produce a split (too few rows),
+        the trainer must NOT silently produce a model."""
+        # Synthetic with very few bars — split should be None or
+        # trigger InsufficientDataError. Use the assembler's
+        # config-validation pathway.
+        per_tf = _multi_tf_for_assembler(n_15m=300, seed=99)
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=5,
+            adversarial_cv_folds=2)
+        # Model A on tiny synthetic should give a small anchor set
+        res = ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+        if res.split is None:
+            with self.assertRaises(
+                    ml_errors.InsufficientDataError):
+                ModelTrainer().train_one(
+                    _make_train_config("B0_majority",
+                                         dataset_id=res.manifest.dataset_id),
+                    res)
+        else:
+            self.skipTest(
+                "split was producible; this test exercises the "
+                "no-split path which depends on synthetic-data luck")
+
+    def test_invalid_model_type_raises(self):
+        res = _assemble_for_training()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            cfg = _make_train_config(
+                "NOT_A_REAL_MODEL",
+                dataset_id=res.manifest.dataset_id)
+            # Bypass TrainConfig.from_dict() validation: build the
+            # dataclass directly to ensure the Trainer itself
+            # validates.
+            cfg = TrainConfig(
+                dataset_id=res.manifest.dataset_id,
+                model_type="NOT_A_REAL_MODEL",
+                train_mode="model_a_meta_label",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False)
+            ModelTrainer().train_one(cfg, res)
+
+    def test_m_random_forest_not_implemented_clear_error(self):
+        """M_random_forest is in ALLOWED_MODEL_TYPES but not in the
+        M18.A.6 scope. The trainer must raise a CLEAR error stating
+        this rather than silently substituting another model."""
+        res = _assemble_for_training()
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type="M_random_forest",
+            train_mode="model_a_meta_label",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            ModelTrainer().train_one(cfg, res)
+        self.assertIn("M18.A.6", str(ctx.exception))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_NoTestLeak — train data does NOT influence training
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_NoTestLeak(unittest.TestCase):
+    """The locked plan forbids optimising on test data. The most
+    structural way to assert this: scramble the test split's feature
+    values and verify the train+val predictions remain bit-identical.
+    If test data influenced training, train predictions would change.
+    """
+
+    def test_b2_logistic_train_predictions_invariant_to_test_data(self):
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "B2_logistic", dataset_id=res.manifest.dataset_id)
+        out_orig = ModelTrainer().train_one(cfg, res)
+
+        # Build a perturbed AssemblerResult with the test slice's
+        # feature columns scrambled. Everything else identical.
+        scrambled = res.dataset.copy()
+        feat_cols = select_feature_columns(list(scrambled.columns))
+        rng = np.random.default_rng(99)
+        test_idx = res.split.test_anchor_indices
+        for c in feat_cols:
+            old_vals = scrambled.loc[test_idx, c].to_numpy()
+            scrambled.loc[test_idx, c] = rng.permutation(old_vals)
+        # Reuse the same split / manifest / AV result — we only
+        # mutate the dataset's TEST rows.
+        from dataclasses import replace
+        perturbed = ds_assembler.AssemblerResult(
+            dataset=scrambled,
+            manifest=res.manifest,
+            split=res.split,
+            coverage_report=res.coverage_report,
+            adversarial_validation=res.adversarial_validation,
+        )
+        out_perturbed = ModelTrainer().train_one(cfg, perturbed)
+
+        # Train predictions MUST be identical (test data did not
+        # influence training).
+        np.testing.assert_array_equal(
+            np.array(out_orig.pred_train),
+            np.array(out_perturbed.pred_train))
+        # Val predictions MUST also be identical (val data was the
+        # same).
+        np.testing.assert_array_equal(
+            np.array(out_orig.pred_val),
+            np.array(out_perturbed.pred_val))
+        # Test predictions SHOULD differ — verifies our scramble
+        # actually changed something (no false-positive identity).
+        self.assertFalse(np.array_equal(
+            np.array(out_orig.pred_test),
+            np.array(out_perturbed.pred_test)))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_FixtureModePropagation — Q16 fixture-mode contract
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_FixtureModePropagation(unittest.TestCase):
+
+    def test_fixture_mode_skips_thinness_gates(self):
+        res = _assemble_for_training(n_15m=400)
+        cfg = _make_train_config(
+            "B0_majority",
+            dataset_id=res.manifest.dataset_id,
+            fixture_mode=True)
+        out = ModelTrainer().train_one(cfg, res)
+        self.assertTrue(out.fixture_only)
+        self.assertTrue(out.thinness_status.get("skipped"))
+        self.assertIn("Q16",
+                       out.thinness_status.get("reason", ""))
+
+    def test_fixture_mode_blocks_promotion_permanently(self):
+        """fixture_mode=True ⇒ fixture_only=True ⇒ promotion_eligible
+        is False, regardless of all other gates."""
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "B0_majority",
+            dataset_id=res.manifest.dataset_id,
+            fixture_mode=True)
+        out = ModelTrainer().train_one(cfg, res)
+        self.assertFalse(out.promotion_eligible)
+        self.assertIn("fixture_only", out.promotion_blocked_reasons)
+
+    def test_dataset_fixture_only_propagates_to_model(self):
+        """If the dataset was built fixture-mode, the model must
+        inherit fixture_only=True even if train_config.fixture_mode
+        is False."""
+        # Build a fixture-mode dataset
+        per_tf = _multi_tf_for_assembler(n_15m=600, seed=33)
+        cfg_ds = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0,
+            fixture_mode=True)
+        res = ds_assembler.DatasetAssembler(cfg_ds).build(
+            per_tf_bars=per_tf)
+        self.assertTrue(res.manifest.fixture_only)
+        # Train with fixture_mode=False at trainer-level
+        cfg = _make_train_config(
+            "B0_majority",
+            dataset_id=res.manifest.dataset_id,
+            fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        # Model inherits fixture_only via the dataset
+        self.assertTrue(out.fixture_only)
+        self.assertFalse(out.promotion_eligible)
+        # Reason is the dataset's own fixture_only flag (namespaced)
+        self.assertTrue(any(
+            r.startswith("dataset:fixture_only")
+            for r in out.promotion_blocked_reasons),
+            out.promotion_blocked_reasons)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_PromotionGate — dataset-inherited gates + thinness composition
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_PromotionGate(unittest.TestCase):
+
+    def test_thinness_failure_blocks_promotion_with_thinness_reason(self):
+        # 159 train samples vs 68 features → feature_to_train_ratio
+        # and minority_count likely both fail.
+        res = _assemble_for_training(n_15m=600)
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertFalse(out.promotion_eligible)
+        # Every thinness reason must be namespaced
+        any_thinness = any(r.startswith("thinness:")
+                            for r in out.promotion_blocked_reasons)
+        self.assertTrue(any_thinness, out.promotion_blocked_reasons)
+
+    def test_adversarial_validation_failure_propagates_via_dataset(self):
+        """Tight AV threshold → dataset AV fails → trainer inherits
+        the AV failure as a 'dataset:' reason, NOT --force-overridable
+        at the trainer layer."""
+        res = _assemble_for_training(n_15m=1000, av_threshold=0.55)
+        # AV almost certainly fails on synthetic random walk
+        self.assertFalse(
+            res.adversarial_validation.passed
+            if res.adversarial_validation else True)
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertFalse(out.promotion_eligible)
+        self.assertTrue(any(
+            r.startswith("dataset:adversarial_validation_failed")
+            for r in out.promotion_blocked_reasons),
+            out.promotion_blocked_reasons)
+
+    def test_coverage_degraded_propagates_via_dataset(self):
+        """Q19 coverage_degraded must propagate as 'dataset:
+        coverage_degraded' — also not trainer-force-overridable."""
+        per_tf = _multi_tf_for_assembler(n_15m=1000, seed=44)
+        per_tf["4H"] = pd.DataFrame(columns=per_tf["4H"].columns)
+        cfg_ds = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=False,    # degrade allowed
+            embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+        res = ds_assembler.DatasetAssembler(cfg_ds).build(
+            per_tf_bars=per_tf)
+        self.assertTrue(res.manifest.coverage_degraded)
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertFalse(out.promotion_eligible)
+        self.assertTrue(any(
+            r == "dataset:coverage_degraded"
+            for r in out.promotion_blocked_reasons),
+            out.promotion_blocked_reasons)
+
+    def test_all_gates_pass_yields_promotion_eligible(self):
+        """With permissive thresholds AND a permissive AV gate, a
+        plain training run should be promotion_eligible=True."""
+        res = _assemble_for_training(n_15m=1000, av_threshold=1.0)
+        # Override thinness thresholds so the synthetic data fits
+        trainer = ModelTrainer(
+            thinness_thresholds=ThinnessThresholds(
+                min_train_samples=10, min_val_samples=10,
+                min_test_samples=10, min_minority_class_train=3,
+                max_features_to_train_ratio=10.0))
+        out = trainer.train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertTrue(out.promotion_eligible,
+            f"with all gates relaxed, B0 should be eligible; "
+            f"reasons={out.promotion_blocked_reasons}")
+        self.assertEqual(out.promotion_blocked_reasons, [])
+
+    def test_reasons_are_namespaced_distinctly(self):
+        """A degraded + thin dataset yields BOTH dataset: and
+        thinness: prefixed reasons so the operator can tell them
+        apart."""
+        per_tf = _multi_tf_for_assembler(n_15m=600, seed=55)
+        per_tf["4H"] = pd.DataFrame(columns=per_tf["4H"].columns)
+        cfg_ds = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=False,
+            embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+        res = ds_assembler.DatasetAssembler(cfg_ds).build(
+            per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        reasons = out.promotion_blocked_reasons
+        has_dataset = any(r.startswith("dataset:") for r in reasons)
+        has_thin    = any(r.startswith("thinness:") for r in reasons)
+        self.assertTrue(has_dataset, reasons)
+        self.assertTrue(has_thin,    reasons)
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_DualCohort — explicit Model A vs Model B cohort semantics
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_DualCohort(unittest.TestCase):
+    """Locks in the dual-cohort contract:
+
+    Model A (`train_mode='model_a_meta_label'`)
+      structural cohort: `anchor_set='model_a_scanner_replica'`
+      semantics: ONLY anchors where the live scanner fires; every
+                  anchor row has scanner_replica.signal_fires == 1.
+
+    Model B (`train_mode='model_b_candidate_quality'`)
+      structural cohort: `anchor_set='model_b_1h_union_candidates'`
+      semantics: ALL 1H anchors ∪ scanner-candidate anchors;
+                  anchor rows include both signal_fires==0 (the 1H-
+                  only anchors) and signal_fires==1 (the scanner-
+                  fired anchors).
+
+    The trainer does NOT re-filter rows by train_mode. The assembler
+    is the single source of truth — train_mode is a metadata tag on
+    the trainer. The trainer enforces 1:1 congruence between
+    train_mode and manifest.anchor_set at train_one() time; any
+    mismatch raises M18ConfigError.
+    """
+
+    # ── 0. Helpers: build BOTH cohorts from the same per_tf_bars ───
+
+    def _build_per_tf(self, seed=21, n_15m=2000):
+        return _multi_tf_for_assembler(n_15m=n_15m, seed=seed)
+
+    def _build_model_a(self, per_tf):
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+        return ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+
+    def _build_model_b(self, per_tf):
+        cfg = ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+        return ds_assembler.DatasetAssembler(cfg).build(
+            per_tf_bars=per_tf)
+
+    def _anchor_rows_signal_fires(self, res):
+        """Return scanner_replica.signal_fires for the rows pointed
+        to by the walk-forward split (train + val + test)."""
+        all_idx = np.concatenate([
+            res.split.train_anchor_indices,
+            res.split.val_anchor_indices,
+            res.split.test_anchor_indices,
+        ])
+        return res.dataset.iloc[all_idx][
+            SCANNER_FIRES_COLUMN].to_numpy(dtype=np.int64)
+
+    # ── 1. Cohort STRUCTURE: anchor rows reflect anchor_set ─────────
+
+    def test_model_a_anchor_rows_all_have_signal_fires_equal_1(self):
+        """Model A cohort: every anchor row has signal_fires == 1.
+        This is the structural assertion that the scanner_replica
+        anchor_set actually filters to scanner-fires rows only."""
+        per_tf = self._build_per_tf()
+        res = self._build_model_a(per_tf)
+        sf = self._anchor_rows_signal_fires(res)
+        self.assertGreater(len(sf), 0,
+            "test pre-condition: Model A must have at least 1 anchor")
+        self.assertTrue((sf == 1).all(),
+            f"Model A anchor rows must ALL have signal_fires=1; "
+            f"got value distribution {pd.Series(sf).value_counts().to_dict()}")
+
+    def test_model_b_anchor_rows_include_both_scanner_and_non_scanner(self):
+        """Model B cohort: union of all 1H anchors and scanner
+        candidates. Anchor rows must contain BOTH signal_fires=0 (the
+        1H-only anchors) and signal_fires=1 (the scanner-fired
+        anchors). Confirms Model B is NOT a scanner-only filter."""
+        per_tf = self._build_per_tf()
+        res = self._build_model_b(per_tf)
+        sf = self._anchor_rows_signal_fires(res)
+        unique_values = set(np.unique(sf).tolist())
+        self.assertIn(0, unique_values,
+            f"Model B must include signal_fires=0 rows (the 1H-only "
+            f"anchors that the union semantics adds on top of the "
+            f"scanner candidates); got {unique_values}")
+        self.assertIn(1, unique_values,
+            f"Model B must include signal_fires=1 rows (the scanner-"
+            f"candidate part of the union); got {unique_values}")
+
+    def test_model_b_is_a_superset_of_model_a_in_anchor_count(self):
+        """Built from identical bars, |B anchors| >= |A anchors| —
+        because B = 1H ∪ scanner and A = scanner only."""
+        per_tf = self._build_per_tf()
+        res_a = self._build_model_a(per_tf)
+        res_b = self._build_model_b(per_tf)
+        n_a = res_a.manifest.anchor_count_total
+        n_b = res_b.manifest.anchor_count_total
+        self.assertGreater(n_b, n_a,
+            f"Model B anchor count must be > Model A anchor count "
+            f"(B is a strict superset, given the 1H union adds "
+            f"non-scanner anchors); got A={n_a}, B={n_b}")
+
+    # ── 2. CONGRUENCE: correct (train_mode, anchor_set) pair works ─
+
+    def test_correct_model_a_pairing_trains_and_records_provenance(self):
+        per_tf = self._build_per_tf()
+        res = self._build_model_a(per_tf)
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_a_meta_label",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        # The train_mode tag is preserved
+        self.assertEqual(out.train_mode, "model_a_meta_label")
+        # The structural anchor_set is propagated from the manifest
+        self.assertEqual(out.dataset_anchor_set,
+                          "model_a_scanner_replica")
+        # n_train > 0 — the cohort actually had data to train on
+        self.assertGreater(out.n_train, 0)
+
+    def test_correct_model_b_pairing_trains_and_records_provenance(self):
+        per_tf = self._build_per_tf()
+        res = self._build_model_b(per_tf)
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_b_candidate_quality",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        self.assertEqual(out.train_mode, "model_b_candidate_quality")
+        self.assertEqual(out.dataset_anchor_set,
+                          "model_b_1h_union_candidates")
+        self.assertGreater(out.n_train, 0)
+
+    # ── 3. MISMATCH: wrong (train_mode, anchor_set) pair raises ─────
+
+    def test_model_a_train_mode_on_model_b_dataset_raises(self):
+        """Operator tagged their config as Model A but pointed it at
+        a Model B dataset — must raise M18ConfigError."""
+        per_tf = self._build_per_tf()
+        res_b = self._build_model_b(per_tf)
+        cfg = TrainConfig(
+            dataset_id=res_b.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_a_meta_label",          # WRONG
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            ModelTrainer().train_one(cfg, res_b)
+        msg = str(ctx.exception)
+        self.assertIn("cohort mismatch", msg)
+        self.assertIn("model_a_scanner_replica", msg)
+        self.assertIn("model_b_1h_union_candidates", msg)
+        # Suggested fix included
+        self.assertIn("model_b_candidate_quality", msg)
+
+    def test_model_b_train_mode_on_model_a_dataset_raises(self):
+        per_tf = self._build_per_tf()
+        res_a = self._build_model_a(per_tf)
+        cfg = TrainConfig(
+            dataset_id=res_a.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_b_candidate_quality",   # WRONG
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            ModelTrainer().train_one(cfg, res_a)
+        msg = str(ctx.exception)
+        self.assertIn("cohort mismatch", msg)
+        self.assertIn("model_b_1h_union_candidates", msg)
+        self.assertIn("model_a_scanner_replica", msg)
+        # Suggested fix included
+        self.assertIn("model_a_meta_label", msg)
+
+    def test_cohort_mismatch_surfaces_before_split_check(self):
+        """Cohort mismatch is more diagnostic than split=None; the
+        trainer raises the cohort mismatch FIRST so the operator
+        sees the structural problem even on degenerate datasets."""
+        from dataclasses import replace
+        per_tf = self._build_per_tf()
+        res_b = self._build_model_b(per_tf)
+        # Build a degenerate result: same Model B dataset but with
+        # split=None. Cohort check must fire even when split is None.
+        res_b_no_split = replace(res_b, split=None)
+        cfg = TrainConfig(
+            dataset_id=res_b.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_a_meta_label",         # WRONG
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            ModelTrainer().train_one(cfg, res_b_no_split)
+        # The cohort mismatch (M18ConfigError) — NOT
+        # InsufficientDataError (which would be raised by split=None
+        # if the cohort check ran second). Both are M18Error
+        # subclasses but ConfigError is the right one here.
+        self.assertIn("cohort mismatch", str(ctx.exception))
+
+    # ── 4. INVARIANTS: mapping is 1:1, trainer is non-filtering ─────
+
+    def test_train_mode_to_anchor_set_mapping_is_one_to_one(self):
+        """Locked map: every ALLOWED_TRAIN_MODES value has exactly
+        one corresponding anchor_set, and vice versa."""
+        from bot.ml.models import (
+            TRAIN_MODE_TO_ANCHOR_SET, ANCHOR_SET_TO_TRAIN_MODE)
+        # Every train_mode in the locked schema must have a mapping
+        for tm in ALLOWED_TRAIN_MODES:
+            self.assertIn(tm, TRAIN_MODE_TO_ANCHOR_SET,
+                f"train_mode {tm!r} has no anchor_set mapping in "
+                f"trainer.TRAIN_MODE_TO_ANCHOR_SET")
+        # The inverse mapping is the inverse
+        for tm, as_ in TRAIN_MODE_TO_ANCHOR_SET.items():
+            self.assertEqual(ANCHOR_SET_TO_TRAIN_MODE[as_], tm)
+        # And inverse is exhaustive
+        self.assertEqual(
+            set(ANCHOR_SET_TO_TRAIN_MODE.keys()),
+            set(TRAIN_MODE_TO_ANCHOR_SET.values()))
+
+    def test_trainer_does_not_filter_rows_by_train_mode(self):
+        """The assembler is the single source of truth for the
+        cohort. Trainer.train_one() must use the split indices
+        directly — it must NOT secretly re-filter to scanner-fires-
+        only rows when train_mode='model_a_meta_label' is supplied
+        with a Model A dataset.
+
+        Equivalently: n_train + n_val + n_test == sum of split
+        index lengths, regardless of train_mode. We prove this by
+        training Model A correctly and showing the per-split sample
+        counts match the split's own index counts exactly.
+        """
+        per_tf = self._build_per_tf()
+        res = self._build_model_a(per_tf)
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type="B0_majority",
+            train_mode="model_a_meta_label",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        # Counts MUST equal the split index lengths exactly — the
+        # trainer did not silently drop rows.
+        self.assertEqual(out.n_train,
+                          len(res.split.train_anchor_indices))
+        self.assertEqual(out.n_val,
+                          len(res.split.val_anchor_indices))
+        self.assertEqual(out.n_test,
+                          len(res.split.test_anchor_indices))
+        # And the manifest's own counts (the assembler's record)
+        # match too — the assembler is the single source of truth.
+        self.assertEqual(out.n_train,
+                          res.manifest.anchor_count_train)
+        self.assertEqual(out.n_val,
+                          res.manifest.anchor_count_val)
+        self.assertEqual(out.n_test,
+                          res.manifest.anchor_count_test)
+
+    def test_train_outputs_records_cohort_metadata_fields(self):
+        """Every TrainOutputs must record BOTH the train_mode (the
+        operator's tag) and the dataset_anchor_set (the assembler's
+        structural identifier) so M18.A.8 promotion can verify
+        cohort provenance."""
+        per_tf = self._build_per_tf()
+        for build, tm, expected_anchor_set in (
+            (self._build_model_a, "model_a_meta_label",
+              "model_a_scanner_replica"),
+            (self._build_model_b, "model_b_candidate_quality",
+              "model_b_1h_union_candidates"),
+        ):
+            res = build(per_tf)
+            cfg = TrainConfig(
+                dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode=tm,
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False)
+            out = ModelTrainer().train_one(cfg, res)
+            self.assertEqual(out.train_mode, tm)
+            self.assertEqual(out.dataset_anchor_set,
+                              expected_anchor_set)
+            # to_dict() serialisation preserves both fields
+            d = out.to_dict()
+            self.assertEqual(d["train_mode"], tm)
+            self.assertEqual(d["dataset_anchor_set"],
+                              expected_anchor_set)
+
 
 class G10_Hygiene(unittest.TestCase):
     """Hygiene tests: no syntax errors, no socket-at-import,

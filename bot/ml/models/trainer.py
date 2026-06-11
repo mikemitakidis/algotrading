@@ -104,6 +104,18 @@ from bot.ml.models.lightgbm_trainer import (
 SCANNER_FIRES_COLUMN = "scanner_replica.signal_fires"
 
 
+# Model types implemented in the M18.A.6 scope. M_random_forest is in
+# ALLOWED_MODEL_TYPES (schemas) but intentionally NOT implemented here;
+# requesting it raises M18ConfigError at train_one() time. M_lightgbm
+# is implemented conditionally (falls back when lightgbm is absent).
+IMPLEMENTED_MODEL_TYPES = frozenset({
+    "B0_majority",
+    "B1_scanner_replica",
+    "B2_logistic",
+    "M_lightgbm",
+})
+
+
 # ── Train-mode ↔ anchor-set mapping (Q18) ────────────────────────────
 # The cohort is set STRUCTURALLY by the assembler's anchor_set; the
 # trainer's train_mode tag must agree with it 1:1.
@@ -285,6 +297,20 @@ class Trainer:
             raise M18ConfigError(
                 f"train_mode={train_config.train_mode!r} not in "
                 f"{sorted(ALLOWED_TRAIN_MODES)}")
+
+        # ── 0a. Model-type implementation scope ─────────────────
+        # M_random_forest is in ALLOWED_MODEL_TYPES but NOT implemented
+        # in the M18.A.6 scope. Reject it HERE — before the dual-cohort
+        # assert — so an unimplemented model surfaces the M18.A.6 scope
+        # error even when the supplied dataset's cohort also mismatches
+        # the train_mode. (A valid model like B0_majority falls through
+        # to the cohort check below.)
+        if train_config.model_type not in IMPLEMENTED_MODEL_TYPES:
+            raise M18ConfigError(
+                f"model_type={train_config.model_type!r} is in "
+                f"ALLOWED_MODEL_TYPES but not implemented in M18.A.6 "
+                f"(scope: B0_majority, B1_scanner_replica, B2_logistic, "
+                f"M_lightgbm-conditional). Pick one of those.")
 
         manifest = assembler_result.manifest
 
