@@ -4059,6 +4059,677 @@ class G5_DualCohort(unittest.TestCase):
             self.assertEqual(d["dataset_anchor_set"],
                               expected_anchor_set)
 
+# ═════════════════════════════════════════════════════════════════════
+# G6 — Evaluation report generation (M18.A.7)
+# ═════════════════════════════════════════════════════════════════════
+
+from bot.ml.evaluation import (
+    EvaluationReport,
+    BaselineComparisonReport,
+    CrossCohortComparisonReport,
+    CROSS_COHORT_DISCLAIMER,
+    calibration_report as eval_calibration_report,
+    expected_calibration_error,
+    maximum_calibration_error,
+    reliability_curve,
+    trading_metrics as eval_trading_metrics,
+    evaluate_model,
+    compare_baselines,
+    compare_across_cohorts,
+    ALLOWED_PRIMARY_SPLITS,
+)
+from bot.ml.evaluation.report import (
+    EVALUATION_REPORT_SCHEMA_VERSION,
+    BASELINE_COMPARISON_REPORT_SCHEMA_VERSION,
+    CROSS_COHORT_COMPARISON_REPORT_SCHEMA_VERSION,
+)
+
+
+def _train_three_baselines_on_model_b(per_tf=None, seed=21):
+    """Train B0/B1/B2 on a Model B dataset and return
+    (assembler_result, [reports])."""
+    if per_tf is None:
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=seed)
+    res = ds_assembler.DatasetAssembler(
+        ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+    ).build(per_tf_bars=per_tf)
+    reports = []
+    for mt in ("B0_majority", "B1_scanner_replica", "B2_logistic"):
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type=mt,
+            train_mode="model_b_candidate_quality",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        reports.append(evaluate_model(out, res))
+    return res, reports
+
+
+def _train_b2_on_model_a(per_tf=None, seed=21):
+    if per_tf is None:
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=seed)
+    res = ds_assembler.DatasetAssembler(
+        ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors
+                .ANCHOR_SET_MODEL_A_SCANNER_REPLICA,
+            require_intraday=True, embargo_bars_override=10,
+            adversarial_cv_folds=3, adversarial_threshold=1.0)
+    ).build(per_tf_bars=per_tf)
+    cfg = TrainConfig(
+        dataset_id=res.manifest.dataset_id,
+        model_type="B2_logistic",
+        train_mode="model_a_meta_label",
+        target_label_id="triple_barrier_atr_2_3_50_won",
+        hyperparameters={}, seed=42, fixture_mode=False)
+    out = ModelTrainer().train_one(cfg, res)
+    return res, evaluate_model(out, res)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_Calibration — pure math
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_Calibration(unittest.TestCase):
+
+    def test_perfect_calibration_ece_zero(self):
+        """When y_proba == y_true exactly, ECE and MCE are 0."""
+        y_true  = np.array([0.0, 0.0, 1.0, 1.0])
+        y_proba = np.array([0.0, 0.0, 1.0, 1.0])
+        self.assertEqual(
+            expected_calibration_error(y_true, y_proba), 0.0)
+        self.assertEqual(
+            maximum_calibration_error(y_true, y_proba), 0.0)
+
+    def test_uniform_predictions_against_balanced_truth(self):
+        """Constant predictions of 0.5 against 50/50 truth → gap = 0
+        in bin index 4 or 5 (the bin containing 0.5). ECE and MCE
+        should be 0 because mean_pred ≈ 0.5 and mean_actual = 0.5."""
+        n = 100
+        y_true  = np.concatenate([np.zeros(50), np.ones(50)])
+        y_proba = np.full(n, 0.5)
+        ece = expected_calibration_error(y_true, y_proba)
+        self.assertAlmostEqual(ece, 0.0, places=12)
+
+    def test_constant_zero_predictions_with_actual_positives(self):
+        """All predictions = 0, actual positives 30%. The bin
+        containing 0.0 (index 0) has mean_pred ≈ 0 and mean_actual
+        = 0.3. ECE = |0 - 0.3| * (1.0) = 0.3."""
+        y_true  = np.concatenate([np.zeros(70), np.ones(30)])
+        y_proba = np.zeros(100)
+        ece = expected_calibration_error(y_true, y_proba)
+        self.assertAlmostEqual(ece, 0.3, places=12)
+        mce = maximum_calibration_error(y_true, y_proba)
+        self.assertAlmostEqual(mce, 0.3, places=12)
+
+    def test_empty_input_returns_nan(self):
+        y = np.array([], dtype=np.float64)
+        self.assertTrue(np.isnan(expected_calibration_error(y, y)))
+        self.assertTrue(np.isnan(maximum_calibration_error(y, y)))
+
+    def test_reliability_curve_bin_count_and_edges(self):
+        rng = np.random.default_rng(0)
+        y_true  = rng.integers(0, 2, 200).astype(float)
+        y_proba = rng.uniform(0, 1, 200)
+        curve = reliability_curve(y_true, y_proba, n_bins=10)
+        self.assertEqual(len(curve), 10)
+        # Edges are equal-width
+        self.assertAlmostEqual(curve[0]["bin_lo"],  0.0)
+        self.assertAlmostEqual(curve[0]["bin_hi"],  0.1)
+        self.assertAlmostEqual(curve[9]["bin_lo"],  0.9)
+        self.assertAlmostEqual(curve[9]["bin_hi"],  1.0)
+        # Total count across bins equals input size
+        self.assertEqual(sum(b["count"] for b in curve), 200)
+
+    def test_calibration_report_bundles_all_fields(self):
+        rep = eval_calibration_report(
+            np.array([0, 1, 0, 1]), np.array([0.1, 0.9, 0.2, 0.8]))
+        for k in ("n_rows", "n_bins", "expected_calibration_error",
+                   "maximum_calibration_error", "reliability_curve"):
+            self.assertIn(k, rep)
+        self.assertEqual(rep["n_rows"], 4)
+        self.assertEqual(rep["n_bins"], 10)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_TradingMetrics — precision/recall/log return
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_TradingMetrics(unittest.TestCase):
+
+    def test_precision_recall_basic(self):
+        # 6 rows: 3 actual positives, prediction agrees on 2/3 of them
+        # and false-positives on 1 row → TP=2, FP=1, FN=1
+        # precision = 2/3, recall = 2/3
+        y_true  = np.array([1, 1, 0, 0, 1, 0], dtype=float)
+        y_proba = np.array([0.9, 0.9, 0.9, 0.1, 0.1, 0.1])
+        m = eval_trading_metrics(
+            y_true=y_true, y_proba=y_proba,
+            target_label_id="not_tb_label_so_aux_disabled")
+        self.assertEqual(m["n_rows"], 6)
+        self.assertEqual(m["n_predicted_positive"], 3)
+        self.assertEqual(m["n_actual_positive"], 3)
+        self.assertAlmostEqual(m["precision_at_threshold"], 2/3,
+                                 places=10)
+        self.assertAlmostEqual(m["recall_at_threshold"],    2/3,
+                                 places=10)
+        # Aux disabled because target label is not a TB-won label
+        self.assertFalse(m["trading_metrics_available"])
+
+    def test_zero_predicted_positive_warning(self):
+        y_true  = np.array([1, 0, 1, 0])
+        y_proba = np.array([0.1, 0.1, 0.1, 0.1])   # all 0 < 0.5
+        m = eval_trading_metrics(
+            y_true=y_true, y_proba=y_proba,
+            target_label_id="x")
+        self.assertEqual(m["n_predicted_positive"], 0)
+        self.assertIn("zero_predicted_positive",
+                       m["zero_trade_warnings"])
+        # Precision is NaN (no positives predicted)
+        self.assertTrue(np.isnan(m["precision_at_threshold"]))
+
+    def test_zero_actual_positive_warning(self):
+        y_true  = np.zeros(4)
+        y_proba = np.array([0.9, 0.6, 0.4, 0.1])
+        m = eval_trading_metrics(
+            y_true=y_true, y_proba=y_proba,
+            target_label_id="x")
+        self.assertEqual(m["n_actual_positive"], 0)
+        self.assertIn("zero_actual_positive",
+                       m["zero_trade_warnings"])
+        self.assertTrue(np.isnan(m["recall_at_threshold"]))
+
+    def test_empty_split(self):
+        m = eval_trading_metrics(
+            y_true=np.array([]), y_proba=np.array([]),
+            target_label_id="x")
+        self.assertEqual(m["n_rows"], 0)
+        self.assertIn("empty_split", m["zero_trade_warnings"])
+
+    def test_log_return_aggregation_with_aux_columns(self):
+        """When dataset + split_indices + TB-won label are all
+        supplied, mean/sum log return aggregate over predicted-
+        positive rows."""
+        res, [rep_b0, rep_b1, rep_b2] = \
+            _train_three_baselines_on_model_b()
+        tm_val = rep_b2.trading_metrics["val"]
+        self.assertTrue(tm_val["trading_metrics_available"])
+        self.assertEqual(tm_val["primary_label_id"],
+                          "triple_barrier_atr_2_3_50")
+        # If any positives were predicted, the metrics are non-NaN
+        if tm_val["n_predicted_positive"] > 0:
+            self.assertFalse(np.isnan(
+                tm_val["mean_log_return_predicted_positive"]))
+            self.assertFalse(np.isnan(
+                tm_val["mean_bars_to_resolution_predicted_positive"]))
+
+    def test_target_label_id_must_end_with_won_for_aux(self):
+        """A non-_won triple-barrier label gets aux metrics unavailable
+        with a clear warning."""
+        m = eval_trading_metrics(
+            y_true=np.array([0, 1]),
+            y_proba=np.array([0.3, 0.7]),
+            target_label_id="triple_barrier_atr_2_3_50",  # not _won
+            dataset=pd.DataFrame({}),     # irrelevant
+            split_indices=np.array([0, 1]))
+        self.assertIsNone(m["primary_label_id"])
+        self.assertFalse(m["trading_metrics_available"])
+        self.assertTrue(any("not a triple-barrier _won" in w
+                              for w in m["zero_trade_warnings"]))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_EvaluationReport — provenance fields & schema
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_EvaluationReport(unittest.TestCase):
+
+    def test_required_fields_all_present(self):
+        """The operator's M18.A.7 directive requires train_mode,
+        dataset_anchor_set, split row counts, split timestamp
+        ranges, embargo/purge settings, accepted/filtered counts,
+        and model cohort type. Verify each."""
+        _, [r] = _train_three_baselines_on_model_b()[0], \
+                  _train_three_baselines_on_model_b()[1][:1]
+        d = r.to_dict()
+        # train_mode
+        self.assertEqual(d["train_mode"], "model_b_candidate_quality")
+        # dataset_anchor_set
+        self.assertEqual(d["dataset_anchor_set"],
+                          "model_b_1h_union_candidates")
+        # split row counts
+        self.assertIn("n_train", d)
+        self.assertIn("n_val",   d)
+        self.assertIn("n_test",  d)
+        # split timestamp ranges
+        for s in ("train", "val", "test"):
+            self.assertIn(s, d["split_timestamp_ranges"])
+            self.assertIn("first", d["split_timestamp_ranges"][s])
+            self.assertIn("last",  d["split_timestamp_ranges"][s])
+            self.assertIn("count", d["split_timestamp_ranges"][s])
+        # embargo/purge settings (under 'split')
+        for k in ("embargo_bars", "embargo_trading_days",
+                    "label_resolved_ts_purge_applied",
+                    "train_frac", "val_frac", "test_frac",
+                    "split_built"):
+            self.assertIn(k, d["split"])
+        # accepted/filtered counts (under 'cohort')
+        for k in ("anchor_count_raw",
+                    "anchor_count_pending_excluded",
+                    "anchor_count_total",
+                    "anchor_count_train",
+                    "anchor_count_val",
+                    "anchor_count_test",
+                    "anchor_count_purged",
+                    "anchor_count_embargoed"):
+            self.assertIn(k, d["cohort"])
+        # model cohort type → both fields present
+        self.assertEqual(d["cohort"]["anchor_set"],
+                          d["dataset_anchor_set"])
+
+    def test_schema_version_recorded(self):
+        _, [r] = _train_three_baselines_on_model_b()[0], \
+                  _train_three_baselines_on_model_b()[1][:1]
+        self.assertEqual(r.schema_version,
+                          EVALUATION_REPORT_SCHEMA_VERSION)
+
+    def test_ml_metrics_echoed_from_train_outputs(self):
+        """ml_metrics in the report match TrainOutputs.metrics_*
+        verbatim."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        self.assertEqual(rep.ml_metrics["train"], out.metrics_train)
+        self.assertEqual(rep.ml_metrics["val"],   out.metrics_val)
+        self.assertEqual(rep.ml_metrics["test"],  out.metrics_test)
+
+    def test_promotion_gate_echoed(self):
+        _, [r] = _train_three_baselines_on_model_b()[0], \
+                  _train_three_baselines_on_model_b()[1][:1]
+        self.assertIsInstance(r.fixture_only, bool)
+        self.assertIsInstance(r.promotion_eligible, bool)
+        self.assertIsInstance(r.promotion_blocked_reasons, list)
+
+    def test_dataset_id_mismatch_refuses(self):
+        """Evaluator refuses to combine a TrainOutputs with a
+        different dataset's AssemblerResult."""
+        res_a, _ = _train_b2_on_model_a()
+        res_b, [out_b] = _train_three_baselines_on_model_b()[0], \
+                          _train_three_baselines_on_model_b()[1][:1]
+        # Build a TrainOutputs pointing at res_b's dataset but pass
+        # res_a's AssemblerResult — must raise.
+        # Construct by serialising and reconstructing fields is
+        # complex; easier: use the train output corresponding to
+        # res_b and pass res_a.
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res_b2 = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res_b2.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res_b2)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            evaluate_model(out, res_a)
+
+    def test_generated_at_utc_is_iso_format(self):
+        _, [r] = _train_three_baselines_on_model_b()[0], \
+                  _train_three_baselines_on_model_b()[1][:1]
+        # Parses cleanly as ISO 8601
+        from datetime import datetime
+        parsed = datetime.fromisoformat(r.generated_at_utc)
+        self.assertIsNotNone(parsed)
+
+    def test_to_dict_is_json_safe(self):
+        import json
+        _, [r] = _train_three_baselines_on_model_b()[0], \
+                  _train_three_baselines_on_model_b()[1][:1]
+        # NaN values in metrics won't strict-JSON, so serialise with
+        # allow_nan=True (which json.dumps does by default).
+        json.dumps(r.to_dict())
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_BaselineCompare — same-cohort only
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_BaselineCompare(unittest.TestCase):
+
+    def test_three_baselines_same_cohort_produce_summary(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports,
+            primary_metric="roc_auc", primary_split="val",
+            baseline_model_type="B0_majority")
+        # All three model types appear in per_metric
+        self.assertEqual(
+            set(cmp.per_metric["roc_auc"].keys()),
+            {"B0_majority", "B1_scanner_replica", "B2_logistic"})
+        # baseline_beats now records BOTH primary (vs B0) AND
+        # secondary (vs B1) baselines: 2 vs B0 + 2 vs B1 = 4 entries.
+        self.assertEqual(len(cmp.baseline_beats), 4)
+        # cohort identity recorded
+        self.assertEqual(cmp.cohort_anchor_set,
+                          "model_b_1h_union_candidates")
+        self.assertEqual(cmp.schema_version,
+                          BASELINE_COMPARISON_REPORT_SCHEMA_VERSION)
+
+    def test_cross_cohort_inputs_rejected(self):
+        """compare_baselines must REFUSE inputs from different
+        cohorts — row-paired comparison is meaningless then."""
+        _, b_reports = _train_three_baselines_on_model_b()
+        _, a_report  = _train_b2_on_model_a()
+        # Mix one A report with the B reports
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            compare_baselines([a_report] + b_reports,
+                primary_metric="roc_auc", primary_split="val",
+                baseline_model_type="B0_majority")
+        msg = str(ctx.exception)
+        self.assertTrue("dataset_id" in msg
+                          or "dataset_anchor_set" in msg, msg)
+
+    def test_duplicate_model_type_rejected(self):
+        _, reports = _train_three_baselines_on_model_b()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            compare_baselines(reports + [reports[0]],
+                baseline_model_type="B0_majority")
+
+    def test_baseline_beat_direction_auc_higher_is_better(self):
+        """For ROC AUC, "beats" means strictly greater."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports,
+            primary_metric="roc_auc", primary_split="val",
+            baseline_model_type="B0_majority")
+        b0_auc = cmp.per_metric["roc_auc"]["B0_majority"]
+        for mt in ("B1_scanner_replica", "B2_logistic"):
+            cand_auc = cmp.per_metric["roc_auc"][mt]
+            key = f"{mt}_beats_B0_majority_on_val_roc_auc"
+            # Beats iff cand > base (and both finite)
+            if not (np.isnan(b0_auc) or np.isnan(cand_auc)):
+                self.assertEqual(cmp.baseline_beats[key],
+                                  cand_auc > b0_auc, (key, cand_auc, b0_auc))
+
+    def test_baseline_beat_direction_brier_lower_is_better(self):
+        """For Brier score, "beats" means strictly LESS."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports,
+            primary_metric="brier_score", primary_split="val",
+            baseline_model_type="B0_majority")
+        b0_brier = cmp.per_metric["brier_score"]["B0_majority"]
+        for mt in ("B1_scanner_replica", "B2_logistic"):
+            cand_brier = cmp.per_metric["brier_score"][mt]
+            key = f"{mt}_beats_B0_majority_on_val_brier_score"
+            if not (np.isnan(b0_brier) or np.isnan(cand_brier)):
+                self.assertEqual(cmp.baseline_beats[key],
+                                  cand_brier < b0_brier,
+                                  (key, cand_brier, b0_brier))
+
+    def test_empty_reports_list_rejected(self):
+        with self.assertRaises(ml_errors.M18ConfigError):
+            compare_baselines([], baseline_model_type="B0_majority")
+
+    def test_unknown_baseline_model_type_rejected(self):
+        _, reports = _train_three_baselines_on_model_b()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            compare_baselines(reports,
+                baseline_model_type="NOT_A_MODEL_TYPE")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_CrossCohortCompare — explicit non-row-paired
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_CrossCohortCompare(unittest.TestCase):
+
+    def test_disclaimer_present_verbatim(self):
+        _, [rep_b_b2] = _train_three_baselines_on_model_b()[0], \
+                         [r for r in _train_three_baselines_on_model_b()[1]
+                           if r.model_type == "B2_logistic"]
+        _, rep_a = _train_b2_on_model_a()
+        cross = compare_across_cohorts(rep_a, rep_b_b2)
+        self.assertEqual(cross.disclaimer, CROSS_COHORT_DISCLAIMER)
+        # The disclaimer text must mention DIFFERENT cohorts and
+        # NO row-paired implication
+        self.assertIn("DIFFERENT cohorts", cross.disclaimer)
+        self.assertIn("aggregate-level", cross.disclaimer)
+        self.assertIn("not as a paired", cross.disclaimer)
+
+    def test_aggregate_metrics_labeled_by_train_mode(self):
+        b_reports = _train_three_baselines_on_model_b()[1]
+        rep_b_b2 = next(r for r in b_reports
+                          if r.model_type == "B2_logistic")
+        _, rep_a = _train_b2_on_model_a()
+        cross = compare_across_cohorts(rep_a, rep_b_b2,
+                                          primary_split="val")
+        # Keys are the train_mode strings, NOT 'a' / 'b'
+        for metric, by_mode in cross.aggregate_metric_values.items():
+            self.assertIn("model_a_meta_label", by_mode)
+            self.assertIn("model_b_candidate_quality", by_mode)
+
+    def test_same_anchor_set_rejected(self):
+        """compare_across_cohorts must refuse same-cohort inputs."""
+        _, reports = _train_three_baselines_on_model_b()
+        b0, b2 = reports[0], reports[2]
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            compare_across_cohorts(b0, b2)
+        self.assertIn("SAME anchor_set", str(ctx.exception))
+
+    def test_invalid_primary_split_rejected(self):
+        b_reports = _train_three_baselines_on_model_b()[1]
+        rep_b_b2 = next(r for r in b_reports
+                          if r.model_type == "B2_logistic")
+        _, rep_a = _train_b2_on_model_a()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            compare_across_cohorts(rep_a, rep_b_b2,
+                                      primary_split="holdout")  # invalid
+
+    def test_cross_cohort_uses_each_models_own_split_sizes(self):
+        """Sanity check the operator's specific directive: the two
+        reports keep their own n_train/val/test (not a forced common
+        size)."""
+        b_reports = _train_three_baselines_on_model_b()[1]
+        rep_b_b2 = next(r for r in b_reports
+                          if r.model_type == "B2_logistic")
+        _, rep_a = _train_b2_on_model_a()
+        cross = compare_across_cohorts(rep_a, rep_b_b2)
+        a_d = cross.a_report
+        b_d = cross.b_report
+        # Different cohort sizes — no normalising
+        self.assertNotEqual(a_d["n_train"], b_d["n_train"])
+        # train_mode and dataset_anchor_set both preserved
+        self.assertEqual(a_d["train_mode"], "model_a_meta_label")
+        self.assertEqual(b_d["train_mode"],
+                          "model_b_candidate_quality")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_ZeroHandling — empty splits / zero-positive predictions
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_ZeroHandling(unittest.TestCase):
+
+    def test_constant_negative_model_produces_well_formed_report(self):
+        """A model that predicts the same constant for every row →
+        n_predicted_positive is either 0 (constant < 0.5) or n_rows
+        (constant >= 0.5). Either way, precision/recall behave
+        correctly and warnings are populated. For B0_majority with
+        imbalanced data, prior(class=1) is typically < 0.5, giving
+        zero predicted positives in every split.
+
+        ROC AUC for a constant predictor on a two-class y_true is
+        0.5 by sklearn convention (all ties → average) — NOT NaN.
+        NaN occurs only when y_true is single-class."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        # B0 emits prior(class=1) constant. Verify trading metric
+        # consistency: predictions binarise the same way for every
+        # row (either all 0 or all 1).
+        for s in ("train", "val", "test"):
+            tm = rep.trading_metrics[s]
+            n_pred = tm["n_predicted_positive"]
+            # All-or-nothing: B0 is constant
+            self.assertIn(n_pred, (0, tm["n_rows"]),
+                f"{s}: B0 is constant — n_predicted_positive must be "
+                f"0 or n_rows ({tm['n_rows']}), got {n_pred}")
+            if n_pred == 0:
+                self.assertIn("zero_predicted_positive",
+                               tm["zero_trade_warnings"])
+                self.assertTrue(
+                    np.isnan(tm["precision_at_threshold"]))
+            # For a constant predictor on two-class y_true, sklearn
+            # ROC AUC = 0.5 by tie convention. NaN only if y_true
+            # itself is single-class in this split.
+            auc = rep.ml_metrics[s]["roc_auc"]
+            y_t = res.dataset.iloc[
+                getattr(res.split, f"{s}_anchor_indices")][
+                "triple_barrier_atr_2_3_50_won"].to_numpy()
+            if len(np.unique(y_t)) < 2:
+                self.assertTrue(np.isnan(auc),
+                    f"{s}: single-class y_true should give NaN AUC; "
+                    f"got {auc}")
+            else:
+                self.assertEqual(auc, 0.5,
+                    f"{s}: constant predictor on 2-class y_true "
+                    f"should give AUC=0.5; got {auc}")
+
+    def test_empty_test_split_serialises_without_error(self):
+        """Empty test split (operator's zero-trade case): evaluator
+        produces a well-formed report — empty trading metrics on
+        the empty split, calibration NaN, timestamp range counts=0.
+
+        Built deterministically by taking a real split and replacing
+        only test_anchor_indices with an empty array via
+        dataclasses.replace (preserves the real WalkForwardSplit
+        field types — checked against bot.ml.dataset.walk_forward
+        rather than guessed)."""
+        from dataclasses import replace
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        # Empty the test split deterministically
+        empty_split = replace(
+            res.split,
+            test_anchor_indices=np.array([], dtype=np.int64))
+        # Empty pred_test to match
+        modified_out = replace(out, pred_test=[], n_test=0)
+        modified_res = replace(res, split=empty_split)
+        rep = evaluate_model(modified_out, modified_res)
+        self.assertEqual(rep.n_test, 0)
+        self.assertEqual(
+            rep.split_timestamp_ranges["test"]["first"], None)
+        self.assertEqual(
+            rep.split_timestamp_ranges["test"]["count"], 0)
+        tm_test = rep.trading_metrics["test"]
+        self.assertIn("empty_split", tm_test["zero_trade_warnings"])
+
+    def test_all_actual_negative_in_split(self):
+        """y_true = all zeros for a split → recall NaN, AUC NaN,
+        precision well-defined (depending on predictions)."""
+        m = eval_trading_metrics(
+            y_true=np.zeros(10),
+            y_proba=np.array([0.9]*3 + [0.1]*7),
+            target_label_id="x")
+        # 3 predicted positive, 0 actual → TP=0
+        self.assertEqual(m["n_predicted_positive"], 3)
+        self.assertEqual(m["n_actual_positive"],    0)
+        self.assertEqual(m["precision_at_threshold"], 0.0)
+        self.assertTrue(np.isnan(m["recall_at_threshold"]))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G6_RegressionTarget — calibration/trading metrics flagged unavailable
+# ─────────────────────────────────────────────────────────────────────
+
+class G6_RegressionTarget(unittest.TestCase):
+
+    def test_regression_target_marks_calibration_and_trading_unavailable(self):
+        """A trainer config targeting a regression label like
+        fwd_return_5b — calibration and trading metrics are
+        inapplicable. The evaluator must produce a report with
+        these blocks explicitly marked unavailable rather than
+        emitting bogus metrics."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        # B0_majority supports regression — emits train mean
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="fwd_return_5b",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        self.assertEqual(rep.target_label_class, "regression")
+        for s in ("train", "val", "test"):
+            self.assertIn("unavailable_for_label_class",
+                           rep.calibration[s])
+            self.assertIn("unavailable_for_label_class",
+                           rep.trading_metrics[s])
+
+
+
 
 class G10_Hygiene(unittest.TestCase):
     """Hygiene tests: no syntax errors, no socket-at-import,

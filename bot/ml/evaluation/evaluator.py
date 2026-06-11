@@ -292,7 +292,7 @@ def evaluate_model(
                                  "test": dict(_unav)}
 
     # Gap 4 — PSI drift: train→val and train→test on feature columns
-    from bot.ml.dataset.assembler import select_feature_columns
+    from bot.ml.models.base import select_feature_columns
     feature_columns = select_feature_columns(list(dataset.columns))
     drift = {
         "train_to_val": drift_report(
