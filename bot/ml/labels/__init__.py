@@ -22,18 +22,24 @@ Hard rules (enforced by G3 tests in test_m18_ml.py):
     (triple-barrier is reimplemented HERE, not delegated to the
     M17.B executor).
 
-Groups shipped in M18.A.4:
-  triple_barrier      primary: triple_barrier_atr_2_3_50
-                        (classification_3way; TP=2*ATR, SL=3*ATR,
-                        timeout=50 bars)
-  forward_returns     fwd_log_ret_{1,5,20} + cost-adjusted variants
-                        (regression; cost_model_applied for the
-                        _cost_10bps suffix labels)
-  mfe_mae             mfe_20, mae_20 raw + pct + ATR-normalized
-                        (regression)
-  risk_adjusted       fwd_log_ret_20 / fractional-ATR and
-                        fwd_log_ret_20 / realized_vol_20
-                        (regression)
+Groups shipped in M18.A.4 — the 10 LOCKED label IDs:
+  triple_barrier      triple_barrier_atr_2_3_50
+                        (classification_3way; TP=3*ATR, SL=2*ATR,
+                        timeout=50 bars; tie=pessimistic_stop_first)
+                      triple_barrier_atr_2_3_50_won
+                        (binary; collapsed 3-way: 1=target hit,
+                        0=stop or timeout)
+  forward_returns     fwd_return_5b, fwd_return_20b
+                        (regression; log(close[i+h] / open[i+1]))
+                      cost_adjusted_fwd_return_5b
+                        (regression; fwd_return_5b minus a 10 bp
+                        round-trip cost; cost_model_applied=True)
+  mfe_mae             mfe_50b, mae_50b (raw, 50-bar horizon)
+                      mfe_over_atr_50b, mae_over_atr_50b
+                        (ATR-normalized; regression)
+  risk_adjusted       risk_adjusted_fwd_return_5b
+                        (regression; fwd_return_5b / (ATR/entry),
+                        5-bar horizon)
 
 The dataset assembler (M18.A.5) will register these via
 ALL_LABEL_GROUPS and produce one big label table per anchor.

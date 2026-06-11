@@ -550,9 +550,19 @@ class G2_VolRegime(unittest.TestCase):
         bars = _make_synthetic_bars(n=50)
         out = vol_regime.compute(bars)
         atr = out["vol_regime.atr_14_sma_true_range"]
-        # ATR(14) sma mode: 1 diff bar + 14 sma rows → 14 NaN at start
-        self.assertEqual(int(atr.iloc[:14].isna().sum()), 14)
-        self.assertFalse(atr.iloc[14:].isna().any())
+        # ATR(14, sma_true_range) warmup is 13 (not 14):
+        #   prev_close = close.shift(1) has 1 NaN at t=0
+        #   tr1 = high - low has 0 NaN
+        #   tr2 = |high - prev_close| has 1 NaN at t=0
+        #   tr3 = |low - prev_close|  has 1 NaN at t=0
+        #   tr = concat([tr1, tr2, tr3]).max(axis=1) — pandas max
+        #     skips NaN, so tr[0] = tr1[0] (VALID).
+        #   rolling(14, min_periods=14).mean() → first valid at idx 13.
+        # Therefore positions 0..12 are NaN (13 values), and positions
+        # 13..49 are valid. This differs from RSI(14) which has 14 NaN
+        # because RSI's input series (gain/loss from diff) starts NaN.
+        self.assertEqual(int(atr.iloc[:13].isna().sum()), 13)
+        self.assertFalse(atr.iloc[13:].isna().any())
 
     def test_atr_parity_vs_m17b(self):
         from bot.backtesting.indicators import atr as live_atr
@@ -1257,8 +1267,21 @@ class G2_SignalHistory(unittest.TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════
-# G3 — Label compute groups (M18.A.4)
 # ═════════════════════════════════════════════════════════════════════
+# G3 — Label compute groups (M18.A.4 — corrected against locked plan)
+# ═════════════════════════════════════════════════════════════════════
+#
+# LOCKED M18 LABEL LIST (10 labels):
+#   triple_barrier_atr_2_3_50            classification_3way  TP=3*ATR, SL=2*ATR
+#   triple_barrier_atr_2_3_50_won        binary               collapsed 3-way
+#   fwd_return_5b                        regression
+#   fwd_return_20b                       regression
+#   cost_adjusted_fwd_return_5b          regression           10 bps round-trip
+#   mfe_50b                              regression           50-bar horizon
+#   mae_50b                              regression           50-bar horizon
+#   mfe_over_atr_50b                     regression
+#   mae_over_atr_50b                     regression
+#   risk_adjusted_fwd_return_5b          regression           fwd/(ATR/entry)
 
 
 def _trending_bars_for_labels(direction: str = "up", n: int = 80,
@@ -1288,94 +1311,119 @@ def _trending_bars_for_labels(direction: str = "up", n: int = 80,
 
 
 def _atr_at_start(bars: pd.DataFrame, value: float) -> pd.Series:
-    """A constant ATR series — useful for analytical fixture tests
-    where we want predictable target/stop levels."""
+    """Constant ATR series — predictable target/stop in fixture tests."""
     return pd.Series(np.full(len(bars), value), index=bars.index)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G3_TripleBarrier
+# G3_TripleBarrier  (TP=3*ATR, SL=2*ATR, timeout=50, tie=stop_first)
 # ─────────────────────────────────────────────────────────────────────
 
 class G3_TripleBarrier(unittest.TestCase):
 
-    LID = "triple_barrier_atr_2_3_50"
+    LID_3WAY = "triple_barrier_atr_2_3_50"
+    LID_WON  = "triple_barrier_atr_2_3_50_won"
+
+    def test_tp_sl_constants(self):
+        """LOCKED: TP_MULT=3.0, SL_MULT=2.0 (NOT the reverse)."""
+        self.assertEqual(triple_barrier.TP_MULT, 3.0)
+        self.assertEqual(triple_barrier.SL_MULT, 2.0)
+        self.assertEqual(triple_barrier.TIMEOUT_BARS, 50)
+        # Both LabelSpecs must report the same multipliers.
+        for s in triple_barrier.SPECS:
+            self.assertEqual(s.tp_mult, 3.0,
+                f"{s.label_id} tp_mult must be 3.0")
+            self.assertEqual(s.sl_mult, 2.0,
+                f"{s.label_id} sl_mult must be 2.0")
+            self.assertEqual(s.horizon_bars, 50)
+            self.assertEqual(s.tie_breaker, "pessimistic_stop_first")
+            self.assertEqual(s.entry_price_source,
+                              "next_bar_open_after_anchor")
+
+    def test_binary_label_exists_and_is_classified(self):
+        """LOCKED: a binary collapsed _won label must be in SPECS."""
+        ids = [s.label_id for s in triple_barrier.SPECS]
+        self.assertIn(self.LID_WON, ids,
+            "triple_barrier_atr_2_3_50_won binary label is missing")
+        won_spec = next(s for s in triple_barrier.SPECS
+                          if s.label_id == self.LID_WON)
+        self.assertEqual(won_spec.label_class, "binary")
+        self.assertEqual(won_spec.leak_class, "future_label_only")
 
     def test_target_hit_in_uptrend(self):
-        """Monotone uptrend at +1 per bar with HL spread 0.5 and
-        ATR=1.0 → target = entry + 2.0 (close after 2 bars), stop =
-        entry - 3.0 (never hit). Expect every resolved row to have
-        label = +1."""
+        """Uptrend at +1/bar, ATR=1.0 → target=entry+3 reached within
+        3 bars; stop=entry-2 never. All resolved 3-way = +1, binary
+        = 1.0."""
         bars = _trending_bars_for_labels(direction="up", n=80,
                                             bar_size=1.0, hl_spread=0.5)
         atr = _atr_at_start(bars, 1.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        resolved = out[out[f"{self.LID}.is_pending"] == 0]
-        # In a strict uptrend with ATR=1, target=entry+2 is reached
-        # within 2-3 bars; stop=entry-3 is unreachable. All should be +1.
-        self.assertTrue((resolved[self.LID] == 1.0).all(),
-            f"uptrend → expected all +1, got distribution "
-            f"{resolved[self.LID].value_counts().to_dict()}")
+        resolved_mask = out[f"{self.LID_3WAY}.is_pending"] == 0
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_3WAY] == 1.0).all())
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_WON] == 1.0).all(),
+            "binary _won must be 1 for every target-hit row")
 
     def test_stop_hit_in_downtrend(self):
         bars = _trending_bars_for_labels(direction="down", n=80,
                                             bar_size=1.0, hl_spread=0.5)
         atr = _atr_at_start(bars, 1.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        resolved = out[out[f"{self.LID}.is_pending"] == 0]
-        self.assertTrue((resolved[self.LID] == -1.0).all(),
-            f"downtrend → expected all -1, got distribution "
-            f"{resolved[self.LID].value_counts().to_dict()}")
+        resolved_mask = out[f"{self.LID_3WAY}.is_pending"] == 0
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_3WAY] == -1.0).all())
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_WON] == 0.0).all(),
+            "binary _won must be 0 for every stop-hit row")
 
-    def test_timeout_in_flat_market_with_wide_atr(self):
-        """Flat bars with small HL spread and WIDE ATR → neither
-        target (+2*ATR) nor stop (-3*ATR) ever reached → all
-        resolved rows are 0 (timeout)."""
+    def test_timeout_in_flat_market(self):
+        """Flat bars, ATR=10 → target=entry+30 / stop=entry-20 never
+        reached. All resolved 3-way = 0 (timeout); binary = 0."""
         bars = _trending_bars_for_labels(direction="flat", n=80,
                                             bar_size=0.0, hl_spread=0.1)
-        atr = _atr_at_start(bars, 10.0)   # way too wide to hit
+        atr = _atr_at_start(bars, 10.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        resolved = out[out[f"{self.LID}.is_pending"] == 0]
-        self.assertGreater(len(resolved), 0,
-            "expected some rows to resolve as timeout")
-        self.assertTrue((resolved[self.LID] == 0.0).all(),
-            f"flat market w/ wide ATR → expected all 0 (timeout), "
-            f"got {resolved[self.LID].value_counts().to_dict()}")
+        resolved_mask = out[f"{self.LID_3WAY}.is_pending"] == 0
+        self.assertGreater(int(resolved_mask.sum()), 0)
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_3WAY] == 0.0).all())
+        # Binary collapse: timeout → 0 (not target hit)
+        self.assertTrue(
+            (out.loc[resolved_mask, self.LID_WON] == 0.0).all())
 
     def test_pending_for_last_window(self):
-        """The last 50 anchors cannot resolve (need 50 forward bars).
-        Plus the very last row also has no i+1 entry bar."""
+        """Anchor i resolves only if i + 50 < n. Last 50 rows pending."""
         bars = _trending_bars_for_labels(direction="up", n=100,
                                             bar_size=0.5, hl_spread=0.2)
         atr = _atr_at_start(bars, 1.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        # Anchor i needs i+1..i+50 forward bars → resolves only if
-        # i+50 < 100, i.e., i < 50. So last 50 rows are pending.
-        pending_count = int(out[f"{self.LID}.is_pending"].sum())
-        self.assertEqual(pending_count, 50,
-            f"expected exactly 50 pending rows, got {pending_count}")
-        # Pending rows must have NaN label and NaT resolved_ts
-        pending_rows = out[out[f"{self.LID}.is_pending"] == 1]
-        self.assertTrue(pending_rows[self.LID].isna().all())
-        self.assertTrue(
-            pd.isna(pending_rows[f"{self.LID}.resolved_ts"]).all())
+        pending_3way = int(out[f"{self.LID_3WAY}.is_pending"].sum())
+        pending_won  = int(out[f"{self.LID_WON}.is_pending"].sum())
+        self.assertEqual(pending_3way, 50)
+        self.assertEqual(pending_won, 50,
+            "binary _won must share the pending mask with the 3-way")
+        pending_rows = out[out[f"{self.LID_3WAY}.is_pending"] == 1]
+        self.assertTrue(pending_rows[self.LID_3WAY].isna().all())
+        self.assertTrue(pending_rows[self.LID_WON].isna().all())
+        self.assertTrue(pd.isna(
+            pending_rows[f"{self.LID_3WAY}.resolved_ts"]).all())
+        self.assertTrue(pd.isna(
+            pending_rows[f"{self.LID_WON}.resolved_ts"]).all())
 
     def test_same_bar_tie_pessimistic_stop_first(self):
-        """Construct a bar where high >= target AND low <= stop on
-        the SAME bar. Pessimistic convention = label is -1."""
-        # Bar 0: entry happens on bar 1's open.
-        # Construct so bar 1's open=100, atr=1.0 →
-        #   target = 102, stop = 97
-        # Bar 1 itself: high=103 (>=target), low=96 (<=stop) → tie
+        """Construct a bar where high >= target AND low <= stop on the
+        SAME bar (entry_open=100, ATR=1.0 → target=103, stop=98).
+        Pessimistic convention: 3-way = -1, binary _won = 0."""
         n = 60
         opens  = np.full(n, 100.0)
         closes = np.full(n, 100.0)
         highs  = np.full(n, 100.5)
         lows   = np.full(n,  99.5)
-        # Override bar 1 (the entry bar) to have the tie
+        # Bar 1 (the entry bar at open=100) gets the tie
         opens[1]  = 100.0
-        highs[1]  = 103.0   # >= 102 target
-        lows[1]   = 96.0    # <= 97 stop
+        highs[1]  = 103.0   # >= 103 target
+        lows[1]   = 98.0    # <= 98 stop  (== triggers stop)
         closes[1] = 100.0
         bars = pd.DataFrame({
             "ts_utc": pd.date_range("2024-01-02", periods=n,
@@ -1386,48 +1434,61 @@ class G3_TripleBarrier(unittest.TestCase):
         })
         atr = _atr_at_start(bars, 1.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        # Anchor 0 → entry bar 1 → tie → label=-1, resolved at bar 1
-        self.assertEqual(float(out[self.LID].iloc[0]), -1.0,
+        self.assertEqual(float(out[self.LID_3WAY].iloc[0]), -1.0,
             "same-bar tie must resolve pessimistic_stop_first → -1")
+        self.assertEqual(float(out[self.LID_WON].iloc[0]), 0.0,
+            "binary _won at same-bar tie must be 0")
         self.assertEqual(
-            int(out[f"{self.LID}.bars_to_resolution"].iloc[0]), 1)
+            int(out[f"{self.LID_3WAY}.bars_to_resolution"].iloc[0]), 1)
 
     def test_resolved_ts_strictly_after_anchor(self):
         bars = _trending_bars_for_labels(direction="up", n=80,
                                             bar_size=0.6, hl_spread=0.3)
         atr = _atr_at_start(bars, 1.0)
         out = triple_barrier.compute(bars, atr_series=atr)
-        assert_label_resolved_after_anchor(bars, self.LID, out)
+        assert_label_resolved_after_anchor(bars, self.LID_3WAY, out)
+        assert_label_resolved_after_anchor(bars, self.LID_WON, out)
 
     def test_nan_atr_yields_pending(self):
         bars = _trending_bars_for_labels(direction="up", n=80)
         atr = pd.Series(np.full(len(bars), np.nan), index=bars.index)
         out = triple_barrier.compute(bars, atr_series=atr)
-        # No anchor can resolve without a valid ATR.
         self.assertTrue(
-            (out[f"{self.LID}.is_pending"] == 1).all(),
-            "every row must be pending when ATR is all NaN")
+            (out[f"{self.LID_3WAY}.is_pending"] == 1).all())
+        self.assertTrue(
+            (out[f"{self.LID_WON}.is_pending"] == 1).all())
 
-    def test_specs_use_future_label_only_leak_class(self):
-        for s in triple_barrier.SPECS:
-            self.assertEqual(s.leak_class, "future_label_only")
-            self.assertEqual(s.label_class, "classification_3way")
-            self.assertEqual(s.tp_mult, 2.0)
-            self.assertEqual(s.sl_mult, 3.0)
-            self.assertEqual(s.horizon_bars, 50)
-            self.assertEqual(s.tie_breaker, "pessimistic_stop_first")
-            self.assertEqual(s.entry_price_source,
-                              "next_bar_open_after_anchor")
+    def test_binary_matches_3way_collapse(self):
+        """The binary _won label must equal 1 wherever 3-way == +1
+        and 0 wherever 3-way ∈ {-1, 0}. This is the canonical
+        collapse rule."""
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=0.6, hl_spread=0.3)
+        atr = _atr_at_start(bars, 1.0)
+        out = triple_barrier.compute(bars, atr_series=atr)
+        resolved = out[out[f"{self.LID_3WAY}.is_pending"] == 0]
+        expected = (resolved[self.LID_3WAY] == 1.0).astype(float)
+        np.testing.assert_array_equal(
+            resolved[self.LID_WON].to_numpy(),
+            expected.to_numpy())
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G3_ForwardReturns (raw + cost-adjusted)
+# G3_ForwardReturns  (fwd_return_{5,20}b + cost_adjusted_fwd_return_5b)
 # ─────────────────────────────────────────────────────────────────────
 
 class G3_ForwardReturns(unittest.TestCase):
 
-    def test_fwd_log_ret_known_geometric_series(self):
-        # close[i+5] = open[i+1] * 1.01^5 → fwd_log_ret_5 = 5*ln(1.01)
+    def test_locked_label_ids(self):
+        ids = sorted(s.label_id for s in forward_returns.SPECS)
+        self.assertEqual(ids, [
+            "cost_adjusted_fwd_return_5b",
+            "fwd_return_20b",
+            "fwd_return_5b",
+        ])
+
+    def test_known_geometric_series(self):
+        # close[i+5] = open[i+1] * 1.01^5 → fwd_return_5b = 5*ln(1.01)
         n = 30
         close = 100.0 * np.power(1.01, np.arange(n))
         open_ = np.concatenate([[100.0], close[:-1]])
@@ -1439,15 +1500,10 @@ class G3_ForwardReturns(unittest.TestCase):
             "volume": np.full(n, 1e6), "quality_flags": 0,
         })
         out = forward_returns.compute(bars)
-        # fwd_log_ret_5 at anchor 0: entry=open[1]=close[0]=100,
-        # exit=close[5]=100*1.01^5 → log = 5*ln(1.01)
-        expected = 5.0 * np.log(1.01)
-        self.assertAlmostEqual(float(out["fwd_log_ret_5"].iloc[0]),
-                                 expected, places=12)
-        # fwd_log_ret_20 at anchor 0: but n=30, so 0+20=20 < 30 — OK
-        expected20 = 20.0 * np.log(1.01)
-        self.assertAlmostEqual(float(out["fwd_log_ret_20"].iloc[0]),
-                                 expected20, places=12)
+        self.assertAlmostEqual(float(out["fwd_return_5b"].iloc[0]),
+                                 5 * np.log(1.01), places=12)
+        self.assertAlmostEqual(float(out["fwd_return_20b"].iloc[0]),
+                                 20 * np.log(1.01), places=12)
 
     def test_cost_adjusted_subtracts_10bps(self):
         n = 30
@@ -1460,127 +1516,141 @@ class G3_ForwardReturns(unittest.TestCase):
             "volume": np.full(n, 1e6), "quality_flags": 0,
         })
         out = forward_returns.compute(bars)
-        diff_5  = (out["fwd_log_ret_5"]
-                    - out["fwd_log_ret_5_cost_10bps"]).dropna()
-        diff_20 = (out["fwd_log_ret_20"]
-                    - out["fwd_log_ret_20_cost_10bps"]).dropna()
-        # Every resolved row must show exactly 0.0010 cost subtracted.
-        np.testing.assert_allclose(diff_5.to_numpy(),
-                                     0.0010, atol=1e-12)
-        np.testing.assert_allclose(diff_20.to_numpy(),
+        diff = (out["fwd_return_5b"]
+                  - out["cost_adjusted_fwd_return_5b"]).dropna()
+        np.testing.assert_allclose(diff.to_numpy(),
                                      0.0010, atol=1e-12)
 
     def test_pending_for_tail_rows(self):
         n = 30
         bars = _trending_bars_for_labels(direction="up", n=n)
         out = forward_returns.compute(bars)
-        # fwd_log_ret_5 pending: anchors where i+5 >= n → i >= 25
-        # → 5 pending rows
-        self.assertEqual(int(out["fwd_log_ret_5.is_pending"].sum()), 5)
-        # fwd_log_ret_20 pending: i+20 >= n → i >= 10 → 20 pending
-        self.assertEqual(int(out["fwd_log_ret_20.is_pending"].sum()),
+        # fwd_return_5b: i+5 >= n → i >= 25 → 5 pending rows
+        self.assertEqual(int(out["fwd_return_5b.is_pending"].sum()), 5)
+        # fwd_return_20b: i+20 >= n → i >= 10 → 20 pending
+        self.assertEqual(int(out["fwd_return_20b.is_pending"].sum()),
                           20)
-        # fwd_log_ret_1 pending: i+1 >= n → i >= 29 → 1 pending
-        self.assertEqual(int(out["fwd_log_ret_1.is_pending"].sum()), 1)
+        # cost-adjusted shares 5b's pending mask
+        self.assertEqual(
+            int(out["cost_adjusted_fwd_return_5b.is_pending"].sum()),
+            5)
 
     def test_resolved_ts_invariant_all_labels(self):
         bars = _trending_bars_for_labels(direction="up", n=60)
         out = forward_returns.compute(bars)
-        for h in (1, 5, 20):
-            assert_label_resolved_after_anchor(
-                bars, f"fwd_log_ret_{h}", out)
-            assert_label_resolved_after_anchor(
-                bars, f"fwd_log_ret_{h}_cost_10bps", out)
+        for lid in ("fwd_return_5b", "fwd_return_20b",
+                      "cost_adjusted_fwd_return_5b"):
+            assert_label_resolved_after_anchor(bars, lid, out)
 
-    def test_specs_use_future_label_only(self):
+    def test_specs_classes_and_cost_flags(self):
         for s in forward_returns.SPECS:
             self.assertEqual(s.leak_class, "future_label_only")
             self.assertEqual(s.label_class, "regression")
         cost_adj = [s for s in forward_returns.SPECS
                       if s.cost_model_applied]
-        self.assertEqual(len(cost_adj), 3,
-            "expected 3 cost-adjusted labels (1, 5, 20 horizons)")
+        self.assertEqual(len(cost_adj), 1,
+            "exactly 1 cost-adjusted label (5b only) per locked plan")
+        self.assertEqual(cost_adj[0].label_id,
+                          "cost_adjusted_fwd_return_5b")
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G3_MFE_MAE
+# G3_MFE_MAE  (HORIZON=50; raw + ATR-normalized only; no pct variants)
 # ─────────────────────────────────────────────────────────────────────
 
 class G3_MFE_MAE(unittest.TestCase):
 
+    def test_locked_label_ids(self):
+        ids = sorted(s.label_id for s in mfe_mae.SPECS)
+        self.assertEqual(ids, [
+            "mae_50b", "mae_over_atr_50b",
+            "mfe_50b", "mfe_over_atr_50b",
+        ])
+
+    def test_horizon_is_50(self):
+        for s in mfe_mae.SPECS:
+            self.assertEqual(s.horizon_bars, 50,
+                f"{s.label_id} horizon must be 50")
+        self.assertEqual(mfe_mae.HORIZON, 50)
+
     def test_mfe_zero_in_strict_downtrend(self):
-        """Strict downtrend: every bar makes a new low. Entry at
-        bar 1's open. The forward window's highs never exceed entry
-        (since prices only fall), so MFE = 0."""
+        """Strict downtrend, HL spread 0. Entry=open[1]=99.
+        Forward 50-bar window highs are all < entry. So MFE = 0
+        and MAE > 0."""
         bars = _trending_bars_for_labels(direction="down", n=80,
                                             bar_size=1.0, hl_spread=0.0)
         out = mfe_mae.compute(bars)
-        resolved = out[out["mfe_20.is_pending"] == 0]
-        # MFE should be ~0 (window highs <= entry); MAE should be
-        # large and positive.
-        self.assertTrue((resolved["mfe_20"] <= 1e-9).all(),
-            f"MFE should be 0 in strict downtrend; got max "
-            f"{resolved['mfe_20'].max()}")
-        self.assertTrue((resolved["mae_20"] > 0).all(),
-            f"MAE should be > 0 in strict downtrend; got min "
-            f"{resolved['mae_20'].min()}")
+        resolved = out[out["mfe_50b.is_pending"] == 0]
+        self.assertTrue((resolved["mfe_50b"] <= 1e-9).all(),
+            f"MFE should be 0 in strict downtrend; max="
+            f"{resolved['mfe_50b'].max()}")
+        self.assertTrue((resolved["mae_50b"] > 0).all())
 
     def test_mae_zero_in_strict_uptrend(self):
         bars = _trending_bars_for_labels(direction="up", n=80,
                                             bar_size=1.0, hl_spread=0.0)
         out = mfe_mae.compute(bars)
-        resolved = out[out["mae_20.is_pending"] == 0]
-        self.assertTrue((resolved["mae_20"] <= 1e-9).all())
-        self.assertTrue((resolved["mfe_20"] > 0).all())
-
-    def test_pct_versions_are_fraction_of_entry(self):
-        bars = _trending_bars_for_labels(direction="up", n=80,
-                                            bar_size=0.5,
-                                            hl_spread=0.3)
-        out = mfe_mae.compute(bars)
-        resolved = out[out["mfe_20.is_pending"] == 0]
-        # mfe_pct_20 == mfe_20 / entry_price (== open[i+1])
-        bar_open = bars["open"].astype(float).values
-        for i in resolved.index:
-            entry = bar_open[i + 1]
-            expected_pct = resolved.loc[i, "mfe_20"] / entry
-            self.assertAlmostEqual(
-                float(resolved.loc[i, "mfe_pct_20"]),
-                expected_pct, places=10)
+        resolved = out[out["mae_50b.is_pending"] == 0]
+        self.assertTrue((resolved["mae_50b"] <= 1e-9).all())
+        self.assertTrue((resolved["mfe_50b"] > 0).all())
 
     def test_atr_normalized_requires_atr(self):
         bars = _trending_bars_for_labels(direction="up", n=80)
-        # Without atr_series, the over_atr labels must be all NaN.
+        out_noatr = mfe_mae.compute(bars)
+        self.assertTrue(out_noatr["mfe_over_atr_50b"].isna().all())
+        self.assertTrue(out_noatr["mae_over_atr_50b"].isna().all())
+        out_atr = mfe_mae.compute(bars,
+                                    atr_series=_atr_at_start(bars, 1.0))
+        resolved = out_atr[out_atr["mfe_50b.is_pending"] == 0]
+        self.assertFalse(resolved["mfe_over_atr_50b"].isna().any())
+
+    def test_atr_normalized_division_math(self):
+        """With ATR=2.0 and known MFE, mfe_over_atr_50b == MFE/2.0."""
+        bars = _trending_bars_for_labels(direction="up", n=80,
+                                            bar_size=0.6,
+                                            hl_spread=0.3)
+        atr = _atr_at_start(bars, 2.0)
+        out = mfe_mae.compute(bars, atr_series=atr)
+        resolved = out[out["mfe_50b.is_pending"] == 0]
+        for i in resolved.index:
+            expected = resolved.loc[i, "mfe_50b"] / 2.0
+            self.assertAlmostEqual(
+                float(resolved.loc[i, "mfe_over_atr_50b"]),
+                expected, places=10)
+
+    def test_pending_for_last_50(self):
+        """Anchor i needs i+50 < n, so last 50 anchors pending."""
+        bars = _trending_bars_for_labels(direction="up", n=80)
         out = mfe_mae.compute(bars)
-        self.assertTrue(out["mfe_over_atr_20"].isna().all())
-        self.assertTrue(out["mae_over_atr_20"].isna().all())
-        # With a constant ATR, they should be finite where resolved.
-        out2 = mfe_mae.compute(bars,
-                                 atr_series=_atr_at_start(bars, 1.0))
-        resolved = out2[out2["mfe_20.is_pending"] == 0]
-        self.assertFalse(resolved["mfe_over_atr_20"].isna().any())
+        self.assertEqual(int(out["mfe_50b.is_pending"].sum()), 50)
 
     def test_resolved_ts_invariant(self):
         bars = _trending_bars_for_labels(direction="up", n=80)
         out = mfe_mae.compute(bars,
                                 atr_series=_atr_at_start(bars, 1.0))
-        for lid in ("mfe_20", "mae_20", "mfe_pct_20", "mae_pct_20",
-                      "mfe_over_atr_20", "mae_over_atr_20"):
+        for lid in ("mfe_50b", "mae_50b",
+                      "mfe_over_atr_50b", "mae_over_atr_50b"):
             assert_label_resolved_after_anchor(bars, lid, out)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G3_RiskAdjusted
+# G3_RiskAdjusted  (single label: risk_adjusted_fwd_return_5b)
 # ─────────────────────────────────────────────────────────────────────
 
 class G3_RiskAdjusted(unittest.TestCase):
 
-    def test_over_atr_division(self):
-        """fwd_log_ret_20_over_atr = fwd_log_ret_20 / (ATR/entry).
-        With constant per-bar log return r and constant ATR a:
-        fwd_log_ret_20 = 20r; over_atr = 20r / (a / entry).
-        """
-        n = 50
+    LID = "risk_adjusted_fwd_return_5b"
+
+    def test_locked_label_id_and_horizon(self):
+        ids = [s.label_id for s in risk_adjusted.SPECS]
+        self.assertEqual(ids, [self.LID])
+        self.assertEqual(risk_adjusted.SPECS[0].horizon_bars, 5)
+        self.assertEqual(risk_adjusted.HORIZON, 5)
+
+    def test_division_math(self):
+        """fwd_return_5b at anchor 0 = 5*ln(1.005); ATR=1.0, entry=100
+        → over_atr = 5*ln(1.005) / (1/100) = 500*ln(1.005)."""
+        n = 30
         close = 100.0 * np.power(1.005, np.arange(n))
         open_ = np.concatenate([[100.0], close[:-1]])
         bars = pd.DataFrame({
@@ -1591,87 +1661,62 @@ class G3_RiskAdjusted(unittest.TestCase):
         })
         atr = pd.Series(np.full(n, 1.0), index=bars.index)
         out = risk_adjusted.compute(bars, atr_series=atr)
-        # Anchor 0: entry=open[1]=100.5 (since close[0]=100,
-        # close[1]=100*1.005); actually open[1]=close[0]=100.
-        # exit close[20] = 100*1.005**20
-        # fwd_log_ret_20 = log(close[20]/100) = 20*log(1.005)
-        # over_atr = 20*log(1.005) / (1.0/100) = 2000 * log(1.005)
-        expected = 20 * np.log(1.005) / (1.0 / 100.0)
-        self.assertAlmostEqual(
-            float(out["fwd_log_ret_20_over_atr"].iloc[0]),
-            expected, places=10)
+        # anchor 0: entry=open[1]=close[0]=100, exit=close[5]
+        # fwd_log = log(close[5]/100) = 5*ln(1.005)
+        # over_atr = 5*ln(1.005) / (1.0/100)
+        expected = 5 * np.log(1.005) / (1.0 / 100.0)
+        self.assertAlmostEqual(float(out[self.LID].iloc[0]),
+                                 expected, places=10)
 
-    def test_over_rvol_division(self):
-        n = 50
-        close = 100.0 * np.power(1.005, np.arange(n))
-        open_ = np.concatenate([[100.0], close[:-1]])
-        bars = pd.DataFrame({
-            "ts_utc": pd.date_range("2024-01-02", periods=n,
-                                      freq="1D", tz="UTC"),
-            "open": open_, "high": close, "low": close, "close": close,
-            "volume": np.full(n, 1e6), "quality_flags": 0,
-        })
-        rvol = pd.Series(np.full(n, 0.01), index=bars.index)
-        out = risk_adjusted.compute(bars, atr_series=None,
-                                       rvol_series=rvol)
-        # fwd_log_ret_20 / 0.01 at anchor 0
-        expected = (20 * np.log(1.005)) / 0.01
-        self.assertAlmostEqual(
-            float(out["fwd_log_ret_20_over_rvol"].iloc[0]),
-            expected, places=10)
-
-    def test_nan_denominator_yields_nan_value(self):
-        n = 50
+    def test_nan_atr_yields_nan_value_not_pending(self):
+        """ATR all NaN → label all NaN, but rows whose forward
+        window resolved are NOT pending — only the denominator is
+        undefined."""
+        n = 30
         bars = _trending_bars_for_labels(direction="up", n=n)
-        # ATR = all NaN → over_atr all NaN even where resolved
         atr = pd.Series(np.full(n, np.nan), index=bars.index)
-        rvol = pd.Series(np.full(n, np.nan), index=bars.index)
-        out = risk_adjusted.compute(bars, atr_series=atr,
-                                       rvol_series=rvol)
-        self.assertTrue(out["fwd_log_ret_20_over_atr"].isna().all())
-        self.assertTrue(out["fwd_log_ret_20_over_rvol"].isna().all())
-        # But resolved_ts / is_pending should NOT mark the rows as
-        # pending — the forward window resolved, the denominator is
-        # just undefined.
-        non_pending = (out["fwd_log_ret_20_over_atr.is_pending"]
-                          == 0).sum()
-        # n - 20 anchors have a valid forward window
-        self.assertEqual(int(non_pending), n - 20)
+        out = risk_adjusted.compute(bars, atr_series=atr)
+        self.assertTrue(out[self.LID].isna().all())
+        non_pending = (out[f"{self.LID}.is_pending"] == 0).sum()
+        # n - 5 anchors have a valid forward window at horizon=5
+        self.assertEqual(int(non_pending), n - 5)
+
+    def test_pending_for_last_5(self):
+        n = 30
+        bars = _trending_bars_for_labels(direction="up", n=n)
+        atr = _atr_at_start(bars, 1.0)
+        out = risk_adjusted.compute(bars, atr_series=atr)
+        # horizon=5: pending iff i+5 >= n → i >= 25 → 5 rows
+        self.assertEqual(int(out[f"{self.LID}.is_pending"].sum()), 5)
 
     def test_resolved_ts_invariant(self):
         n = 50
         bars = _trending_bars_for_labels(direction="up", n=n)
         atr = _atr_at_start(bars, 1.0)
-        rvol = _atr_at_start(bars, 0.01)
-        out = risk_adjusted.compute(bars, atr_series=atr,
-                                       rvol_series=rvol)
-        for lid in ("fwd_log_ret_20_over_atr",
-                      "fwd_log_ret_20_over_rvol"):
-            assert_label_resolved_after_anchor(bars, lid, out)
+        out = risk_adjusted.compute(bars, atr_series=atr)
+        assert_label_resolved_after_anchor(bars, self.LID, out)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G3_LabelLeakSafety — past-bar scramble
+# G3_LabelLeakSafety  (past-bar scramble across all groups)
 # ─────────────────────────────────────────────────────────────────────
 
 class G3_LabelLeakSafety(unittest.TestCase):
-    """Labels look only AT or AFTER the anchor (entry = open[i+1],
-    forward window from i+1). Scrambling bars STRICTLY BEFORE the
-    anchor must not change the label at the anchor — provided we
-    hold the ATR series constant (since computed ATR depends on
-    past bars; that dependency is correctly handled by passing
-    pre-computed ATR through, not by the label group recomputing
-    ATR internally).
+    """Labels look only AT or AFTER the anchor (entry = open[i+1]).
+    Scrambling bars STRICTLY BEFORE the anchor must not change the
+    label at the anchor — provided we hold the ATR series constant
+    (since real ATR depends on past bars; that dependency is
+    correctly handled by passing pre-computed ATR through, not by
+    having label code recompute it internally).
     """
 
     def test_past_bar_scramble_does_not_change_labels(self):
-        bars = _trending_bars_for_labels(direction="up", n=80,
+        bars = _trending_bars_for_labels(direction="up", n=120,
                                             bar_size=0.6,
                                             hl_spread=0.3)
         atr = _atr_at_start(bars, 1.0)
 
-        # Scramble bars 0..30 (strictly before the anchors we'll check
-        # at index 40 onwards).
+        # Scramble bars 0..30 (strictly before the anchors at 40+).
         anchor_lo = 40
         rng = np.random.default_rng(31415)
         scrambled = bars.copy()
@@ -1684,9 +1729,7 @@ class G3_LabelLeakSafety(unittest.TestCase):
             ("triple_barrier", {"atr_series": atr}),
             ("forward_returns", {}),
             ("mfe_mae", {"atr_series": atr}),
-            ("risk_adjusted", {"atr_series": atr,
-                                 "rvol_series": _atr_at_start(
-                                     bars, 0.01)}),
+            ("risk_adjusted", {"atr_series": atr}),
         ]:
             mod = {"triple_barrier": triple_barrier,
                     "forward_returns": forward_returns,
@@ -1694,13 +1737,16 @@ class G3_LabelLeakSafety(unittest.TestCase):
                     "risk_adjusted": risk_adjusted}[mod_name]
             a = mod.compute(bars, **kwargs)
             b = mod.compute(scrambled, **kwargs)
-            # Compare every label-value column at anchor_lo..end
             for col in a.columns:
-                if col.endswith(".resolved_ts") \
-                        or col.endswith(".is_pending"):
+                # Skip aux columns whose value is a tz-aware ts —
+                # those are compared via resolved_ts checks above.
+                if col.endswith(".resolved_ts"):
                     continue
-                if col.endswith(".bars_to_resolution") \
-                        or col.endswith(".return_log_at_resolution"):
+                if col.endswith(".is_pending"):
+                    # Same boolean column; quickly assert equality.
+                    np.testing.assert_array_equal(
+                        a[col].iloc[anchor_lo:].to_numpy(),
+                        b[col].iloc[anchor_lo:].to_numpy())
                     continue
                 av = a[col].iloc[anchor_lo:].to_numpy()
                 bv = b[col].iloc[anchor_lo:].to_numpy()
@@ -1710,10 +1756,74 @@ class G3_LabelLeakSafety(unittest.TestCase):
                               f"under past-bar scramble")
                 m = ~np.isnan(av)
                 np.testing.assert_allclose(
-                    av[m], bv[m],
-                    rtol=1e-12, atol=1e-12,
+                    av[m], bv[m], rtol=1e-12, atol=1e-12,
                     err_msg=f"{mod_name}/{col}: past-bar scramble "
                               f"changed label values (leak!)")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G3_LockedLabelRegistry  (canary against future schema drift)
+# ─────────────────────────────────────────────────────────────────────
+
+class G3_LockedLabelRegistry(unittest.TestCase):
+    """Belt-and-suspenders check that the exact set of label_ids
+    emitted by M18.A.4 matches the locked plan EXACTLY. Future
+    additions must update this list explicitly so the test forces
+    a conscious choice."""
+
+    LOCKED_LABEL_IDS = frozenset({
+        "triple_barrier_atr_2_3_50",
+        "triple_barrier_atr_2_3_50_won",
+        "fwd_return_5b",
+        "fwd_return_20b",
+        "cost_adjusted_fwd_return_5b",
+        "mfe_50b",
+        "mae_50b",
+        "mfe_over_atr_50b",
+        "mae_over_atr_50b",
+        "risk_adjusted_fwd_return_5b",
+    })
+
+    def test_registry_matches_locked_set(self):
+        import bot.ml.labels as labels_pkg
+        actual = set()
+        for grp in labels_pkg.ALL_LABEL_GROUPS.values():
+            for s in grp.SPECS:
+                actual.add(s.label_id)
+        self.assertEqual(actual, self.LOCKED_LABEL_IDS,
+            f"label registry drift detected;\n"
+            f"  missing from registry: "
+            f"{self.LOCKED_LABEL_IDS - actual}\n"
+            f"  extra in registry:     "
+            f"{actual - self.LOCKED_LABEL_IDS}")
+
+    def test_all_label_classes_in_allowed_set(self):
+        from bot.ml.schemas import ALLOWED_LABEL_CLASSES
+        import bot.ml.labels as labels_pkg
+        for grp in labels_pkg.ALL_LABEL_GROUPS.values():
+            for s in grp.SPECS:
+                self.assertIn(s.label_class, ALLOWED_LABEL_CLASSES,
+                    f"{s.label_id} has label_class={s.label_class!r}")
+
+    def test_exactly_one_binary_label(self):
+        import bot.ml.labels as labels_pkg
+        binary = []
+        for grp in labels_pkg.ALL_LABEL_GROUPS.values():
+            for s in grp.SPECS:
+                if s.label_class == "binary":
+                    binary.append(s.label_id)
+        self.assertEqual(binary, ["triple_barrier_atr_2_3_50_won"],
+            f"expected exactly one binary label (the collapsed "
+            f"triple-barrier _won); found {binary}")
+
+    def test_exactly_one_three_way_label(self):
+        import bot.ml.labels as labels_pkg
+        three_way = []
+        for grp in labels_pkg.ALL_LABEL_GROUPS.values():
+            for s in grp.SPECS:
+                if s.label_class == "classification_3way":
+                    three_way.append(s.label_id)
+        self.assertEqual(three_way, ["triple_barrier_atr_2_3_50"])
 
 
 class G10_Hygiene(unittest.TestCase):

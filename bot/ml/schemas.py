@@ -71,7 +71,7 @@ ALLOWED_DTYPES: FrozenSet[str] = frozenset({
 
 # ─── Label classes ───────────────────────────────────────────────────
 ALLOWED_LABEL_CLASSES: FrozenSet[str] = frozenset({
-    "binary", "ternary", "regression",
+    "classification_3way", "binary", "regression", "ranking",
 })
 
 # ─── Anchor timeframes ───────────────────────────────────────────────
