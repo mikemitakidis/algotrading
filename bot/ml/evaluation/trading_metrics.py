@@ -73,6 +73,36 @@ def _resolve_primary_tb_label(target_label_id: str) -> Optional[str]:
     return target_label_id[:-len(TB_WON_SUFFIX)]
 
 
+PRECISION_AT_K_VALUES = (5, 10, 20, 50)
+
+# Default per-trade cost in log-return units (~10 bps), matching the
+# cost assumption used by the cost_adjusted_fwd_return_5b label.
+DEFAULT_COST_PER_TRADE_LOG_RETURN = 0.001
+
+EQUITY_CURVE_UNAVAILABLE_REASON = (
+    "requires per-bar equity curve, not just per-trade log returns; "
+    "deferred to the backtester-driven evaluation phase")
+
+
+def _precision_at_k(y_true, y_proba):
+    """Precision over the top-K rows ranked by y_proba (desc).
+
+    K values are locked (5, 10, 20, 50). When the split has fewer
+    than K rows, the entry is NaN."""
+    import numpy as _np
+    out = {}
+    n = len(y_true)
+    order = _np.argsort(-_np.asarray(y_proba, dtype=_np.float64),
+                          kind="stable")
+    y_sorted = _np.asarray(y_true, dtype=_np.float64)[order]
+    for k in PRECISION_AT_K_VALUES:
+        if n >= k:
+            out[f"precision_at_{k}"] = float(_np.mean(y_sorted[:k]))
+        else:
+            out[f"precision_at_{k}"] = float("nan")
+    return out
+
+
 def trading_metrics(
     *,
     y_true:           np.ndarray,
@@ -81,6 +111,8 @@ def trading_metrics(
     dataset:          Optional[pd.DataFrame] = None,
     split_indices:    Optional[np.ndarray]   = None,
     threshold:        float                  = DEFAULT_THRESHOLD,
+    cost_per_trade_log_return: float =
+        DEFAULT_COST_PER_TRADE_LOG_RETURN,
 ) -> Dict[str, Any]:
     """Compute per-split trading metrics.
 
@@ -98,11 +130,23 @@ def trading_metrics(
             "n_rows":                                       0,
             "n_predicted_positive":                         0,
             "n_actual_positive":                            0,
+            "n_filtered":                                   0,
             "positive_rate_pred":                           float("nan"),
             "positive_rate_true":                           float("nan"),
             "precision_at_threshold":                       float("nan"),
             "recall_at_threshold":                          float("nan"),
             "threshold":                                    float(threshold),
+            "win_rate_by_return":                           float("nan"),
+            "average_log_return_win":                       float("nan"),
+            "average_log_return_loss":                      float("nan"),
+            "profit_factor":                                float("nan"),
+            "expected_value_after_costs":                   float("nan"),
+            "cost_per_trade_log_return":
+                float(cost_per_trade_log_return),
+            "precision_at_k": {f"precision_at_{k}": float("nan")
+                                 for k in PRECISION_AT_K_VALUES},
+            "equity_curve_metrics": {
+                "unavailable_reason": EQUITY_CURVE_UNAVAILABLE_REASON},
             "mean_log_return_predicted_positive":           float("nan"),
             "sum_log_return_predicted_positive":            float("nan"),
             "mean_bars_to_resolution_predicted_positive":   float("nan"),
@@ -138,6 +182,11 @@ def trading_metrics(
     mean_log_return = float("nan")
     sum_log_return  = float("nan")
     mean_bars       = float("nan")
+    win_rate_by_return         = float("nan")
+    average_log_return_win     = float("nan")
+    average_log_return_loss    = float("nan")
+    profit_factor              = float("nan")
+    expected_value_after_costs = float("nan")
 
     if dataset is None or split_indices is None:
         warnings.append("aux_columns_not_provided")
@@ -167,6 +216,25 @@ def trading_metrics(
                 if len(ret_finite) > 0:
                     mean_log_return = float(np.mean(ret_finite))
                     sum_log_return  = float(np.sum(ret_finite))
+                    wins   = ret_finite[ret_finite >  0.0]
+                    losses = ret_finite[ret_finite <= 0.0]
+                    win_rate_by_return = (
+                        float(len(wins)) / len(ret_finite))
+                    if len(wins) > 0:
+                        average_log_return_win = float(np.mean(wins))
+                    if len(losses) > 0:
+                        average_log_return_loss = float(
+                            np.mean(losses))
+                    loss_sum = float(np.sum(np.abs(losses)))
+                    if loss_sum > 0.0:
+                        profit_factor = (float(np.sum(wins))
+                                          / loss_sum)
+                    else:
+                        warnings.append(
+                            "profit_factor_undefined_no_losses")
+                    expected_value_after_costs = (
+                        mean_log_return
+                        - float(cost_per_trade_log_return))
                 if len(bars_finite) > 0:
                     mean_bars       = float(np.mean(bars_finite))
 
@@ -174,11 +242,24 @@ def trading_metrics(
         "n_rows":                                       n,
         "n_predicted_positive":                         n_pred_pos,
         "n_actual_positive":                            n_actual_pos,
+        "n_filtered":                                   n - n_pred_pos,
         "positive_rate_pred":                           float(n_pred_pos) / n,
         "positive_rate_true":                           float(n_actual_pos) / n,
         "precision_at_threshold":                       precision,
         "recall_at_threshold":                          recall,
         "threshold":                                    float(threshold),
+        "win_rate_by_return":                           win_rate_by_return,
+        "average_log_return_win":                       average_log_return_win,
+        "average_log_return_loss":                      average_log_return_loss,
+        "profit_factor":                                profit_factor,
+        "expected_value_after_costs":
+            expected_value_after_costs,
+        "cost_per_trade_log_return":
+            float(cost_per_trade_log_return),
+        "precision_at_k":                               _precision_at_k(
+                                                            y_t, y_p),
+        "equity_curve_metrics": {
+            "unavailable_reason": EQUITY_CURVE_UNAVAILABLE_REASON},
         "mean_log_return_predicted_positive":           mean_log_return,
         "sum_log_return_predicted_positive":            sum_log_return,
         "mean_bars_to_resolution_predicted_positive":   mean_bars,

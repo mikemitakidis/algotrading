@@ -28,8 +28,8 @@ from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional
 
 
-EVALUATION_REPORT_SCHEMA_VERSION             = 1
-BASELINE_COMPARISON_REPORT_SCHEMA_VERSION    = 1
+EVALUATION_REPORT_SCHEMA_VERSION             = 2
+BASELINE_COMPARISON_REPORT_SCHEMA_VERSION    = 2
 CROSS_COHORT_COMPARISON_REPORT_SCHEMA_VERSION = 1
 
 CROSS_COHORT_DISCLAIMER = (
@@ -82,11 +82,31 @@ class EvaluationReport:
     # Per-split ML metrics (echoed from TrainOutputs.metrics_*)
     ml_metrics: Dict[str, Dict[str, float]]
 
+    # v2 Gap 1 — extended ML metrics incl. PR-AUC (PRIMARY M18 metric),
+    # log_loss (clipped), precision/recall/F1 @0.5, confusion matrix
+    ml_metrics_extended: Dict[str, Dict[str, Any]]
+
+    # v2 Gap 2 — locked threshold ladder
+    # [0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.80]
+    threshold_metrics: Dict[str, Dict[str, Any]]
+
     # Per-split calibration diagnostics
     calibration: Dict[str, Dict[str, Any]]
 
-    # Per-split trading-style metrics
+    # Per-split trading-style metrics (v2 Gap 3 — extended to the
+    # 23-key contract incl. EV after costs, profit factor,
+    # precision_at_k, equity_curve_metrics unavailable block)
     trading_metrics: Dict[str, Dict[str, Any]]
+
+    # v2 Gap 4 — PSI drift diagnostics {train_to_val, train_to_test}
+    drift: Dict[str, Dict[str, Any]]
+
+    # v2 Gap 5 — permutation importance (single block; deterministic)
+    permutation_importance: Dict[str, Any]
+
+    # v2 Gap 6 — segment/regime breakdowns per split
+    # (per_symbol / per_year / volatility_regime / market_regime)
+    breakdowns: Dict[str, Dict[str, Any]]
 
     # Promotion gate echo (verbatim from TrainOutputs)
     fixture_only: bool
@@ -114,8 +134,20 @@ class BaselineComparisonReport:
     cohort_anchor_set: str
     model_reports: List[Dict[str, Any]]      # to_dict() of each
     primary_split: str                         # 'val' by default
-    per_metric: Dict[str, Dict[str, float]]   # {'roc_auc': {'B0':0.5,'B2':0.65}}
-    baseline_beats: Dict[str, bool]           # {'B2_logistic_beats_B0_majority': True}
+    primary_metric: str                        # v2: 'pr_auc' default
+    primary_baseline_model_type: str           # v2: 'B0_majority'
+    secondary_baseline_model_type: Optional[str]
+        # v2: 'B1_scanner_replica' default; None skips B1 deltas
+    per_metric: Dict[str, Dict[str, float]]   # {'pr_auc': {'B0':0.44,'B2':0.49}}
+    baseline_beats: Dict[str, bool]
+        # v2: BOTH _beats_B0_majority AND _beats_B1_scanner_replica
+        # keys for each non-baseline model (4 entries for 3 models)
+    deltas_vs_primary_baseline: Dict[str, Dict[str, float]]
+        # v2: {model_type: {metric: delta_vs_B0}}; sign convention:
+        # positive = candidate better, incl. LOWER_IS_BETTER metrics
+        # (brier/log_loss/mse/mae/ECE/MCE) where delta = baseline - candidate
+    deltas_vs_secondary_baseline: Dict[str, Dict[str, float]]
+        # v2: {model_type: {metric: delta_vs_B1}}; empty when secondary None
     generated_at_utc: str
 
     def to_dict(self) -> Dict[str, Any]:
