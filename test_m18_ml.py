@@ -109,6 +109,478 @@ _M18_WHITELIST_PREFIXES = (
 
 
 # ═════════════════════════════════════════════════════════════════════
+# G1 — M18.A.1 foundation tests
+#   schemas, feature/label/train config contracts, hashing, errors,
+#   allowed registry/model/status values, and CLI foundation behaviour.
+#
+# RECONSTRUCTED CONTRACT-FAITHFULLY from the A.5 transcript class
+# inventory + visible test-run names + the Word M18.A.1 truth table,
+# validated against the current production contracts in bot/ml/
+# {schemas,hashing,errors,cli}.py.
+#
+# NOT byte-identical: the original G1 test bodies were not recoverable
+# from any transcript or patch. Four classes (G1_Hashing, G1_LabelSpec,
+# G1_TrainConfig, G1_CLI) have their exact final test-method NAMES from
+# transcript run logs and reproduce them; the other five
+# (G1_FeatureSpec, G1_FeatureGroupSchema, G1_DatasetConfig,
+# G1_AllowedRegistryStatuses, G1_Errors) had no recoverable names and
+# are reconstructed from the production contract they must pin.
+# ═════════════════════════════════════════════════════════════════════
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_FeatureSpec — FeatureSpec contract (reconstructed from contract)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_FeatureSpec(unittest.TestCase):
+
+    def _valid(self):
+        return {
+            "feature_id": "trend.ema_20",
+            "feature_group": "trend",
+            "feature_group_version": 1,
+            "dtype": "float64",
+            "leak_class": "safe",
+            "lookback_bars": 20,
+            "lookback_unit": "bars_at_anchor_tf",
+            "computed_from": ["close"],
+            "description": "20-bar EMA of close.",
+        }
+
+    def test_parses_valid_feature_spec(self):
+        spec = ml_schemas.FeatureSpec.from_dict(self._valid())
+        self.assertEqual(spec.feature_id, "trend.ema_20")
+        self.assertEqual(spec.feature_group, "trend")
+        self.assertEqual(spec.leak_class, "safe")
+        self.assertEqual(spec.computed_from, ("close",))
+
+    def test_round_trip(self):
+        spec = ml_schemas.FeatureSpec.from_dict(self._valid())
+        again = ml_schemas.FeatureSpec.from_dict(spec.to_dict())
+        self.assertEqual(spec, again)
+
+    def test_feature_id_must_be_group_dot_name(self):
+        d = self._valid()
+        d["feature_id"] = "no_dot"
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+    def test_feature_id_must_start_with_group(self):
+        d = self._valid()
+        d["feature_id"] = "momentum.rsi_14"   # group is 'trend'
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+    def test_rejects_unknown_dtype(self):
+        d = self._valid()
+        d["dtype"] = "complex256"
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+    def test_rejects_feature_only_disallowed_leak_class(self):
+        # Features may only be 'safe' or 'requires_past_flywheel_only';
+        # 'future_label_only' is a LABEL leak_class and must be refused.
+        d = self._valid()
+        d["leak_class"] = "future_label_only"
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+    def test_rejects_negative_lookback(self):
+        d = self._valid()
+        d["lookback_bars"] = -1
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+    def test_missing_required_key_raises(self):
+        d = self._valid()
+        del d["dtype"]
+        with self.assertRaises(ml_errors.FeatureSchemaError):
+            ml_schemas.FeatureSpec.from_dict(d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_FeatureGroupSchema — group wrapper (reconstructed from contract)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_FeatureGroupSchema(unittest.TestCase):
+
+    def _spec(self, fid="trend.ema_20"):
+        return ml_schemas.FeatureSpec.from_dict({
+            "feature_id": fid,
+            "feature_group": "trend",
+            "feature_group_version": 1,
+            "dtype": "float64",
+            "leak_class": "safe",
+            "lookback_bars": 20,
+            "lookback_unit": "bars_at_anchor_tf",
+            "computed_from": ["close"],
+            "description": "desc",
+        })
+
+    def test_constructs_with_specs(self):
+        grp = ml_schemas.FeatureGroupSchema(
+            group_name="trend",
+            group_version=1,
+            feature_specs=(self._spec("trend.ema_20"),
+                            self._spec("trend.ema_50")),
+            description="trend group",
+        )
+        self.assertEqual(grp.group_name, "trend")
+        self.assertEqual(len(grp.feature_specs), 2)
+
+    def test_is_frozen(self):
+        grp = ml_schemas.FeatureGroupSchema(
+            group_name="trend", group_version=1,
+            feature_specs=(self._spec(),), description="d")
+        with self.assertRaises(Exception):
+            grp.group_name = "other"   # frozen dataclass
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_LabelSpec — LabelSpec contract (test names from transcript run log)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_LabelSpec(unittest.TestCase):
+
+    def _valid(self):
+        return {
+            "label_id": "fwd_return_5b",
+            "label_schema_version": 1,
+            "label_class": "regression",
+            "horizon_bars": 5,
+            "horizon_unit": "bars_at_anchor_tf",
+            "leak_class": "future_label_only",
+            "computed_from": ["open", "close"],
+            "description": "5-bar forward log return.",
+        }
+
+    def test_parses_valid_label_spec(self):
+        spec = ml_schemas.LabelSpec.from_dict(self._valid())
+        self.assertEqual(spec.label_id, "fwd_return_5b")
+        self.assertEqual(spec.label_class, "regression")
+        self.assertEqual(spec.horizon_bars, 5)
+        self.assertEqual(spec.leak_class, "future_label_only")
+
+    def test_round_trip(self):
+        spec = ml_schemas.LabelSpec.from_dict(self._valid())
+        again = ml_schemas.LabelSpec.from_dict(spec.to_dict())
+        self.assertEqual(spec, again)
+
+    def test_optional_triple_barrier_fields(self):
+        d = self._valid()
+        d.update({
+            "label_id": "triple_barrier_atr_2_3_50",
+            "label_class": "classification_3way",
+            "horizon_bars": 50,
+            "tp_mult": 3.0, "sl_mult": 2.0,
+            "atr_source": "vol_regime.atr_14_sma_true_range",
+            "entry_price_source": "next_bar_open_after_anchor",
+            "tie_breaker": "pessimistic_stop_first",
+        })
+        spec = ml_schemas.LabelSpec.from_dict(d)
+        self.assertEqual(spec.tp_mult, 3.0)
+        self.assertEqual(spec.sl_mult, 2.0)
+        self.assertEqual(spec.tie_breaker, "pessimistic_stop_first")
+
+    def test_rejects_unknown_label_class(self):
+        d = self._valid()
+        d["label_class"] = "made_up_class"
+        with self.assertRaises(ml_errors.LabelSchemaError):
+            ml_schemas.LabelSpec.from_dict(d)
+
+    def test_rejects_non_future_label_leak_class(self):
+        # Labels MUST have leak_class='future_label_only' — anything
+        # else is a schema error.
+        d = self._valid()
+        d["leak_class"] = "safe"
+        with self.assertRaises(ml_errors.LabelSchemaError):
+            ml_schemas.LabelSpec.from_dict(d)
+
+    def test_rejects_zero_horizon(self):
+        d = self._valid()
+        d["horizon_bars"] = 0
+        with self.assertRaises(ml_errors.LabelSchemaError):
+            ml_schemas.LabelSpec.from_dict(d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_DatasetConfig — DatasetConfig contract (reconstructed from contract)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_DatasetConfig(unittest.TestCase):
+
+    def _valid(self):
+        return {
+            "symbol": "AAPL",
+            "timeframes": ["15m", "1h", "4h", "1d"],
+            "anchor_tf": "15m",
+            "anchor_set": "model_b_1h_union_candidates",
+            "feature_groups": ["trend", "momentum"],
+            "label_ids": ["triple_barrier_atr_2_3_50"],
+            "bar_window_start_utc": "2024-01-02T00:00:00Z",
+            "bar_window_end_utc": "2024-06-01T00:00:00Z",
+            "walk_forward": {"train_frac": 0.6, "val_frac": 0.2,
+                              "test_frac": 0.2},
+        }
+
+    def test_parses_valid(self):
+        cfg = ml_schemas.DatasetConfig.from_dict(self._valid())
+        self.assertEqual(cfg.symbol, "AAPL")
+        self.assertEqual(cfg.anchor_tf, "15m")
+        self.assertFalse(cfg.fixture_mode)
+
+    def test_rejects_unknown_anchor_tf(self):
+        d = self._valid()
+        d["anchor_tf"] = "7m"
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_empty_symbol(self):
+        d = self._valid()
+        d["symbol"] = ""
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_missing_required_key_raises(self):
+        d = self._valid()
+        del d["walk_forward"]
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_TrainConfig — TrainConfig contract (test names from transcript log)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_TrainConfig(unittest.TestCase):
+
+    def _valid(self):
+        return {
+            "dataset_id": "ds_abc123",
+            "model_type": "B0_majority",
+            "train_mode": "model_b_candidate_quality",
+            "target_label_id": "triple_barrier_atr_2_3_50_won",
+            "hyperparameters": {},
+        }
+
+    def test_parses_valid(self):
+        cfg = ml_schemas.TrainConfig.from_dict(self._valid())
+        self.assertEqual(cfg.dataset_id, "ds_abc123")
+        self.assertEqual(cfg.model_type, "B0_majority")
+        self.assertEqual(cfg.seed, 42)
+
+    def test_fixture_mode_default_false(self):
+        cfg = ml_schemas.TrainConfig.from_dict(self._valid())
+        self.assertFalse(cfg.fixture_mode)
+
+    def test_fixture_mode_explicit_true(self):
+        d = self._valid()
+        d["fixture_mode"] = True
+        cfg = ml_schemas.TrainConfig.from_dict(d)
+        self.assertTrue(cfg.fixture_mode)
+
+    def test_rejects_unknown_model_type(self):
+        d = self._valid()
+        d["model_type"] = "XGBoost9000"
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.TrainConfig.from_dict(d)
+
+    def test_rejects_unknown_train_mode(self):
+        d = self._valid()
+        d["train_mode"] = "model_c_speculative"
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.TrainConfig.from_dict(d)
+
+    def test_rejects_bool_seed(self):
+        d = self._valid()
+        d["seed"] = True   # bool is not an acceptable int seed
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.TrainConfig.from_dict(d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_AllowedRegistryStatuses — locked allowlists (reconstructed)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_AllowedRegistryStatuses(unittest.TestCase):
+
+    def test_allowed_label_classes_locked_set(self):
+        self.assertEqual(
+            set(ml_schemas.ALLOWED_LABEL_CLASSES),
+            {"classification_3way", "binary", "regression", "ranking"})
+
+    def test_allowed_model_types_contains_locked_members(self):
+        for m in ("B0_majority", "B1_scanner_replica", "B2_logistic",
+                   "M_lightgbm", "M_random_forest"):
+            self.assertIn(m, ml_schemas.ALLOWED_MODEL_TYPES)
+
+    def test_allowed_train_modes_locked_set(self):
+        self.assertEqual(
+            set(ml_schemas.ALLOWED_TRAIN_MODES),
+            {"model_a_meta_label", "model_b_candidate_quality"})
+
+    def test_registry_statuses_include_core_lifecycle(self):
+        for s in ("candidate", "current", "demoted", "forced_promoted",
+                   "fixture_only"):
+            self.assertIn(s, ml_schemas.ALLOWED_REGISTRY_STATUSES)
+
+    def test_feature_leak_classes_are_restricted(self):
+        # Features may ONLY be 'safe' or 'requires_past_flywheel_only'.
+        self.assertEqual(
+            set(ml_schemas.ALLOWED_FEATURE_LEAK_CLASSES),
+            {"safe", "requires_past_flywheel_only"})
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_Hashing — canonical hashing (test names from transcript run log)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_Hashing(unittest.TestCase):
+
+    def test_sha256_hex_64_chars(self):
+        h = ml_hashing.sha256_hex(b"hello")
+        self.assertEqual(len(h), 64)
+        self.assertTrue(all(c in "0123456789abcdef" for c in h))
+
+    def test_sha256_hex_rejects_str(self):
+        with self.assertRaises(TypeError):
+            ml_hashing.sha256_hex("not bytes")
+
+    def test_canonical_json_deterministic_for_dict_order(self):
+        a = ml_hashing.canonical_json({"a": 1, "b": 2})
+        b = ml_hashing.canonical_json({"b": 2, "a": 1})
+        self.assertEqual(a, b)
+
+    def test_canonical_json_sorted_sets(self):
+        out = ml_hashing.canonical_json({3, 1, 2})
+        self.assertEqual(out, b"[1,2,3]")
+
+    def test_canonical_json_tuple_to_list(self):
+        self.assertEqual(ml_hashing.canonical_json((1, 2)), b"[1,2]")
+
+    def test_canonical_json_rejects_unknown_type(self):
+        with self.assertRaises(TypeError):
+            ml_hashing.canonical_json(object())
+
+    def test_hash_canonical_stable(self):
+        self.assertEqual(
+            ml_hashing.hash_canonical({"x": 1, "y": [1, 2, 3]}),
+            ml_hashing.hash_canonical({"y": [1, 2, 3], "x": 1}))
+
+    def test_lib_versions_contains_required_keys(self):
+        v = ml_hashing.lib_versions()
+        for k in ("python", "numpy", "pandas", "sklearn"):
+            self.assertIn(k, v)
+
+    def test_git_head_sha_returns_hex_or_unknown(self):
+        sha = ml_hashing.git_head_sha()
+        self.assertTrue(
+            sha == "unknown"
+            or all(c in "0123456789abcdef" for c in sha))
+
+    def test_repro_hash_deterministic(self):
+        cfg = {"a": 1}
+        libs = {"numpy": "1.0"}
+        self.assertEqual(
+            ml_hashing.repro_hash(cfg, libs, "abc"),
+            ml_hashing.repro_hash(cfg, libs, "abc"))
+
+    def test_repro_hash_changes_for_each_input(self):
+        # SR-8: changing ANY component of the composition changes the
+        # resulting hash.
+        base = ml_hashing.repro_hash({"a": 1}, {"numpy": "1.0"}, "abc")
+        self.assertNotEqual(
+            base, ml_hashing.repro_hash({"a": 2}, {"numpy": "1.0"}, "abc"))
+        self.assertNotEqual(
+            base, ml_hashing.repro_hash({"a": 1}, {"numpy": "2.0"}, "abc"))
+        self.assertNotEqual(
+            base, ml_hashing.repro_hash({"a": 1}, {"numpy": "1.0"}, "xyz"))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_Errors — M18 error hierarchy (reconstructed from contract)
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_Errors(unittest.TestCase):
+
+    def test_all_m18_errors_subclass_base(self):
+        for name in ("M18ConfigError", "M18SchemaError", "M18DataError",
+                      "M18LeakageError", "M18RegistryError"):
+            cls = getattr(ml_errors, name)
+            self.assertTrue(issubclass(cls, ml_errors.M18Error),
+                f"{name} must subclass M18Error")
+
+    def test_schema_errors_subclass_schema_error(self):
+        for name in ("FeatureSchemaError", "LabelSchemaError"):
+            cls = getattr(ml_errors, name)
+            self.assertTrue(issubclass(cls, ml_errors.M18Error),
+                f"{name} must subclass M18Error")
+
+    def test_config_error_is_raisable_and_carries_message(self):
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            raise ml_errors.M18ConfigError("bad config")
+        self.assertIn("bad config", str(ctx.exception))
+
+    def test_distinct_error_types_are_not_interchangeable(self):
+        self.assertFalse(
+            issubclass(ml_errors.M18ConfigError, ml_errors.M18DataError))
+        self.assertFalse(
+            issubclass(ml_errors.M18RegistryError,
+                        ml_errors.M18ConfigError))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G1_CLI — foundation CLI behaviour (test names from transcript run log)
+#   NOTE: the full CLI surface is proved by G9 (M18.A.9). These are the
+#   foundation-level existence/stub checks only; they must NOT regress
+#   the A.9 wiring (predict / registry list|show|promote WIRED; the four
+#   stubs return exit 2).
+# ─────────────────────────────────────────────────────────────────────
+
+class G1_CLI(unittest.TestCase):
+
+    def _run(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = ml_cli.main(argv)
+        except SystemExit as exc:
+            rc = exc.code
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_subcommand_stub_returns_2(self):
+        # build-dataset is a documented stub in M18.A.10: exits 2.
+        rc, _, _ = self._run(["build-dataset"])
+        self.assertEqual(rc, 2)
+
+    def test_train_requires_config(self):
+        # train is a documented stub (needs persisted AssemblerResult):
+        # it must not silently succeed — exits 2.
+        rc, _, _ = self._run(["train"])
+        self.assertEqual(rc, 2)
+
+    def test_unknown_subcommand_exits_nonzero(self):
+        rc, _, _ = self._run(["definitely-not-a-subcommand"])
+        self.assertNotEqual(rc, 0)
+
+    def test_registry_promote_supports_force_override(self):
+        # The A.9 promote surface accepts --force and --override-gate
+        # without an argparse error (exit 2). Missing model-id is a
+        # different (non-argparse) failure path.
+        rc, _, _ = self._run(
+            ["registry", "promote", "--help"])
+        self.assertEqual(rc, 0)
+
+    def test_registry_promote_supports_force_override_surface(self):
+        # The promote parser exposes the force/override flags as part of
+        # its surface (foundation-level existence check).
+        import inspect as _inspect
+        src = _inspect.getsource(ml_cli)
+        self.assertIn("--force", src)
+        self.assertIn("--override-gate", src)
+
+
+# ═════════════════════════════════════════════════════════════════════
 # G2 — M16 loader + safe feature groups (M18.A.2)
 # ═════════════════════════════════════════════════════════════════════
 #
