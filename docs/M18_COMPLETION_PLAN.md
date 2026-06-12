@@ -247,6 +247,74 @@ ROADMAP.
 
 ---
 
+## 7.A Advanced quality & speed requirements (operator-added)
+
+Additional operator-requested requirements that extend §6 and §7. The theme is
+quality assurance and training speed — the goal is not only to match the
+original plan but to make M18 measurably faster to train and safer to promote.
+
+1. **Model risk scorecard.** Every model gets a model-risk score across:
+   leakage risk, drift risk, calibration risk, data-thinness risk,
+   feature-instability risk, and regime-fragility risk. Surfaced in the eval
+   report and the registry entry.
+   **Classification: SHOULD before final M18.**
+
+2. **Training speed benchmark.** Track elapsed time for each stage (feature
+   build, label build, dataset assembly, training, evaluation, registry write).
+   Store rows/sec and, once the feature_store/label_store lands, the cache-hit
+   speed improvement. The whole point of the store is faster training, so this
+   is how we prove it.
+   **Classification: MUST before final M18** (the goal is faster training).
+
+3. **Dataset quality report.** Persist a dataset-quality report per dataset:
+   gaps, duplicates, stale bars, OHLC anomalies, zero-volume rows, missing
+   features, missing labels.
+   **Classification: MUST before final M18.**
+
+4. **Model explainability report.** Top features, negative-impact features,
+   unstable features, and the feature groups that contribute most to false
+   positives.
+   **Classification: SHOULD before final M18.**
+
+5. **False-positive / false-negative error analysis.** Evaluation lists why
+   rejected/accepted trades failed, broken down by feature group, regime,
+   symbol, and scanner route.
+   **Classification: SHOULD before final M18.**
+
+6. **Training reproducibility bundle.** For every model/run, save a full audit
+   bundle: config, schema hashes, dataset manifest, repro_hash_v2, git SHA,
+   library versions, gate outcomes, and the reason for rejection/promotion.
+   (Extends §6.2's run manifest into a self-contained, portable bundle.)
+   **Classification: MUST before final M18.**
+
+7. **Performance regression guard.** A new model cannot be promoted if it is
+   slower than the baseline by a configured threshold, unless explicitly
+   accepted (recorded like a forced judgment-gate override).
+   **Classification: SHOULD before final M18.**
+
+8. **Cache performance regression guard.** Once feature_store/label_store
+   exists, add tests proving repeated builds reuse cached partitions and become
+   faster (cache-hit path strictly faster than cold build on a fixture).
+   **Classification: MUST before final M18.**
+
+9. **Model rollback / previous-champion restoration.** The registry must allow
+   restoring a previous champion without retraining (complements §6.1's
+   "previous champion recoverable").
+   **Classification: SHOULD before final M18.**
+
+10. **Overfitting suspicion report.** Report train/val/test metric gaps,
+    permutation-importance instability, and adversarial-validation signs of
+    leakage/overfit; flag a model as overfit-suspect for operator review.
+    **Classification: MUST before final M18.**
+
+These map onto the phase plan as follows: items 2/3/8 attach to **M18.B.7**
+(store + cache stats) and **M18.B.8** (artifact persistence); items 1/4/5/6/10
+attach to **M18.B.10** (advanced monitoring/evaluation); items 7/9 attach to
+**M18.B.10** registry/leaderboard work. Each carries its own tests per the §9
+pattern (a passing fixture and a failing fixture that trips the guard).
+
+---
+
 ## 8. M18.B implementation phases
 
 | Phase | Scope | Depends on |
