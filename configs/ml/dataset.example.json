@@ -1,35 +1,31 @@
 {
-    "symbol": "AAPL",
-    "timeframes": ["1h", "4h", "1d"],
-    "anchor_tf": "1h",
-    "anchor_set": "model_a_scanner_replica",
-    "feature_groups": [
-        "price_return",
-        "trend",
-        "momentum",
-        "vol_regime",
-        "volume_liquidity",
-        "mtf_confluence",
-        "scanner_replica",
-        "market_context",
-        "signal_history",
-        "symbol_meta"
-    ],
-    "label_ids": [
-        "triple_barrier_v1_won",
-        "forward_returns_5bar",
-        "mfe_mae_10bar",
-        "risk_adjusted_sharpe_10bar"
-    ],
-    "bar_window_start_utc": "2022-01-01",
-    "bar_window_end_utc":   "2025-12-31",
-    "walk_forward": {
-        "n_splits":         5,
-        "train_size_bars":  5000,
-        "val_size_bars":    1000,
-        "test_size_bars":   1000,
-        "embargo_bars":     20,
-        "purge_bars":       10
-    },
-    "fixture_mode": false
+  "_description": "Example dataset configuration for `bot.ml.cli build-dataset`. This file documents the DatasetConfig schema (bot.ml.schemas.DatasetConfig) and is verified by the G9_ExampleConfigsParse test. NOTE: the build-dataset subcommand is STUBBED as of M18.A.9 — see bot/ml/cli.py for the gap (DatasetConfig has no anchor_set field, and AssemblerResult has no persistence layer). This example documents the user-facing config shape that will be consumed when build-dataset lands in M18.A.10+.",
+  "symbols":              ["AAPL"],
+  "anchor_tf":            "15m",
+  "start_date":           "2024-01-02",
+  "end_date":             "2024-12-31",
+  "feature_groups": [
+    "price_return",
+    "trend",
+    "momentum",
+    "vol_regime",
+    "volume_liquidity",
+    "scanner_replica",
+    "mtf_confluence",
+    "market_context",
+    "signal_history",
+    "symbol_meta"
+  ],
+  "labels": [
+    "triple_barrier_atr_2_3_50_won",
+    "fwd_return_5b",
+    "mfe_50b",
+    "mae_50b"
+  ],
+  "train_pct":            0.6,
+  "val_pct":              0.2,
+  "test_pct":             0.2,
+  "embargo_trading_days": 5,
+  "require_intraday":     true,
+  "fixture_mode":         false
 }

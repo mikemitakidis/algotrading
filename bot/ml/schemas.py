@@ -410,33 +410,38 @@ class LabelSpec:
 
 @dataclass(frozen=True)
 class DatasetConfig:
-    """Config for assembling a single dataset (M18.A.5).
+    """User-facing config for assembling a single dataset (M18.A.1).
 
-    symbol                 ticker to build the dataset for
-    timeframes             list of timeframes to load bars at;
-                             the first is the anchor timeframe
+    symbols                tickers to build the dataset for (>=1)
     anchor_tf              chosen anchor timeframe (must be in
-                             timeframes and ALLOWED_ANCHOR_TFS)
-    anchor_set             which cohort to build; one of:
-                             'model_a_scanner_replica'  |
-                             'model_b_1h_union_candidates'
-    feature_groups         list of feature group names to include
-    label_ids              list of label_ids to compute
-    bar_window_start_utc   ISO date string, inclusive
-    bar_window_end_utc     ISO date string, inclusive
-    walk_forward           dict with split sizes, embargo, purge bars
+                             ALLOWED_ANCHOR_TFS)
+    start_date             ISO date string 'YYYY-MM-DD', inclusive
+    end_date               ISO date string 'YYYY-MM-DD', exclusive;
+                             must be > start_date
+    feature_groups         feature group names to include (>=1)
+    labels                 label_ids to compute (>=1)
+    train_pct              fraction for train split (default 0.6)
+    val_pct                fraction for val split (default 0.2)
+    test_pct               fraction for test split (default 0.2);
+                             train+val+test must sum to 1.0, all > 0
+    embargo_trading_days   purge/embargo width in trading days
+                             (int >= 0, default 5)
+    require_intraday       if True, intraday TFs must be present
+                             (default False)
     fixture_mode           Q16 / Amendment 2: bypass thinness gates;
                              permanently tags artifacts as fixture_only
     """
-    symbol: str
-    timeframes: Tuple[str, ...]
+    symbols: Tuple[str, ...]
     anchor_tf: str
-    anchor_set: str
+    start_date: str
+    end_date: str
     feature_groups: Tuple[str, ...]
-    label_ids: Tuple[str, ...]
-    bar_window_start_utc: str
-    bar_window_end_utc: str
-    walk_forward: Dict[str, Any]
+    labels: Tuple[str, ...]
+    train_pct: float = 0.6
+    val_pct: float = 0.2
+    test_pct: float = 0.2
+    embargo_trading_days: int = 5
+    require_intraday: bool = False
     fixture_mode: bool = False
 
     @classmethod
@@ -444,57 +449,91 @@ class DatasetConfig:
         if not isinstance(d, Mapping):
             raise M18ConfigError(
                 f"DatasetConfig.from_dict expects a Mapping")
-        required = ("symbol", "timeframes", "anchor_tf", "anchor_set",
-                     "feature_groups", "label_ids",
-                     "bar_window_start_utc", "bar_window_end_utc",
-                     "walk_forward")
+        required = ("symbols", "anchor_tf", "start_date", "end_date",
+                     "feature_groups", "labels")
         for k in required:
             if k not in d:
                 raise M18ConfigError(
                     f"DatasetConfig missing required key {k!r}")
-        sym = d["symbol"]
-        if not isinstance(sym, str) or not sym:
+        syms = d["symbols"]
+        if not isinstance(syms, (list, tuple)) or not syms:
             raise M18ConfigError(
-                "DatasetConfig.symbol must be non-empty string")
-        tfs = tuple(d["timeframes"])
-        if not tfs:
-            raise M18ConfigError(
-                "DatasetConfig.timeframes must be non-empty")
-        for tf in tfs:
-            if tf not in ALLOWED_ANCHOR_TFS:
+                f"DatasetConfig.symbols must be non-empty list/tuple")
+        for s in syms:
+            if not isinstance(s, str) or not s:
                 raise M18ConfigError(
-                    f"DatasetConfig.timeframes contains unknown tf "
-                    f"{tf!r}; allowed: {sorted(ALLOWED_ANCHOR_TFS)}")
-        atf = d["anchor_tf"]
-        if atf not in tfs:
+                    f"DatasetConfig.symbols entries must be non-empty "
+                    f"strings; got {s!r}")
+        anchor_tf = d["anchor_tf"]
+        if anchor_tf not in ALLOWED_ANCHOR_TFS:
             raise M18ConfigError(
-                f"DatasetConfig.anchor_tf {atf!r} not in timeframes "
-                f"{tfs!r}")
+                f"DatasetConfig.anchor_tf must be in "
+                f"{sorted(ALLOWED_ANCHOR_TFS)}; got {anchor_tf!r}")
+        sd = d["start_date"]
+        ed = d["end_date"]
+        if not isinstance(sd, str) or not isinstance(ed, str):
+            raise M18ConfigError(
+                f"DatasetConfig.start_date and end_date must be ISO "
+                f"date strings 'YYYY-MM-DD'")
+        if sd >= ed:
+            raise M18ConfigError(
+                f"DatasetConfig.start_date={sd!r} must be < "
+                f"end_date={ed!r}")
+        fgs = d["feature_groups"]
+        if not isinstance(fgs, (list, tuple)) or not fgs:
+            raise M18ConfigError(
+                f"DatasetConfig.feature_groups must be non-empty "
+                f"list/tuple")
+        labels = d["labels"]
+        if not isinstance(labels, (list, tuple)) or not labels:
+            raise M18ConfigError(
+                f"DatasetConfig.labels must be non-empty list/tuple")
+        train_pct = float(d.get("train_pct", 0.6))
+        val_pct   = float(d.get("val_pct",   0.2))
+        test_pct  = float(d.get("test_pct",  0.2))
+        total = train_pct + val_pct + test_pct
+        if abs(total - 1.0) > 1e-9:
+            raise M18ConfigError(
+                f"DatasetConfig: train+val+test must sum to 1.0, "
+                f"got {total}")
+        if min(train_pct, val_pct, test_pct) <= 0:
+            raise M18ConfigError(
+                f"DatasetConfig: all of train/val/test must be > 0")
+        emb = d.get("embargo_trading_days", 5)
+        if not isinstance(emb, int) or isinstance(emb, bool) or emb < 0:
+            raise M18ConfigError(
+                f"DatasetConfig.embargo_trading_days must be int >= 0")
+        ri = bool(d.get("require_intraday", False))
+        fm = bool(d.get("fixture_mode", False))
         return cls(
-            symbol=sym,
-            timeframes=tfs,
-            anchor_tf=atf,
-            anchor_set=str(d["anchor_set"]),
-            feature_groups=tuple(d["feature_groups"]),
-            label_ids=tuple(d["label_ids"]),
-            bar_window_start_utc=str(d["bar_window_start_utc"]),
-            bar_window_end_utc=str(d["bar_window_end_utc"]),
-            walk_forward=dict(d["walk_forward"]),
-            fixture_mode=bool(d.get("fixture_mode", False)),
+            symbols=tuple(syms),
+            anchor_tf=anchor_tf,
+            start_date=sd,
+            end_date=ed,
+            feature_groups=tuple(fgs),
+            labels=tuple(labels),
+            train_pct=train_pct,
+            val_pct=val_pct,
+            test_pct=test_pct,
+            embargo_trading_days=emb,
+            require_intraday=ri,
+            fixture_mode=fm,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "symbol":                self.symbol,
-            "timeframes":            list(self.timeframes),
-            "anchor_tf":             self.anchor_tf,
-            "anchor_set":            self.anchor_set,
-            "feature_groups":        list(self.feature_groups),
-            "label_ids":             list(self.label_ids),
-            "bar_window_start_utc":  self.bar_window_start_utc,
-            "bar_window_end_utc":    self.bar_window_end_utc,
-            "walk_forward":          dict(self.walk_forward),
-            "fixture_mode":          self.fixture_mode,
+            "symbols":              list(self.symbols),
+            "anchor_tf":            self.anchor_tf,
+            "start_date":           self.start_date,
+            "end_date":             self.end_date,
+            "feature_groups":       list(self.feature_groups),
+            "labels":               list(self.labels),
+            "train_pct":            self.train_pct,
+            "val_pct":              self.val_pct,
+            "test_pct":             self.test_pct,
+            "embargo_trading_days": self.embargo_trading_days,
+            "require_intraday":     self.require_intraday,
+            "fixture_mode":         self.fixture_mode,
         }
 
 

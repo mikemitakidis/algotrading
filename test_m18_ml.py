@@ -313,23 +313,49 @@ class G1_DatasetConfig(unittest.TestCase):
 
     def _valid(self):
         return {
-            "symbol": "AAPL",
-            "timeframes": ["15m", "1h", "4h", "1d"],
+            "symbols": ["AAPL", "MSFT"],
             "anchor_tf": "15m",
-            "anchor_set": "model_b_1h_union_candidates",
+            "start_date": "2024-01-02",
+            "end_date": "2024-06-01",
             "feature_groups": ["trend", "momentum"],
-            "label_ids": ["triple_barrier_atr_2_3_50"],
-            "bar_window_start_utc": "2024-01-02T00:00:00Z",
-            "bar_window_end_utc": "2024-06-01T00:00:00Z",
-            "walk_forward": {"train_frac": 0.6, "val_frac": 0.2,
-                              "test_frac": 0.2},
+            "labels": ["triple_barrier_atr_2_3_50_won", "fwd_return_5b"],
+            "train_pct": 0.6,
+            "val_pct": 0.2,
+            "test_pct": 0.2,
+            "embargo_trading_days": 5,
+            "require_intraday": False,
+            "fixture_mode": False,
         }
 
     def test_parses_valid(self):
         cfg = ml_schemas.DatasetConfig.from_dict(self._valid())
-        self.assertEqual(cfg.symbol, "AAPL")
+        self.assertEqual(cfg.symbols, ("AAPL", "MSFT"))
         self.assertEqual(cfg.anchor_tf, "15m")
+        self.assertEqual(cfg.labels,
+                          ("triple_barrier_atr_2_3_50_won", "fwd_return_5b"))
         self.assertFalse(cfg.fixture_mode)
+
+    def test_round_trip(self):
+        cfg = ml_schemas.DatasetConfig.from_dict(self._valid())
+        again = ml_schemas.DatasetConfig.from_dict(cfg.to_dict())
+        self.assertEqual(cfg, again)
+
+    def test_split_pcts_default_to_60_20_20(self):
+        d = self._valid()
+        for k in ("train_pct", "val_pct", "test_pct"):
+            d.pop(k, None)
+        cfg = ml_schemas.DatasetConfig.from_dict(d)
+        self.assertAlmostEqual(cfg.train_pct, 0.6)
+        self.assertAlmostEqual(cfg.val_pct, 0.2)
+        self.assertAlmostEqual(cfg.test_pct, 0.2)
+
+    def test_embargo_and_require_intraday_defaults(self):
+        d = self._valid()
+        d.pop("embargo_trading_days", None)
+        d.pop("require_intraday", None)
+        cfg = ml_schemas.DatasetConfig.from_dict(d)
+        self.assertEqual(cfg.embargo_trading_days, 5)
+        self.assertFalse(cfg.require_intraday)
 
     def test_rejects_unknown_anchor_tf(self):
         d = self._valid()
@@ -337,17 +363,68 @@ class G1_DatasetConfig(unittest.TestCase):
         with self.assertRaises(ml_errors.M18ConfigError):
             ml_schemas.DatasetConfig.from_dict(d)
 
-    def test_rejects_empty_symbol(self):
+    def test_rejects_empty_symbols(self):
         d = self._valid()
-        d["symbol"] = ""
+        d["symbols"] = []
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_non_string_symbol_entry(self):
+        d = self._valid()
+        d["symbols"] = ["AAPL", ""]
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_empty_labels(self):
+        d = self._valid()
+        d["labels"] = []
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_empty_feature_groups(self):
+        d = self._valid()
+        d["feature_groups"] = []
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_start_not_before_end(self):
+        d = self._valid()
+        d["start_date"] = "2024-06-01"
+        d["end_date"] = "2024-01-02"
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_splits_not_summing_to_one(self):
+        d = self._valid()
+        d["train_pct"], d["val_pct"], d["test_pct"] = 0.7, 0.2, 0.2
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_nonpositive_split(self):
+        d = self._valid()
+        d["train_pct"], d["val_pct"], d["test_pct"] = 0.8, 0.2, 0.0
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_negative_embargo(self):
+        d = self._valid()
+        d["embargo_trading_days"] = -1
+        with self.assertRaises(ml_errors.M18ConfigError):
+            ml_schemas.DatasetConfig.from_dict(d)
+
+    def test_rejects_bool_embargo(self):
+        d = self._valid()
+        d["embargo_trading_days"] = True
         with self.assertRaises(ml_errors.M18ConfigError):
             ml_schemas.DatasetConfig.from_dict(d)
 
     def test_missing_required_key_raises(self):
-        d = self._valid()
-        del d["walk_forward"]
-        with self.assertRaises(ml_errors.M18ConfigError):
-            ml_schemas.DatasetConfig.from_dict(d)
+        for k in ("symbols", "anchor_tf", "start_date", "end_date",
+                   "feature_groups", "labels"):
+            d = self._valid()
+            del d[k]
+            with self.assertRaises(ml_errors.M18ConfigError):
+                ml_schemas.DatasetConfig.from_dict(d)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -7576,14 +7653,6 @@ class G9_ExampleConfigsParse(unittest.TestCase):
         d.pop("_description", None)
         return d
 
-    @unittest.skip(
-        "DEFERRED to the DatasetConfig schema reconciliation (part of "
-        "the tracked G1-G5 gap): the final DatasetConfig uses "
-        "symbols/labels/start_date/end_date/train_pct/val_pct/test_pct, "
-        "but the current reconstruction still uses "
-        "symbol/label_ids/walk_forward. Byte-faithful test body "
-        "preserved; un-skip when schemas.py + the example configs are "
-        "corrected.")
     def test_dataset_example_parses_via_DatasetConfig_from_dict(self):
         d = self._load_example("dataset.example.json")
         cfg = _g9_DatasetConfig.from_dict(d)
@@ -7593,12 +7662,6 @@ class G9_ExampleConfigsParse(unittest.TestCase):
         self.assertAlmostEqual(
             cfg.train_pct + cfg.val_pct + cfg.test_pct, 1.0)
 
-    @unittest.skip(
-        "DEFERRED to the DatasetConfig schema reconciliation (part of "
-        "the tracked G1-G5 gap): depends on the corrected "
-        "train.example.json (model_type B2_logistic / train_mode "
-        "model_b_candidate_quality) that lands with the schema fix. "
-        "Byte-faithful test body preserved.")
     def test_train_example_parses_via_TrainConfig_from_dict(self):
         d = self._load_example("train.example.json")
         cfg = _g9_TrainConfig.from_dict(d)
