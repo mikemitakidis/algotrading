@@ -2,10 +2,15 @@
 
 **Recovery branch:** `m18-recovery-from-transcripts`
 **Base `main`:** `a8d8ca4` (M17.B closeout)
-**Latest branch commit:** `4fe264b` (final audit / documentation)
 **Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene)
-**Implementation recovery chain audited:** 23 commits through `baedf9f`
-**Total branch ahead of `main` after final audit commit:** 24 commits
+**Final audit documentation checkpoint:** `4fe264b`
+**Metadata correction checkpoint:** `519878d`
+**Current branch tip:** see `git log` on `m18-recovery-from-transcripts`
+**Ahead-of-`main` count:**
+- Implementation recovery chain through `baedf9f`: 23 commits
+- After final audit documentation commit `4fe264b`: 24 commits ahead of `main`
+- After metadata correction commit `519878d`: 25 commits ahead of `main`
+- Current exact ahead count: verify with `git rev-list --count main..HEAD`
 
 > This is the maximum evidence-supported recovery of the lost M18
 > local-only commit chain. **This is NOT a byte-identical restoration.**
@@ -36,8 +41,10 @@ from the recovery chat sessions (A.9, A.10, and all checkpoint work).
 | Item | Value |
 |---|---|
 | Branch | `m18-recovery-from-transcripts` |
-| Latest branch commit | `4fe264b` (final audit / documentation) |
 | Latest functional checkpoint | `baedf9f` (Checkpoint 4E — G10 hygiene) |
+| Final audit documentation checkpoint | `4fe264b` |
+| Metadata correction checkpoint | `519878d` |
+| Current branch tip | see `git log` on `m18-recovery-from-transcripts` |
 | `test_m18_ml` | **428 OK, skipped=3** |
 | M18 `G10_Hygiene` | **10 OK** |
 | M17.B safety gate | **200 OK, skipped=2** |

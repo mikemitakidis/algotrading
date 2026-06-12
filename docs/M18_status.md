@@ -2,10 +2,16 @@
 
 **Milestone:** M18.A (ML Pipeline / Closed-Loop ML)
 **Recovered branch:** `m18-recovery-from-transcripts`
-**Latest branch commit:** `4fe264b` (final audit / documentation)
 **Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene)
-**Implementation recovery chain audited:** 23 commits through `baedf9f`
-**Total branch ahead of `main` after final audit commit:** 24 commits
+**Final audit documentation checkpoint:** `4fe264b`
+**Metadata correction checkpoint:** `519878d`
+**Current branch tip:** see `git log` on `m18-recovery-from-transcripts`
+**Ahead-of-`main` count:**
+- Implementation recovery chain through `baedf9f`: 23 commits
+- After final audit documentation commit `4fe264b`: 24 commits ahead of `main`
+- After metadata correction commit `519878d`: 25 commits ahead of `main`
+- Current exact ahead count: verify with `git rev-list --count main..HEAD`
+
 **Mode throughout:** read-only / shadow-only — no live promotion.
 
 ### Current recovered state
