@@ -845,8 +845,9 @@ These are the project's permanent ground rules (per user constitution):
 
 ## M18 — ML foundation / meta-labelling / file-based registry / read-only prediction pipeline
 
-**Status:** Recovered on branch `m18-recovery-from-transcripts`
-(latest commit `baedf9f`).
+**Status:** Recovered on branch `m18-recovery-from-transcripts`.
+**Latest branch commit:** `4fe264b` (final audit / documentation).
+**Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene).
 
 **M18 recovery branch reached 428 OK / G10 10 OK.**
 The original 452 OK target was **not** byte-identically recoverable

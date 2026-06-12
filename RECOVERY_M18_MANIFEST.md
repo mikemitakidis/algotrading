@@ -2,8 +2,10 @@
 
 **Recovery branch:** `m18-recovery-from-transcripts`
 **Base `main`:** `a8d8ca4` (M17.B closeout)
-**Latest recovery commit:** `baedf9f` (Checkpoint 4E — G10 hygiene)
-**Branch is 23 commits ahead of `main`.**
+**Latest branch commit:** `4fe264b` (final audit / documentation)
+**Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene)
+**Implementation recovery chain audited:** 23 commits through `baedf9f`
+**Total branch ahead of `main` after final audit commit:** 24 commits
 
 > This is the maximum evidence-supported recovery of the lost M18
 > local-only commit chain. **This is NOT a byte-identical restoration.**
@@ -34,7 +36,8 @@ from the recovery chat sessions (A.9, A.10, and all checkpoint work).
 | Item | Value |
 |---|---|
 | Branch | `m18-recovery-from-transcripts` |
-| Latest checkpoint | `baedf9f` |
+| Latest branch commit | `4fe264b` (final audit / documentation) |
+| Latest functional checkpoint | `baedf9f` (Checkpoint 4E — G10 hygiene) |
 | `test_m18_ml` | **428 OK, skipped=3** |
 | M18 `G10_Hygiene` | **10 OK** |
 | M17.B safety gate | **200 OK, skipped=2** |
@@ -140,9 +143,14 @@ match this decision.
 
 ---
 
-## 6. Commit audit (23 commits, `a8d8ca4..baedf9f`)
+## 6. Commit audit: 23 implementation/recovery commits through `baedf9f`, plus final audit/documentation commit `4fe264b`
 
 Full per-commit detail: `recovery_audit/final_commit_audit/commit_audit.txt`.
+
+The final audit commit `4fe264b` was separately reviewed for
+documentation-only changes and did not alter production logic or test
+behaviour (the `test_m18_ml.py` changes are two G10 docstrings; the
+`bot/ml/cli.py` changes are module-docstring/comment text only).
 
 Every commit touched only M18-scope paths: `bot/ml/*`, `configs/ml/*`,
 `test_m18_ml.py`, `test_m17_backtesting.py` (M18 whitelist filter only —

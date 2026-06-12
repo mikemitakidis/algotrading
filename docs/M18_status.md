@@ -2,7 +2,10 @@
 
 **Milestone:** M18.A (ML Pipeline / Closed-Loop ML)
 **Recovered branch:** `m18-recovery-from-transcripts`
-**Latest recovery commit:** `baedf9f` (Checkpoint 4E — G10 hygiene)
+**Latest branch commit:** `4fe264b` (final audit / documentation)
+**Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene)
+**Implementation recovery chain audited:** 23 commits through `baedf9f`
+**Total branch ahead of `main` after final audit commit:** 24 commits
 **Mode throughout:** read-only / shadow-only — no live promotion.
 
 ### Current recovered state
