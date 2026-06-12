@@ -73,7 +73,7 @@ def _resolve_primary_tb_label(target_label_id: str) -> Optional[str]:
     return target_label_id[:-len(TB_WON_SUFFIX)]
 
 
-PRECISION_AT_K_VALUES = (5, 10, 20, 50)
+PRECISION_AT_K_LIST = (5, 10, 20, 50)
 
 # Default per-trade cost in log-return units (~10 bps), matching the
 # cost assumption used by the cost_adjusted_fwd_return_5b label.
@@ -95,11 +95,11 @@ def _precision_at_k(y_true, y_proba):
     order = _np.argsort(-_np.asarray(y_proba, dtype=_np.float64),
                           kind="stable")
     y_sorted = _np.asarray(y_true, dtype=_np.float64)[order]
-    for k in PRECISION_AT_K_VALUES:
+    for k in PRECISION_AT_K_LIST:
         if n >= k:
-            out[f"precision_at_{k}"] = float(_np.mean(y_sorted[:k]))
+            out[f"k_{k}"] = float(_np.mean(y_sorted[:k]))
         else:
-            out[f"precision_at_{k}"] = float("nan")
+            out[f"k_{k}"] = float("nan")
     return out
 
 
@@ -143,9 +143,12 @@ def trading_metrics(
             "expected_value_after_costs":                   float("nan"),
             "cost_per_trade_log_return":
                 float(cost_per_trade_log_return),
-            "precision_at_k": {f"precision_at_{k}": float("nan")
-                                 for k in PRECISION_AT_K_VALUES},
+            "precision_at_k": {f"k_{k}": float("nan")
+                                 for k in PRECISION_AT_K_LIST},
             "equity_curve_metrics": {
+                "sharpe_ratio": None,
+                "sortino_ratio": None,
+                "max_drawdown": None,
                 "unavailable_reason": EQUITY_CURVE_UNAVAILABLE_REASON},
             "mean_log_return_predicted_positive":           float("nan"),
             "sum_log_return_predicted_positive":            float("nan"),
@@ -259,6 +262,9 @@ def trading_metrics(
         "precision_at_k":                               _precision_at_k(
                                                             y_t, y_p),
         "equity_curve_metrics": {
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "max_drawdown": None,
             "unavailable_reason": EQUITY_CURVE_UNAVAILABLE_REASON},
         "mean_log_return_predicted_positive":           mean_log_return,
         "sum_log_return_predicted_positive":            sum_log_return,

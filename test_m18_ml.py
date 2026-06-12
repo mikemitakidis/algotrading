@@ -4730,6 +4730,1334 @@ class G6_RegressionTarget(unittest.TestCase):
 
 
 
+# ═════════════════════════════════════════════════════════════════════
+# G7 — Extended evaluation: PR-AUC, threshold table, drift,
+#       permutation importance, breakdowns (M18.A.7 amend)
+# ═════════════════════════════════════════════════════════════════════
+
+from bot.ml.evaluation import (
+    binary_metrics_extended,
+    threshold_table,
+    LOCKED_THRESHOLDS,
+    drift_report,
+    permutation_importance,
+    PI_SUPPORTED_MODEL_TYPES,
+    all_breakdowns,
+    per_symbol_breakdown,
+    per_year_breakdown,
+    volatility_regime_breakdown,
+    market_regime_breakdown,
+    MIN_SAMPLES_PER_SEGMENT,
+    PRECISION_AT_K_LIST,
+    EQUITY_CURVE_UNAVAILABLE_REASON,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_ExtendedMlMetrics — PR-AUC, log_loss, F1, confusion matrix
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_ExtendedMlMetrics(unittest.TestCase):
+
+    def test_perfect_predictions_yield_pr_auc_1(self):
+        """When y_proba perfectly orders y_true (all positives above
+        all negatives), PR-AUC = 1.0 and ROC AUC = 1.0."""
+        y_true  = np.array([0, 0, 0, 1, 1, 1], dtype=float)
+        y_proba = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+        m = binary_metrics_extended(y_true, y_proba)
+        self.assertAlmostEqual(m["pr_auc"],  1.0, places=10)
+        self.assertAlmostEqual(m["roc_auc"], 1.0, places=10)
+        self.assertEqual(m["confusion_matrix_at_05"],
+                          {"tp": 3, "fp": 0, "fn": 0, "tn": 3})
+
+    def test_pr_auc_present_and_finite_on_real_split(self):
+        """PR-AUC is the PRIMARY M18 metric — verify it's emitted for
+        every binary split."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for s in ("train", "val", "test"):
+            ext = rep.ml_metrics_extended[s]
+            self.assertIn("pr_auc", ext)
+            # PR-AUC is finite when both classes are present in the
+            # split. Otherwise NaN, which is the documented behaviour.
+            if not np.isnan(ext["pr_auc"]):
+                self.assertGreater(ext["pr_auc"], 0.0)
+                self.assertLessEqual(ext["pr_auc"], 1.0)
+            self.assertIn("log_loss", ext)
+            self.assertIn("f1_at_05", ext)
+            self.assertIn("confusion_matrix_at_05", ext)
+
+    def test_confusion_matrix_consistency(self):
+        """tp + fp + fn + tn must equal n_rows."""
+        y_true  = np.array([1, 1, 0, 0, 1, 0, 1, 1])
+        y_proba = np.array([0.9, 0.4, 0.6, 0.1, 0.8, 0.3, 0.7, 0.2])
+        m = binary_metrics_extended(y_true, y_proba)
+        cm = m["confusion_matrix_at_05"]
+        self.assertEqual(cm["tp"] + cm["fp"] + cm["fn"] + cm["tn"],
+                          m["n_rows"])
+
+    def test_log_loss_clipped_no_inf_on_extreme_predictions(self):
+        """y_proba = 0 with y_true = 1 would blow up log_loss without
+        clipping. binary_metrics_extended must return finite log_loss."""
+        y_true  = np.array([1, 1, 0, 0], dtype=float)
+        y_proba = np.array([0.0, 0.0, 1.0, 1.0])
+        m = binary_metrics_extended(y_true, y_proba)
+        self.assertTrue(np.isfinite(m["log_loss"]),
+            f"log_loss must be clipped to finite; got {m['log_loss']}")
+
+    def test_single_class_y_true_pr_auc_nan(self):
+        """When y_true is all-zero or all-one, PR-AUC is undefined
+        (no minority class). Must return NaN per sklearn convention."""
+        m = binary_metrics_extended(np.zeros(10),
+                                       np.linspace(0.1, 0.9, 10))
+        self.assertTrue(np.isnan(m["pr_auc"]))
+        self.assertTrue(np.isnan(m["roc_auc"]))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_ThresholdTable — locked threshold ladder
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_ThresholdTable(unittest.TestCase):
+
+    def test_locked_thresholds_match_directive(self):
+        """The locked threshold ladder per M18.A.7 directive."""
+        self.assertEqual(tuple(LOCKED_THRESHOLDS),
+                          (0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.80))
+
+    def test_table_row_count_matches_thresholds(self):
+        rng = np.random.default_rng(0)
+        y_true  = rng.integers(0, 2, 300).astype(float)
+        y_proba = rng.uniform(0, 1, 300)
+        t = threshold_table(y_true, y_proba)
+        self.assertEqual(len(t["rows"]), len(LOCKED_THRESHOLDS))
+
+    def test_accepted_plus_filtered_equals_n_rows(self):
+        rng = np.random.default_rng(1)
+        y_true  = rng.integers(0, 2, 200).astype(float)
+        y_proba = rng.uniform(0, 1, 200)
+        t = threshold_table(y_true, y_proba)
+        for row in t["rows"]:
+            self.assertEqual(
+                row["n_predicted_positive"] + row["n_filtered"],
+                t["n_rows"])
+
+    def test_higher_threshold_yields_fewer_predicted_positive(self):
+        """Monotone: predicted positive count is non-increasing in
+        threshold."""
+        rng = np.random.default_rng(2)
+        y_true  = rng.integers(0, 2, 300).astype(float)
+        y_proba = rng.uniform(0, 1, 300)
+        t = threshold_table(y_true, y_proba)
+        counts = [r["n_predicted_positive"] for r in t["rows"]]
+        for prev, nxt in zip(counts, counts[1:]):
+            self.assertGreaterEqual(prev, nxt,
+                f"n_predicted_positive must be monotone non-increasing "
+                f"in threshold; got {counts}")
+
+    def test_empty_split_returns_note(self):
+        t = threshold_table(np.array([]), np.array([]))
+        self.assertEqual(t["rows"], [])
+        self.assertEqual(t["note"], "empty_split")
+
+    def test_threshold_table_in_evaluation_report(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for s in ("train", "val", "test"):
+            t = rep.threshold_metrics[s]
+            self.assertIn("rows", t)
+            self.assertEqual(len(t["rows"]),
+                              len(LOCKED_THRESHOLDS))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_TradingMetricsExtended — win_rate, profit_factor, EV, p@k,
+#                             equity-curve unavailability
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_TradingMetricsExtended(unittest.TestCase):
+
+    def _run_b2_eval(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        return evaluate_model(out, res)
+
+    def test_all_new_trading_fields_present(self):
+        rep = self._run_b2_eval()
+        tm = rep.trading_metrics["val"]
+        for k in ("win_rate_by_return", "average_log_return_win",
+                    "average_log_return_loss", "profit_factor",
+                    "expected_value_after_costs",
+                    "cost_per_trade_log_return",
+                    "precision_at_k", "n_filtered",
+                    "equity_curve_metrics"):
+            self.assertIn(k, tm, f"missing: {k}")
+
+    def test_precision_at_k_uses_locked_k_values(self):
+        rep = self._run_b2_eval()
+        tm = rep.trading_metrics["val"]
+        for k in PRECISION_AT_K_LIST:
+            self.assertIn(f"k_{k}", tm["precision_at_k"])
+
+    def test_equity_curve_block_marked_unavailable(self):
+        """Sharpe / Sortino / max DD cannot be computed from per-trade
+        labels alone — verify the report says so explicitly rather
+        than emitting a misleading 0 or NaN."""
+        rep = self._run_b2_eval()
+        for s in ("train", "val", "test"):
+            ec = rep.trading_metrics[s]["equity_curve_metrics"]
+            self.assertEqual(ec["sharpe_ratio"], None)
+            self.assertEqual(ec["sortino_ratio"], None)
+            self.assertEqual(ec["max_drawdown"], None)
+            self.assertEqual(ec["unavailable_reason"],
+                              EQUITY_CURVE_UNAVAILABLE_REASON)
+
+    def test_n_filtered_plus_predicted_positive_equals_n_rows(self):
+        rep = self._run_b2_eval()
+        for s in ("train", "val", "test"):
+            tm = rep.trading_metrics[s]
+            self.assertEqual(
+                tm["n_predicted_positive"] + tm["n_filtered"],
+                tm["n_rows"])
+
+    def test_expected_value_after_costs_drops_with_cost(self):
+        """Doubling the cost decreases EV by the cost delta."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep0 = evaluate_model(out, res, cost_per_trade_log_return=0.0)
+        rep1 = evaluate_model(out, res, cost_per_trade_log_return=0.01)
+        ev0 = rep0.trading_metrics["val"]["expected_value_after_costs"]
+        ev1 = rep1.trading_metrics["val"]["expected_value_after_costs"]
+        if not (np.isnan(ev0) or np.isnan(ev1)):
+            # EV decreases by exactly the cost (cost is in log-return
+            # units, subtracted from each predicted-positive trade's
+            # return, so mean decreases by the cost).
+            self.assertAlmostEqual(ev0 - ev1, 0.01, places=10)
+
+    def test_profit_factor_undefined_no_losses(self):
+        """When every predicted-positive trade is a winner, profit
+        factor is mathematically infinite — emit NaN plus a warning
+        rather than +inf."""
+        # Pure unit test on the trading_metrics function directly
+        from bot.ml.evaluation import trading_metrics as tm_fn
+        # 4 predicted positives, ALL with positive log return
+        dataset = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4,
+                                      tz="UTC"),
+            "triple_barrier_atr_2_3_50.return_log_at_resolution":
+                [0.02, 0.03, 0.04, 0.05],
+            "triple_barrier_atr_2_3_50.bars_to_resolution":
+                [10.0, 20.0, 30.0, 40.0],
+        })
+        out = tm_fn(
+            y_true=np.array([1.0, 1.0, 1.0, 1.0]),
+            y_proba=np.array([0.9, 0.9, 0.9, 0.9]),
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            dataset=dataset,
+            split_indices=np.array([0, 1, 2, 3]))
+        self.assertTrue(np.isnan(out["profit_factor"]))
+        self.assertIn("profit_factor_undefined_no_losses",
+                       out["zero_trade_warnings"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_Drift — PSI report
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_Drift(unittest.TestCase):
+
+    def test_identical_distributions_yield_max_psi_near_zero(self):
+        """Train→train PSI must be ~0 (no shift on identical data)."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        train_idx = res.split.train_anchor_indices
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        rpt = drift_report(
+            dataset=res.dataset,
+            train_indices=train_idx,
+            comparison_indices=train_idx,         # identical
+            feature_columns=feat_cols,
+            comparison_split_name="self")
+        self.assertIsNone(rpt["unavailable_reason"])
+        # PSI(train, train) should be exactly 0 modulo floating point
+        self.assertLess(rpt["max_psi"], 1e-9,
+            f"identical distributions should give max_psi ~ 0; "
+            f"got {rpt['max_psi']}")
+        self.assertFalse(rpt["drift_warning"])
+
+    def test_insufficient_samples_unavailable_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=res.split.train_anchor_indices
+                  if False else per_tf)
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        rpt = drift_report(
+            dataset=res.dataset,
+            train_indices=np.array([0, 1, 2]),     # < 10 samples
+            comparison_indices=np.array([3, 4, 5]),
+            feature_columns=feat_cols,
+            comparison_split_name="val")
+        self.assertIsNotNone(rpt["unavailable_reason"])
+        self.assertIn("insufficient samples",
+                       rpt["unavailable_reason"])
+
+    def test_drift_block_present_in_evaluation_report(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for cmp_split in ("train_to_val", "train_to_test"):
+            d = rep.drift[cmp_split]
+            for k in ("max_psi", "argmax_psi_feature",
+                        "features_over_threshold", "drift_warning",
+                        "per_feature_psi", "threshold",
+                        "n_reference", "n_comparison"):
+                self.assertIn(k, d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_PermutationImportance
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_PermutationImportance(unittest.TestCase):
+
+    def test_supported_model_types_are_b2_and_lightgbm(self):
+        """B0 and B1 are explicitly unsupported per locked plan."""
+        self.assertEqual(PI_SUPPORTED_MODEL_TYPES,
+                          frozenset({"B2_logistic", "M_lightgbm"}))
+
+    def test_b0_majority_returns_unavailable_with_clear_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        pi = rep.permutation_importance
+        self.assertFalse(pi["available"])
+        self.assertIn("constant predictor",
+                       pi["unavailable_reason"])
+
+    def test_b1_scanner_replica_returns_unavailable_with_clear_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B1_scanner_replica",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        pi = rep.permutation_importance
+        self.assertFalse(pi["available"])
+        self.assertIn("passthrough",
+                       pi["unavailable_reason"])
+
+    def test_b2_logistic_top_features_populated(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res, permutation_n_repeats=3,
+                                permutation_n_top=10)
+        pi = rep.permutation_importance
+        self.assertTrue(pi["available"])
+        self.assertEqual(pi["model_type"], "B2_logistic")
+        self.assertLessEqual(len(pi["top_features"]), 10)
+        # Each entry has the expected structure
+        for f in pi["top_features"]:
+            self.assertIn("feature", f)
+            self.assertIn("importance_mean", f)
+            self.assertIn("importance_std", f)
+            self.assertEqual(f["n_repeats"], 3)
+        # top_features are sorted by importance_mean descending
+        means = [f["importance_mean"] for f in pi["top_features"]]
+        # Allow NaN sentinel at the end
+        finite_means = [m for m in means if not np.isnan(m)]
+        for prev, nxt in zip(finite_means, finite_means[1:]):
+            self.assertGreaterEqual(prev, nxt)
+
+    def test_permutation_importance_deterministic(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        cfg = TrainConfig(dataset_id=res.manifest.dataset_id,
+            model_type="B2_logistic",
+            train_mode="model_b_candidate_quality",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        # Run permutation importance twice with same seed
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        pi1 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val")
+        pi2 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val")
+        # Same baseline score
+        self.assertEqual(pi1["baseline_score"], pi2["baseline_score"])
+        # Same importance for every feature
+        for f1, f2 in zip(pi1["all_features"], pi2["all_features"]):
+            self.assertEqual(f1["feature"], f2["feature"])
+            self.assertEqual(f1["importance_mean"],
+                              f2["importance_mean"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_Breakdowns — segment metrics
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_Breakdowns(unittest.TestCase):
+
+    def _train_b2(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        return res, out
+
+    def test_per_symbol_unavailable_on_single_symbol_dataset(self):
+        """M18.A.5 assembler is single-symbol; per-symbol breakdown
+        must explicitly report unavailable rather than fabricating
+        a one-segment summary that doesn't actually filter by
+        symbol."""
+        res, _ = self._train_b2()
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        sym = rep.breakdowns["val"]["per_symbol"]
+        self.assertFalse(sym["available"])
+        self.assertIn("symbol", sym["unavailable_reason"])
+
+    def test_per_year_segments_use_ts_utc(self):
+        """per-year breakdown groups by anchor ts year — synthetic
+        fixture has bars across a single year, so we expect ≤1
+        segment after the min_samples filter."""
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        py = rep.breakdowns["val"]["per_year"]
+        self.assertTrue(py["available"])
+        self.assertIn("segments",   py["per_year"])
+        self.assertIn("per_quarter", py)
+        # Total segment count + skipped count must be > 0
+        n_segments = len(py["per_year"]["segments"])
+        n_skipped  = len(py["per_year"]["skipped_segments"])
+        self.assertGreaterEqual(n_segments + n_skipped, 1)
+
+    def test_min_samples_threshold_drops_small_segments(self):
+        """Small synthetic data forces many segments below 50 → must
+        appear in skipped_segments."""
+        res, out = self._train_b2()
+        # Use a very high min_samples to force most segments to skip
+        rep = evaluate_model(out, res, breakdowns_min_samples=10000)
+        py = rep.breakdowns["val"]["per_year"]
+        self.assertEqual(len(py["per_year"]["segments"]), 0)
+        # All quarters skipped too
+        self.assertEqual(len(py["per_quarter"]["segments"]), 0)
+
+    def test_vol_regime_breakdown_uses_vol_regime_field(self):
+        """vol_regime breakdown uses vol_regime.vol_regime_flag if
+        present."""
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        vr = rep.breakdowns["val"]["volatility_regime"]
+        self.assertTrue(vr["available"])
+        # Binning field is one of the two recognised columns
+        self.assertIn(vr["binning_field"],
+                       ("vol_regime.vol_regime_flag",
+                        "vol_regime.atr_percentile_60"))
+
+    def test_market_regime_breakdown_uses_market_context_field(self):
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        mr = rep.breakdowns["val"]["market_regime"]
+        if mr["available"]:
+            self.assertIn(mr["binning_field"],
+                ("market_context.spy_above_ema200_1d",
+                  "market_context.qqq_above_ema200_1d"))
+        else:
+            # If not available, must give explicit reason
+            self.assertIsNotNone(mr["unavailable_reason"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_BaselineCompareExtended — B0 + B1 deltas
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_BaselineCompareExtended(unittest.TestCase):
+
+    def test_compare_baselines_default_primary_is_pr_auc(self):
+        """PR-AUC is the M18 primary metric per the locked plan."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)   # no primary_metric kwarg
+        self.assertEqual(cmp.primary_metric, "pr_auc")
+
+    def test_baseline_beats_includes_both_b0_and_b1_keys(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports, primary_split="val")
+        keys = sorted(cmp.baseline_beats.keys())
+        # B0 comparisons
+        beats_b0 = [k for k in keys
+                     if k.endswith("_beats_B0_majority_on_val_pr_auc")]
+        # B1 comparisons
+        beats_b1 = [k for k in keys
+                     if k.endswith("_beats_B1_scanner_replica_on_val_pr_auc")]
+        self.assertEqual(len(beats_b0), 2, beats_b0)
+        self.assertEqual(len(beats_b1), 2, beats_b1)
+
+    def test_deltas_vs_b0_and_b1_present(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)
+        # B1 and B2 should have deltas vs B0
+        self.assertIn("B1_scanner_replica", cmp.deltas_vs_primary_baseline)
+        self.assertIn("B2_logistic",         cmp.deltas_vs_primary_baseline)
+        # B0 and B2 should have deltas vs B1
+        self.assertIn("B0_majority",         cmp.deltas_vs_secondary_baseline)
+        self.assertIn("B2_logistic",         cmp.deltas_vs_secondary_baseline)
+        # PR-AUC delta is recorded
+        self.assertIn("pr_auc",
+                       cmp.deltas_vs_primary_baseline["B2_logistic"])
+
+    def test_delta_sign_convention_higher_is_better(self):
+        """For PR-AUC (higher is better), delta = candidate - baseline.
+        Positive delta means candidate wins."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)
+        # Compute the expected delta manually
+        b0_auc = cmp.per_metric["pr_auc"]["B0_majority"]
+        b2_auc = cmp.per_metric["pr_auc"]["B2_logistic"]
+        expected = b2_auc - b0_auc
+        actual   = cmp.deltas_vs_primary_baseline["B2_logistic"]["pr_auc"]
+        self.assertAlmostEqual(expected, actual, places=10)
+
+    def test_delta_sign_convention_lower_is_better(self):
+        """For log_loss (lower is better), delta = baseline - candidate.
+        Positive delta still means candidate wins."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports, primary_metric="log_loss")
+        # Sign convention check
+        b0_ll = cmp.per_metric["log_loss"]["B0_majority"]
+        b2_ll = cmp.per_metric["log_loss"]["B2_logistic"]
+        expected = b0_ll - b2_ll
+        actual   = cmp.deltas_vs_primary_baseline["B2_logistic"]["log_loss"]
+        self.assertAlmostEqual(expected, actual, places=10)
+
+    def test_secondary_baseline_none_skips_b1_deltas(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports,
+            secondary_baseline_model_type=None)
+        self.assertEqual(cmp.deltas_vs_secondary_baseline, {})
+
+
+
+# ═════════════════════════════════════════════════════════════════════
+# G7 — Extended evaluation: PR-AUC, threshold table, drift,
+#       permutation importance, breakdowns (M18.A.7 amend)
+# ═════════════════════════════════════════════════════════════════════
+
+from bot.ml.evaluation import (
+    binary_metrics_extended,
+    threshold_table,
+    LOCKED_THRESHOLDS,
+    drift_report,
+    permutation_importance,
+    PI_SUPPORTED_MODEL_TYPES,
+    all_breakdowns,
+    per_symbol_breakdown,
+    per_year_breakdown,
+    volatility_regime_breakdown,
+    market_regime_breakdown,
+    MIN_SAMPLES_PER_SEGMENT,
+    PRECISION_AT_K_LIST,
+    EQUITY_CURVE_UNAVAILABLE_REASON,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_ExtendedMlMetrics — PR-AUC, log_loss, F1, confusion matrix
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_ExtendedMlMetrics(unittest.TestCase):
+
+    def test_perfect_predictions_yield_pr_auc_1(self):
+        """When y_proba perfectly orders y_true (all positives above
+        all negatives), PR-AUC = 1.0 and ROC AUC = 1.0."""
+        y_true  = np.array([0, 0, 0, 1, 1, 1], dtype=float)
+        y_proba = np.array([0.1, 0.2, 0.3, 0.7, 0.8, 0.9])
+        m = binary_metrics_extended(y_true, y_proba)
+        self.assertAlmostEqual(m["pr_auc"],  1.0, places=10)
+        self.assertAlmostEqual(m["roc_auc"], 1.0, places=10)
+        self.assertEqual(m["confusion_matrix_at_05"],
+                          {"tp": 3, "fp": 0, "fn": 0, "tn": 3})
+
+    def test_pr_auc_present_and_finite_on_real_split(self):
+        """PR-AUC is the PRIMARY M18 metric — verify it's emitted for
+        every binary split."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for s in ("train", "val", "test"):
+            ext = rep.ml_metrics_extended[s]
+            self.assertIn("pr_auc", ext)
+            # PR-AUC is finite when both classes are present in the
+            # split. Otherwise NaN, which is the documented behaviour.
+            if not np.isnan(ext["pr_auc"]):
+                self.assertGreater(ext["pr_auc"], 0.0)
+                self.assertLessEqual(ext["pr_auc"], 1.0)
+            self.assertIn("log_loss", ext)
+            self.assertIn("f1_at_05", ext)
+            self.assertIn("confusion_matrix_at_05", ext)
+
+    def test_confusion_matrix_consistency(self):
+        """tp + fp + fn + tn must equal n_rows."""
+        y_true  = np.array([1, 1, 0, 0, 1, 0, 1, 1])
+        y_proba = np.array([0.9, 0.4, 0.6, 0.1, 0.8, 0.3, 0.7, 0.2])
+        m = binary_metrics_extended(y_true, y_proba)
+        cm = m["confusion_matrix_at_05"]
+        self.assertEqual(cm["tp"] + cm["fp"] + cm["fn"] + cm["tn"],
+                          m["n_rows"])
+
+    def test_log_loss_clipped_no_inf_on_extreme_predictions(self):
+        """y_proba = 0 with y_true = 1 would blow up log_loss without
+        clipping. binary_metrics_extended must return finite log_loss."""
+        y_true  = np.array([1, 1, 0, 0], dtype=float)
+        y_proba = np.array([0.0, 0.0, 1.0, 1.0])
+        m = binary_metrics_extended(y_true, y_proba)
+        self.assertTrue(np.isfinite(m["log_loss"]),
+            f"log_loss must be clipped to finite; got {m['log_loss']}")
+
+    def test_single_class_y_true_pr_auc_nan(self):
+        """When y_true is all-zero or all-one, PR-AUC is undefined
+        (no minority class). Must return NaN per sklearn convention."""
+        m = binary_metrics_extended(np.zeros(10),
+                                       np.linspace(0.1, 0.9, 10))
+        self.assertTrue(np.isnan(m["pr_auc"]))
+        self.assertTrue(np.isnan(m["roc_auc"]))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_ThresholdTable — locked threshold ladder
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_ThresholdTable(unittest.TestCase):
+
+    def test_locked_thresholds_match_directive(self):
+        """The locked threshold ladder per M18.A.7 directive."""
+        self.assertEqual(tuple(LOCKED_THRESHOLDS),
+                          (0.30, 0.40, 0.50, 0.60, 0.65, 0.70, 0.80))
+
+    def test_table_row_count_matches_thresholds(self):
+        rng = np.random.default_rng(0)
+        y_true  = rng.integers(0, 2, 300).astype(float)
+        y_proba = rng.uniform(0, 1, 300)
+        t = threshold_table(y_true, y_proba)
+        self.assertEqual(len(t["rows"]), len(LOCKED_THRESHOLDS))
+
+    def test_accepted_plus_filtered_equals_n_rows(self):
+        rng = np.random.default_rng(1)
+        y_true  = rng.integers(0, 2, 200).astype(float)
+        y_proba = rng.uniform(0, 1, 200)
+        t = threshold_table(y_true, y_proba)
+        for row in t["rows"]:
+            self.assertEqual(
+                row["n_predicted_positive"] + row["n_filtered"],
+                t["n_rows"])
+
+    def test_higher_threshold_yields_fewer_predicted_positive(self):
+        """Monotone: predicted positive count is non-increasing in
+        threshold."""
+        rng = np.random.default_rng(2)
+        y_true  = rng.integers(0, 2, 300).astype(float)
+        y_proba = rng.uniform(0, 1, 300)
+        t = threshold_table(y_true, y_proba)
+        counts = [r["n_predicted_positive"] for r in t["rows"]]
+        for prev, nxt in zip(counts, counts[1:]):
+            self.assertGreaterEqual(prev, nxt,
+                f"n_predicted_positive must be monotone non-increasing "
+                f"in threshold; got {counts}")
+
+    def test_empty_split_returns_note(self):
+        t = threshold_table(np.array([]), np.array([]))
+        self.assertEqual(t["rows"], [])
+        self.assertEqual(t["note"], "empty_split")
+
+    def test_threshold_table_in_evaluation_report(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for s in ("train", "val", "test"):
+            t = rep.threshold_metrics[s]
+            self.assertIn("rows", t)
+            self.assertEqual(len(t["rows"]),
+                              len(LOCKED_THRESHOLDS))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_TradingMetricsExtended — win_rate, profit_factor, EV, p@k,
+#                             equity-curve unavailability
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_TradingMetricsExtended(unittest.TestCase):
+
+    def _run_b2_eval(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        return evaluate_model(out, res)
+
+    def test_all_new_trading_fields_present(self):
+        rep = self._run_b2_eval()
+        tm = rep.trading_metrics["val"]
+        for k in ("win_rate_by_return", "average_log_return_win",
+                    "average_log_return_loss", "profit_factor",
+                    "expected_value_after_costs",
+                    "cost_per_trade_log_return",
+                    "precision_at_k", "n_filtered",
+                    "equity_curve_metrics"):
+            self.assertIn(k, tm, f"missing: {k}")
+
+    def test_precision_at_k_uses_locked_k_values(self):
+        rep = self._run_b2_eval()
+        tm = rep.trading_metrics["val"]
+        for k in PRECISION_AT_K_LIST:
+            self.assertIn(f"k_{k}", tm["precision_at_k"])
+
+    def test_equity_curve_block_marked_unavailable(self):
+        """Sharpe / Sortino / max DD cannot be computed from per-trade
+        labels alone — verify the report says so explicitly rather
+        than emitting a misleading 0 or NaN."""
+        rep = self._run_b2_eval()
+        for s in ("train", "val", "test"):
+            ec = rep.trading_metrics[s]["equity_curve_metrics"]
+            self.assertEqual(ec["sharpe_ratio"], None)
+            self.assertEqual(ec["sortino_ratio"], None)
+            self.assertEqual(ec["max_drawdown"], None)
+            self.assertEqual(ec["unavailable_reason"],
+                              EQUITY_CURVE_UNAVAILABLE_REASON)
+
+    def test_n_filtered_plus_predicted_positive_equals_n_rows(self):
+        rep = self._run_b2_eval()
+        for s in ("train", "val", "test"):
+            tm = rep.trading_metrics[s]
+            self.assertEqual(
+                tm["n_predicted_positive"] + tm["n_filtered"],
+                tm["n_rows"])
+
+    def test_expected_value_after_costs_drops_with_cost(self):
+        """Doubling the cost decreases EV by the cost delta."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep0 = evaluate_model(out, res, cost_per_trade_log_return=0.0)
+        rep1 = evaluate_model(out, res, cost_per_trade_log_return=0.01)
+        ev0 = rep0.trading_metrics["val"]["expected_value_after_costs"]
+        ev1 = rep1.trading_metrics["val"]["expected_value_after_costs"]
+        if not (np.isnan(ev0) or np.isnan(ev1)):
+            # EV decreases by exactly the cost (cost is in log-return
+            # units, subtracted from each predicted-positive trade's
+            # return, so mean decreases by the cost).
+            self.assertAlmostEqual(ev0 - ev1, 0.01, places=10)
+
+    def test_profit_factor_undefined_no_losses(self):
+        """When every predicted-positive trade is a winner, profit
+        factor is mathematically infinite — emit NaN plus a warning
+        rather than +inf."""
+        # Pure unit test on the trading_metrics function directly
+        from bot.ml.evaluation import trading_metrics as tm_fn
+        # 4 predicted positives, ALL with positive log return
+        dataset = pd.DataFrame({
+            "ts_utc": pd.date_range("2024-01-01", periods=4,
+                                      tz="UTC"),
+            "triple_barrier_atr_2_3_50.return_log_at_resolution":
+                [0.02, 0.03, 0.04, 0.05],
+            "triple_barrier_atr_2_3_50.bars_to_resolution":
+                [10.0, 20.0, 30.0, 40.0],
+        })
+        out = tm_fn(
+            y_true=np.array([1.0, 1.0, 1.0, 1.0]),
+            y_proba=np.array([0.9, 0.9, 0.9, 0.9]),
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            dataset=dataset,
+            split_indices=np.array([0, 1, 2, 3]))
+        self.assertTrue(np.isnan(out["profit_factor"]))
+        self.assertIn("profit_factor_undefined_no_losses",
+                       out["zero_trade_warnings"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_Drift — PSI report
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_Drift(unittest.TestCase):
+
+    def test_identical_distributions_yield_max_psi_near_zero(self):
+        """Train→train PSI must be ~0 (no shift on identical data)."""
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        train_idx = res.split.train_anchor_indices
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        rpt = drift_report(
+            dataset=res.dataset,
+            train_indices=train_idx,
+            comparison_indices=train_idx,         # identical
+            feature_columns=feat_cols,
+            comparison_split_name="self")
+        self.assertIsNone(rpt["unavailable_reason"])
+        # PSI(train, train) should be exactly 0 modulo floating point
+        self.assertLess(rpt["max_psi"], 1e-9,
+            f"identical distributions should give max_psi ~ 0; "
+            f"got {rpt['max_psi']}")
+        self.assertFalse(rpt["drift_warning"])
+
+    def test_insufficient_samples_unavailable_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=res.split.train_anchor_indices
+                  if False else per_tf)
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        rpt = drift_report(
+            dataset=res.dataset,
+            train_indices=np.array([0, 1, 2]),     # < 10 samples
+            comparison_indices=np.array([3, 4, 5]),
+            feature_columns=feat_cols,
+            comparison_split_name="val")
+        self.assertIsNotNone(rpt["unavailable_reason"])
+        self.assertIn("insufficient samples",
+                       rpt["unavailable_reason"])
+
+    def test_drift_block_present_in_evaluation_report(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        for cmp_split in ("train_to_val", "train_to_test"):
+            d = rep.drift[cmp_split]
+            for k in ("max_psi", "argmax_psi_feature",
+                        "features_over_threshold", "drift_warning",
+                        "per_feature_psi", "threshold",
+                        "n_reference", "n_comparison"):
+                self.assertIn(k, d)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_PermutationImportance
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_PermutationImportance(unittest.TestCase):
+
+    def test_supported_model_types_are_b2_and_lightgbm(self):
+        """B0 and B1 are explicitly unsupported per locked plan."""
+        self.assertEqual(PI_SUPPORTED_MODEL_TYPES,
+                          frozenset({"B2_logistic", "M_lightgbm"}))
+
+    def test_b0_majority_returns_unavailable_with_clear_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        pi = rep.permutation_importance
+        self.assertFalse(pi["available"])
+        self.assertIn("constant predictor",
+                       pi["unavailable_reason"])
+
+    def test_b1_scanner_replica_returns_unavailable_with_clear_reason(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B1_scanner_replica",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        pi = rep.permutation_importance
+        self.assertFalse(pi["available"])
+        self.assertIn("passthrough",
+                       pi["unavailable_reason"])
+
+    def test_b2_logistic_top_features_populated(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res, permutation_n_repeats=3,
+                                permutation_n_top=10)
+        pi = rep.permutation_importance
+        self.assertTrue(pi["available"])
+        self.assertEqual(pi["model_type"], "B2_logistic")
+        self.assertLessEqual(len(pi["top_features"]), 10)
+        # Each entry has the expected structure
+        for f in pi["top_features"]:
+            self.assertIn("feature", f)
+            self.assertIn("importance_mean", f)
+            self.assertIn("importance_std", f)
+            self.assertEqual(f["n_repeats"], 3)
+        # top_features are sorted by importance_mean descending
+        means = [f["importance_mean"] for f in pi["top_features"]]
+        # Allow NaN sentinel at the end
+        finite_means = [m for m in means if not np.isnan(m)]
+        for prev, nxt in zip(finite_means, finite_means[1:]):
+            self.assertGreaterEqual(prev, nxt)
+
+    def test_permutation_importance_deterministic(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        cfg = TrainConfig(dataset_id=res.manifest.dataset_id,
+            model_type="B2_logistic",
+            train_mode="model_b_candidate_quality",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        # Run permutation importance twice with same seed
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        pi1 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val")
+        pi2 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val")
+        # Same baseline score
+        self.assertEqual(pi1["baseline_score"], pi2["baseline_score"])
+        # Same importance for every feature
+        for f1, f2 in zip(pi1["all_features"], pi2["all_features"]):
+            self.assertEqual(f1["feature"], f2["feature"])
+            self.assertEqual(f1["importance_mean"],
+                              f2["importance_mean"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_Breakdowns — segment metrics
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_Breakdowns(unittest.TestCase):
+
+    def _train_b2(self):
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=True, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B2_logistic",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        return res, out
+
+    def test_per_symbol_unavailable_on_single_symbol_dataset(self):
+        """M18.A.5 assembler is single-symbol; per-symbol breakdown
+        must explicitly report unavailable rather than fabricating
+        a one-segment summary that doesn't actually filter by
+        symbol."""
+        res, _ = self._train_b2()
+        out = ModelTrainer().train_one(
+            TrainConfig(dataset_id=res.manifest.dataset_id,
+                model_type="B0_majority",
+                train_mode="model_b_candidate_quality",
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                hyperparameters={}, seed=42, fixture_mode=False),
+            res)
+        rep = evaluate_model(out, res)
+        sym = rep.breakdowns["val"]["per_symbol"]
+        self.assertFalse(sym["available"])
+        self.assertIn("symbol", sym["unavailable_reason"])
+
+    def test_per_year_segments_use_ts_utc(self):
+        """per-year breakdown groups by anchor ts year — synthetic
+        fixture has bars across a single year, so we expect ≤1
+        segment after the min_samples filter."""
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        py = rep.breakdowns["val"]["per_year"]
+        self.assertTrue(py["available"])
+        self.assertIn("segments",   py["per_year"])
+        self.assertIn("per_quarter", py)
+        # Total segment count + skipped count must be > 0
+        n_segments = len(py["per_year"]["segments"])
+        n_skipped  = len(py["per_year"]["skipped_segments"])
+        self.assertGreaterEqual(n_segments + n_skipped, 1)
+
+    def test_min_samples_threshold_drops_small_segments(self):
+        """Small synthetic data forces many segments below 50 → must
+        appear in skipped_segments."""
+        res, out = self._train_b2()
+        # Use a very high min_samples to force most segments to skip
+        rep = evaluate_model(out, res, breakdowns_min_samples=10000)
+        py = rep.breakdowns["val"]["per_year"]
+        self.assertEqual(len(py["per_year"]["segments"]), 0)
+        # All quarters skipped too
+        self.assertEqual(len(py["per_quarter"]["segments"]), 0)
+
+    def test_vol_regime_breakdown_uses_vol_regime_field(self):
+        """vol_regime breakdown uses vol_regime.vol_regime_flag if
+        present."""
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        vr = rep.breakdowns["val"]["volatility_regime"]
+        self.assertTrue(vr["available"])
+        # Binning field is one of the two recognised columns
+        self.assertIn(vr["binning_field"],
+                       ("vol_regime.vol_regime_flag",
+                        "vol_regime.atr_percentile_60"))
+
+    def test_market_regime_breakdown_uses_market_context_field(self):
+        res, out = self._train_b2()
+        rep = evaluate_model(out, res)
+        mr = rep.breakdowns["val"]["market_regime"]
+        if mr["available"]:
+            self.assertIn(mr["binning_field"],
+                ("market_context.spy_above_ema200_1d",
+                  "market_context.qqq_above_ema200_1d"))
+        else:
+            # If not available, must give explicit reason
+            self.assertIsNotNone(mr["unavailable_reason"])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_BaselineCompareExtended — B0 + B1 deltas
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_BaselineCompareExtended(unittest.TestCase):
+
+    def test_compare_baselines_default_primary_is_pr_auc(self):
+        """PR-AUC is the M18 primary metric per the locked plan."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)   # no primary_metric kwarg
+        self.assertEqual(cmp.primary_metric, "pr_auc")
+
+    def test_baseline_beats_includes_both_b0_and_b1_keys(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports, primary_split="val")
+        keys = sorted(cmp.baseline_beats.keys())
+        # B0 comparisons
+        beats_b0 = [k for k in keys
+                     if k.endswith("_beats_B0_majority_on_val_pr_auc")]
+        # B1 comparisons
+        beats_b1 = [k for k in keys
+                     if k.endswith("_beats_B1_scanner_replica_on_val_pr_auc")]
+        self.assertEqual(len(beats_b0), 2, beats_b0)
+        self.assertEqual(len(beats_b1), 2, beats_b1)
+
+    def test_deltas_vs_b0_and_b1_present(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)
+        # B1 and B2 should have deltas vs B0
+        self.assertIn("B1_scanner_replica", cmp.deltas_vs_primary_baseline)
+        self.assertIn("B2_logistic",         cmp.deltas_vs_primary_baseline)
+        # B0 and B2 should have deltas vs B1
+        self.assertIn("B0_majority",         cmp.deltas_vs_secondary_baseline)
+        self.assertIn("B2_logistic",         cmp.deltas_vs_secondary_baseline)
+        # PR-AUC delta is recorded
+        self.assertIn("pr_auc",
+                       cmp.deltas_vs_primary_baseline["B2_logistic"])
+
+    def test_delta_sign_convention_higher_is_better(self):
+        """For PR-AUC (higher is better), delta = candidate - baseline.
+        Positive delta means candidate wins."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports)
+        # Compute the expected delta manually
+        b0_auc = cmp.per_metric["pr_auc"]["B0_majority"]
+        b2_auc = cmp.per_metric["pr_auc"]["B2_logistic"]
+        expected = b2_auc - b0_auc
+        actual   = cmp.deltas_vs_primary_baseline["B2_logistic"]["pr_auc"]
+        self.assertAlmostEqual(expected, actual, places=10)
+
+    def test_delta_sign_convention_lower_is_better(self):
+        """For log_loss (lower is better), delta = baseline - candidate.
+        Positive delta still means candidate wins."""
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports, primary_metric="log_loss")
+        # Sign convention check
+        b0_ll = cmp.per_metric["log_loss"]["B0_majority"]
+        b2_ll = cmp.per_metric["log_loss"]["B2_logistic"]
+        expected = b0_ll - b2_ll
+        actual   = cmp.deltas_vs_primary_baseline["B2_logistic"]["log_loss"]
+        self.assertAlmostEqual(expected, actual, places=10)
+
+    def test_secondary_baseline_none_skips_b1_deltas(self):
+        _, reports = _train_three_baselines_on_model_b()
+        cmp = compare_baselines(reports,
+            secondary_baseline_model_type=None)
+        self.assertEqual(cmp.deltas_vs_secondary_baseline, {})
+
+
+
 
 class G10_Hygiene(unittest.TestCase):
     """Hygiene tests: no syntax errors, no socket-at-import,

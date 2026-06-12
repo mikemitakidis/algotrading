@@ -138,6 +138,10 @@ def evaluate_model(
     assembler_result: AssemblerResult,
     *,
     n_calibration_bins: int = 10,
+    cost_per_trade_log_return: float = 0.001,
+    permutation_n_repeats: int = 5,
+    permutation_n_top: int = 20,
+    breakdowns_min_samples: int = 50,
 ) -> EvaluationReport:
     """Build a complete EvaluationReport for one trained model.
 
@@ -216,15 +220,18 @@ def evaluate_model(
             "train": trading_metrics(
                 y_true=y_true_train, y_proba=y_proba_train,
                 target_label_id=target, dataset=dataset,
-                split_indices=split.train_anchor_indices),
+                split_indices=split.train_anchor_indices,
+                cost_per_trade_log_return=cost_per_trade_log_return),
             "val":   trading_metrics(
                 y_true=y_true_val, y_proba=y_proba_val,
                 target_label_id=target, dataset=dataset,
-                split_indices=split.val_anchor_indices),
+                split_indices=split.val_anchor_indices,
+                cost_per_trade_log_return=cost_per_trade_log_return),
             "test":  trading_metrics(
                 y_true=y_true_test, y_proba=y_proba_test,
                 target_label_id=target, dataset=dataset,
-                split_indices=split.test_anchor_indices),
+                split_indices=split.test_anchor_indices,
+                cost_per_trade_log_return=cost_per_trade_log_return),
         }
     else:
         trading = {
@@ -268,15 +275,18 @@ def evaluate_model(
             "train": all_breakdowns(
                 dataset=dataset,
                 indices=split.train_anchor_indices,
-                y_true=y_true_train, y_proba=y_proba_train),
+                y_true=y_true_train, y_proba=y_proba_train,
+                min_samples=breakdowns_min_samples),
             "val":   all_breakdowns(
                 dataset=dataset,
                 indices=split.val_anchor_indices,
-                y_true=y_true_val, y_proba=y_proba_val),
+                y_true=y_true_val, y_proba=y_proba_val,
+                min_samples=breakdowns_min_samples),
             "test":  all_breakdowns(
                 dataset=dataset,
                 indices=split.test_anchor_indices,
-                y_true=y_true_test, y_proba=y_proba_test),
+                y_true=y_true_test, y_proba=y_proba_test,
+                min_samples=breakdowns_min_samples),
         }
     else:
         _unav = {"unavailable_for_label_class":
@@ -317,7 +327,9 @@ def evaluate_model(
         perm_importance = permutation_importance(
             train_config=_tc,
             assembler_result=assembler_result,
-            feature_columns=feature_columns)
+            feature_columns=feature_columns,
+            n_repeats=permutation_n_repeats,
+            n_top=permutation_n_top)
     except Exception as _e:  # defensive: never sink the whole report
         perm_importance = {
             "available":          False,
