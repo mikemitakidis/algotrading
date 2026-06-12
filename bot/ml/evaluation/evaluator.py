@@ -142,6 +142,7 @@ def evaluate_model(
     permutation_n_repeats: int = 5,
     permutation_n_top: int = 20,
     breakdowns_min_samples: int = 50,
+    drift_warning_threshold: float = 0.25,
 ) -> EvaluationReport:
     """Build a complete EvaluationReport for one trained model.
 
@@ -310,13 +311,15 @@ def evaluate_model(
             train_indices=split.train_anchor_indices,
             comparison_indices=split.val_anchor_indices,
             feature_columns=feature_columns,
-            comparison_split_name="val"),
+            comparison_split_name="val",
+            drift_warning_threshold=drift_warning_threshold),
         "train_to_test": drift_report(
             dataset=dataset,
             train_indices=split.train_anchor_indices,
             comparison_indices=split.test_anchor_indices,
             feature_columns=feature_columns,
-            comparison_split_name="test"),
+            comparison_split_name="test",
+            drift_warning_threshold=drift_warning_threshold),
     }
 
     # Gap 5 — permutation importance (deterministic; refits from the

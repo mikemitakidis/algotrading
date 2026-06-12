@@ -52,24 +52,24 @@ from typing import List, Optional
 # Each names the exact missing surface bit, per the accepted closeout.
 
 STUB_BUILD_DATASET = (
-    "build-dataset is not wired as of M18.A.10: AssemblerResult has "
+    "build-dataset is not wired as of M18.A.10+: AssemblerResult has "
     "no persistence layer (and the DatasetConfig/AssemblerConfig "
     "surfaces differ). Use bot.ml.dataset.assembler.DatasetAssembler "
     "directly from a fixture script until that surface is approved."
 )
 STUB_TRAIN = (
-    "train is not wired as of M18.A.10: it needs a persisted "
+    "train is not wired as of M18.A.10+: it needs a persisted "
     "AssemblerResult to load from, and no persistence layer exists "
     "yet. Use bot.ml.models.trainer directly from a fixture script."
 )
 STUB_EVALUATE = (
-    "evaluate is not wired as of M18.A.10: blocked on the same "
+    "evaluate is not wired as of M18.A.10+: blocked on the same "
     "AssemblerResult persistence gap as train. The most recent "
     "evaluation report for a model is already accessible via "
     "`registry show`."
 )
 STUB_REGISTRY_DEMOTE = (
-    "registry demote is not wired as of M18.A.10: the M18.A.1 parser "
+    "registry demote is not wired as of M18.A.10+: the M18.A.1 parser "
     "surface gave this subcommand no flags, but "
     "Registry.demote_current() requires a scope_key. Wiring it would "
     "require adding --scope-key or --model-id, which is inventing "
@@ -143,9 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="The model_id to promote.")
     rg_promote.add_argument("--force", action="store_true",
         help="Override a JUDGMENT gate (never integrity — Q17).")
-    rg_promote.add_argument("--override-gate",
-        help="The judgment gate being overridden (required with "
-              "--force).")
+    rg_promote.add_argument("--override-gate", action="append",
+        help="A judgment gate being overridden (required with "
+              "--force). May be given multiple times.")
     rg_promote.add_argument("--reason",
         help="Operator justification (required with --force).")
 
@@ -174,7 +174,7 @@ def _cmd_predict(args: argparse.Namespace,
 
         input_path = Path(args.input)
         if not input_path.exists():
-            print(f"predict: input file not found: {input_path}",
+            print(f"predict: input file does not exist: {input_path}",
                 file=sys.stderr)
             return 1
         suffix = input_path.suffix.lower()
@@ -195,6 +195,7 @@ def _cmd_predict(args: argparse.Namespace,
             X_input=X_input,
         )
         print(json.dumps({
+            "command":               "predict",
             "model_id":              result.model_id,
             "n_input_rows":          result.n_input_rows,
             "n_features":            result.n_features,
@@ -218,7 +219,9 @@ def _cmd_registry_list(_registry_root: Optional[str]) -> int:
         registry = _make_registry(_registry_root)
         entries = registry.list_entries()
         print(json.dumps(
-            {"entries": [e.to_dict() for e in entries]},
+            {"command": "registry-list",
+             "n_entries": len(entries),
+             "entries": [e.to_dict() for e in entries]},
             sort_keys=True, indent=2, default=str))
         return 0
     except M18Error as e:
@@ -237,7 +240,9 @@ def _cmd_registry_show(args: argparse.Namespace,
     try:
         registry = _make_registry(_registry_root)
         entry = registry.get_entry(args.model_id)
-        print(json.dumps(entry.to_dict(), sort_keys=True, indent=2,
+        print(json.dumps({"command": "registry-show",
+                          "entry": entry.to_dict()},
+                          sort_keys=True, indent=2,
                           default=str))
         return 0
     except M18Error as e:
@@ -259,9 +264,7 @@ def _cmd_registry_promote(args: argparse.Namespace,
     )
     try:
         registry = _make_registry(_registry_root)
-        override_gates = ()
-        if args.override_gate:
-            override_gates = (args.override_gate,)
+        override_gates = tuple(args.override_gate or ())
         entry = registry.promote_to_current(
             args.model_id,
             force=args.force,
