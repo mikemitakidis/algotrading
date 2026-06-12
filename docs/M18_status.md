@@ -1,10 +1,27 @@
 # M18.A — ML Pipeline / Closed-Loop ML — Status
 
 **Milestone:** M18.A (ML Pipeline / Closed-Loop ML)
-**Status:** local-only HEAD reached `a06fcfe` (M18.A.10) pre-push.
-**Recovery branch HEAD:** see `git rev-parse HEAD` on
-`m18-recovery-from-transcripts`.
+**Recovered branch:** `m18-recovery-from-transcripts`
+**Latest recovery commit:** `baedf9f` (Checkpoint 4E — G10 hygiene)
 **Mode throughout:** read-only / shadow-only — no live promotion.
+
+### Current recovered state
+
+| Metric | Value |
+|---|---|
+| `test_m18_ml` | **428 OK, skipped=3** |
+| M18 `G10_Hygiene` | **10 OK** |
+| M17.B safety gate | **200 OK, skipped=2** |
+| Original local-only target | 452 OK, skipped=2 |
+| Remaining gap | **24 unrecoverable G2–G5 method-level tests** |
+
+M18 was recovered to the maximum evidence-supported state:
+**428 OK / skipped=3, M18 G10 10 OK**, with 24 original G2–G5 test
+methods unrecoverable from available evidence. The original 452 OK
+target was **not** byte-identically recoverable — see
+`RECOVERY_M18_MANIFEST.md` for the full byte-faithful vs
+contract-faithful vs unrecoverable breakdown. This is **not** a claim
+of byte-identical restoration.
 
 ---
 
@@ -81,7 +98,8 @@
 | G6 | Baselines + dual-cohort trainer (A ⊆ B proof, B0/B1/B2 parity, thinness gates) |
 | G7 | EvaluationReport v2 (PR-AUC, threshold table, drift PSI, permutation, breakdowns) |
 | G8 | Registry (status inference, promotion gates, Q17 force-override matrix, Q20 envelope + schema) |
-| G10_Hygiene | AST no-write-to-signals.db, no-socket-at-import, baseline-forbidden preservation, file scope |
+| G9 | M18.A.9 CLI surface: predict, registry list/show/promote, documented stubs (exit 2), no repo pollution |
+| G10_Hygiene | AST no-write-to-signals.db, no-socket-at-import, no forbidden/network/executor imports, bot.historical sole-importer, data/ml gitignore, M17.B baseline preservation, file-scope drift guard |
 
 ---
 

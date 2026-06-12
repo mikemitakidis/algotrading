@@ -469,7 +469,7 @@ This is recorded here to make the deviation from the original roadmap explicit. 
 **M15 is fully CLOSED as of 2026-06-05.** Dashboard work now stops unless safety- or compliance-driven. The priority shifts to advanced trading-bot intelligence: historical data → strategy criteria & parameters → backtesting → signal scoring → paper-trade automation → optimisation → controlled live trading → fully autonomous. Concrete near-term timelines:
 - **M16 — Historical data + first signal engine**: 3-7 days.
 - **M17 — Backtesting + parameter rules**: 1-2 weeks.
-- **M18 — Advanced signal scoring + paper-trade automation**: 2-4 weeks.
+- **M18 — ML foundation / meta-labelling / file-based registry / read-only prediction pipeline**: 2-4 weeks.
 - **Controlled live trading readiness**: 2-3+ months minimum.
 - **Fully autonomous advanced live bot**: 3-6+ months.
 
@@ -843,10 +843,25 @@ These are the project's permanent ground rules (per user constitution):
 
 ---
 
-## M18 — ML Pipeline / Closed-Loop ML
+## M18 — ML foundation / meta-labelling / file-based registry / read-only prediction pipeline
 
-**Status:** M18.A complete locally (HEAD recovered to equivalent of
-`a06fcfe`). Push pending operator authorisation.
+**Status:** Recovered on branch `m18-recovery-from-transcripts`
+(latest commit `baedf9f`).
+
+**M18 recovery branch reached 428 OK / G10 10 OK.**
+The original 452 OK target was **not** byte-identically recoverable
+because 24 G2–G5 method-level tests have no surviving evidence. Those
+24 are documented in `RECOVERY_M18_MANIFEST.md`. The recovered state
+is the maximum evidence-supported state — not a byte-identical
+restoration.
+
+| Metric | Value |
+|---|---|
+| `test_m18_ml` | 428 OK, skipped=3 |
+| M18 `G10_Hygiene` | 10 OK |
+| M17.B safety gate | 200 OK, skipped=2 |
+| Original local-only target | 452 OK, skipped=2 |
+| Remaining gap | 24 unrecoverable G2–G5 method-level tests |
 
 **Sub-milestones delivered:**
 M18.A.pre-phase, M18.A.1 .. M18.A.10. See `docs/M18_status.md` for

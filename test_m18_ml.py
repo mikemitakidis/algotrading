@@ -7863,9 +7863,11 @@ class G10_Hygiene(unittest.TestCase):
     # ---- forbidden imports in bot/ml/* (SR-7) ----------------------
 
     def test_no_forbidden_imports_in_bot_ml(self):
-        """Every .py in bot/ml/ must import only stdlib + pandas/numpy
-        + bot.ml.* + (only m16_loader.py) bot.historical. None of the
-        live/broker/scanner/strategy/backtesting surfaces are allowed.
+        """bot/ml/* must not import live, broker, scanner,
+        data-provider, network, or executor surfaces. bot.backtesting
+        parity imports are allowed only where used for scanner-replica
+        parity (bot.backtesting.indicators / .mtf_context / .strategy);
+        bot.historical may be imported only by m16_loader.py.
         """
         offenders = []
         for f in _walk_bot_ml_py_files():
@@ -7907,10 +7909,13 @@ class G10_Hygiene(unittest.TestCase):
 
     def test_m18_new_forbidden_additions_present(self):
         """The M18-specific forbidden-import additions must be present
-        in the active set. M18 may ADD to the inherited M17 baseline
-        (e.g. bot.backtesting — ML code must not reach into the
-        backtester); this test makes those additions explicit so they
-        can't silently disappear."""
+        in the active set. M18-specific additions are executor/order
+        surfaces such as bot.main and bot.recovery_executor (a
+        read-only / shadow-only ML milestone must never import the live
+        order executor). bot.backtesting is NOT forbidden — M18
+        features legitimately reuse it for scanner-replica parity. This
+        test makes the executor additions explicit so they can't
+        silently disappear."""
         active = set(_M18_FORBIDDEN_IMPORT_PREFIXES)
         missing = _M18_NEW_FORBIDDEN - active
         self.assertEqual(missing, set(),

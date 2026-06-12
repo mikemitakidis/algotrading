@@ -24,7 +24,8 @@ Wiring decisions (from the accepted closeout — do not widen):
                               adding --scope-key/--model-id would be
                               inventing surface (forbidden)
 
-CLI surface is UNCHANGED from M18.A.1 — no flags added or removed.
+CLI surface is the accepted M18.A.9 safe partial surface only.
+No unapproved CLI widening beyond the recovered A.9 contract is allowed.
 
 Exit-code semantics (locked):
   0   success
@@ -82,7 +83,7 @@ def _stub(message: str) -> int:
     return 2
 
 
-# ── Parser (surface UNCHANGED from M18.A.1) ─────────────────────────
+# ── Parser (accepted M18.A.9 safe partial surface) ──────────────────
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
