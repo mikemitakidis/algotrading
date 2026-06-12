@@ -883,3 +883,13 @@ chat session for A.9 and A.10).
 **Coming next:** M18.B and beyond (closed-loop ML toward live-readiness).
 M13.4A (Dashboard Broker Allocation + Budget Controls) remains
 deferred per its design handoff document.
+
+**Not accepted as final M18.** The recovered branch is a safe baseline.
+An original-plan-vs-code audit found items missing or materially reduced
+versus "M18 Final Architecture v2" (RandomForest fallback, repro_hash_v2,
+real isotonic calibration, strict production thinness gates,
+NaN/missingness policy, AV failure-reason persistence,
+feature_store/label_store, dataset/model artifact persistence, full CLI).
+The M18.B completion roadmap, advanced M18+ requirements, per-phase tests,
+push-safe workflow, and final acceptance criteria are in
+`docs/M18_COMPLETION_PLAN.md`.

@@ -32,6 +32,15 @@ target was **not** byte-identically recoverable — see
 contract-faithful vs unrecoverable breakdown. This is **not** a claim
 of byte-identical restoration.
 
+> **Not accepted as final M18.** This branch is a safe baseline. An
+> original-plan-vs-code audit found items missing or materially reduced
+> versus "M18 Final Architecture v2" (RandomForest fallback,
+> repro_hash_v2, real isotonic calibration, strict production thinness
+> gates, NaN/missingness policy, AV failure-reason persistence,
+> feature_store/label_store, artifact persistence, full CLI). The
+> completion roadmap, advanced M18+ requirements, M18.B phases, and
+> final acceptance criteria are in **`docs/M18_COMPLETION_PLAN.md`**.
+
 ---
 
 ## Hard invariants (asserted by G10)

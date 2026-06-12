@@ -193,6 +193,23 @@ M18 recovered to the maximum evidence-supported state:
 methods unrecoverable** from available evidence. The original
 **452 OK / skipped=2** target was **not** byte-identically recoverable.
 
-Remaining tasks tracked but not part of this recovery:
-expanding `test_m18_ml.py` to the full 452 only if further evidence
-surfaces; M13.4A (Dashboard Broker Allocation) remains deferred.
+### Not accepted as final M18 (decision recorded)
+
+This recovered branch is accepted as a **safe baseline**, NOT as final M18.
+An original-plan-vs-code audit found that the *accepted* M18 had itself
+narrowed several items from the original "M18 Final Architecture v2" plan.
+Now that the target is the full original plan implemented and improved, the
+following are missing or materially reduced and must be completed before final
+acceptance: RandomForest fallback; repro_hash_v2 (full SR-8); real isotonic
+calibration; strict production thinness gates; NaN/missingness policy;
+adversarial-validation failure-reason persistence; content-addressed
+feature_store/label_store; dataset/model artifact persistence; full CLI
+(build/train/evaluate/demote); original artifact / model-card layout.
+
+The full corrected audit, the advanced M18+ requirements, the M18.B phase plan,
+per-phase tests, the push-safe workflow, and final acceptance criteria are in
+**`docs/M18_COMPLETION_PLAN.md`**.
+
+Remaining tasks: execute the M18.B completion phases (push-safe, one phase per
+commit); recover the 24 residual tests only if further evidence surfaces (never
+fabricate); M13.4A (Dashboard Broker Allocation) remains deferred.
