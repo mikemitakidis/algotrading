@@ -98,21 +98,26 @@ from bot.ml.models.lightgbm_trainer import (
     LightGBMTrainer,
     is_lightgbm_available,
 )
+from bot.ml.models.random_forest_trainer import (
+    RandomForestTrainer,
+)
 
 
 # Column name of the live-scanner passthrough used by B1.
 SCANNER_FIRES_COLUMN = "scanner_replica.signal_fires"
 
 
-# Model types implemented in the M18.A.6 scope. M_random_forest is in
-# ALLOWED_MODEL_TYPES (schemas) but intentionally NOT implemented here;
-# requesting it raises M18ConfigError at train_one() time. M_lightgbm
-# is implemented conditionally (falls back when lightgbm is absent).
+# Model types implemented in M18. M_lightgbm is implemented
+# conditionally (raises if lightgbm is absent — never silently falls
+# back). M_random_forest (M18.B.1) is a sklearn-only tree model that
+# does NOT require lightgbm; it trains only when explicitly requested
+# via train_config.model_type == "M_random_forest".
 IMPLEMENTED_MODEL_TYPES = frozenset({
     "B0_majority",
     "B1_scanner_replica",
     "B2_logistic",
     "M_lightgbm",
+    "M_random_forest",
 })
 
 
@@ -299,18 +304,16 @@ class Trainer:
                 f"{sorted(ALLOWED_TRAIN_MODES)}")
 
         # ── 0a. Model-type implementation scope ─────────────────
-        # M_random_forest is in ALLOWED_MODEL_TYPES but NOT implemented
-        # in the M18.A.6 scope. Reject it HERE — before the dual-cohort
-        # assert — so an unimplemented model surfaces the M18.A.6 scope
-        # error even when the supplied dataset's cohort also mismatches
-        # the train_mode. (A valid model like B0_majority falls through
-        # to the cohort check below.)
+        # Reject any model_type that is in ALLOWED_MODEL_TYPES (schema)
+        # but has no trainer here. Checked BEFORE the dual-cohort assert
+        # so an unimplemented model surfaces the scope error even when
+        # the supplied dataset's cohort also mismatches the train_mode.
         if train_config.model_type not in IMPLEMENTED_MODEL_TYPES:
             raise M18ConfigError(
                 f"model_type={train_config.model_type!r} is in "
-                f"ALLOWED_MODEL_TYPES but not implemented in M18.A.6 "
-                f"(scope: B0_majority, B1_scanner_replica, B2_logistic, "
-                f"M_lightgbm-conditional). Pick one of those.")
+                f"ALLOWED_MODEL_TYPES but not implemented "
+                f"(scope: {sorted(IMPLEMENTED_MODEL_TYPES)}). "
+                f"Pick one of those.")
 
         manifest = assembler_result.manifest
 
@@ -422,14 +425,23 @@ class Trainer:
             pred_train = inner.predict_proba(X_train)
             pred_val   = inner.predict_proba(X_val)
             pred_test  = inner.predict_proba(X_test)
+        elif train_config.model_type == "M_random_forest":
+            inner = RandomForestTrainer()
+            inner.fit(X_train, y_train,
+                       label_class=label_class, seed=seed,
+                       hyperparameters=dict(
+                           train_config.hyperparameters))
+            pred_train = inner.predict_proba(X_train)
+            pred_val   = inner.predict_proba(X_val)
+            pred_test  = inner.predict_proba(X_test)
         else:
-            # M_random_forest is in ALLOWED_MODEL_TYPES but not
-            # implemented in M18.A.6 scope.
+            # Defensive: every entry in IMPLEMENTED_MODEL_TYPES has a
+            # branch above, and the 0a guard already rejects anything
+            # not implemented. This stays as a belt-and-suspenders.
             raise M18ConfigError(
                 f"model_type={train_config.model_type!r} is in "
-                f"ALLOWED_MODEL_TYPES but not implemented in M18.A.6 "
-                f"(scope: B0_majority, B1_scanner_replica, B2_logistic, "
-                f"M_lightgbm-conditional). Pick one of those.")
+                f"IMPLEMENTED_MODEL_TYPES but has no train_one dispatch "
+                f"branch — this is a bug.")
 
         # ── 5. Metrics ───────────────────────────────────────────
         if label_class == "binary":

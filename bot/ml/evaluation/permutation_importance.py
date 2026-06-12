@@ -61,10 +61,6 @@ UNSUPPORTED_REASONS = {
         "(scanner_replica.signal_fires); permutation importance is "
         "not a meaningful diagnostic — it would be ~1.0 for that "
         "one column and 0 for all others"),
-    "M_random_forest": (
-        "M_random_forest is in ALLOWED_MODEL_TYPES but not "
-        "implemented in M18.A.6 yet; permutation importance will be "
-        "added when the trainer lands"),
 }
 
 

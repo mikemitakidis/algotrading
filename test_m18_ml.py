@@ -58,6 +58,7 @@ from bot.ml.models import (
     LogisticRegressionTrainer,
     LightGBMTrainer,
     is_lightgbm_available,
+    RandomForestTrainer,
     SCANNER_FIRES_COLUMN,
     select_feature_columns,
     select_label_columns,
@@ -3604,10 +3605,161 @@ class G5_TrainerOrchestrator(unittest.TestCase):
                 hyperparameters={}, seed=42, fixture_mode=False)
             ModelTrainer().train_one(cfg, res)
 
-    def test_m_random_forest_not_implemented_clear_error(self):
-        """M_random_forest is in ALLOWED_MODEL_TYPES but not in the
-        M18.A.6 scope. The trainer must raise a CLEAR error stating
-        this rather than silently substituting another model."""
+    def test_m_random_forest_is_implemented_and_trains(self):
+        """M18.B.1: M_random_forest is now IMPLEMENTED. Requesting it
+        must train (not raise the old M18.A.6 scope error)."""
+        res = _assemble_for_training()
+        cfg = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type="M_random_forest",
+            train_mode="model_b_candidate_quality",
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            hyperparameters={}, seed=42, fixture_mode=False)
+        out = ModelTrainer().train_one(cfg, res)
+        self.assertEqual(out.model_type, "M_random_forest")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G5_NoTestLeak — train data does NOT influence training
+# ─────────────────────────────────────────────────────────────────────
+
+class G5_RandomForest(unittest.TestCase):
+    """M18.B.1 — M_random_forest sklearn fallback trainer.
+
+    A sklearn-only tree model that does NOT require lightgbm. Trains
+    only when explicitly requested; deterministic given a fixed seed;
+    binary targets only; rejects unsafe/non-deterministic overrides.
+    """
+
+    # ---- a small deterministic binary fixture (direct trainer) -----
+
+    def _fixture(self, n=200, seed=0):
+        rng = np.random.default_rng(seed)
+        X = rng.normal(size=(n, 6))
+        y = (X[:, 0] + X[:, 1] > 0).astype(np.float64)
+        return X, y
+
+    def test_random_forest_model_type_is_implemented(self):
+        from bot.ml.models.trainer import IMPLEMENTED_MODEL_TYPES
+        self.assertIn("M_random_forest", IMPLEMENTED_MODEL_TYPES)
+        self.assertEqual(RandomForestTrainer.model_type,
+                          "M_random_forest")
+
+    def test_random_forest_trains_on_fixture(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("M_random_forest",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertIsInstance(out, TrainOutputs)
+        self.assertEqual(out.model_type, "M_random_forest")
+        self.assertEqual(len(out.pred_train),
+                          len(res.split.train_anchor_indices))
+        self.assertEqual(len(out.pred_val),
+                          len(res.split.val_anchor_indices))
+        self.assertEqual(len(out.pred_test),
+                          len(res.split.test_anchor_indices))
+
+    def test_random_forest_probabilities_are_valid(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("M_random_forest",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        for arr in (out.pred_train, out.pred_val, out.pred_test):
+            a = np.asarray(arr, dtype=np.float64)
+            self.assertTrue(np.all(np.isfinite(a)),
+                             "RF probabilities must be finite")
+            if a.size:
+                self.assertGreaterEqual(float(a.min()), 0.0)
+                self.assertLessEqual(float(a.max()), 1.0)
+
+    def test_random_forest_deterministic_same_seed(self):
+        X, y = self._fixture()
+        t1 = RandomForestTrainer()
+        t1.fit(X, y, label_class="binary", seed=42)
+        t2 = RandomForestTrainer()
+        t2.fit(X, y, label_class="binary", seed=42)
+        np.testing.assert_array_equal(
+            t1.predict_proba(X), t2.predict_proba(X))
+
+    def test_random_forest_different_seed_can_change_predictions(self):
+        # Same data + different seed: outputs must remain VALID; we do
+        # NOT assert they differ (could coincide on an easy fixture) —
+        # only that a different seed still yields finite, in-range,
+        # correctly-shaped probabilities.
+        X, y = self._fixture()
+        t = RandomForestTrainer()
+        t.fit(X, y, label_class="binary", seed=7)
+        p = t.predict_proba(X)
+        self.assertEqual(p.shape, (X.shape[0],))
+        self.assertTrue(np.all(np.isfinite(p)))
+        self.assertGreaterEqual(float(p.min()), 0.0)
+        self.assertLessEqual(float(p.max()), 1.0)
+
+    def test_random_forest_requires_binary_target(self):
+        X, y = self._fixture()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(
+                X, y, label_class="classification_3way", seed=42)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(
+                X, y, label_class="regression", seed=42)
+
+    def test_random_forest_empty_train_set_fails(self):
+        empty_X = np.empty((0, 6), dtype=np.float64)
+        empty_y = np.empty((0,), dtype=np.float64)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(
+                empty_X, empty_y, label_class="binary", seed=42)
+
+    def test_random_forest_one_class_train_fails_clearly(self):
+        X, _ = self._fixture()
+        y_one = np.zeros(X.shape[0], dtype=np.float64)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(
+                X, y_one, label_class="binary", seed=42)
+
+    def test_random_forest_rejects_unsafe_hyperparameters(self):
+        X, y = self._fixture()
+        for bad in ({"n_jobs": 2}, {"random_state": 99},
+                     {"bootstrap": False}, {"not_a_param": 1}):
+            with self.assertRaises(ml_errors.M18ConfigError):
+                RandomForestTrainer().fit(
+                    X, y, label_class="binary", seed=42,
+                    hyperparameters=bad)
+
+    def test_random_forest_allows_safe_hyperparameters(self):
+        X, y = self._fixture()
+        t = RandomForestTrainer()
+        t.fit(X, y, label_class="binary", seed=42,
+               hyperparameters={"n_estimators": 50, "max_depth": 5,
+                                 "min_samples_leaf": 10,
+                                 "class_weight": "balanced"})
+        p = t.predict_proba(X)
+        self.assertEqual(p.shape, (X.shape[0],))
+        self.assertTrue(np.all(np.isfinite(p)))
+
+    def test_random_forest_does_not_require_lightgbm(self):
+        # RF must work whether or not lightgbm is installed, and the
+        # trainer module must not import lightgbm.
+        import importlib, sys
+        X, y = self._fixture()
+        t = RandomForestTrainer()
+        t.fit(X, y, label_class="binary", seed=42)
+        self.assertTrue(np.all(np.isfinite(t.predict_proba(X))))
+        # library_versions reports sklearn, never lightgbm
+        self.assertIn("sklearn", t.library_versions())
+        self.assertNotIn("lightgbm", t.library_versions())
+        # the module's source does not import lightgbm
+        import bot.ml.models.random_forest_trainer as rf_mod
+        src = Path(rf_mod.__file__).read_text()
+        self.assertNotIn("import lightgbm", src)
+
+    def test_random_forest_respects_dual_cohort_validation(self):
+        # Wrong train_mode for the fixture's anchor_set must still raise
+        # the existing cohort error (the assembler fixture is the
+        # model_b cohort; requesting model_a must fail).
         res = _assemble_for_training()
         cfg = TrainConfig(
             dataset_id=res.manifest.dataset_id,
@@ -3615,14 +3767,9 @@ class G5_TrainerOrchestrator(unittest.TestCase):
             train_mode="model_a_meta_label",
             target_label_id="triple_barrier_atr_2_3_50_won",
             hyperparameters={}, seed=42, fixture_mode=False)
-        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+        with self.assertRaises((AssertionError, ml_errors.M18ConfigError)):
             ModelTrainer().train_one(cfg, res)
-        self.assertIn("M18.A.6", str(ctx.exception))
 
-
-# ─────────────────────────────────────────────────────────────────────
-# G5_NoTestLeak — train data does NOT influence training
-# ─────────────────────────────────────────────────────────────────────
 
 class G5_NoTestLeak(unittest.TestCase):
     """The locked plan forbids optimising on test data. The most

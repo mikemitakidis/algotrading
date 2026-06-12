@@ -11,13 +11,15 @@ Public surface:
   LogisticRegressionTrainer   B2_logistic
   LightGBMTrainer             M_lightgbm (import-gated)
   is_lightgbm_available       True iff lightgbm is importable
+  RandomForestTrainer         M_random_forest (sklearn-only; M18.B.1)
 
 Each trainer's `model_type` attribute matches the corresponding entry
 in bot.ml.schemas.ALLOWED_MODEL_TYPES.
 
-M_random_forest is in ALLOWED_MODEL_TYPES but is NOT implemented in
-the M18.A.6 scope. Requesting it via TrainConfig raises M18ConfigError
-at Trainer.train_one() time.
+M_random_forest (M18.B.1) is a sklearn-only tree model that trains when
+explicitly requested via TrainConfig.model_type == "M_random_forest".
+It is NOT a silent automatic fallback and never replaces M_lightgbm on
+its own.
 """
 from __future__ import annotations
 
@@ -41,6 +43,9 @@ from bot.ml.models.lightgbm_trainer import (
     LightGBMTrainer,
     is_lightgbm_available,
 )
+from bot.ml.models.random_forest_trainer import (
+    RandomForestTrainer,
+)
 from bot.ml.models.trainer import (
     Trainer,
     SCANNER_FIRES_COLUMN,
@@ -59,6 +64,7 @@ __all__ = [
     "LogisticRegressionTrainer",
     "LightGBMTrainer",
     "is_lightgbm_available",
+    "RandomForestTrainer",
     "SCANNER_FIRES_COLUMN",
     "TRAIN_MODE_TO_ANCHOR_SET",
     "ANCHOR_SET_TO_TRAIN_MODE",

@@ -64,9 +64,10 @@ corrections over the first audit pass:
 
 ## 4. Missing / reduced original-plan items
 
-1. **RandomForest fallback** — `M_random_forest` is in `ALLOWED_MODEL_TYPES`
-   but not in `IMPLEMENTED_MODEL_TYPES`; the trainer raises `M18ConfigError`.
-   With LightGBM absent there is no non-linear model.
+1. **RandomForest fallback** — **RESOLVED (M18.B.1).** `M_random_forest` is now
+   implemented (`bot/ml/models/random_forest_trainer.py`, sklearn-only,
+   deterministic) and in `IMPLEMENTED_MODEL_TYPES`; it trains only when
+   explicitly requested and never silently replaces M_lightgbm.
 2. **repro_hash_v2 (SR-8)** — current `repro_hash(config, library_versions,
    git_sha)` is a subset; the plan required feature/label/train_config/
    dataset_manifest canonical JSON + per-symbol M16 bar SHA + git head +
@@ -105,7 +106,7 @@ corrections over the first audit pass:
 |---|---|---|---|
 | Global NaN→0 imputation encodes missingness as a real value | `models/base.py::extract_xy_for_split` | Important (modelling) | per-group fill + missingness indicators + intentional-NaN tests |
 | AV failure reason swallowed | `dataset/assembler.py` `except Exception: av_result=None` | Important | persist structured failure record |
-| `M_random_forest` advertised but unimplemented | `models/trainer.py` | Important | implement RF fallback (M18.B.1) |
+| `M_random_forest` advertised but unimplemented | `models/trainer.py` | Important | **RESOLVED (M18.B.1)** — implemented as sklearn RandomForestTrainer |
 | repro_hash weaker than SR-8 | `hashing.py` | Important | repro_hash_v2 (M18.B.2) |
 
 No integrity-gate bypass, no mutable `approved_for_live`, no `signals.db`
@@ -320,7 +321,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | Phase | Scope | Depends on |
 |---|---|---|
 | **M18.B.0** | Save audit + completion roadmap (this commit) | — |
-| **M18.B.1** | RandomForest fallback (sklearn, deterministic) | — |
+| **M18.B.1** | RandomForest fallback (sklearn, deterministic) — **DONE** (commit on branch) | — |
 | **M18.B.2** | repro_hash_v2 (full SR-8 composition) | — |
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) | — |
