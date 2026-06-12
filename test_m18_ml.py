@@ -7721,6 +7721,63 @@ class G9_NoTemplatePollution(unittest.TestCase):
 
 
 
+
+
+# ═════════════════════════════════════════════════════════════════════
+# G10 hygiene constants (M18.A.10)
+#
+# Forbidden import prefixes for bot/ml/* production code (SR-7): the
+# M17.A baseline + M17.B additions + M18 additions. Carried forward so
+# that bot/ml/* can never import live/broker/scanner/strategy/data
+# surfaces. Mirrors test_m17_backtesting._FORBIDDEN_IMPORT_PREFIXES.
+# CONTRACT-FAITHFUL / NOT BYTE-IDENTICAL: the constant + the G10 test
+# bodies below were reconstructed from the M17.B byte-faithful analogs
+# and the A.5 transcript body fragments; the final M18 G10 block was not
+# recoverable as a single byte-faithful artifact.
+# ═════════════════════════════════════════════════════════════════════
+
+# The M17.B baseline forbidden set (must remain a subset of M18's).
+_M17B_FORBIDDEN_BASELINE = frozenset({
+    # M17.B additions
+    "bot.scanner", "bot.strategy", "bot.feature_engine",
+    "bot.indicators", "bot.sentiment", "bot.flywheel",
+    # M17.A baseline
+    "yfinance", "bot.data", "bot.providers", "bot.backtest",
+    "bot.brokers", "bot.broker_", "bot.gateway_",
+    "bot.etoro.live_broker", "bot.etoro.paper_broker",
+    "bot.etoro.signal_only",
+    "bot.risk_authority.engine", "bot.risk_authority.governor",
+    "bot.risk_authority.snapshot", "bot.risk_authority.preflight",
+    "bot.risk_authority.ibkr_paper_reader",
+    "ibapi", "ib_insync", "requests", "urllib.request", "urllib3",
+    "http.client",
+})
+
+# M18-specific additions to the forbidden set (SR-7 / Q17): M18 is a
+# read-only / shadow-only ML foundation — bot/ml/* must never import
+# the live order executor surfaces. (bot.backtesting is NOT forbidden:
+# M18 features legitimately reuse bot.backtesting.indicators /
+# .mtf_context / .strategy for scanner-replica parity.)
+_M18_NEW_FORBIDDEN = frozenset({
+    "bot.main",
+    "bot.recovery_executor",
+})
+
+_M18_FORBIDDEN_IMPORT_PREFIXES = tuple(sorted(
+    _M17B_FORBIDDEN_BASELINE | _M18_NEW_FORBIDDEN))
+
+# Network libs that must never be imported anywhere in bot/ml/*.
+_M18_NETWORK_LIB_PREFIXES = (
+    "requests", "urllib.request", "urllib3", "http.client",
+    "socket", "aiohttp", "httpx", "websocket", "websockets",
+    "yfinance",
+)
+
+# M17 baseline commit — the point before M17/M18 work; used by the
+# file-drift guard. Mirrors test_m17_backtesting._M17_BASELINE_SHA.
+_M18_M17_BASELINE_SHA = "13a3aa4"
+
+
 class G10_Hygiene(unittest.TestCase):
     """Hygiene tests: no syntax errors, no socket-at-import,
     no forbidden imports, no unexpected files."""
@@ -7802,6 +7859,136 @@ class G10_Hygiene(unittest.TestCase):
         self.assertEqual(
             result.returncode, 0,
             f"bot.ml import opened a socket. stderr:\n{result.stderr}")
+
+    # ---- forbidden imports in bot/ml/* (SR-7) ----------------------
+
+    def test_no_forbidden_imports_in_bot_ml(self):
+        """Every .py in bot/ml/ must import only stdlib + pandas/numpy
+        + bot.ml.* + (only m16_loader.py) bot.historical. None of the
+        live/broker/scanner/strategy/backtesting surfaces are allowed.
+        """
+        offenders = []
+        for f in _walk_bot_ml_py_files():
+            for imp in _imports_in_file(f):
+                for forbidden in _M18_FORBIDDEN_IMPORT_PREFIXES:
+                    if imp == forbidden or imp.startswith(forbidden + "."):
+                        offenders.append((str(f.relative_to(
+                            Path(__file__).parent)), imp))
+                        break
+        self.assertEqual(offenders, [],
+            f"bot/ml/* imports forbidden modules: {offenders}")
+
+    def test_no_network_libs_imported(self):
+        """bot/ml/* must not import any network library directly —
+        all data access goes through the M16 loader, which is the only
+        sanctioned I/O path. Catches an accidental requests/urllib/
+        socket import slipping into a feature or registry module."""
+        offenders = []
+        for f in _walk_bot_ml_py_files():
+            for imp in _imports_in_file(f):
+                for net in _M18_NETWORK_LIB_PREFIXES:
+                    if imp == net or imp.startswith(net + "."):
+                        offenders.append((str(f.relative_to(
+                            Path(__file__).parent)), imp))
+                        break
+        self.assertEqual(offenders, [],
+            f"bot/ml/* imports network modules directly: {offenders}")
+
+    def test_m17b_forbidden_baseline_preserved(self):
+        """Ensure M17.B's forbidden-import baseline is still a subset
+        of M18's active forbidden set. Regression to catch silent
+        weakening of past invariants (the M17.B pattern carried
+        forward)."""
+        active = set(_M18_FORBIDDEN_IMPORT_PREFIXES)
+        missing = _M17B_FORBIDDEN_BASELINE - active
+        self.assertEqual(missing, set(),
+            f"M17.B forbidden-import baseline silently weakened — "
+            f"missing entries: {sorted(missing)}")
+
+    def test_m18_new_forbidden_additions_present(self):
+        """The M18-specific forbidden-import additions must be present
+        in the active set. M18 may ADD to the inherited M17 baseline
+        (e.g. bot.backtesting — ML code must not reach into the
+        backtester); this test makes those additions explicit so they
+        can't silently disappear."""
+        active = set(_M18_FORBIDDEN_IMPORT_PREFIXES)
+        missing = _M18_NEW_FORBIDDEN - active
+        self.assertEqual(missing, set(),
+            f"M18 forbidden-import additions missing from active set: "
+            f"{sorted(missing)}")
+
+    # ---- bot.historical sole-importer rule -------------------------
+
+    def test_bot_historical_only_in_m16_loader(self):
+        """bot.historical is the M16 access path. Only
+        bot/ml/dataset/m16_loader.py may import it (analogous to
+        bot/backtesting/data_loader.py being the single M16 importer
+        for M17)."""
+        allowed_importer = (Path(__file__).parent / "bot" / "ml" /
+                             "dataset" / "m16_loader.py").resolve()
+        offenders = []
+        for f in _walk_bot_ml_py_files():
+            if f.resolve() == allowed_importer:
+                continue
+            for imp in _imports_in_file(f):
+                if imp == "bot.historical" or imp.startswith(
+                        "bot.historical."):
+                    offenders.append((str(f.relative_to(
+                        Path(__file__).parent)), imp))
+        self.assertEqual(offenders, [],
+            f"bot.historical must be imported ONLY by bot/ml/dataset/"
+            f"m16_loader.py; offenders: {offenders}")
+
+    # ---- generated artifacts gitignored ----------------------------
+
+    def test_data_ml_gitignored(self):
+        """data/ is gitignored in .gitignore (line 6); data/ml/ is
+        covered transitively. This test makes the invariant explicit so
+        generated ML artifacts never land in the repo."""
+        gi = (Path(__file__).parent / ".gitignore").read_text()
+        self.assertTrue(
+            "data/ml" in gi or
+            re.search(r"^data/$", gi, re.MULTILINE) is not None,
+            "data/ml/ should be gitignored (either explicitly or via "
+            "the broader data/ rule)")
+
+    # ---- new files: only the expected set --------------------------
+
+    def test_no_unexpected_files_added(self):
+        """M18 adds files only in bot/ml/, configs/ml/, test_m18_ml.py,
+        docs/M18_*.md, plus the three repo-level docs every closeout
+        updates. Same whitelist pattern as M17.B's test of the same
+        name; this is the M18-side counterpart."""
+        result = subprocess.run(
+            ["git", "diff", "--name-only", _M18_M17_BASELINE_SHA, "HEAD"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        changed = sorted(result.stdout.strip().splitlines())
+        allowed_prefixes = (
+            "bot/backtesting/", "configs/backtests/",   # M17
+            "bot/ml/",          "configs/ml/",          # M18
+        )
+        allowed_exact = {
+            "test_m17_backtesting.py",
+            "test_m18_ml.py",
+            "MILESTONE_STATUS.md",
+            "ROADMAP.md",
+            "docs/NEXT_WORK_REGISTER.md",
+            # M18 recovery-scope artifacts (this branch reconstructs
+            # M18 from transcripts; these document/support that effort).
+            ".gitignore",
+            "RECOVERY_M18_MANIFEST.md",
+        }
+        allowed_doc_regex = re.compile(
+            r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
+        unexpected = [
+            p for p in changed
+            if not p.startswith(allowed_prefixes)
+                and p not in allowed_exact
+                and not allowed_doc_regex.match(p)
+        ]
+        self.assertEqual(unexpected, [],
+            f"Unexpected files changed: {unexpected}")
 
 
 if __name__ == "__main__":
