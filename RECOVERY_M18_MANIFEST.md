@@ -210,6 +210,12 @@ The full corrected audit, the advanced M18+ requirements, the M18.B phase plan,
 per-phase tests, the push-safe workflow, and final acceptance criteria are in
 **`docs/M18_COMPLETION_PLAN.md`**.
 
+**M18.B progress:** M18.B.1 (RandomForest fallback + permutation-importance
+integration) and M18.B.2 (repro_hash_v2 full SR-8 composition, with
+`m16_bars_digest` persisted in `DatasetManifest` and `TrainOutputs.repro_hash_v2`
+populated) are DONE on the branch. Suite at 464 OK / skipped=3 with these added.
+The 428-OK figures above are the pre-M18.B recovery baseline.
+
 Remaining tasks: execute the M18.B completion phases (push-safe, one phase per
 commit); recover the 24 residual tests only if further evidence surfaces (never
 fabricate); M13.4A (Dashboard Broker Allocation) remains deferred.

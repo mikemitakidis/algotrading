@@ -40,6 +40,11 @@ of byte-identical restoration.
 > feature_store/label_store, artifact persistence, full CLI). The
 > completion roadmap, advanced M18+ requirements, M18.B phases, and
 > final acceptance criteria are in **`docs/M18_COMPLETION_PLAN.md`**.
+>
+> **M18.B progress:** M18.B.1 (RandomForest fallback) and M18.B.2
+> (repro_hash_v2 full SR-8 composition) are DONE on the branch. Suite is
+> at 464 OK / skipped=3 with these phases added (recovery-baseline above
+> reflects the pre-M18.B state).
 
 ---
 

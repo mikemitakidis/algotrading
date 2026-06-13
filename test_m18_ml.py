@@ -578,10 +578,203 @@ class G1_Hashing(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# G1_Errors — M18 error hierarchy (reconstructed from contract)
+# G1_ReproHashV2 — SR-8 full reproducibility composition (M18.B.2)
 # ─────────────────────────────────────────────────────────────────────
 
-class G1_Errors(unittest.TestCase):
+class G1_ReproHashV2(unittest.TestCase):
+
+    def _tc(self, **over):
+        d = {
+            "model_type": "M_random_forest",
+            "train_mode": "model_b_candidate_quality",
+            "target_label_id": "triple_barrier_atr_2_3_50_won",
+            "hyperparameters": {}, "seed": 42, "fixture_mode": False,
+            "dataset_id": "DS1",
+        }
+        d.update(over)
+        return d
+
+    def _mf(self, **over):
+        d = {
+            "dataset_id": "DS1", "dataset_hash_sha256": "abc123",
+            "feature_specs_hash": "feat1", "label_specs_hash": "lbl1",
+            "anchor_set": "model_b_1h_union_candidates",
+            "anchor_count_train": 100, "anchor_count_val": 30,
+            "anchor_count_test": 30, "coverage_degraded": False,
+            "fixture_only": False, "promotion_eligible": True,
+            "promotion_blocked_reasons": [],
+        }
+        d.update(over)
+        return d
+
+    def _digest(self, **over):
+        d = {"15m": {"n_bars": 1000, "first_ts": "2024-01-01",
+                     "last_ts": "2024-06-01", "close_sum_str": "123.0",
+                     "close_sum_sq_str": "456.0"}}
+        d.update(over)
+        return d
+
+    def _libs(self, **over):
+        d = {"python": "3.11", "numpy": "2.0", "pandas": "2.0",
+             "sklearn": "1.8", "lightgbm": "absent"}
+        d.update(over)
+        return d
+
+    def _hash(self, **over):
+        kw = dict(
+            train_config=over.pop("train_config", self._tc()),
+            dataset_manifest=over.pop("dataset_manifest", self._mf()),
+            feature_schema_hash=over.pop("feature_schema_hash", "feat1"),
+            label_schema_hash=over.pop("label_schema_hash", "lbl1"),
+            m16_bars_digest=over.pop("m16_bars_digest", self._digest()),
+            library_versions=over.pop("library_versions", self._libs()),
+            git_sha=over.pop("git_sha", "deadbeef"),
+        )
+        kw.update(over)
+        return ml_hashing.repro_hash_v2(**kw)
+
+    def test_repro_hash_v2_same_inputs_same_hash(self):
+        self.assertEqual(self._hash(), self._hash())
+
+    def test_repro_hash_v2_changes_when_feature_schema_changes(self):
+        self.assertNotEqual(
+            self._hash(feature_schema_hash="feat1"),
+            self._hash(feature_schema_hash="feat2"))
+
+    def test_repro_hash_v2_changes_when_label_schema_changes(self):
+        self.assertNotEqual(
+            self._hash(label_schema_hash="lbl1"),
+            self._hash(label_schema_hash="lbl2"))
+
+    def test_repro_hash_v2_changes_when_train_config_changes(self):
+        self.assertNotEqual(
+            self._hash(train_config=self._tc(seed=1)),
+            self._hash(train_config=self._tc(seed=2)))
+
+    def test_repro_hash_v2_changes_when_dataset_manifest_changes(self):
+        self.assertNotEqual(
+            self._hash(dataset_manifest=self._mf(anchor_count_train=100)),
+            self._hash(dataset_manifest=self._mf(anchor_count_train=999)))
+
+    def test_repro_hash_v2_changes_when_m16_bars_digest_changes(self):
+        d2 = self._digest()
+        d2["15m"]["close_sum_str"] = "999.0"
+        self.assertNotEqual(
+            self._hash(m16_bars_digest=self._digest()),
+            self._hash(m16_bars_digest=d2))
+
+    def test_repro_hash_v2_changes_when_git_sha_changes(self):
+        self.assertNotEqual(
+            self._hash(git_sha="aaa"), self._hash(git_sha="bbb"))
+
+    def test_repro_hash_v2_changes_when_library_version_changes(self):
+        self.assertNotEqual(
+            self._hash(library_versions=self._libs(numpy="2.0")),
+            self._hash(library_versions=self._libs(numpy="2.1")))
+
+    def test_repro_hash_v2_component_hashes_are_present(self):
+        payload = ml_hashing.repro_hash_v2_payload(
+            train_config=self._tc(), dataset_manifest=self._mf(),
+            feature_schema_hash="feat1", label_schema_hash="lbl1",
+            m16_bars_digest=self._digest(), library_versions=self._libs(),
+            git_sha="deadbeef")
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["algorithm"],
+                          ml_hashing.REPRO_HASH_V2_ALGORITHM)
+        ch = ml_hashing.repro_hash_v2_component_hashes(payload)
+        for k in ("feature_schema_hash", "label_schema_hash",
+                   "train_config_hash", "dataset_manifest_hash",
+                   "m16_bars_hash", "library_versions_hash", "git_head"):
+            self.assertIn(k, ch)
+
+    def test_repro_hash_v2_rejects_missing_required_train_config_fields(self):
+        with self.assertRaises(ValueError):
+            self._hash(train_config={"model_type": "B2_logistic"})
+
+    def test_repro_hash_v2_rejects_missing_required_manifest_fields(self):
+        with self.assertRaises(ValueError):
+            self._hash(dataset_manifest={"dataset_id": "DS1"})
+
+    def test_repro_hash_v2_requires_bars_fingerprint(self):
+        with self.assertRaises(ValueError):
+            ml_hashing.repro_hash_v2(
+                train_config=self._tc(), dataset_manifest=self._mf(),
+                feature_schema_hash="feat1", label_schema_hash="lbl1",
+                library_versions=self._libs(), git_sha="x")
+
+    def test_repro_hash_v2_rejects_conflicting_schema_hash(self):
+        with self.assertRaises(ValueError):
+            ml_hashing.repro_hash_v2(
+                train_config=self._tc(), dataset_manifest=self._mf(),
+                feature_schema={"a": 1}, feature_schema_hash="not_matching",
+                label_schema_hash="lbl1",
+                m16_bars_digest=self._digest(),
+                library_versions=self._libs(), git_sha="x")
+
+    def test_repro_hash_v2_does_not_mutate_inputs(self):
+        import copy
+        tc, mf, dg, lv = (self._tc(), self._mf(), self._digest(),
+                           self._libs())
+        tc_c, mf_c, dg_c, lv_c = (copy.deepcopy(tc), copy.deepcopy(mf),
+                                   copy.deepcopy(dg), copy.deepcopy(lv))
+        ml_hashing.repro_hash_v2(
+            train_config=tc, dataset_manifest=mf,
+            feature_schema_hash="feat1", label_schema_hash="lbl1",
+            m16_bars_digest=dg, library_versions=lv, git_sha="x")
+        self.assertEqual((tc, mf, dg, lv), (tc_c, mf_c, dg_c, lv_c))
+
+    def test_repro_hash_v1_remains_backward_compatible(self):
+        h = ml_hashing.repro_hash(
+            self._tc(), self._libs(), "deadbeef")
+        self.assertEqual(len(h), 64)
+        # v1 and v2 are different hashes (different surfaces)
+        self.assertNotEqual(h, self._hash())
+
+    def test_repro_hash_v2_precomputed_schema_hash_marked_source(self):
+        payload = ml_hashing.repro_hash_v2_payload(
+            train_config=self._tc(), dataset_manifest=self._mf(),
+            feature_schema_hash="feat1", label_schema_hash="lbl1",
+            m16_bars_digest=self._digest(), library_versions=self._libs(),
+            git_sha="x")
+        self.assertEqual(payload["feature_schema_source"],
+                          "precomputed_hash")
+        self.assertEqual(payload["label_schema_source"],
+                          "precomputed_hash")
+
+    def test_train_outputs_contains_repro_hash_v2(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertIsNotNone(out.repro_hash_v2)
+        self.assertEqual(len(out.repro_hash_v2), 64)
+        self.assertIn("repro_hash_v2", out.to_dict())
+
+    def test_dataset_manifest_persists_m16_bars_digest(self):
+        res = _assemble_for_training()
+        md = res.manifest.to_dict()
+        self.assertIn("m16_bars_digest", md)
+        self.assertTrue(md["m16_bars_digest"])
+
+    def test_dataset_hash_still_deterministic_after_m16_bars_digest_field(self):
+        r1 = _assemble_for_training()
+        r2 = _assemble_for_training()
+        self.assertEqual(r1.manifest.dataset_hash_sha256,
+                          r2.manifest.dataset_hash_sha256)
+
+    def test_old_manifest_roundtrip_still_safe_if_field_missing(self):
+        from bot.ml.dataset.manifest import DatasetManifest
+        res = _assemble_for_training()
+        md = res.manifest.to_dict()
+        old = {k: v for k, v in md.items() if k != "m16_bars_digest"}
+        rt = DatasetManifest.from_dict(old)
+        self.assertEqual(rt.m16_bars_digest, {})
+        self.assertEqual(rt.dataset_hash_sha256,
+                          res.manifest.dataset_hash_sha256)
+
+
+
 
     def test_all_m18_errors_subclass_base(self):
         for name in ("M18ConfigError", "M18SchemaError", "M18DataError",

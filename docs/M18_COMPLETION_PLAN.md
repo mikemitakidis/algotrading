@@ -70,10 +70,14 @@ corrections over the first audit pass:
    explicitly requested and never silently replaces M_lightgbm. Permutation
    importance is fully integrated for it (added to `SUPPORTED_MODEL_TYPES` with
    a dispatch branch in `bot/ml/evaluation/permutation_importance.py`).
-2. **repro_hash_v2 (SR-8)** — current `repro_hash(config, library_versions,
-   git_sha)` is a subset; the plan required feature/label/train_config/
-   dataset_manifest canonical JSON + per-symbol M16 bar SHA + git head +
-   python/numpy/pandas/sklearn/lightgbm versions as explicit components.
+2. **repro_hash_v2 (SR-8)** — **RESOLVED (M18.B.2).** `bot/ml/hashing.py` now
+   exposes `repro_hash_v2` / `repro_hash_v2_payload` /
+   `repro_hash_v2_component_hashes` composing all SR-8 components
+   (feature/label schema hashes, train_config, dataset_manifest, M16 bars
+   digest, library versions + their hash, git head) with per-component hashes.
+   `DatasetManifest` now persists `m16_bars_digest` (backward-compatible) and
+   `TrainOutputs.repro_hash_v2` is populated by the trainer. v1 `repro_hash` is
+   preserved.
 3. **Real isotonic calibration model** — fit-on-val, apply-to-test, persist;
    pre/post Brier/ECE/MCE in the eval report.
 4. **Strict production thinness gates** — keep cold-start defaults for build,
@@ -109,7 +113,7 @@ corrections over the first audit pass:
 | Global NaN→0 imputation encodes missingness as a real value | `models/base.py::extract_xy_for_split` | Important (modelling) | per-group fill + missingness indicators + intentional-NaN tests |
 | AV failure reason swallowed | `dataset/assembler.py` `except Exception: av_result=None` | Important | persist structured failure record |
 | `M_random_forest` advertised but unimplemented | `models/trainer.py` | Important | **RESOLVED (M18.B.1)** — implemented as sklearn RandomForestTrainer |
-| repro_hash weaker than SR-8 | `hashing.py` | Important | repro_hash_v2 (M18.B.2) |
+| repro_hash weaker than SR-8 | `hashing.py` | Important | **RESOLVED (M18.B.2)** — repro_hash_v2 full SR-8 composition |
 
 No integrity-gate bypass, no mutable `approved_for_live`, no `signals.db`
 writes — those remain correct.
@@ -324,7 +328,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 |---|---|---|
 | **M18.B.0** | Save audit + completion roadmap (this commit) | — |
 | **M18.B.1** | RandomForest fallback (sklearn, deterministic) + permutation-importance integration — **DONE** | — |
-| **M18.B.2** | repro_hash_v2 (full SR-8 composition) | — |
+| **M18.B.2** | repro_hash_v2 (full SR-8 composition) — **DONE** | — |
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) | — |
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) | — |

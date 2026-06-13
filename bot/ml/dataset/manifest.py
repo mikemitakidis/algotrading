@@ -31,7 +31,7 @@ dataset, not of the dataset itself).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -133,6 +133,14 @@ class DatasetManifest:
     # Adversarial validation (set AFTER AV runs; None until then)
     adversarial_validation: Optional[Dict[str, Any]] = None
 
+    # M16 input-bars digest (M18.B.2 / SR-8). The compact per-timeframe
+    # fingerprint (n_bars / first_ts / last_ts / close sums) that already
+    # feeds dataset_hash_sha256 via compute_dataset_hash — now PERSISTED
+    # so repro_hash_v2 can fingerprint the source data without storing
+    # raw OHLCV. Added LAST + default_factory so older manifests that
+    # predate this field still round-trip (from_dict tolerates absence).
+    m16_bars_digest: Dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -143,7 +151,12 @@ class DatasetManifest:
                 f"DatasetManifest schema_version must be "
                 f"{MANIFEST_SCHEMA_VERSION}, got "
                 f"{d.get('schema_version')!r}")
-        return cls(**d)
+        # Backward compatibility: m16_bars_digest was added in M18.B.2.
+        # Older manifests won't have it — default to {} rather than
+        # failing the round-trip. We only pass keys the dataclass knows.
+        known = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in d.items() if k in known}
+        return cls(**filtered)
 
 
 def _bars_digest(per_tf_bars: Dict[str, pd.DataFrame]) -> Dict[str, Any]:

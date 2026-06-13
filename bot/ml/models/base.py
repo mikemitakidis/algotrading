@@ -198,5 +198,10 @@ class TrainOutputs:
     # Thinness diagnostics
     thinness_status: Dict[str, Any]
 
+    # SR-8 reproducibility hash (M18.B.2). Backward-compatible: defaults
+    # to None so older serialised TrainOutputs / registry entries that
+    # predate v2 still construct. Populated by Trainer.train_one().
+    repro_hash_v2: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

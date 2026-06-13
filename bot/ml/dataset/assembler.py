@@ -492,6 +492,7 @@ class DatasetAssembler:
             promotion_blocked_reasons=promotion_blocked_reasons,
             adversarial_validation=(av_result.to_dict()
                                       if av_result else None),
+            m16_bars_digest=bars_digest_dict,
         )
 
         return AssemblerResult(
