@@ -107,21 +107,33 @@ def extract_xy_for_split(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Materialise (X, y) for `indices` from the joined dataset.
 
-    NaN handling
-    ------------
-    Feature NaN: replaced with 0.0 (LR / LightGBM behaviour). NOT a
-    silent-imputation trick on real data — features near warmup are
-    expected to have NaN, and the assembler's pending exclusion has
-    already handled label-side NaN.
+    NaN handling (M18.B.5 explicit missingness policy)
+    --------------------------------------------------
+    Feature NaN is filled per the central policy
+    (bot.ml.features.missingness): a deterministic NEUTRAL fill (0.0,
+    not data-derived → no leakage). The matrix is then asserted finite
+    (no NaN/inf/object) before being returned, so NaN/inf can never
+    reach a model .fit(). Per-column missingness indicators and the
+    audit report are produced at dataset-assembly time (see the
+    assembler / manifest.missingness_report); here we only fill + guard.
     Target NaN: refuse — should never happen post-assembler-exclusion.
     """
+    from bot.ml.features.missingness import (
+        apply_missingness_fill, assert_finite_matrix)
     if len(indices) == 0:
         return (np.empty((0, len(feature_columns)), dtype=np.float64),
                 np.empty((0,), dtype=np.float64))
     sub = dataset.iloc[indices]
     X = sub[feature_columns].to_numpy(dtype=np.float64, copy=True)
-    # Replace feature NaN with 0 for compatibility with LR/LightGBM
-    X[np.isnan(X)] = 0.0
+    # Explicit missingness policy: deterministic neutral fill (+ the
+    # assembler-side report/indicators). Replaces the prior silent
+    # blanket `X[np.isnan(X)] = 0.0`.
+    X, _indicators, _indicator_names = apply_missingness_fill(
+        X, feature_columns)
+    # Guard: NaN/inf must never reach the model. inf is NOT filled by
+    # the policy (it signals a feature-computation bug), so this raises
+    # M18DataError on remaining inf.
+    assert_finite_matrix(X, name="feature matrix (post-missingness)")
     y = sub[target_label_id].to_numpy(dtype=np.float64, copy=True)
     if np.isnan(y).any():
         raise InsufficientDataError(
@@ -210,6 +222,12 @@ class TrainOutputs:
     # override) at the registry promotion layer.
     production_thinness_status: Dict[str, Any] = field(
         default_factory=dict)
+
+    # M18.B.5 — explicit missingness policy provenance, surfaced from the
+    # dataset manifest so the model output records which policy cleaned
+    # its features. Backward-compatible (default "" / default_factory).
+    missingness_policy_hash: str = ""
+    missingness_report: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

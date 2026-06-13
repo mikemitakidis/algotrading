@@ -141,6 +141,13 @@ class DatasetManifest:
     # predate this field still round-trip (from_dict tolerates absence).
     m16_bars_digest: Dict[str, Any] = field(default_factory=dict)
 
+    # M18.B.5 — explicit missingness policy provenance. Backward-
+    # compatible (default_factory / default ""), filtered by from_dict
+    # so older manifests round-trip. The policy hash also feeds the
+    # dataset hash + repro_hash_v2 so a policy change is detectable.
+    missingness_policy_hash: str = ""
+    missingness_report: Dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -205,6 +212,7 @@ def compute_dataset_hash(
     test_frac: float,
     embargo_bars: int,
     fixture_mode_invocation: bool,
+    missingness_policy_hash: str = "",
 ) -> str:
     """Deterministic SHA-256 over the dataset's identity-relevant
     fields. Uses canonical_json (sorted keys, fixed separators) to
@@ -222,6 +230,7 @@ def compute_dataset_hash(
         "test_frac":              round(float(test_frac), 6),
         "embargo_bars":           int(embargo_bars),
         "fixture_mode_invocation": bool(fixture_mode_invocation),
+        "missingness_policy_hash": str(missingness_policy_hash),
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
     }
     return sha256_hex(canonical_json(payload))

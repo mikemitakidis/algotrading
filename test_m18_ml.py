@@ -2845,6 +2845,270 @@ class G4_Manifest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G4_MissingnessPolicy — explicit NaN / missingness policy (M18.B.5)
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_MissingnessPolicy(unittest.TestCase):
+    """Explicit, deterministic, auditable missingness policy:
+    per-group neutral fill + indicators, JSON-safe report, policy hash
+    that feeds dataset_hash/repro_hash_v2, and a finite-matrix guard so
+    NaN/inf never reach .fit()."""
+
+    def _miss(self):
+        import bot.ml.features.missingness as miss
+        return miss
+
+    # 1
+    def test_missingness_policy_object_is_canonical_and_hashes(self):
+        miss = self._miss()
+        h1 = miss.missingness_policy_hash()
+        h2 = miss.missingness_policy_hash()
+        self.assertEqual(h1, h2)
+        self.assertEqual(len(h1), 64)
+        # changing the policy changes the hash
+        orig = miss.FEATURE_GROUP_POLICY["trend"]["strategy"]
+        miss.FEATURE_GROUP_POLICY["trend"]["strategy"] = "changed_for_test"
+        try:
+            self.assertNotEqual(h1, miss.missingness_policy_hash())
+        finally:
+            miss.FEATURE_GROUP_POLICY["trend"]["strategy"] = orig
+        self.assertEqual(h1, miss.missingness_policy_hash())
+
+    # 2
+    def test_missingness_policy_covers_all_10_feature_groups(self):
+        miss = self._miss()
+        from bot.ml.features import ALL_FEATURE_GROUPS
+        self.assertEqual(set(miss.LOCKED_FEATURE_GROUPS),
+                          set(ALL_FEATURE_GROUPS.keys()))
+        self.assertEqual(len(miss.LOCKED_FEATURE_GROUPS), 10)
+        for g in ALL_FEATURE_GROUPS:
+            self.assertIn(g, miss.FEATURE_GROUP_POLICY)
+
+    # 3
+    def test_missingness_policy_rejects_unknown_group(self):
+        miss = self._miss()
+        with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+            miss.assert_known_groups(["totally_unknown_group.feat"])
+        self.assertIn("missingness_policy_unknown_group",
+                       str(ctx.exception))
+
+    # 4
+    def test_warmup_nan_handled_deterministically(self):
+        miss = self._miss()
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        X = res.dataset[fcols].to_numpy(dtype=np.float64)
+        self.assertTrue(np.isnan(X).any())   # warmup NaN present
+        Xf1, _i1, _n1 = miss.apply_missingness_fill(X, fcols)
+        Xf2, _i2, _n2 = miss.apply_missingness_fill(X, fcols)
+        self.assertFalse(np.isnan(Xf1).any())
+        np.testing.assert_array_equal(Xf1, Xf2)   # deterministic
+
+    # 5
+    def test_missingness_indicators_added_for_expected_missing_groups(self):
+        miss = self._miss()
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        X = res.dataset[fcols].to_numpy(dtype=np.float64)
+        _Xf, inds, names = miss.apply_missingness_fill(X, fcols)
+        self.assertTrue(all(n.endswith("__was_missing") for n in names))
+        self.assertEqual(inds.shape[1], len(names))
+        # at least one trend / price_return indicator present
+        self.assertTrue(any(n.startswith("trend.") for n in names))
+
+    # 6
+    def test_signal_history_missingness_is_intentional(self):
+        miss = self._miss()
+        p = miss.FEATURE_GROUP_POLICY["signal_history"]
+        self.assertTrue(p["indicator_required"])
+        self.assertIn("intentional", p["expected_reason"])
+        # a synthetic all-NaN signal_history column fills to neutral +
+        # indicator, no final NaN
+        cols = ["signal_history.x"]
+        X = np.array([[np.nan], [np.nan], [1.0]])
+        Xf, inds, names = miss.apply_missingness_fill(X, cols)
+        self.assertFalse(np.isnan(Xf).any())
+        self.assertEqual(names, ["signal_history.x__was_missing"])
+        np.testing.assert_array_equal(inds[:, 0], np.array([1.0, 1.0, 0.0]))
+
+    # 7
+    def test_market_context_missingness_is_reported(self):
+        miss = self._miss()
+        cols = ["market_context.a", "market_context.b"]
+        X = np.array([[np.nan, 1.0], [2.0, np.nan]])
+        rep = miss.build_missingness_report(X, cols)
+        self.assertIn("market_context", rep["groups"])
+        mc = rep["groups"]["market_context"]
+        self.assertEqual(mc["nan_before"], 2)
+        self.assertEqual(mc["nan_after"], 0)
+        self.assertTrue(mc["indicators_added"])
+
+    # 8
+    def test_mtf_confluence_missingness_no_lookahead(self):
+        # The fill is a constant (0.0) and indicators are per-cell; no
+        # value is sourced from another (future) row. Verify a later
+        # non-missing value does not change an earlier filled cell.
+        miss = self._miss()
+        cols = ["mtf_confluence.htf"]
+        X = np.array([[np.nan], [np.nan], [5.0]])
+        Xf, _i, _n = miss.apply_missingness_fill(X, cols)
+        # early rows filled with neutral 0.0, NOT back-filled from 5.0
+        self.assertEqual(Xf[0, 0], 0.0)
+        self.assertEqual(Xf[1, 0], 0.0)
+        self.assertEqual(Xf[2, 0], 5.0)
+
+    # 9
+    def test_symbol_meta_unexpected_missing_detected(self):
+        miss = self._miss()
+        self.assertTrue(
+            miss.FEATURE_GROUP_POLICY["symbol_meta"]["expect_no_missing"])
+        cols = ["symbol_meta.sector_code"]
+        X = np.array([[np.nan], [1.0]])
+        rep = miss.build_missingness_report(X, cols)
+        self.assertIn("unexpected_missingness_in_symbol_meta",
+                       rep["unexpected_missingness_flags"])
+
+    # 10
+    def test_final_feature_matrix_has_no_nan_or_inf(self):
+        miss = self._miss()
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        for idxs in (res.split.train_anchor_indices,
+                      res.split.val_anchor_indices,
+                      res.split.test_anchor_indices):
+            X, _y = extract_xy_for_split(
+                res.dataset, np.asarray(idxs),
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                feature_columns=fcols)
+            self.assertFalse(np.isnan(X).any())
+            self.assertFalse(np.isinf(X).any())
+
+    # 11
+    def test_trainer_rejects_remaining_nan_before_fit(self):
+        # assert_finite_matrix raises on NaN (extract_xy fills NaN, so we
+        # test the guard directly with a NaN that bypasses fill — i.e.
+        # the guard itself is the last line of defence).
+        miss = self._miss()
+        with self.assertRaises(ml_errors.M18DataError) as ctx:
+            miss.assert_finite_matrix(
+                np.array([[1.0, np.nan]]), name="X")
+        self.assertIn("missingness_remaining_nan", str(ctx.exception))
+
+    # 12
+    def test_trainer_rejects_remaining_inf_before_fit(self):
+        miss = self._miss()
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        ti = int(res.split.train_anchor_indices[0])
+        res.dataset.loc[res.dataset.index[ti], fcols[0]] = np.inf
+        with self.assertRaises(ml_errors.M18DataError) as ctx:
+            ModelTrainer().train_one(
+                _make_train_config(
+                    "B2_logistic",
+                    dataset_id=res.manifest.dataset_id),
+                res)
+        self.assertIn("missingness_remaining_inf", str(ctx.exception))
+
+    # 13
+    def test_missingness_report_is_json_safe(self):
+        res = _assemble_for_training()
+        rep = res.manifest.missingness_report
+        s = json.dumps(rep, allow_nan=False)
+        self.assertIsInstance(s, str)
+
+    # 14
+    def test_missingness_report_persisted_in_manifest(self):
+        miss = self._miss()
+        res = _assemble_for_training()
+        self.assertTrue(res.manifest.missingness_policy_hash)
+        self.assertEqual(res.manifest.missingness_policy_hash,
+                          miss.missingness_policy_hash())
+        self.assertIn("groups", res.manifest.missingness_report)
+
+    # 15
+    def test_missingness_manifest_round_trip_old_manifest_safe(self):
+        res = _assemble_for_training()
+        d = res.manifest.to_dict()
+        d_old = {k: v for k, v in d.items()
+                 if k not in ("missingness_policy_hash",
+                               "missingness_report")}
+        m = ds_manifest.DatasetManifest.from_dict(d_old)
+        self.assertEqual(m.missingness_policy_hash, "")
+        self.assertEqual(m.missingness_report, {})
+        # new manifest also round-trips
+        m2 = ds_manifest.DatasetManifest.from_dict(d)
+        self.assertEqual(m2.missingness_policy_hash,
+                          res.manifest.missingness_policy_hash)
+
+    # 16
+    def test_repro_hash_v2_changes_when_missingness_policy_changes(self):
+        # The policy hash feeds dataset_hash, which is part of the
+        # manifest dict that repro_hash_v2 hashes. Verify dataset_hash
+        # (the carrier) changes with the policy hash.
+        kw = dict(
+            symbol="X", timeframes=["15m"], anchor_tf="15m",
+            anchor_set="A", bars_digest={}, feature_specs_hash="f",
+            label_specs_hash="l", train_frac=0.6, val_frac=0.2,
+            test_frac=0.2, embargo_bars=10,
+            fixture_mode_invocation=False)
+        h_a = ds_manifest.compute_dataset_hash(
+            **kw, missingness_policy_hash="HASH_A")
+        h_b = ds_manifest.compute_dataset_hash(
+            **kw, missingness_policy_hash="HASH_B")
+        self.assertNotEqual(h_a, h_b)
+
+    # 17
+    def test_dataset_hash_changes_when_missingness_policy_changes(self):
+        kw = dict(
+            symbol="X", timeframes=["15m"], anchor_tf="15m",
+            anchor_set="A", bars_digest={}, feature_specs_hash="f",
+            label_specs_hash="l", train_frac=0.6, val_frac=0.2,
+            test_frac=0.2, embargo_bars=10,
+            fixture_mode_invocation=False)
+        base = ds_manifest.compute_dataset_hash(**kw)          # default ""
+        changed = ds_manifest.compute_dataset_hash(
+            **kw, missingness_policy_hash="nonempty")
+        self.assertNotEqual(base, changed)
+
+    # 18
+    def test_missingness_report_in_train_outputs(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config(
+                "B2_logistic", dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertTrue(out.missingness_policy_hash)
+        self.assertIn("groups", out.missingness_report)
+        self.assertIn("missingness_report", out.to_dict())
+
+    # 19
+    def test_no_blanket_fillna_without_indicator(self):
+        # Every group that is filled must require an indicator — there is
+        # no group whose NaN disappears silently with no indicator and
+        # no report entry.
+        miss = self._miss()
+        for g, p in miss.FEATURE_GROUP_POLICY.items():
+            self.assertTrue(
+                p["indicator_required"],
+                f"group {g} fills NaN but has no required indicator")
+
+    # 20
+    def test_non_missing_values_unchanged_by_policy(self):
+        miss = self._miss()
+        cols = ["trend.a", "momentum.b"]
+        X = np.array([[1.5, -2.0], [np.nan, 3.0], [4.0, 5.0]])
+        Xf, _i, _n = miss.apply_missingness_fill(X, cols)
+        # non-missing cells identical
+        self.assertEqual(Xf[0, 0], 1.5)
+        self.assertEqual(Xf[0, 1], -2.0)
+        self.assertEqual(Xf[1, 1], 3.0)
+        self.assertEqual(Xf[2, 0], 4.0)
+        self.assertEqual(Xf[2, 1], 5.0)
+        # the one missing cell became neutral 0.0
+        self.assertEqual(Xf[1, 0], 0.0)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G4_WalkForward — single split + embargo + label-overlap purge
 # ─────────────────────────────────────────────────────────────────────
 

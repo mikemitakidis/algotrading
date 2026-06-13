@@ -569,4 +569,8 @@ class Trainer:
             thinness_status=thinness_status,
             repro_hash_v2=rh_v2,
             production_thinness_status=production_thinness_status,
+            missingness_policy_hash=getattr(
+                manifest, "missingness_policy_hash", ""),
+            missingness_report=getattr(
+                manifest, "missingness_report", {}) or {},
         )

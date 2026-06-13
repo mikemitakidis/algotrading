@@ -384,6 +384,17 @@ class DatasetAssembler:
         bars_digest_dict = _bars_digest(per_tf_bars)
         feat_hash = compute_feature_specs_hash(ALL_FEATURE_GROUPS)
         lbl_hash  = compute_label_specs_hash(ALL_LABEL_GROUPS)
+        # M18.B.5 — explicit missingness policy: hash + report over the
+        # assembled feature table. The policy hash is folded into the
+        # dataset hash so a policy change changes the dataset identity.
+        from bot.ml.features.missingness import (
+            missingness_policy_hash as _mp_hash,
+            build_missingness_report as _build_mp_report)
+        from bot.ml.models.base import select_feature_columns as _sel_feat
+        missingness_hash = _mp_hash()
+        _feat_cols_for_report = _sel_feat(list(feature_df.columns))
+        missingness_report = _build_mp_report(
+            feature_df, _feat_cols_for_report)
         dataset_hash = compute_dataset_hash(
             symbol=self.cfg.symbol,
             timeframes=list(self.cfg.timeframes),
@@ -397,6 +408,7 @@ class DatasetAssembler:
             test_frac=self.cfg.test_frac,
             embargo_bars=embargo_bars,
             fixture_mode_invocation=self.cfg.fixture_mode,
+            missingness_policy_hash=missingness_hash,
         )
 
         # 9. Manifest. Compute Q19 timeframe lists and the promotion
@@ -493,6 +505,8 @@ class DatasetAssembler:
             adversarial_validation=(av_result.to_dict()
                                       if av_result else None),
             m16_bars_digest=bars_digest_dict,
+            missingness_policy_hash=missingness_hash,
+            missingness_report=missingness_report,
         )
 
         return AssemblerResult(

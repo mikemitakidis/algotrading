@@ -120,8 +120,24 @@ corrections over the first audit pass:
    but can NEVER create a promotable registry candidate. `production_thinness_
    status` carries `threshold_profile` ("strict"/"relaxed_for_tests") and
    `strict_profile` (bool).
-5. **Explicit NaN/missingness policy** — per-group fill + indicator columns +
-   tests that warmup/signal_history/market_context NaN behaviour is intentional.
+5. **Explicit NaN/missingness policy** — **RESOLVED (M18.B.5).** Central
+   policy in `bot/ml/features/missingness.py` (`MISSINGNESS_POLICY_VERSION =
+   m18_missingness_v1`) covering all 10 feature groups with an explicit
+   per-group strategy (deterministic neutral fill 0.0 + per-column
+   `<feature>__was_missing` indicator) and `expect_no_missing` flags for
+   scanner_replica / symbol_meta (unexpected missingness is surfaced in the
+   report, never hidden). The prior silent `X[np.isnan(X)] = 0.0` in
+   `models/base.py` is replaced by `apply_missingness_fill()` +
+   `assert_finite_matrix()`, so NaN is filled deterministically and remaining
+   inf/NaN/object raises `M18DataError` before any `.fit()`. A JSON-safe
+   `missingness_report` + `missingness_policy_hash` are computed at assembly and
+   persisted in `DatasetManifest` (and surfaced on `TrainOutputs`); the policy
+   hash is folded into `compute_dataset_hash`, so the dataset hash — and hence
+   `repro_hash_v2` (via `dataset_manifest_hash`) — changes when the policy
+   changes. **Known limitation:** indicator columns are computed at the model
+   boundary and reported at assembly, but are NOT materialised as persisted
+   dataset columns; policy-change *detection* is via the policy hash in the
+   dataset hash, not via added schema columns.
 6. **AV failure-reason persistence** — record exception class/message/cause
    (too-few-rows vs NaN vs one-class vs sklearn-missing) in the manifest.
 7. **Content-addressed feature_store / label_store** —
@@ -369,7 +385,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.2** | repro_hash_v2 (full SR-8 composition) — **DONE** | — |
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) — **DONE** | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) — **DONE** | — |
-| **M18.B.5** | NaN/missingness policy (per-group fill + indicators) | — |
+| **M18.B.5** | NaN/missingness policy (per-group fill + indicators) — **DONE** | — |
 | **M18.B.6** | AV failure-reason persistence | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (atomic, parallel-safe) | — |
 | **M18.B.8** | Dataset/model artifact persistence + model-card output | B.7 |

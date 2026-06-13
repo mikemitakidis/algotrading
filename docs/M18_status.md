@@ -48,10 +48,17 @@ of byte-identical restoration.
 > gates — separate 2000/500/100/50 profile, integrity-class, force
 > cannot override, and non-bypassable: any non-locked profile emits
 > production_threshold_profile_not_locked so relaxed thresholds can
-> never create a promotable model; trainability gates unchanged) are DONE on the
+> never create a promotable model; trainability gates unchanged), and
+> M18.B.5 (explicit NaN/missingness policy — central
+> bot/ml/features/missingness.py over all 10 feature groups,
+> deterministic neutral fill + per-column __was_missing indicators,
+> JSON-safe report + policy hash persisted in DatasetManifest and
+> surfaced on TrainOutputs, policy hash folded into dataset_hash so
+> repro_hash_v2 changes with the policy, and a finite-matrix guard that
+> raises M18DataError on NaN/inf/object before .fit()) are DONE on the
 > branch, plus a B1–B3 audit hardening pass (RF 0/1-only +
 > finite-target checks; repro_hash_v2 fail-closed; isotonic
-> shape/non-binary/strict-JSON/artifact validation). Suite is at 514
+> shape/non-binary/strict-JSON/artifact validation). Suite is at 534
 > OK / skipped=3 with these phases added (recovery-baseline above
 > reflects the pre-M18.B state).
 
