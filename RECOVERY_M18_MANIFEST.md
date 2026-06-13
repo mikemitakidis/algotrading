@@ -226,7 +226,7 @@ thinness gates — a separate `ProductionThinnessThresholds` profile of
 `production:*` blocked reasons that `--force` cannot override; the profile is
 non-bypassable — a non-locked (relaxed) profile emits
 `production_threshold_profile_not_locked` so relaxed thresholds can never create
-a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 534 OK / skipped=3
+a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 541 OK / skipped=3
 
 M18.B.5 (explicit NaN/missingness policy) is DONE: central
 `bot/ml/features/missingness.py` (`m18_missingness_v1`) covers all 10 feature
@@ -235,13 +235,13 @@ indicators; `expect_no_missing` groups (scanner_replica, symbol_meta) surface
 unexpected missingness in the report. The prior silent `X[np.isnan(X)] = 0.0`
 in `models/base.py` is replaced by `apply_missingness_fill()` +
 `assert_finite_matrix()` (raises `M18DataError` on remaining NaN/inf/object
-before `.fit()`). A JSON-safe `missingness_report` + `missingness_policy_hash`
+before `.fit()`). Indicators are appended to the model matrix as REAL features (extract_xy_for_split column-stacks them), so TrainOutputs.n_features = base_feature_count + missingness_indicator_count (recorded on TrainOutputs). A JSON-safe `missingness_report` + `missingness_policy_hash`
 are persisted in `DatasetManifest` (filtered `from_dict` keeps old manifests
 round-tripping) and surfaced on `TrainOutputs`; the policy hash is folded into
 `compute_dataset_hash`, so the dataset hash and `repro_hash_v2` change when the
 policy changes. Known limitation: indicator columns are NOT materialised as
 persisted dataset columns — policy-change detection is via the policy hash in
-the dataset hash, not via schema columns.
+the dataset hash, not via schema columns; indicators live at the model boundary, not in select_feature_columns / persisted dataset columns.
 with these added.
 The 428-OK figures above are the pre-M18.B recovery baseline.
 

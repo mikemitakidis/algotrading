@@ -120,24 +120,30 @@ corrections over the first audit pass:
    but can NEVER create a promotable registry candidate. `production_thinness_
    status` carries `threshold_profile` ("strict"/"relaxed_for_tests") and
    `strict_profile` (bool).
-5. **Explicit NaN/missingness policy** — **RESOLVED (M18.B.5).** Central
-   policy in `bot/ml/features/missingness.py` (`MISSINGNESS_POLICY_VERSION =
-   m18_missingness_v1`) covering all 10 feature groups with an explicit
-   per-group strategy (deterministic neutral fill 0.0 + per-column
-   `<feature>__was_missing` indicator) and `expect_no_missing` flags for
-   scanner_replica / symbol_meta (unexpected missingness is surfaced in the
+5. **Explicit NaN/missingness policy** — **RESOLVED (M18.B.5 + indicator
+   fix).** Central policy in `bot/ml/features/missingness.py`
+   (`MISSINGNESS_POLICY_VERSION = m18_missingness_v1`) covering all 10 feature
+   groups with an explicit per-group strategy (deterministic neutral fill 0.0 +
+   per-column `<feature>__was_missing` indicator) and `expect_no_missing` flags
+   for scanner_replica / symbol_meta (unexpected missingness is surfaced in the
    report, never hidden). The prior silent `X[np.isnan(X)] = 0.0` in
    `models/base.py` is replaced by `apply_missingness_fill()` +
-   `assert_finite_matrix()`, so NaN is filled deterministically and remaining
-   inf/NaN/object raises `M18DataError` before any `.fit()`. A JSON-safe
-   `missingness_report` + `missingness_policy_hash` are computed at assembly and
-   persisted in `DatasetManifest` (and surfaced on `TrainOutputs`); the policy
-   hash is folded into `compute_dataset_hash`, so the dataset hash — and hence
-   `repro_hash_v2` (via `dataset_manifest_hash`) — changes when the policy
-   changes. **Known limitation:** indicator columns are computed at the model
-   boundary and reported at assembly, but are NOT materialised as persisted
-   dataset columns; policy-change *detection* is via the policy hash in the
-   dataset hash, not via added schema columns.
+   `assert_finite_matrix()`. **Indicators are REAL model features:**
+   `extract_xy_for_split` appends the indicator columns to X, so the model
+   trains on base features + indicators; `TrainOutputs.n_features` is the actual
+   model-matrix width (base + indicators), and `base_feature_count` /
+   `missingness_indicator_count` / `model_feature_count` /
+   `missingness_indicator_names` record the split. Train/val/test (and the
+   empty split) use an identical, deterministic indicator column order. A
+   JSON-safe `missingness_report` + `missingness_policy_hash` are persisted in
+   `DatasetManifest` (and surfaced on `TrainOutputs`); the policy hash is folded
+   into `compute_dataset_hash`, so the dataset hash — and hence `repro_hash_v2`
+   (via `dataset_manifest_hash`) — changes when the policy changes. **Known
+   limitation:** indicator columns are model-boundary features, NOT persisted
+   dataset columns / not in `select_feature_columns`; policy-change *detection*
+   is via the policy hash in the dataset hash, and repro_hash_v2 sensitivity is
+   indirect (through dataset_hash), not a standalone repro component. Constant
+   neutral fill only (no learned imputation). Live/predict path unchanged.
 6. **AV failure-reason persistence** — record exception class/message/cause
    (too-few-rows vs NaN vs one-class vs sklearn-missing) in the manifest.
 7. **Content-addressed feature_store / label_store** —

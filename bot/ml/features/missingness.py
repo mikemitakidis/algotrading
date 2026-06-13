@@ -170,6 +170,20 @@ def assert_known_groups(feature_columns: List[str]) -> None:
             f"to group(s) with no missingness policy: {unknown}")
 
 
+def missingness_indicator_names(feature_columns: List[str]) -> List[str]:
+    """Deterministic list of the missingness-indicator column names that
+    `apply_missingness_fill` will emit for `feature_columns`, in the
+    SAME order. Lets callers compute the model-matrix width / column
+    schema without materialising data (e.g. the empty-split case)."""
+    assert_known_groups(feature_columns)
+    names: List[str] = []
+    for col in feature_columns:
+        grp = _group_of(col)
+        if FEATURE_GROUP_POLICY[grp]["indicator_required"]:
+            names.append(f"{col}__was_missing")
+    return names
+
+
 def apply_missingness_fill(
     X: np.ndarray,
     feature_columns: List[str],

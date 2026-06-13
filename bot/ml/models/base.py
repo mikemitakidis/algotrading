@@ -111,29 +111,40 @@ def extract_xy_for_split(
     --------------------------------------------------
     Feature NaN is filled per the central policy
     (bot.ml.features.missingness): a deterministic NEUTRAL fill (0.0,
-    not data-derived → no leakage). The matrix is then asserted finite
-    (no NaN/inf/object) before being returned, so NaN/inf can never
-    reach a model .fit(). Per-column missingness indicators and the
-    audit report are produced at dataset-assembly time (see the
-    assembler / manifest.missingness_report); here we only fill + guard.
+    not data-derived → no leakage). Per-column missingness INDICATORS
+    ('<feature>__was_missing', 1.0 where the original cell was NaN) are
+    then APPENDED to the feature matrix, so the model actually trains on
+    them. The combined matrix is asserted finite (no NaN/inf/object)
+    before being returned, so NaN/inf can never reach a model .fit().
+    The returned width is len(feature_columns) + number of indicator
+    columns, identical across train/val/test for a given feature_columns
+    list (indicator set is a deterministic function of feature_columns).
     Target NaN: refuse — should never happen post-assembler-exclusion.
     """
     from bot.ml.features.missingness import (
-        apply_missingness_fill, assert_finite_matrix)
+        apply_missingness_fill, assert_finite_matrix,
+        missingness_indicator_names)
     if len(indices) == 0:
-        return (np.empty((0, len(feature_columns)), dtype=np.float64),
+        n_model_cols = (len(feature_columns)
+                        + len(missingness_indicator_names(feature_columns)))
+        return (np.empty((0, n_model_cols), dtype=np.float64),
                 np.empty((0,), dtype=np.float64))
     sub = dataset.iloc[indices]
     X = sub[feature_columns].to_numpy(dtype=np.float64, copy=True)
-    # Explicit missingness policy: deterministic neutral fill (+ the
-    # assembler-side report/indicators). Replaces the prior silent
-    # blanket `X[np.isnan(X)] = 0.0`.
-    X, _indicators, _indicator_names = apply_missingness_fill(
+    # Explicit missingness policy: deterministic neutral fill + per-column
+    # missingness indicators APPENDED as real model features. Replaces
+    # the prior silent blanket `X[np.isnan(X)] = 0.0`.
+    X_filled, indicators, _indicator_names = apply_missingness_fill(
         X, feature_columns)
+    if indicators.shape[1]:
+        X_model = np.column_stack([X_filled, indicators])
+    else:
+        X_model = X_filled
     # Guard: NaN/inf must never reach the model. inf is NOT filled by
     # the policy (it signals a feature-computation bug), so this raises
     # M18DataError on remaining inf.
-    assert_finite_matrix(X, name="feature matrix (post-missingness)")
+    assert_finite_matrix(
+        X_model, name="feature matrix (post-missingness)")
     y = sub[target_label_id].to_numpy(dtype=np.float64, copy=True)
     if np.isnan(y).any():
         raise InsufficientDataError(
@@ -141,7 +152,7 @@ def extract_xy_for_split(
             f"{int(np.isnan(y).sum())} positions in the supplied split "
             f"— the assembler should have excluded pending rows "
             f"upstream; this is a bug or a malformed split")
-    return X, y
+    return X_model, y
 
 
 @dataclass
@@ -228,6 +239,15 @@ class TrainOutputs:
     # its features. Backward-compatible (default "" / default_factory).
     missingness_policy_hash: str = ""
     missingness_report: Dict[str, Any] = field(default_factory=dict)
+
+    # M18.B.5 — model-feature breakdown. The model matrix is base
+    # features + appended missingness indicators, so n_features (above)
+    # is the ACTUAL model width. These record the split. Backward-
+    # compatible defaults.
+    base_feature_count: int = 0
+    missingness_indicator_count: int = 0
+    model_feature_count: int = 0
+    missingness_indicator_names: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

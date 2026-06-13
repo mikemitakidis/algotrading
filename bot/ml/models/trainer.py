@@ -372,7 +372,23 @@ class Trainer:
         n_train = int(len(y_train))
         n_val   = int(len(y_val))
         n_test  = int(len(y_test))
-        n_features = int(len(feature_columns))
+        # M18.B.5: the model matrix is base features + appended
+        # missingness indicators, so n_features is the ACTUAL model
+        # width, not just len(feature_columns).
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        base_feature_columns = list(feature_columns)
+        indicator_names = missingness_indicator_names(base_feature_columns)
+        model_feature_columns = base_feature_columns + indicator_names
+        n_base_features = int(len(base_feature_columns))
+        n_indicator_features = int(len(indicator_names))
+        n_features = int(X_train.shape[1])
+        # Sanity: the appended width must match the deterministic schema.
+        if n_features != len(model_feature_columns):
+            raise M18ConfigError(
+                f"model feature-matrix width {n_features} != expected "
+                f"base+indicator schema width {len(model_feature_columns)} "
+                f"— missingness indicator schema mismatch")
 
         # ── 2. Thinness gates ───────────────────────────────────
         # Skipped entirely when fixture_mode (Q16). When skipped, the
@@ -573,4 +589,8 @@ class Trainer:
                 manifest, "missingness_policy_hash", ""),
             missingness_report=getattr(
                 manifest, "missingness_report", {}) or {},
+            base_feature_count=n_base_features,
+            missingness_indicator_count=n_indicator_features,
+            model_feature_count=n_features,
+            missingness_indicator_names=list(indicator_names),
         )

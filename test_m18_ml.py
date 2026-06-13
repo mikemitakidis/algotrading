@@ -3107,6 +3107,103 @@ class G4_MissingnessPolicy(unittest.TestCase):
         # the one missing cell became neutral 0.0
         self.assertEqual(Xf[1, 0], 0.0)
 
+    # ---- B.5 fix: indicators are REAL model features ----------------
+
+    def test_extract_xy_appends_missingness_indicators_to_X(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(fcols))
+        self.assertGreater(n_ind, 0)
+        X, _y = extract_xy_for_split(
+            res.dataset, res.split.train_anchor_indices,
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            feature_columns=fcols)
+        self.assertEqual(X.shape[1], len(fcols) + n_ind)
+
+    def test_train_outputs_n_features_includes_missingness_indicators(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(fcols))
+        out = ModelTrainer().train_one(
+            _make_train_config(
+                "B2_logistic", dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertGreater(out.n_features, res.manifest.feature_count)
+        self.assertEqual(out.n_features,
+                          res.manifest.feature_count + n_ind)
+        self.assertEqual(out.base_feature_count,
+                          res.manifest.feature_count)
+        self.assertEqual(out.missingness_indicator_count, n_ind)
+        self.assertEqual(out.model_feature_count, out.n_features)
+
+    def test_train_val_test_have_same_missingness_indicator_order(self):
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        widths = []
+        for idxs in (res.split.train_anchor_indices,
+                      res.split.val_anchor_indices,
+                      res.split.test_anchor_indices):
+            X, _y = extract_xy_for_split(
+                res.dataset, np.asarray(idxs),
+                target_label_id="triple_barrier_atr_2_3_50_won",
+                feature_columns=fcols)
+            widths.append(X.shape[1])
+        self.assertEqual(len(set(widths)), 1)   # identical column count
+        # indicator names are a deterministic function of feature_columns
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        self.assertEqual(missingness_indicator_names(fcols),
+                          missingness_indicator_names(fcols))
+
+    def test_missingness_indicators_are_nonzero_when_nan_present(self):
+        res = _assemble_for_training()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        n_base = len(fcols)
+        X, _y = extract_xy_for_split(
+            res.dataset, res.split.train_anchor_indices,
+            target_label_id="triple_barrier_atr_2_3_50_won",
+            feature_columns=fcols)
+        indicator_block = X[:, n_base:]
+        self.assertGreater(indicator_block.shape[1], 0)
+        self.assertTrue((indicator_block == 1.0).any())
+        # indicators are strictly 0/1
+        self.assertTrue(np.isin(indicator_block, [0.0, 1.0]).all())
+
+    def test_no_missingness_indicator_for_unknown_group(self):
+        miss = self._miss()
+        with self.assertRaises(ml_errors.M18ConfigError):
+            miss.missingness_indicator_names(["bogus_group.feat"])
+
+    def test_missingness_report_matches_model_feature_count(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config(
+                "B2_logistic", dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertEqual(
+            out.missingness_report["feature_count_after_indicators"],
+            out.n_features)
+
+    def test_non_missing_unchanged_and_indicators_zero_for_present(self):
+        miss = self._miss()
+        cols = ["trend.a", "momentum.b"]
+        # row 0 fully present, row 1 has a missing trend.a
+        X = np.array([[1.5, -2.0], [np.nan, 3.0]])
+        Xf, inds, names = miss.apply_missingness_fill(X, cols)
+        # base values for present cells unchanged
+        self.assertEqual(Xf[0, 0], 1.5)
+        self.assertEqual(Xf[0, 1], -2.0)
+        self.assertEqual(Xf[1, 1], 3.0)
+        # indicator for the present cell (row0, trend.a) is 0
+        ti = names.index("trend.a__was_missing")
+        self.assertEqual(inds[0, ti], 0.0)
+        # indicator for the missing cell (row1, trend.a) is 1
+        self.assertEqual(inds[1, ti], 1.0)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G4_WalkForward — single split + embargo + label-overlap purge
@@ -3742,26 +3839,36 @@ class G5_FeatureSelect(unittest.TestCase):
             get_label_class("not_a_real_label_id")
 
     def test_extract_xy_split_dimensions(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
         res = _assemble_for_training()
         feat_cols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(feat_cols))
         X, y = extract_xy_for_split(
             res.dataset, res.split.train_anchor_indices,
             target_label_id="triple_barrier_atr_2_3_50_won",
             feature_columns=feat_cols)
         self.assertEqual(X.shape[0], len(res.split.train_anchor_indices))
-        self.assertEqual(X.shape[1], len(feat_cols))
+        # M18.B.5: model matrix = base features + appended missingness
+        # indicators.
+        self.assertEqual(X.shape[1], len(feat_cols) + n_ind)
         self.assertEqual(y.shape[0], X.shape[0])
         # No NaN in target (pending excluded by the assembler)
         self.assertFalse(np.isnan(y).any())
 
     def test_extract_xy_empty_indices(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
         res = _assemble_for_training()
         feat_cols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(feat_cols))
         X, y = extract_xy_for_split(
             res.dataset, np.array([], dtype=np.int64),
             target_label_id="triple_barrier_atr_2_3_50_won",
             feature_columns=feat_cols)
-        self.assertEqual(X.shape, (0, len(feat_cols)))
+        # Empty split keeps the SAME model width (base + indicators) so
+        # column counts are consistent across all splits.
+        self.assertEqual(X.shape, (0, len(feat_cols) + n_ind))
         self.assertEqual(y.shape, (0,))
 
 
