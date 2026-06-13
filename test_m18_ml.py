@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
 import io
 import json
 import os
@@ -4194,27 +4195,34 @@ class G5_PromotionGate(unittest.TestCase):
             for r in out.promotion_blocked_reasons),
             out.promotion_blocked_reasons)
 
-    def test_all_gates_pass_yields_promotion_eligible(self):
-        """With permissive thresholds AND a permissive AV gate, a
-        plain training run should be promotion_eligible=True."""
+    def test_all_trainability_and_dataset_gates_pass(self):
+        """With permissive trainability thresholds AND a permissive AV
+        gate, every NON-production gate passes — so the only remaining
+        promotion-blocked reasons are the strict production-thinness
+        ones (a tiny fixture can never meet 2000/500/100/50, and that
+        gate is non-bypassable). This proves the trainability / dataset
+        / AV gates are all satisfied without bypassing production."""
         res = _assemble_for_training(n_15m=1000, av_threshold=1.0)
-        # Override thinness thresholds so the synthetic data fits
+        # Override only the TRAINABILITY thresholds so the synthetic
+        # data fits; the production profile stays locked strict.
         trainer = ModelTrainer(
             thinness_thresholds=ThinnessThresholds(
                 min_train_samples=10, min_val_samples=10,
                 min_test_samples=10, min_minority_class_train=3,
-                max_features_to_train_ratio=10.0),
-            production_thinness_thresholds=ProductionThinnessThresholds(
-                min_total_rows=1, min_train_positives=1,
-                min_holdout_positives=1, min_per_symbol_rows=1))
+                max_features_to_train_ratio=10.0))
         out = trainer.train_one(
             _make_train_config("B0_majority",
                                   dataset_id=res.manifest.dataset_id),
             res)
-        self.assertTrue(out.promotion_eligible,
-            f"with all gates relaxed, B0 should be eligible; "
-            f"reasons={out.promotion_blocked_reasons}")
-        self.assertEqual(out.promotion_blocked_reasons, [])
+        non_production = [r for r in out.promotion_blocked_reasons
+                          if not r.startswith("production:")]
+        self.assertEqual(non_production, [],
+            f"all non-production gates should pass; leftover non-"
+            f"production reasons={non_production}")
+        # And the model is still NOT promotable — production gate holds.
+        self.assertFalse(out.promotion_eligible)
+        self.assertTrue(any(r.startswith("production:")
+                            for r in out.promotion_blocked_reasons))
 
     def test_reasons_are_namespaced_distinctly(self):
         """A degraded + thin dataset yields BOTH dataset: and
@@ -6720,6 +6728,26 @@ from bot.ml.errors import (
 )
 
 
+def _g8_make_strict_qualified(out):
+    """Return a copy of TrainOutputs that genuinely satisfies the STRICT
+    production profile (2000/500/100/50), for registry promotion-
+    MECHANICS tests. Uses the locked strict profile with observed counts
+    that actually meet it (NOT a relaxed/bypassed profile), and strips
+    any production:* blocked reasons. Recomputes promotion_eligible."""
+    strict_status = evaluate_production_thinness(
+        total_rows=3000, train_positives=600, holdout_positives=150,
+        per_symbol_counts={"X": 3000}, label_class="binary")
+    assert strict_status["passed"] and strict_status["strict_profile"]
+    new_reasons = [r for r in out.promotion_blocked_reasons
+                   if not r.startswith("production:")]
+    return dataclasses.replace(
+        out,
+        production_thinness_status=strict_status,
+        promotion_blocked_reasons=new_reasons,
+        promotion_eligible=(len(new_reasons) == 0),
+    )
+
+
 def _g8_build_clean_b2(seed_n=2000, fixture_mode=False):
     """Build (assembler_result, train_outputs, evaluation_report) for
     a B2_logistic on Model B cohort with a relaxed drift threshold so
@@ -6741,16 +6769,20 @@ def _g8_build_clean_b2(seed_n=2000, fixture_mode=False):
         target_label_id="triple_barrier_atr_2_3_50_won",
         hyperparameters={}, seed=42,
         fixture_mode=fixture_mode)
-    # G8 promotion-mechanics tests use a relaxed production-thinness
-    # profile so the (necessarily small) fixture is not blocked by the
-    # strict 2000/500/100/50 data-volume gate — the strict gate has its
-    # own dedicated tests in G8_ProductionThinnessGates. The default
-    # Trainer() keeps the locked strict profile.
-    _relaxed_prod = ProductionThinnessThresholds(
-        min_total_rows=1, min_train_positives=1,
-        min_holdout_positives=1, min_per_symbol_rows=1)
-    out = ModelTrainer(
-        production_thinness_thresholds=_relaxed_prod).train_one(cfg, res)
+    # Train with the DEFAULT strict Trainer — the production profile is
+    # never bypassable. The fixture is necessarily small, so the strict
+    # production gate would block promotion; to test registry promotion
+    # MECHANICS (not the data-volume gate, which has its own tests in
+    # G8_ProductionThinnessGates), we then promote the TrainOutputs to a
+    # genuinely strict-QUALIFIED candidate: a strict-profile production
+    # status whose observed counts actually meet 2000/500/100/50, and a
+    # promotion_blocked_reasons list with the production:* reasons
+    # removed. This represents "a model that really did meet the strict
+    # gate" without a slow large fixture — and crucially it is NOT a
+    # relaxed/bypassed profile.
+    out = ModelTrainer().train_one(cfg, res)
+    if not fixture_mode:
+        out = _g8_make_strict_qualified(out)
     rep = evaluate_model(out, res, drift_warning_threshold=100.0)
     return res, out, rep
 
@@ -7067,6 +7099,17 @@ class G8_GateClassification(unittest.TestCase):
         self.assertEqual(judg, ["thinness:a", "baseline_beat:x"])
         self.assertEqual(unk, ["weird_reason"])
 
+    def test_production_prefix_is_integrity(self):
+        r = "production:production_total_rows_below_2000"
+        self.assertTrue(is_integrity_gate(r))
+        self.assertFalse(is_judgment_gate(r))
+        self.assertFalse(matches_override_gate(r, "sample_count"))
+        self.assertFalse(matches_override_gate(r, "baseline_beat"))
+        # the lock reason is also integrity / non-overridable
+        lock = "production:production_threshold_profile_not_locked"
+        self.assertTrue(is_integrity_gate(lock))
+        self.assertFalse(is_judgment_gate(lock))
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G8_ProductionThinnessGates — strict production promotion gates (M18.B.4)
@@ -7254,6 +7297,96 @@ class G8_ProductionThinnessGates(unittest.TestCase):
         # AV with threshold 0.0 should not pass -> dataset reason present
         self.assertFalse(out.promotion_eligible)
 
+    # ---- B.4 LOCK: relaxed/injected profile can never promote --------
+
+    def test_default_trainer_uses_locked_strict_thresholds(self):
+        t = ModelTrainer()
+        th = t.production_thinness_thresholds
+        self.assertTrue(th.is_strict())
+        self.assertEqual(th.min_total_rows, 2000)
+        self.assertEqual(th.min_train_positives, 500)
+        self.assertEqual(th.min_holdout_positives, 100)
+        self.assertEqual(th.min_per_symbol_rows, 50)
+
+    def test_relaxed_thresholds_cannot_create_promotable_model(self):
+        # Even with infinite-passing relaxed thresholds, a non-locked
+        # profile is blocked by production_threshold_profile_not_locked.
+        relaxed = ProductionThinnessThresholds(
+            min_total_rows=1, min_train_positives=1,
+            min_holdout_positives=1, min_per_symbol_rows=1)
+        res = _assemble_for_training()
+        out = ModelTrainer(
+            production_thinness_thresholds=relaxed).train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertFalse(out.promotion_eligible)
+        self.assertIn(
+            "production:production_threshold_profile_not_locked",
+            out.promotion_blocked_reasons)
+
+    def test_non_strict_threshold_profile_blocked(self):
+        relaxed = ProductionThinnessThresholds(min_total_rows=10)
+        r = evaluate_production_thinness(
+            total_rows=999999, train_positives=999999,
+            holdout_positives=999999, per_symbol_counts={"X": 999999},
+            label_class="binary", thresholds=relaxed)
+        self.assertFalse(r["passed"])
+        self.assertEqual(r["threshold_profile"], "relaxed_for_tests")
+        self.assertFalse(r["strict_profile"])
+        self.assertIn("production_threshold_profile_not_locked",
+                       r["blocked_reasons"])
+
+    def test_strict_profile_marked_strict(self):
+        r = evaluate_production_thinness(
+            total_rows=3000, train_positives=600, holdout_positives=150,
+            per_symbol_counts={"X": 3000}, label_class="binary")
+        self.assertEqual(r["threshold_profile"], "strict")
+        self.assertTrue(r["strict_profile"])
+        self.assertNotIn("production_threshold_profile_not_locked",
+                          r["blocked_reasons"])
+
+    def test_registry_promote_with_non_strict_profile_fails_with_force(self):
+        # A model built with a relaxed production profile must NOT be
+        # promotable even with --force --override-gate.
+        relaxed = ProductionThinnessThresholds(
+            min_total_rows=1, min_train_positives=1,
+            min_holdout_positives=1, min_per_symbol_rows=1)
+        res = _assemble_for_training()
+        out = ModelTrainer(
+            production_thinness_thresholds=relaxed).train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        rep = evaluate_model(out, res, drift_warning_threshold=100.0)
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            entry = reg.register_candidate(out, rep, res)
+            with self.assertRaises(G8PromotionBlocked) as ctx:
+                reg.promote_to_current(
+                    entry.model_id, force=True,
+                    override_gates=("sample_count", "baseline_beat"),
+                    reason="trying to force a non-strict-profile model",
+                    actor="test_user")
+            self.assertEqual(ctx.exception.gate_category, "integrity")
+
+    def test_pure_helper_custom_thresholds_does_not_imply_promotability(self):
+        # The pure helper can be exercised with custom thresholds, but a
+        # non-locked profile is reported non-strict + blocked — it never
+        # implies registry promotability.
+        custom = ProductionThinnessThresholds(
+            min_total_rows=100, min_train_positives=10,
+            min_holdout_positives=5, min_per_symbol_rows=5)
+        r = evaluate_production_thinness(
+            total_rows=500, train_positives=50, holdout_positives=20,
+            per_symbol_counts={"X": 500}, label_class="binary",
+            thresholds=custom)
+        # counts clear the custom thresholds, but profile is non-locked
+        self.assertFalse(r["strict_profile"])
+        self.assertIn("production_threshold_profile_not_locked",
+                       r["blocked_reasons"])
+        self.assertFalse(r["passed"])
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G8_RegistryEntry — schema + deterministic model_id
@@ -7323,16 +7456,17 @@ class G8_StatusInference(unittest.TestCase):
                 require_intraday=True, embargo_bars_override=10,
                 adversarial_cv_folds=3, adversarial_threshold=1.0)
         ).build(per_tf_bars=per_tf)
-        out = ModelTrainer(
-            production_thinness_thresholds=ProductionThinnessThresholds(
-                min_total_rows=1, min_train_positives=1,
-                min_holdout_positives=1, min_per_symbol_rows=1)
-        ).train_one(TrainConfig(
+        # Default STRICT Trainer (production profile is non-bypassable).
+        # Strip only the production:* reasons via _g8_make_strict_qualified
+        # so the JUDGMENT thinness:* gate is what these tests exercise;
+        # production-thinness has its own dedicated tests.
+        out = ModelTrainer().train_one(TrainConfig(
             dataset_id=res.manifest.dataset_id,
             model_type="B2_logistic",
             train_mode="model_b_candidate_quality",
             target_label_id="triple_barrier_atr_2_3_50_won",
             hyperparameters={}, seed=42, fixture_mode=False), res)
+        out = _g8_make_strict_qualified(out)
         rep = evaluate_model(out, res, drift_warning_threshold=100.0)
         # The thin dataset triggers thinness reasons
         s = infer_initial_status(out, rep)
@@ -7544,16 +7678,17 @@ class G8_ForceOverrideJudgmentGate(unittest.TestCase):
                 require_intraday=True, embargo_bars_override=10,
                 adversarial_cv_folds=3, adversarial_threshold=1.0)
         ).build(per_tf_bars=per_tf)
-        out = ModelTrainer(
-            production_thinness_thresholds=ProductionThinnessThresholds(
-                min_total_rows=1, min_train_positives=1,
-                min_holdout_positives=1, min_per_symbol_rows=1)
-        ).train_one(TrainConfig(
+        # Default STRICT Trainer (production profile is non-bypassable).
+        # Strip only the production:* reasons via _g8_make_strict_qualified
+        # so the JUDGMENT thinness:* gate is what these tests exercise;
+        # production-thinness has its own dedicated tests.
+        out = ModelTrainer().train_one(TrainConfig(
             dataset_id=res.manifest.dataset_id,
             model_type="B2_logistic",
             train_mode="model_b_candidate_quality",
             target_label_id="triple_barrier_atr_2_3_50_won",
             hyperparameters={}, seed=42, fixture_mode=False), res)
+        out = _g8_make_strict_qualified(out)
         rep = evaluate_model(out, res, drift_warning_threshold=100.0)
         reg = Registry(root=root)
         entry = reg.register_candidate(out, rep, res)

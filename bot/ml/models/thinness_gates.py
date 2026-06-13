@@ -181,6 +181,12 @@ PRODUCTION_BLOCK_TOTAL_ROWS       = "production_total_rows_below_2000"
 PRODUCTION_BLOCK_TRAIN_POSITIVES  = "production_train_positives_below_500"
 PRODUCTION_BLOCK_HOLDOUT_POSITIVES = "production_holdout_positives_below_100"
 PRODUCTION_BLOCK_PER_SYMBOL_ROWS  = "production_per_symbol_rows_below_50"
+# Emitted when the production profile is NOT the locked strict profile.
+# This makes a relaxed/injected profile VISIBLY non-promotable: it is an
+# integrity-class reason at the registry layer (force cannot override),
+# so relaxed thresholds may be used in helper tests but can NEVER create
+# a promotable registry candidate.
+PRODUCTION_BLOCK_PROFILE_NOT_LOCKED = "production_threshold_profile_not_locked"
 
 
 @dataclass
@@ -192,6 +198,17 @@ class ProductionThinnessThresholds:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def is_strict(self) -> bool:
+        """True iff this profile is EXACTLY the locked strict profile
+        (2000/500/100/50). Any deviation is treated as non-strict and
+        is non-promotable."""
+        return (
+            self.min_total_rows        == PRODUCTION_MIN_TOTAL_ROWS
+            and self.min_train_positives   == PRODUCTION_MIN_TRAIN_POSITIVES
+            and self.min_holdout_positives == PRODUCTION_MIN_HOLDOUT_POSITIVES
+            and self.min_per_symbol_rows   == PRODUCTION_MIN_PER_SYMBOL_ROWS
+        )
 
 
 def count_positives(y: np.ndarray, label_class: str) -> int:
@@ -244,6 +261,13 @@ def evaluate_production_thinness(
 
     blocked: List[str] = []
 
+    # A non-locked (relaxed/injected) profile is VISIBLY non-promotable.
+    # This is the lock: relaxed thresholds may be used in helper tests
+    # but can never create a promotable registry candidate.
+    strict = thresholds.is_strict()
+    if not strict:
+        blocked.append(PRODUCTION_BLOCK_PROFILE_NOT_LOCKED)
+
     if label_class != "binary":
         blocked.append("production_unsupported_label_class")
 
@@ -257,9 +281,11 @@ def evaluate_production_thinness(
         blocked.append(PRODUCTION_BLOCK_PER_SYMBOL_ROWS)
 
     return {
-        "profile":     "production_promotion",
-        "passed":      len(blocked) == 0,
-        "label_class": label_class,
+        "profile":          "production_promotion",
+        "threshold_profile": "strict" if strict else "relaxed_for_tests",
+        "strict_profile":   bool(strict),
+        "passed":           len(blocked) == 0,
+        "label_class":      label_class,
         "thresholds": {
             "min_total_rows":        thresholds.min_total_rows,
             "min_train_positives":   thresholds.min_train_positives,

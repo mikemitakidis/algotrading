@@ -46,10 +46,12 @@ of byte-identical restoration.
 > calibration — fit on val, applied to test, JSON-safe artifact,
 > pre/post Brier/ECE/MCE), and M18.B.4 (strict production thinness
 > gates — separate 2000/500/100/50 profile, integrity-class, force
-> cannot override; trainability gates unchanged) are DONE on the
+> cannot override, and non-bypassable: any non-locked profile emits
+> production_threshold_profile_not_locked so relaxed thresholds can
+> never create a promotable model; trainability gates unchanged) are DONE on the
 > branch, plus a B1–B3 audit hardening pass (RF 0/1-only +
 > finite-target checks; repro_hash_v2 fail-closed; isotonic
-> shape/non-binary/strict-JSON/artifact validation). Suite is at 507
+> shape/non-binary/strict-JSON/artifact validation). Suite is at 514
 > OK / skipped=3 with these phases added (recovery-baseline above
 > reflects the pre-M18.B state).
 

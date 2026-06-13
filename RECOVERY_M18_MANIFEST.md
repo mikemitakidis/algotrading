@@ -223,8 +223,10 @@ val/test shapes + non-binary labels, is strict-JSON safe, and
 thinness gates — a separate `ProductionThinnessThresholds` profile of
 2000/500/100/50 evaluated for every model, attached to
 `TrainOutputs.production_thinness_status`, emitted as integrity-class
-`production:*` blocked reasons that `--force` cannot override; trainability
-gates unchanged so fixtures still train) is DONE. Suite at 507 OK / skipped=3
+`production:*` blocked reasons that `--force` cannot override; the profile is
+non-bypassable — a non-locked (relaxed) profile emits
+`production_threshold_profile_not_locked` so relaxed thresholds can never create
+a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 514 OK / skipped=3
 with these added.
 The 428-OK figures above are the pre-M18.B recovery baseline.
 

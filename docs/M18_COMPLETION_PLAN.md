@@ -106,16 +106,20 @@ corrections over the first audit pass:
      safe (NaN→None), and `apply_isotonic_artifact` raises `ValueError` on
      malformed artifacts (missing thresholds / length mismatch / non-finite /
      non-monotonic x).
-4. **Strict production thinness gates** — **RESOLVED (M18.B.4).** Cold-start /
-   trainability gates are unchanged (fixture/small datasets still train +
-   produce diagnostics). A separate strict `ProductionThinnessThresholds`
+4. **Strict production thinness gates** — **RESOLVED (M18.B.4 + lock).**
+   Cold-start / trainability gates are unchanged (fixture/small datasets still
+   train + produce diagnostics). A separate strict `ProductionThinnessThresholds`
    profile (2000 total rows / 500 train positives / 100 holdout positives / 50
    per-symbol rows) is evaluated for every model via
    `evaluate_production_thinness()`, attached to
    `TrainOutputs.production_thinness_status`, and emitted as `production:*`
-   blocked reasons. Those reasons are INTEGRITY-class in
-   `registry/gates.py` — `--force` can never override them. The strict profile
-   is injectable on `Trainer` (default = locked strict values).
+   blocked reasons (INTEGRITY-class in `registry/gates.py` — `--force` can never
+   override). **Lock:** the profile is non-bypassable — any non-locked
+   (relaxed/injected) profile emits `production_threshold_profile_not_locked`
+   (also integrity), so relaxed thresholds may be used in pure-helper unit tests
+   but can NEVER create a promotable registry candidate. `production_thinness_
+   status` carries `threshold_profile` ("strict"/"relaxed_for_tests") and
+   `strict_profile` (bool).
 5. **Explicit NaN/missingness policy** — per-group fill + indicator columns +
    tests that warmup/signal_history/market_context NaN behaviour is intentional.
 6. **AV failure-reason persistence** — record exception class/message/cause
