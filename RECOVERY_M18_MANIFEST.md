@@ -219,7 +219,12 @@ fits on val only and applies to test; JSON-safe artifact;
 the branch, plus a B1–B3 audit-hardening pass (RF rejects non-finite + non-0/1
 targets; repro_hash_v2 is fail-closed in the trainer; isotonic validates
 val/test shapes + non-binary labels, is strict-JSON safe, and
-`apply_isotonic_artifact` validates the artifact). Suite at 492 OK / skipped=3
+`apply_isotonic_artifact` validates the artifact). M18.B.4 (strict production
+thinness gates — a separate `ProductionThinnessThresholds` profile of
+2000/500/100/50 evaluated for every model, attached to
+`TrainOutputs.production_thinness_status`, emitted as integrity-class
+`production:*` blocked reasons that `--force` cannot override; trainability
+gates unchanged so fixtures still train) is DONE. Suite at 507 OK / skipped=3
 with these added.
 The 428-OK figures above are the pre-M18.B recovery baseline.
 

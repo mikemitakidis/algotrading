@@ -89,6 +89,11 @@ def is_integrity_gate(reason: str) -> bool:
     """
     if reason in INTEGRITY_GATE_REASONS:
         return True
+    # 'production:<...>' — strict production-promotion thinness gates
+    # (M18.B.4). INTEGRITY: --force may never override insufficient
+    # data / positives for a production-quality model.
+    if reason.startswith("production:"):
+        return True
     # 'dataset:<anything else>' is treated as integrity by default —
     # the manifest only emits integrity-class reasons under the
     # 'dataset:' prefix.

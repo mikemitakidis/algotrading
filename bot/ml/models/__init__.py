@@ -33,6 +33,9 @@ from bot.ml.models.base import (
 from bot.ml.models.thinness_gates import (
     ThinnessThresholds,
     evaluate_thinness,
+    evaluate_production_thinness,
+    ProductionThinnessThresholds,
+    count_positives,
 )
 from bot.ml.models.baselines import (
     MajorityClassTrainer,
@@ -59,6 +62,9 @@ __all__ = [
     "TrainOutputs",
     "ThinnessThresholds",
     "evaluate_thinness",
+    "evaluate_production_thinness",
+    "ProductionThinnessThresholds",
+    "count_positives",
     "MajorityClassTrainer",
     "ScannerReplicaTrainer",
     "LogisticRegressionTrainer",

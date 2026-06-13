@@ -203,5 +203,13 @@ class TrainOutputs:
     # predate v2 still construct. Populated by Trainer.train_one().
     repro_hash_v2: Optional[str] = None
 
+    # M18.B.4 — strict production-promotion thinness profile. Backward-
+    # compatible (default_factory). Distinct from the weak trainability
+    # `thinness_status` above: this is evaluated even for fixture/cold-
+    # start models and its failures are INTEGRITY gates (force cannot
+    # override) at the registry promotion layer.
+    production_thinness_status: Dict[str, Any] = field(
+        default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

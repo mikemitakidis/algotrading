@@ -53,6 +53,9 @@ from bot.ml.models import (
     TrainOutputs,
     ThinnessThresholds,
     evaluate_thinness,
+    evaluate_production_thinness,
+    ProductionThinnessThresholds,
+    count_positives,
     MajorityClassTrainer,
     ScannerReplicaTrainer,
     LogisticRegressionTrainer,
@@ -4200,7 +4203,10 @@ class G5_PromotionGate(unittest.TestCase):
             thinness_thresholds=ThinnessThresholds(
                 min_train_samples=10, min_val_samples=10,
                 min_test_samples=10, min_minority_class_train=3,
-                max_features_to_train_ratio=10.0))
+                max_features_to_train_ratio=10.0),
+            production_thinness_thresholds=ProductionThinnessThresholds(
+                min_total_rows=1, min_train_positives=1,
+                min_holdout_positives=1, min_per_symbol_rows=1))
         out = trainer.train_one(
             _make_train_config("B0_majority",
                                   dataset_id=res.manifest.dataset_id),
@@ -6735,7 +6741,16 @@ def _g8_build_clean_b2(seed_n=2000, fixture_mode=False):
         target_label_id="triple_barrier_atr_2_3_50_won",
         hyperparameters={}, seed=42,
         fixture_mode=fixture_mode)
-    out = ModelTrainer().train_one(cfg, res)
+    # G8 promotion-mechanics tests use a relaxed production-thinness
+    # profile so the (necessarily small) fixture is not blocked by the
+    # strict 2000/500/100/50 data-volume gate — the strict gate has its
+    # own dedicated tests in G8_ProductionThinnessGates. The default
+    # Trainer() keeps the locked strict profile.
+    _relaxed_prod = ProductionThinnessThresholds(
+        min_total_rows=1, min_train_positives=1,
+        min_holdout_positives=1, min_per_symbol_rows=1)
+    out = ModelTrainer(
+        production_thinness_thresholds=_relaxed_prod).train_one(cfg, res)
     rep = evaluate_model(out, res, drift_warning_threshold=100.0)
     return res, out, rep
 
@@ -7054,6 +7069,193 @@ class G8_GateClassification(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G8_ProductionThinnessGates — strict production promotion gates (M18.B.4)
+# ─────────────────────────────────────────────────────────────────────
+
+class G8_ProductionThinnessGates(unittest.TestCase):
+    """Strict production-promotion thinness profile: 2000 total rows,
+    500 train positives, 100 holdout positives, 50 per-symbol rows.
+    Trainability gates stay weak (fixture/cold-start can train); these
+    gates are INTEGRITY (force cannot override) and block promotion."""
+
+    def test_production_gate_passes_when_thresholds_met(self):
+        r = evaluate_production_thinness(
+            total_rows=3000, train_positives=600,
+            holdout_positives=150,
+            per_symbol_counts={"AAPL": 2000, "MSFT": 1000},
+            label_class="binary")
+        self.assertTrue(r["passed"])
+        self.assertEqual(r["blocked_reasons"], [])
+
+    def test_production_gate_blocks_total_rows_below_threshold(self):
+        r = evaluate_production_thinness(
+            total_rows=1000, train_positives=600,
+            holdout_positives=150, per_symbol_counts={"X": 1000},
+            label_class="binary")
+        self.assertFalse(r["passed"])
+        self.assertIn("production_total_rows_below_2000",
+                       r["blocked_reasons"])
+
+    def test_production_gate_blocks_train_positives_below_threshold(self):
+        r = evaluate_production_thinness(
+            total_rows=3000, train_positives=120,
+            holdout_positives=150, per_symbol_counts={"X": 3000},
+            label_class="binary")
+        self.assertFalse(r["passed"])
+        self.assertIn("production_train_positives_below_500",
+                       r["blocked_reasons"])
+
+    def test_production_gate_blocks_holdout_positives_below_threshold(self):
+        r = evaluate_production_thinness(
+            total_rows=3000, train_positives=600,
+            holdout_positives=40, per_symbol_counts={"X": 3000},
+            label_class="binary")
+        self.assertFalse(r["passed"])
+        self.assertIn("production_holdout_positives_below_100",
+                       r["blocked_reasons"])
+
+    def test_production_gate_blocks_per_symbol_rows_below_threshold(self):
+        r = evaluate_production_thinness(
+            total_rows=3000, train_positives=600,
+            holdout_positives=150,
+            per_symbol_counts={"AAPL": 2988, "TINY": 12},
+            label_class="binary")
+        self.assertFalse(r["passed"])
+        self.assertIn("production_per_symbol_rows_below_50",
+                       r["blocked_reasons"])
+        self.assertEqual(r["observed"]["min_per_symbol_rows"], 12)
+
+    def test_fixture_mode_can_train_but_cannot_promote(self):
+        res, out, rep = _g8_build_clean_b2(fixture_mode=True)
+        # fixture trained and produced outputs
+        self.assertIsNotNone(out.pred_test)
+        self.assertGreater(len(out.pred_test), 0)
+        # but cannot promote
+        self.assertFalse(out.promotion_eligible)
+        self.assertIn("fixture_only", out.promotion_blocked_reasons)
+
+    def test_cold_start_small_dataset_can_train_but_cannot_promote(self):
+        # Default strict Trainer: small fixture trains (diagnostics) but
+        # the production profile fails -> not promotion_eligible.
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertGreater(len(out.pred_test), 0)        # trained
+        self.assertFalse(out.promotion_eligible)         # but blocked
+        self.assertTrue(any(r.startswith("production:")
+                            for r in out.promotion_blocked_reasons),
+                         out.promotion_blocked_reasons)
+
+    def test_force_cannot_override_production_thinness(self):
+        # A model blocked only by production-thinness must NOT promote
+        # even with --force --override-gate. (Strict Trainer default.)
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        rep = evaluate_model(out, res, drift_warning_threshold=100.0)
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            entry = reg.register_candidate(out, rep, res)
+            with self.assertRaises(G8PromotionBlocked) as ctx:
+                reg.promote_to_current(
+                    entry.model_id, force=True,
+                    override_gates=("sample_count", "baseline_beat"),
+                    reason="trying to force a thin model",
+                    actor="test_user")
+            self.assertEqual(ctx.exception.gate_category, "integrity")
+
+    def test_production_thinness_status_in_train_outputs(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        pts = out.production_thinness_status
+        self.assertEqual(pts["profile"], "production_promotion")
+        self.assertIn("thresholds", pts)
+        self.assertIn("observed", pts)
+        self.assertIn("blocked_reasons", pts)
+        self.assertEqual(pts["thresholds"]["min_total_rows"], 2000)
+        self.assertEqual(pts["thresholds"]["min_train_positives"], 500)
+        self.assertEqual(pts["thresholds"]["min_holdout_positives"], 100)
+        self.assertEqual(pts["thresholds"]["min_per_symbol_rows"], 50)
+
+    def test_production_thinness_status_round_trips(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        d = json.loads(json.dumps(out.to_dict()))
+        self.assertIn("production_thinness_status", d)
+        self.assertEqual(
+            d["production_thinness_status"]["profile"],
+            "production_promotion")
+
+    def test_existing_trainability_thinness_still_exists(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        # old trainability thinness_status preserved (not replaced)
+        self.assertTrue(out.thinness_status)
+        self.assertIn("checks", out.thinness_status)
+
+    def test_non_binary_or_missing_labels_not_counted_as_positive(self):
+        # NaN / non-1 values must not inflate positive counts.
+        y = np.array([0.0, 1.0, 1.0, np.nan, 2.0, 0.0, 1.0])
+        self.assertEqual(count_positives(y, "binary"), 3)
+
+    def test_positive_count_uses_only_target_label(self):
+        # count_positives operates on the supplied y only — a different
+        # label column cannot inflate the count.
+        y_target = np.array([0.0, 0.0, 1.0])
+        y_other  = np.array([1.0, 1.0, 1.0])
+        self.assertEqual(count_positives(y_target, "binary"), 1)
+        self.assertEqual(count_positives(y_other, "binary"), 3)
+
+    def test_coverage_degraded_still_blocks_promotion(self):
+        # Q19 regression guard: coverage_degraded remains a blocking
+        # integrity reason regardless of the new production gate.
+        per_tf = _multi_tf_for_assembler(n_15m=300, seed=31)
+        # Drop a required TF to force coverage degradation.
+        per_tf = {"15m": per_tf["15m"]}
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=False, embargo_bars_override=10,
+                adversarial_cv_folds=3, adversarial_threshold=1.0)
+        ).build(per_tf_bars=per_tf)
+        if res.manifest.coverage_degraded:
+            out = ModelTrainer().train_one(
+                _make_train_config("B0_majority",
+                                      dataset_id=res.manifest.dataset_id),
+                res)
+            self.assertFalse(out.promotion_eligible)
+            self.assertTrue(any("coverage_degraded" in r
+                                for r in out.promotion_blocked_reasons),
+                             out.promotion_blocked_reasons)
+
+    def test_adversarial_validation_blocking_still_intact(self):
+        # AV gate regression guard: a strict AV threshold that fails
+        # still blocks promotion (independent of production gate).
+        res = _assemble_for_training(n_15m=600, av_threshold=0.0)
+        out = ModelTrainer().train_one(
+            _make_train_config("B0_majority",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        # AV with threshold 0.0 should not pass -> dataset reason present
+        self.assertFalse(out.promotion_eligible)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G8_RegistryEntry — schema + deterministic model_id
 # ─────────────────────────────────────────────────────────────────────
 
@@ -7121,7 +7323,11 @@ class G8_StatusInference(unittest.TestCase):
                 require_intraday=True, embargo_bars_override=10,
                 adversarial_cv_folds=3, adversarial_threshold=1.0)
         ).build(per_tf_bars=per_tf)
-        out = ModelTrainer().train_one(TrainConfig(
+        out = ModelTrainer(
+            production_thinness_thresholds=ProductionThinnessThresholds(
+                min_total_rows=1, min_train_positives=1,
+                min_holdout_positives=1, min_per_symbol_rows=1)
+        ).train_one(TrainConfig(
             dataset_id=res.manifest.dataset_id,
             model_type="B2_logistic",
             train_mode="model_b_candidate_quality",
@@ -7338,7 +7544,11 @@ class G8_ForceOverrideJudgmentGate(unittest.TestCase):
                 require_intraday=True, embargo_bars_override=10,
                 adversarial_cv_folds=3, adversarial_threshold=1.0)
         ).build(per_tf_bars=per_tf)
-        out = ModelTrainer().train_one(TrainConfig(
+        out = ModelTrainer(
+            production_thinness_thresholds=ProductionThinnessThresholds(
+                min_total_rows=1, min_train_positives=1,
+                min_holdout_positives=1, min_per_symbol_rows=1)
+        ).train_one(TrainConfig(
             dataset_id=res.manifest.dataset_id,
             model_type="B2_logistic",
             train_mode="model_b_candidate_quality",

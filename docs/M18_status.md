@@ -42,13 +42,16 @@ of byte-identical restoration.
 > final acceptance criteria are in **`docs/M18_COMPLETION_PLAN.md`**.
 >
 > **M18.B progress:** M18.B.1 (RandomForest fallback), M18.B.2
-> (repro_hash_v2 full SR-8 composition), and M18.B.3 (real isotonic
+> (repro_hash_v2 full SR-8 composition), M18.B.3 (real isotonic
 > calibration — fit on val, applied to test, JSON-safe artifact,
-> pre/post Brier/ECE/MCE) are DONE on the branch, plus a B1–B3 audit
-> hardening pass (RF 0/1-only + finite-target checks; repro_hash_v2
-> fail-closed; isotonic shape/non-binary/strict-JSON/artifact
-> validation). Suite is at 492 OK / skipped=3 with these phases added
-> (recovery-baseline above reflects the pre-M18.B state).
+> pre/post Brier/ECE/MCE), and M18.B.4 (strict production thinness
+> gates — separate 2000/500/100/50 profile, integrity-class, force
+> cannot override; trainability gates unchanged) are DONE on the
+> branch, plus a B1–B3 audit hardening pass (RF 0/1-only +
+> finite-target checks; repro_hash_v2 fail-closed; isotonic
+> shape/non-binary/strict-JSON/artifact validation). Suite is at 507
+> OK / skipped=3 with these phases added (recovery-baseline above
+> reflects the pre-M18.B state).
 
 ---
 

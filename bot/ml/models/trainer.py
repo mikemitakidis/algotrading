@@ -93,6 +93,9 @@ from bot.ml.models.base import (
 from bot.ml.models.thinness_gates import (
     ThinnessThresholds,
     evaluate_thinness,
+    evaluate_production_thinness,
+    ProductionThinnessThresholds,
+    count_positives,
 )
 from bot.ml.models.baselines import (
     MajorityClassTrainer,
@@ -288,9 +291,17 @@ class Trainer:
 
     def __init__(self,
                   thinness_thresholds: Optional[ThinnessThresholds]
-                    = None):
+                    = None,
+                  production_thinness_thresholds:
+                    Optional[ProductionThinnessThresholds] = None):
         self.thinness_thresholds = (thinness_thresholds
                                       or ThinnessThresholds())
+        # Strict production-promotion profile (M18.B.4). Injectable so
+        # tests / cold-start tooling can relax it; the DEFAULT is the
+        # locked strict profile (2000 / 500 / 100 / 50).
+        self.production_thinness_thresholds = (
+            production_thinness_thresholds
+            or ProductionThinnessThresholds())
 
     # ── train_one ────────────────────────────────────────────────
 
@@ -458,6 +469,27 @@ class Trainer:
             metrics_val   = _regression_metrics(y_val,   pred_val)
             metrics_test  = _regression_metrics(y_test,  pred_test)
 
+        # ── 5b. Production-promotion thinness (M18.B.4) ─────────
+        # Strict profile, evaluated for EVERY model (including
+        # fixture/cold-start) so promotion eligibility is always known.
+        # Positives counted on the target label only, positive==1.
+        prod_total_rows = n_train + n_val + n_test
+        prod_train_positives = count_positives(y_train, label_class)
+        prod_holdout_positives = count_positives(y_test, label_class)
+        # Per-symbol counts: the assembler is single-symbol per dataset
+        # (manifest.symbol), so this symbol's row count is the dataset
+        # total. A future multi-symbol assembler would supply a real
+        # breakdown here.
+        prod_per_symbol_counts = {manifest.symbol: prod_total_rows}
+        production_thinness_status = evaluate_production_thinness(
+            total_rows=prod_total_rows,
+            train_positives=prod_train_positives,
+            holdout_positives=prod_holdout_positives,
+            per_symbol_counts=prod_per_symbol_counts,
+            label_class=label_class,
+            thresholds=self.production_thinness_thresholds,
+        )
+
         # ── 6. Promotion gate composition ────────────────────────
         promotion_blocked_reasons: List[str] = []
         # Integrity gates inherited from the dataset manifest —
@@ -473,6 +505,13 @@ class Trainer:
         if not train_config.fixture_mode:
             for ch in thinness_status.get("failed_checks", []):
                 promotion_blocked_reasons.append(f"thinness:{ch}")
+        # Production-promotion thinness — INTEGRITY gates (M18.B.4),
+        # NOT --force-overridable. Evaluated for every model, including
+        # fixture/cold-start, so a too-thin model can never be promoted.
+        if not production_thinness_status.get("passed", False):
+            for r in production_thinness_status.get(
+                    "blocked_reasons", []):
+                promotion_blocked_reasons.append(f"production:{r}")
         promotion_eligible = (len(promotion_blocked_reasons) == 0)
 
         fixture_only = bool(manifest.fixture_only
@@ -529,4 +568,5 @@ class Trainer:
             promotion_blocked_reasons=promotion_blocked_reasons,
             thinness_status=thinness_status,
             repro_hash_v2=rh_v2,
+            production_thinness_status=production_thinness_status,
         )

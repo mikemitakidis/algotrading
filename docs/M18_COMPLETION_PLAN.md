@@ -46,7 +46,7 @@ corrections over the first audit pass:
 - **Calibration** was mis-classified as implemented. Only diagnostics
   (reliability curve / ECE / MCE) exist; there is **no `IsotonicRegression`**
   fit-on-validation / applied-to-test calibrator anywhere in `bot/ml/`.
-- **Thinness gates** are materially weaker than the plan
+- **Thinness gates** (trainability) are intentionally weaker than the plan
   (train≥200/val≥50/test≥50/minority≥20 vs total≥2000/train-positives≥500/
   holdout-positives≥100/per-symbol≥50) and count *total samples*, not
   *positive labels*.
@@ -106,8 +106,16 @@ corrections over the first audit pass:
      safe (NaN→None), and `apply_isotonic_artifact` raises `ValueError` on
      malformed artifacts (missing thresholds / length mismatch / non-finite /
      non-monotonic x).
-4. **Strict production thinness gates** — keep cold-start defaults for build,
-   add a separate strict `production_promotion` profile.
+4. **Strict production thinness gates** — **RESOLVED (M18.B.4).** Cold-start /
+   trainability gates are unchanged (fixture/small datasets still train +
+   produce diagnostics). A separate strict `ProductionThinnessThresholds`
+   profile (2000 total rows / 500 train positives / 100 holdout positives / 50
+   per-symbol rows) is evaluated for every model via
+   `evaluate_production_thinness()`, attached to
+   `TrainOutputs.production_thinness_status`, and emitted as `production:*`
+   blocked reasons. Those reasons are INTEGRITY-class in
+   `registry/gates.py` — `--force` can never override them. The strict profile
+   is injectable on `Trainer` (default = locked strict values).
 5. **Explicit NaN/missingness policy** — per-group fill + indicator columns +
    tests that warmup/signal_history/market_context NaN behaviour is intentional.
 6. **AV failure-reason persistence** — record exception class/message/cause
@@ -356,7 +364,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.1** | RandomForest fallback (sklearn, deterministic) + permutation-importance integration — **DONE** | — |
 | **M18.B.2** | repro_hash_v2 (full SR-8 composition) — **DONE** | — |
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) — **DONE** | — |
-| **M18.B.4** | Strict production thinness gates (separate profile) | — |
+| **M18.B.4** | Strict production thinness gates (separate profile) — **DONE** | — |
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) | — |
 | **M18.B.6** | AV failure-reason persistence | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (atomic, parallel-safe) | — |
