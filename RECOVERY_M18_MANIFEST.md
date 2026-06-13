@@ -211,9 +211,12 @@ per-phase tests, the push-safe workflow, and final acceptance criteria are in
 **`docs/M18_COMPLETION_PLAN.md`**.
 
 **M18.B progress:** M18.B.1 (RandomForest fallback + permutation-importance
-integration) and M18.B.2 (repro_hash_v2 full SR-8 composition, with
+integration), M18.B.2 (repro_hash_v2 full SR-8 composition, with
 `m16_bars_digest` persisted in `DatasetManifest` and `TrainOutputs.repro_hash_v2`
-populated) are DONE on the branch. Suite at 464 OK / skipped=3 with these added.
+populated), and M18.B.3 (real isotonic calibration — `fit_isotonic_calibration`
+fits on val only and applies to test; JSON-safe artifact;
+`EvaluationReport.isotonic_calibration` with pre/post Brier/ECE/MCE) are DONE on
+the branch. Suite at 479 OK / skipped=3 with these added.
 The 428-OK figures above are the pre-M18.B recovery baseline.
 
 Remaining tasks: execute the M18.B completion phases (push-safe, one phase per

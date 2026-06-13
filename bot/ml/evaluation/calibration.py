@@ -149,3 +149,181 @@ def calibration_report(
         "reliability_curve": reliability_curve(
             y_true, y_proba, n_bins=n_bins),
     }
+
+
+# ─── Real isotonic calibration (M18.B.3) ─────────────────────────────
+#
+# The functions above are DIAGNOSTIC only (reliability curve / ECE /
+# MCE). M18.B.3 adds a real fitted calibrator:
+#
+#   * fit IsotonicRegression on the VALIDATION split only (never train),
+#   * apply the fitted mapping to the TEST split (out-of-sample),
+#   * report pre/post Brier/ECE/MCE for both val and test,
+#   * persist a JSON-safe artifact (x_thresholds / y_thresholds) so the
+#     mapping can be re-applied later WITHOUT pickling a live sklearn
+#     object (mirrors the registry's refit-on-demand philosophy).
+#
+# Leakage rule (most important): the calibrator is fit on
+# (val_prob, val_y) and applied to test_prob. Train is never used.
+
+DEFAULT_MIN_VALIDATION_ROWS = 20
+
+
+def _brier(y_true: np.ndarray, y_proba: np.ndarray) -> float:
+    """Mean squared error of probabilities (clipped to [0,1])."""
+    if len(y_true) == 0:
+        return float("nan")
+    p = np.clip(np.asarray(y_proba, dtype=np.float64), 0.0, 1.0)
+    y = np.asarray(y_true, dtype=np.float64)
+    return float(np.mean((p - y) ** 2))
+
+
+def _split_metrics(y_true: np.ndarray, y_proba: np.ndarray,
+                    *, n_bins: int = DEFAULT_N_BINS) -> Dict[str, float]:
+    return {
+        "brier": _brier(y_true, y_proba),
+        "ece":   expected_calibration_error(y_true, y_proba,
+                                              n_bins=n_bins),
+        "mce":   maximum_calibration_error(y_true, y_proba,
+                                             n_bins=n_bins),
+    }
+
+
+def apply_isotonic_artifact(
+    probabilities: np.ndarray,
+    artifact: Dict[str, Any],
+) -> np.ndarray:
+    """Apply a persisted isotonic artifact to new probabilities.
+
+    Uses linear interpolation over the fitted (x_thresholds,
+    y_thresholds) breakpoints, clipping out-of-range inputs to the
+    fitted domain (out_of_bounds='clip'). Output is clipped to [0,1].
+    Lets future prediction code reuse the calibration WITHOUT a live
+    sklearn object.
+    """
+    p = np.asarray(probabilities, dtype=np.float64)
+    if p.size == 0:
+        return np.empty((0,), dtype=np.float64)
+    xs = np.asarray(artifact["x_thresholds"], dtype=np.float64)
+    ys = np.asarray(artifact["y_thresholds"], dtype=np.float64)
+    if xs.size == 0 or ys.size == 0:
+        # Degenerate artifact: identity (clipped).
+        return np.clip(p, 0.0, 1.0)
+    # np.interp clips to the endpoints outside [xs[0], xs[-1]], which is
+    # exactly out_of_bounds='clip'.
+    out = np.interp(np.clip(p, 0.0, 1.0), xs, ys)
+    return np.clip(out, 0.0, 1.0).astype(np.float64)
+
+
+def fit_isotonic_calibration(
+    *,
+    val_prob: np.ndarray,
+    val_y: np.ndarray,
+    test_prob: Optional[np.ndarray] = None,
+    test_y: Optional[np.ndarray] = None,
+    label_class: str = "binary",
+    min_validation_rows: int = DEFAULT_MIN_VALIDATION_ROWS,
+    n_bins: int = DEFAULT_N_BINS,
+) -> Dict[str, Any]:
+    """Fit isotonic calibration on the validation split and apply to
+    test. Returns a JSON-safe result dict.
+
+    NEVER fits on train. Binary label_class only. On any unsuitable
+    input the result is {available: False, unavailable_reason: ...}
+    rather than raising, so it can never crash the full evaluation.
+    """
+    def _unavailable(reason: str) -> Dict[str, Any]:
+        return {
+            "method":             "isotonic",
+            "available":          False,
+            "fitted_on_split":    "val",
+            "unavailable_reason": reason,
+        }
+
+    if label_class != "binary":
+        return _unavailable("unsupported_label_class")
+
+    vp = np.asarray(val_prob, dtype=np.float64)
+    vy = np.asarray(val_y, dtype=np.float64)
+
+    if vp.shape[0] < min_validation_rows:
+        return _unavailable("too_few_validation_rows")
+    if not np.all(np.isfinite(vp)):
+        return _unavailable("non_finite_probability")
+    if not np.all(np.isfinite(vy)):
+        return _unavailable("non_finite_label")
+    if np.unique(vy).shape[0] < 2:
+        return _unavailable("one_class_validation_labels")
+
+    try:
+        from sklearn.isotonic import IsotonicRegression
+    except ImportError:
+        return _unavailable("sklearn_unavailable")
+
+    try:
+        iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0,
+                                  y_max=1.0)
+        # Fit on VALIDATION ONLY.
+        iso.fit(np.clip(vp, 0.0, 1.0), vy)
+        xs = np.asarray(iso.X_thresholds_, dtype=np.float64)
+        ys = np.asarray(iso.y_thresholds_, dtype=np.float64)
+        artifact = {
+            "x_thresholds": [float(x) for x in xs],
+            "y_thresholds": [float(y) for y in ys],
+            "out_of_bounds": "clip",
+        }
+
+        n_pos = int(np.sum(vy == 1.0))
+        n_neg = int(np.sum(vy == 0.0))
+
+        # Validation pre/post (in-sample — shows the fitted behaviour).
+        val_cal = apply_isotonic_artifact(vp, artifact)
+        val_pre = _split_metrics(vy, vp, n_bins=n_bins)
+        val_post = _split_metrics(vy, val_cal, n_bins=n_bins)
+
+        result: Dict[str, Any] = {
+            "method":          "isotonic",
+            "available":       True,
+            "fitted_on_split": "val",
+            "n_fit_rows":      int(vp.shape[0]),
+            "n_positive":      n_pos,
+            "n_negative":      n_neg,
+            "out_of_bounds":   "clip",
+            "artifact":        artifact,
+            "validation": {
+                "pre_brier":  val_pre["brier"],
+                "post_brier": val_post["brier"],
+                "pre_ece":    val_pre["ece"],
+                "post_ece":   val_post["ece"],
+                "pre_mce":    val_pre["mce"],
+                "post_mce":   val_post["mce"],
+            },
+        }
+
+        # Test pre/post (out-of-sample — the meaningful calibration
+        # check). Only when test labels are usable.
+        if test_prob is not None and test_y is not None:
+            tp = np.asarray(test_prob, dtype=np.float64)
+            ty = np.asarray(test_y, dtype=np.float64)
+            if (tp.shape[0] > 0 and np.all(np.isfinite(tp))
+                    and np.all(np.isfinite(ty))):
+                test_cal = apply_isotonic_artifact(tp, artifact)
+                test_pre = _split_metrics(ty, tp, n_bins=n_bins)
+                test_post = _split_metrics(ty, test_cal, n_bins=n_bins)
+                result["test"] = {
+                    "pre_brier":  test_pre["brier"],
+                    "post_brier": test_post["brier"],
+                    "pre_ece":    test_pre["ece"],
+                    "post_ece":   test_post["ece"],
+                    "pre_mce":    test_pre["mce"],
+                    "post_mce":   test_post["mce"],
+                    "n_rows":     int(tp.shape[0]),
+                }
+            else:
+                result["test"] = {
+                    "unavailable_reason": (
+                        "non_finite_or_empty_test_split")}
+
+        return result
+    except Exception as e:  # pragma: no cover - defensive
+        return _unavailable(f"unexpected_exception:{type(e).__name__}")

@@ -41,10 +41,12 @@ of byte-identical restoration.
 > completion roadmap, advanced M18+ requirements, M18.B phases, and
 > final acceptance criteria are in **`docs/M18_COMPLETION_PLAN.md`**.
 >
-> **M18.B progress:** M18.B.1 (RandomForest fallback) and M18.B.2
-> (repro_hash_v2 full SR-8 composition) are DONE on the branch. Suite is
-> at 464 OK / skipped=3 with these phases added (recovery-baseline above
-> reflects the pre-M18.B state).
+> **M18.B progress:** M18.B.1 (RandomForest fallback), M18.B.2
+> (repro_hash_v2 full SR-8 composition), and M18.B.3 (real isotonic
+> calibration — fit on val, applied to test, JSON-safe artifact,
+> pre/post Brier/ECE/MCE) are DONE on the branch. Suite is at 479 OK /
+> skipped=3 with these phases added (recovery-baseline above reflects
+> the pre-M18.B state).
 
 ---
 

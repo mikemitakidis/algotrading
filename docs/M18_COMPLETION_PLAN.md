@@ -78,8 +78,14 @@ corrections over the first audit pass:
    `DatasetManifest` now persists `m16_bars_digest` (backward-compatible) and
    `TrainOutputs.repro_hash_v2` is populated by the trainer. v1 `repro_hash` is
    preserved.
-3. **Real isotonic calibration model** — fit-on-val, apply-to-test, persist;
-   pre/post Brier/ECE/MCE in the eval report.
+3. **Real isotonic calibration model** — **RESOLVED (M18.B.3).**
+   `bot/ml/evaluation/calibration.py` now has `fit_isotonic_calibration`
+   (sklearn `IsotonicRegression`, fit on the VALIDATION split only, applied to
+   TEST) and `apply_isotonic_artifact` (re-applies a JSON-safe
+   x/y-thresholds artifact without a live sklearn object). Pre/post
+   Brier/ECE/MCE are reported for val and test; the result is attached to
+   `EvaluationReport.isotonic_calibration`. Diagnostic-only calibration is
+   preserved.
 4. **Strict production thinness gates** — keep cold-start defaults for build,
    add a separate strict `production_promotion` profile.
 5. **Explicit NaN/missingness policy** — per-group fill + indicator columns +
@@ -329,7 +335,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.0** | Save audit + completion roadmap (this commit) | — |
 | **M18.B.1** | RandomForest fallback (sklearn, deterministic) + permutation-importance integration — **DONE** | — |
 | **M18.B.2** | repro_hash_v2 (full SR-8 composition) — **DONE** | — |
-| **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) | — |
+| **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) — **DONE** | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) | — |
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) | — |
 | **M18.B.6** | AV failure-reason persistence | — |

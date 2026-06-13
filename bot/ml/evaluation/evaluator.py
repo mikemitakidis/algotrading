@@ -40,7 +40,10 @@ import pandas as pd
 from bot.ml.errors import M18ConfigError
 from bot.ml.models.base import TrainOutputs
 from bot.ml.dataset.assembler import AssemblerResult
-from bot.ml.evaluation.calibration import calibration_report
+from bot.ml.evaluation.calibration import (
+    calibration_report,
+    fit_isotonic_calibration,
+)
 from bot.ml.evaluation.trading_metrics import trading_metrics
 from bot.ml.evaluation.ml_metrics import binary_metrics_extended
 from bot.ml.evaluation.threshold_metrics import threshold_table
@@ -215,6 +218,19 @@ def evaluate_model(
                         train_outputs.target_label_class},
         }
 
+    # M18.B.3 — real fitted isotonic calibration: fit on VALIDATION only
+    # (never train), apply to TEST. Binary-only; returns an
+    # {available: False, unavailable_reason} dict otherwise. Never
+    # crashes the evaluation.
+    isotonic_calibration = fit_isotonic_calibration(
+        val_prob=y_proba_val,
+        val_y=y_true_val,
+        test_prob=y_proba_test,
+        test_y=y_true_test,
+        label_class=train_outputs.target_label_class,
+        n_bins=n_calibration_bins,
+    )
+
     # Trading metrics per split (binary only)
     if train_outputs.target_label_class == "binary":
         trading = {
@@ -364,6 +380,7 @@ def evaluate_model(
         ml_metrics_extended=ml_metrics_extended,
         threshold_metrics=threshold_metrics,
         calibration=calibration,
+        isotonic_calibration=isotonic_calibration,
         trading_metrics=trading,
         drift=drift,
         permutation_importance=perm_importance,

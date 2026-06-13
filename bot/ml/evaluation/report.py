@@ -118,6 +118,12 @@ class EvaluationReport:
     library_versions: Dict[str, str]
     generated_at_utc: str
 
+    # M18.B.3 — real fitted isotonic calibration (fit on val, applied to
+    # test). Backward-compatible (default_factory) so older reports that
+    # predate B.3 still construct. Distinct from the diagnostic-only
+    # `calibration` field above (reliability curve / ECE / MCE).
+    isotonic_calibration: Dict[str, Any] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 

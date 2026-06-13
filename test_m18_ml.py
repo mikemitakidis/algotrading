@@ -4495,6 +4495,8 @@ from bot.ml.evaluation import (
     expected_calibration_error,
     maximum_calibration_error,
     reliability_curve,
+    fit_isotonic_calibration,
+    apply_isotonic_artifact,
     trading_metrics as eval_trading_metrics,
     evaluate_model,
     compare_baselines,
@@ -6690,6 +6692,181 @@ def _g8_build_clean_b2(seed_n=2000, fixture_mode=False):
     out = ModelTrainer().train_one(cfg, res)
     rep = evaluate_model(out, res, drift_warning_threshold=100.0)
     return res, out, rep
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G7_IsotonicCalibration — real fitted calibration (M18.B.3)
+# ─────────────────────────────────────────────────────────────────────
+
+class G7_IsotonicCalibration(unittest.TestCase):
+    """Real IsotonicRegression calibration: fit on validation only,
+    apply to test, JSON-safe artifact, pre/post Brier/ECE/MCE."""
+
+    def _val_test(self, n=200, seed=0):
+        rng = np.random.default_rng(seed)
+        val_p = rng.uniform(0.0, 1.0, n)
+        val_y = (rng.uniform(0.0, 1.0, n) < val_p).astype(np.float64)
+        test_p = rng.uniform(0.0, 1.0, n)
+        test_y = (rng.uniform(0.0, 1.0, n) < test_p).astype(np.float64)
+        return val_p, val_y, test_p, test_y
+
+    def test_isotonic_fits_on_validation_only(self):
+        # Capture the arrays passed to IsotonicRegression.fit and assert
+        # they match the VALIDATION input (count + values), never train.
+        import bot.ml.evaluation.calibration as cal_mod
+        from sklearn.isotonic import IsotonicRegression
+        val_p, val_y, test_p, test_y = self._val_test()
+        captured = {}
+        orig_fit = IsotonicRegression.fit
+
+        def spy_fit(self, X, y, *a, **k):
+            captured["X"] = np.asarray(X, dtype=np.float64).copy()
+            captured["y"] = np.asarray(y, dtype=np.float64).copy()
+            return orig_fit(self, X, y, *a, **k)
+
+        IsotonicRegression.fit = spy_fit
+        try:
+            cal_mod.fit_isotonic_calibration(
+                val_prob=val_p, val_y=val_y,
+                test_prob=test_p, test_y=test_y, label_class="binary")
+        finally:
+            IsotonicRegression.fit = orig_fit
+        self.assertEqual(captured["X"].shape[0], len(val_p))
+        np.testing.assert_array_equal(
+            captured["X"], np.clip(val_p, 0.0, 1.0))
+        np.testing.assert_array_equal(captured["y"], val_y)
+
+    def test_isotonic_applies_to_test_probabilities(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        self.assertTrue(r["available"])
+        cal = apply_isotonic_artifact(test_p, r["artifact"])
+        self.assertEqual(len(cal), len(test_p))
+
+    def test_isotonic_probabilities_are_bounded(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        cal = apply_isotonic_artifact(test_p, r["artifact"])
+        self.assertTrue(np.all(np.isfinite(cal)))
+        self.assertGreaterEqual(float(cal.min()), 0.0)
+        self.assertLessEqual(float(cal.max()), 1.0)
+
+    def test_isotonic_artifact_is_json_safe(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        art = r["artifact"]
+        self.assertIsInstance(art["x_thresholds"], list)
+        self.assertIsInstance(art["y_thresholds"], list)
+        json.dumps(r)  # must not raise
+
+    def test_isotonic_artifact_round_trip(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        art = r["artifact"]
+        restored = json.loads(json.dumps(art))
+        c1 = apply_isotonic_artifact(test_p, art)
+        c2 = apply_isotonic_artifact(test_p, restored)
+        np.testing.assert_array_equal(c1, c2)
+
+    def test_isotonic_reports_pre_post_brier_ece_mce(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        for section in ("validation", "test"):
+            for k in ("pre_brier", "post_brier", "pre_ece",
+                       "post_ece", "pre_mce", "post_mce"):
+                self.assertIn(k, r[section])
+
+    def test_isotonic_rejects_one_class_validation(self):
+        val_p, _, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=np.zeros(len(val_p)),
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"],
+                          "one_class_validation_labels")
+
+    def test_isotonic_rejects_too_few_validation_rows(self):
+        val_p, val_y, _, _ = self._val_test(n=5)
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y, label_class="binary")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"],
+                          "too_few_validation_rows")
+
+    def test_isotonic_rejects_non_finite_probabilities(self):
+        val_p, val_y, _, _ = self._val_test()
+        val_p[0] = np.nan
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y, label_class="binary")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"], "non_finite_probability")
+
+    def test_isotonic_binary_only(self):
+        val_p, val_y, _, _ = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y, label_class="classification_3way")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"], "unsupported_label_class")
+
+    def test_eval_report_contains_isotonic_calibration(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        rep = evaluate_model(out, res)
+        ic = rep.isotonic_calibration
+        self.assertTrue(ic.get("available"), ic.get("unavailable_reason"))
+        self.assertEqual(ic["method"], "isotonic")
+        self.assertEqual(ic["fitted_on_split"], "val")
+        self.assertIn("isotonic_calibration", rep.to_dict())
+
+    def test_isotonic_does_not_mutate_original_predictions(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        val_p_c, test_p_c = val_p.copy(), test_p.copy()
+        fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        np.testing.assert_array_equal(val_p, val_p_c)
+        np.testing.assert_array_equal(test_p, test_p_c)
+
+    def test_isotonic_deterministic_same_inputs(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r1 = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        r2 = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        self.assertEqual(r1, r2)
+
+    def test_calibration_unavailable_reason_round_trips(self):
+        val_p, val_y, _, _ = self._val_test(n=5)
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y, label_class="binary")
+        d = json.loads(json.dumps(r))
+        self.assertFalse(d["available"])
+        self.assertEqual(d["unavailable_reason"], "too_few_validation_rows")
+
+    def test_calibrated_metrics_present_not_required_to_improve(self):
+        # Isotonic can overfit tiny val data — assert metrics are
+        # COMPUTED (finite numbers), not that they always improve.
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        for section in ("validation", "test"):
+            self.assertTrue(np.isfinite(r[section]["post_brier"]))
 
 
 # ─────────────────────────────────────────────────────────────────────

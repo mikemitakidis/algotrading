@@ -32,6 +32,8 @@ from bot.ml.evaluation.calibration import (
     expected_calibration_error,
     maximum_calibration_error,
     reliability_curve,
+    fit_isotonic_calibration,
+    apply_isotonic_artifact,
 )
 from bot.ml.evaluation.trading_metrics import (
     trading_metrics,
@@ -83,6 +85,8 @@ __all__ = [
     "expected_calibration_error",
     "maximum_calibration_error",
     "reliability_curve",
+    "fit_isotonic_calibration",
+    "apply_isotonic_artifact",
     "trading_metrics",
     "evaluate_model",
     "compare_baselines",
