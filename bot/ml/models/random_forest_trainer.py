@@ -123,11 +123,25 @@ class RandomForestTrainer:
             raise M18ConfigError(
                 "M_random_forest requires at least 1 train row; got an "
                 "empty train set")
+        # Targets must be finite before we inspect their class set.
+        if not np.all(np.isfinite(y_train)):
+            raise M18ConfigError(
+                "M_random_forest requires finite binary targets; "
+                "y_train contains non-finite values (NaN/inf).")
+        # Binary targets must be exactly {0, 1}. A two-class set like
+        # {0, 2} would pass the one-class check below but then
+        # predict_proba's class-1 column lookup would silently treat
+        # the wrong class as positive. Reject anything outside {0,1}.
+        uniq = np.unique(y_train)
+        actual = {float(v) for v in uniq.tolist()}
+        if not actual.issubset({0.0, 1.0}):
+            raise M18ConfigError(
+                f"M_random_forest binary targets must be in {{0.0, 1.0}}; "
+                f"got classes {sorted(actual)}.")
         # One-class train set: RandomForest would learn a degenerate
         # always-one-class model and predict_proba would emit a single
         # column. Fail clearly rather than silently emit misleading
         # probabilities.
-        uniq = np.unique(y_train)
         if uniq.shape[0] < 2:
             raise M18ConfigError(
                 f"M_random_forest requires both classes present in the "

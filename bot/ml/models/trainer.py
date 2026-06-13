@@ -481,8 +481,10 @@ class Trainer:
         # ── 7. SR-8 reproducibility hash (M18.B.2) ──────────────
         # Full v2 composition: feature/label schema hashes + train
         # config + dataset manifest + persisted M16 bars digest +
-        # library versions + git HEAD. Best-effort: never block a
-        # training run on hashing failure (audit metadata only).
+        # library versions + git HEAD. FAIL-CLOSED: reproducibility is
+        # part of the training audit contract (SR-8), so a hashing
+        # failure raises rather than silently producing a model with no
+        # repro hash.
         try:
             manifest_dict = manifest.to_dict()
             rh_v2 = repro_hash_v2(
@@ -497,8 +499,9 @@ class Trainer:
                 library_versions=_hashing_lib_versions(),
                 git_sha=_hashing_git_head_sha(),
             )
-        except Exception:
-            rh_v2 = None
+        except Exception as e:
+            raise M18ConfigError(
+                f"repro_hash_v2_failed:{type(e).__name__}:{e}") from e
 
         return TrainOutputs(
             train_config=train_config.to_dict(),

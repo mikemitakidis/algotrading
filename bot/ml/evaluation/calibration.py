@@ -27,7 +27,7 @@ Zero-handling:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -189,6 +189,18 @@ def _split_metrics(y_true: np.ndarray, y_proba: np.ndarray,
     }
 
 
+def _nan_to_none(obj: Any) -> Any:
+    """Recursively replace NaN/inf floats with None so the result is
+    strict-JSON-safe (json.dumps(..., allow_nan=False) succeeds)."""
+    if isinstance(obj, dict):
+        return {k: _nan_to_none(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_nan_to_none(v) for v in obj]
+    if isinstance(obj, float):
+        return obj if np.isfinite(obj) else None
+    return obj
+
+
 def apply_isotonic_artifact(
     probabilities: np.ndarray,
     artifact: Dict[str, Any],
@@ -202,10 +214,30 @@ def apply_isotonic_artifact(
     sklearn object.
     """
     p = np.asarray(probabilities, dtype=np.float64)
-    if p.size == 0:
-        return np.empty((0,), dtype=np.float64)
+    if not isinstance(artifact, Mapping):
+        raise ValueError(
+            "apply_isotonic_artifact: artifact must be a mapping")
+    if "x_thresholds" not in artifact or "y_thresholds" not in artifact:
+        raise ValueError(
+            "apply_isotonic_artifact: artifact missing x_thresholds / "
+            "y_thresholds")
     xs = np.asarray(artifact["x_thresholds"], dtype=np.float64)
     ys = np.asarray(artifact["y_thresholds"], dtype=np.float64)
+    if xs.shape[0] != ys.shape[0]:
+        raise ValueError(
+            f"apply_isotonic_artifact: x_thresholds (n={xs.shape[0]}) "
+            f"and y_thresholds (n={ys.shape[0]}) length mismatch")
+    if xs.size and (not np.all(np.isfinite(xs))
+                     or not np.all(np.isfinite(ys))):
+        raise ValueError(
+            "apply_isotonic_artifact: thresholds contain non-finite "
+            "values")
+    if xs.size and np.any(np.diff(xs) < 0):
+        raise ValueError(
+            "apply_isotonic_artifact: x_thresholds must be "
+            "non-decreasing (monotonic)")
+    if p.size == 0:
+        return np.empty((0,), dtype=np.float64)
     if xs.size == 0 or ys.size == 0:
         # Degenerate artifact: identity (clipped).
         return np.clip(p, 0.0, 1.0)
@@ -246,13 +278,18 @@ def fit_isotonic_calibration(
     vp = np.asarray(val_prob, dtype=np.float64)
     vy = np.asarray(val_y, dtype=np.float64)
 
+    if vp.shape != vy.shape:
+        return _unavailable("validation_shape_mismatch")
     if vp.shape[0] < min_validation_rows:
         return _unavailable("too_few_validation_rows")
     if not np.all(np.isfinite(vp)):
         return _unavailable("non_finite_probability")
     if not np.all(np.isfinite(vy)):
         return _unavailable("non_finite_label")
-    if np.unique(vy).shape[0] < 2:
+    val_classes = {float(v) for v in np.unique(vy).tolist()}
+    if not val_classes.issubset({0.0, 1.0}):
+        return _unavailable("non_binary_validation_labels")
+    if len(val_classes) < 2:
         return _unavailable("one_class_validation_labels")
 
     try:
@@ -301,12 +338,29 @@ def fit_isotonic_calibration(
         }
 
         # Test pre/post (out-of-sample — the meaningful calibration
-        # check). Only when test labels are usable.
-        if test_prob is not None and test_y is not None:
+        # check). The test section is ALWAYS present with an explicit
+        # reason when it can't be computed.
+        if test_prob is None or test_y is None:
+            result["test"] = {
+                "unavailable_reason": "test_split_not_supplied"}
+        else:
             tp = np.asarray(test_prob, dtype=np.float64)
             ty = np.asarray(test_y, dtype=np.float64)
-            if (tp.shape[0] > 0 and np.all(np.isfinite(tp))
-                    and np.all(np.isfinite(ty))):
+            if tp.shape != ty.shape:
+                result["test"] = {
+                    "unavailable_reason": "test_shape_mismatch"}
+            elif tp.shape[0] == 0:
+                result["test"] = {
+                    "unavailable_reason": "empty_test_split"}
+            elif not (np.all(np.isfinite(tp))
+                       and np.all(np.isfinite(ty))):
+                result["test"] = {
+                    "unavailable_reason": "non_finite_test_split"}
+            elif not {float(v) for v in
+                       np.unique(ty).tolist()}.issubset({0.0, 1.0}):
+                result["test"] = {
+                    "unavailable_reason": "non_binary_test_labels"}
+            else:
                 test_cal = apply_isotonic_artifact(tp, artifact)
                 test_pre = _split_metrics(ty, tp, n_bins=n_bins)
                 test_post = _split_metrics(ty, test_cal, n_bins=n_bins)
@@ -319,11 +373,10 @@ def fit_isotonic_calibration(
                     "post_mce":   test_post["mce"],
                     "n_rows":     int(tp.shape[0]),
                 }
-            else:
-                result["test"] = {
-                    "unavailable_reason": (
-                        "non_finite_or_empty_test_split")}
 
+        # Strict JSON-safety: convert any NaN metric to None so the
+        # result survives json.dumps(..., allow_nan=False).
+        result = _nan_to_none(result)
         return result
     except Exception as e:  # pragma: no cover - defensive
         return _unavailable(f"unexpected_exception:{type(e).__name__}")

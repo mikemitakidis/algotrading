@@ -85,7 +85,27 @@ corrections over the first audit pass:
    x/y-thresholds artifact without a live sklearn object). Pre/post
    Brier/ECE/MCE are reported for val and test; the result is attached to
    `EvaluationReport.isotonic_calibration`. Diagnostic-only calibration is
-   preserved.
+   preserved. **Live/predict limitation (documented honestly):** the
+   live/predict path is unchanged — the evaluation report carries the isotonic
+   artifact, and `apply_isotonic_artifact` exists so future predict code can
+   reuse it; wiring it into the predict command is deferred to the
+   artifact/predict phases (B.8/B.9).
+
+   **B1–B3 audit hardening (applied):**
+   - RF (`random_forest_trainer.py`) now rejects non-finite targets and any
+     binary target outside `{0, 1}` (e.g. `{0, 2}`), closing the wrong-positive
+     -class path.
+   - repro_hash_v2 in `trainer.train_one()` is now **fail-closed**: a hashing
+     failure raises `M18ConfigError("repro_hash_v2_failed:...")` instead of
+     silently storing `None` (reproducibility is part of the audit contract).
+   - isotonic calibration validates val/test shape equality
+     (`validation_shape_mismatch` / `test_shape_mismatch`), rejects non-binary
+     val/test labels (`non_binary_validation_labels` /
+     `non_binary_test_labels`), always emits a `test` section (with explicit
+     reason when unavailable, e.g. `test_split_not_supplied`), is strict-JSON
+     safe (NaN→None), and `apply_isotonic_artifact` raises `ValueError` on
+     malformed artifacts (missing thresholds / length mismatch / non-finite /
+     non-monotonic x).
 4. **Strict production thinness gates** — keep cold-start defaults for build,
    add a separate strict `production_promotion` profile.
 5. **Explicit NaN/missingness policy** — per-group fill + indicator columns +

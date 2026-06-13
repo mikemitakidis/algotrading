@@ -773,6 +773,36 @@ class G1_ReproHashV2(unittest.TestCase):
         self.assertEqual(rt.dataset_hash_sha256,
                           res.manifest.dataset_hash_sha256)
 
+    def test_train_one_repro_hash_v2_present_on_success(self):
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config("B2_logistic",
+                                  dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertIsNotNone(out.repro_hash_v2)
+        self.assertEqual(len(out.repro_hash_v2), 64)
+
+    def test_train_one_repro_hash_v2_failure_not_silent(self):
+        # Fail-closed: if repro_hash_v2 raises, train_one must raise
+        # M18ConfigError with a 'repro_hash_v2_failed' message — never
+        # silently produce a model with no reproducibility hash.
+        import bot.ml.models.trainer as _tr
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "B2_logistic", dataset_id=res.manifest.dataset_id)
+        orig = _tr.repro_hash_v2
+
+        def _boom(**kwargs):
+            raise ValueError("simulated hashing failure")
+
+        _tr.repro_hash_v2 = _boom
+        try:
+            with self.assertRaises(ml_errors.M18ConfigError) as ctx:
+                ModelTrainer().train_one(cfg, res)
+            self.assertIn("repro_hash_v2_failed", str(ctx.exception))
+        finally:
+            _tr.repro_hash_v2 = orig
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G1_Errors — M18 error hierarchy (reconstructed from contract)
@@ -3967,6 +3997,22 @@ class G5_RandomForest(unittest.TestCase):
         with self.assertRaises((AssertionError, ml_errors.M18ConfigError)):
             ModelTrainer().train_one(cfg, res)
 
+    def test_random_forest_rejects_non_finite_targets(self):
+        X, _ = self._fixture()
+        y = np.zeros(X.shape[0], dtype=np.float64)
+        y[: X.shape[0] // 2] = 1.0
+        y[0] = np.nan
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(X, y, label_class="binary", seed=42)
+
+    def test_random_forest_rejects_non_0_1_binary_targets(self):
+        X, _ = self._fixture()
+        # Two classes {0, 2} — passes a naive one-class check but is not
+        # a valid binary {0,1} target.
+        y = np.where(np.arange(X.shape[0]) % 2 == 0, 0.0, 2.0)
+        with self.assertRaises(ml_errors.M18ConfigError):
+            RandomForestTrainer().fit(X, y, label_class="binary", seed=42)
+
 
 class G5_NoTestLeak(unittest.TestCase):
     """The locked plan forbids optimising on test data. The most
@@ -6867,6 +6913,78 @@ class G7_IsotonicCalibration(unittest.TestCase):
             test_prob=test_p, test_y=test_y, label_class="binary")
         for section in ("validation", "test"):
             self.assertTrue(np.isfinite(r[section]["post_brier"]))
+
+    def test_isotonic_rejects_validation_shape_mismatch(self):
+        val_p, val_y, _, _ = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p[:50], val_y=val_y, label_class="binary")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"],
+                          "validation_shape_mismatch")
+
+    def test_isotonic_rejects_test_shape_mismatch(self):
+        val_p, val_y, test_p, _ = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=np.zeros(len(test_p) - 10),
+            label_class="binary")
+        self.assertTrue(r["available"])
+        self.assertEqual(r["test"]["unavailable_reason"],
+                          "test_shape_mismatch")
+
+    def test_isotonic_rejects_non_binary_validation_labels(self):
+        val_p, val_y, _, _ = self._val_test()
+        bad = np.where(val_y > 0, 2.0, 0.0)
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=bad, label_class="binary")
+        self.assertFalse(r["available"])
+        self.assertEqual(r["unavailable_reason"],
+                          "non_binary_validation_labels")
+
+    def test_isotonic_marks_non_binary_test_labels_unavailable(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        bad = np.where(test_y > 0, 2.0, 0.0)
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=bad, label_class="binary")
+        self.assertTrue(r["available"])
+        self.assertEqual(r["test"]["unavailable_reason"],
+                          "non_binary_test_labels")
+
+    def test_apply_isotonic_artifact_rejects_missing_thresholds(self):
+        with self.assertRaises(ValueError):
+            apply_isotonic_artifact(
+                np.array([0.5]), {"y_thresholds": [0.0, 1.0]})
+
+    def test_apply_isotonic_artifact_rejects_length_mismatch(self):
+        with self.assertRaises(ValueError):
+            apply_isotonic_artifact(np.array([0.5]), {
+                "x_thresholds": [0.0, 0.5, 1.0],
+                "y_thresholds": [0.0, 1.0]})
+
+    def test_apply_isotonic_artifact_rejects_non_monotonic_x_thresholds(self):
+        with self.assertRaises(ValueError):
+            apply_isotonic_artifact(np.array([0.5]), {
+                "x_thresholds": [1.0, 0.0],
+                "y_thresholds": [0.0, 1.0]})
+
+    def test_isotonic_result_is_strict_json_safe(self):
+        val_p, val_y, test_p, test_y = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y,
+            test_prob=test_p, test_y=test_y, label_class="binary")
+        # strict: no NaN/inf allowed
+        json.dumps(r, allow_nan=False)
+
+    def test_isotonic_result_always_has_test_section(self):
+        # When no test split is supplied, the test section must still
+        # be present with an explicit reason.
+        val_p, val_y, _, _ = self._val_test()
+        r = fit_isotonic_calibration(
+            val_prob=val_p, val_y=val_y, label_class="binary")
+        self.assertIn("test", r)
+        self.assertEqual(r["test"]["unavailable_reason"],
+                          "test_split_not_supplied")
 
 
 # ─────────────────────────────────────────────────────────────────────
