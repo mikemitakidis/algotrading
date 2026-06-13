@@ -774,7 +774,11 @@ class G1_ReproHashV2(unittest.TestCase):
                           res.manifest.dataset_hash_sha256)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# G1_Errors — M18 error hierarchy (reconstructed from contract)
+# ─────────────────────────────────────────────────────────────────────
 
+class G1_Errors(unittest.TestCase):
 
     def test_all_m18_errors_subclass_base(self):
         for name in ("M18ConfigError", "M18SchemaError", "M18DataError",
