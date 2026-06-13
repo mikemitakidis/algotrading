@@ -17,6 +17,7 @@ Algorithm (standard):
 Model-type support:
   B2_logistic        supported (fits via the locked LR config)
   M_lightgbm         supported when lightgbm is installed
+  M_random_forest    supported (sklearn-only; M18.B.1)
   B0_majority        NOT supported — constant predictor uses no
                        features → all importances trivially 0;
                        returned with explicit unavailable_reason
@@ -51,7 +52,11 @@ DEFAULT_SCORING    = "roc_auc"
 
 # Model types where permutation importance is structurally
 # meaningful: requires the model to depend on input features.
-SUPPORTED_MODEL_TYPES = frozenset({"B2_logistic", "M_lightgbm"})
+SUPPORTED_MODEL_TYPES = frozenset({
+    "B2_logistic",
+    "M_lightgbm",
+    "M_random_forest",
+})
 UNSUPPORTED_REASONS = {
     "B0_majority": (
         "B0_majority is a constant predictor (uses no features); "
@@ -200,6 +205,12 @@ def permutation_importance(
                     "installed in this venv"),
             }
         model = LightGBMTrainer()
+        model.fit(X_train, y_train, label_class=label_class, seed=seed,
+                   hyperparameters=dict(train_config.hyperparameters))
+    elif mt == "M_random_forest":
+        from bot.ml.models.random_forest_trainer import (
+            RandomForestTrainer)
+        model = RandomForestTrainer()
         model.fit(X_train, y_train, label_class=label_class, seed=seed,
                    hyperparameters=dict(train_config.hyperparameters))
     else:

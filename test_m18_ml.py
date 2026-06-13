@@ -5333,10 +5333,12 @@ class G7_Drift(unittest.TestCase):
 
 class G7_PermutationImportance(unittest.TestCase):
 
-    def test_supported_model_types_are_b2_and_lightgbm(self):
-        """B0 and B1 are explicitly unsupported per locked plan."""
+    def test_supported_model_types_are_b2_lightgbm_and_rf(self):
+        """B0 and B1 are explicitly unsupported per locked plan.
+        M_random_forest is supported as of M18.B.1."""
         self.assertEqual(PI_SUPPORTED_MODEL_TYPES,
-                          frozenset({"B2_logistic", "M_lightgbm"}))
+                          frozenset({"B2_logistic", "M_lightgbm",
+                                     "M_random_forest"}))
 
     def test_b0_majority_returns_unavailable_with_clear_reason(self):
         per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
@@ -5454,6 +5456,80 @@ class G7_PermutationImportance(unittest.TestCase):
             self.assertEqual(f1["feature"], f2["feature"])
             self.assertEqual(f1["importance_mean"],
                               f2["importance_mean"])
+
+    # ---- M18.B.1: RandomForest permutation-importance integration ----
+
+    def _rf_cfg_and_res(self):
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "M_random_forest", dataset_id=res.manifest.dataset_id)
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        return res, cfg, feat_cols
+
+    def test_random_forest_permutation_importance_available(self):
+        res, cfg, feat_cols = self._rf_cfg_and_res()
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["model_type"], "M_random_forest")
+        self.assertIn("top_features", pi)
+        self.assertIn("all_features", pi)
+        self.assertGreater(len(pi["all_features"]), 0)
+        for f in pi["top_features"]:
+            self.assertIn("feature", f)
+            self.assertIn("importance_mean", f)
+            self.assertIn("importance_std", f)
+
+    def test_random_forest_permutation_importance_deterministic(self):
+        res, cfg, feat_cols = self._rf_cfg_and_res()
+        pi1 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        pi2 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi1["available"] and pi2["available"])
+        self.assertEqual(pi1["baseline_score"], pi2["baseline_score"])
+        for f1, f2 in zip(pi1["all_features"], pi2["all_features"]):
+            self.assertEqual(f1["feature"], f2["feature"])
+            self.assertEqual(f1["importance_mean"],
+                              f2["importance_mean"])
+            self.assertEqual(f1["importance_std"],
+                              f2["importance_std"])
+
+    def test_random_forest_permutation_importance_respects_safe_hyperparameters(self):
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "M_random_forest", dataset_id=res.manifest.dataset_id,
+            hyperparameters={"n_estimators": 50, "max_depth": 5})
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["model_type"], "M_random_forest")
+
+    def test_random_forest_permutation_importance_rejects_unsafe_hyperparameters(self):
+        res = _assemble_for_training()
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        for bad in ({"n_jobs": 2}, {"random_state": 99},
+                     {"bootstrap": False}):
+            cfg = _make_train_config(
+                "M_random_forest", dataset_id=res.manifest.dataset_id,
+                hyperparameters=bad)
+            with self.assertRaises(ml_errors.M18ConfigError):
+                permutation_importance(
+                    train_config=cfg, assembler_result=res,
+                    feature_columns=feat_cols, n_repeats=3,
+                    evaluation_split="val", min_samples=10)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -5997,10 +6073,12 @@ class G7_Drift(unittest.TestCase):
 
 class G7_PermutationImportance(unittest.TestCase):
 
-    def test_supported_model_types_are_b2_and_lightgbm(self):
-        """B0 and B1 are explicitly unsupported per locked plan."""
+    def test_supported_model_types_are_b2_lightgbm_and_rf(self):
+        """B0 and B1 are explicitly unsupported per locked plan.
+        M_random_forest is supported as of M18.B.1."""
         self.assertEqual(PI_SUPPORTED_MODEL_TYPES,
-                          frozenset({"B2_logistic", "M_lightgbm"}))
+                          frozenset({"B2_logistic", "M_lightgbm",
+                                     "M_random_forest"}))
 
     def test_b0_majority_returns_unavailable_with_clear_reason(self):
         per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
@@ -6212,6 +6290,81 @@ class G7_Breakdowns(unittest.TestCase):
         else:
             # If not available, must give explicit reason
             self.assertIsNotNone(mr["unavailable_reason"])
+    # ---- M18.B.1: RandomForest permutation-importance integration ----
+
+    def _rf_cfg_and_res(self):
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "M_random_forest", dataset_id=res.manifest.dataset_id)
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        return res, cfg, feat_cols
+
+    def test_random_forest_permutation_importance_available(self):
+        res, cfg, feat_cols = self._rf_cfg_and_res()
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["model_type"], "M_random_forest")
+        self.assertIn("top_features", pi)
+        self.assertIn("all_features", pi)
+        self.assertGreater(len(pi["all_features"]), 0)
+        for f in pi["top_features"]:
+            self.assertIn("feature", f)
+            self.assertIn("importance_mean", f)
+            self.assertIn("importance_std", f)
+
+    def test_random_forest_permutation_importance_deterministic(self):
+        res, cfg, feat_cols = self._rf_cfg_and_res()
+        pi1 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        pi2 = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi1["available"] and pi2["available"])
+        self.assertEqual(pi1["baseline_score"], pi2["baseline_score"])
+        for f1, f2 in zip(pi1["all_features"], pi2["all_features"]):
+            self.assertEqual(f1["feature"], f2["feature"])
+            self.assertEqual(f1["importance_mean"],
+                              f2["importance_mean"])
+            self.assertEqual(f1["importance_std"],
+                              f2["importance_std"])
+
+    def test_random_forest_permutation_importance_respects_safe_hyperparameters(self):
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "M_random_forest", dataset_id=res.manifest.dataset_id,
+            hyperparameters={"n_estimators": 50, "max_depth": 5})
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=3,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["model_type"], "M_random_forest")
+
+    def test_random_forest_permutation_importance_rejects_unsafe_hyperparameters(self):
+        res = _assemble_for_training()
+        from bot.ml.models.base import select_feature_columns
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        for bad in ({"n_jobs": 2}, {"random_state": 99},
+                     {"bootstrap": False}):
+            cfg = _make_train_config(
+                "M_random_forest", dataset_id=res.manifest.dataset_id,
+                hyperparameters=bad)
+            with self.assertRaises(ml_errors.M18ConfigError):
+                permutation_importance(
+                    train_config=cfg, assembler_result=res,
+                    feature_columns=feat_cols, n_repeats=3,
+                    evaluation_split="val", min_samples=10)
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────

@@ -67,7 +67,9 @@ corrections over the first audit pass:
 1. **RandomForest fallback** — **RESOLVED (M18.B.1).** `M_random_forest` is now
    implemented (`bot/ml/models/random_forest_trainer.py`, sklearn-only,
    deterministic) and in `IMPLEMENTED_MODEL_TYPES`; it trains only when
-   explicitly requested and never silently replaces M_lightgbm.
+   explicitly requested and never silently replaces M_lightgbm. Permutation
+   importance is fully integrated for it (added to `SUPPORTED_MODEL_TYPES` with
+   a dispatch branch in `bot/ml/evaluation/permutation_importance.py`).
 2. **repro_hash_v2 (SR-8)** — current `repro_hash(config, library_versions,
    git_sha)` is a subset; the plan required feature/label/train_config/
    dataset_manifest canonical JSON + per-symbol M16 bar SHA + git head +
@@ -321,7 +323,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | Phase | Scope | Depends on |
 |---|---|---|
 | **M18.B.0** | Save audit + completion roadmap (this commit) | — |
-| **M18.B.1** | RandomForest fallback (sklearn, deterministic) — **DONE** (commit on branch) | — |
+| **M18.B.1** | RandomForest fallback (sklearn, deterministic) + permutation-importance integration — **DONE** | — |
 | **M18.B.2** | repro_hash_v2 (full SR-8 composition) | — |
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) | — |
