@@ -266,7 +266,10 @@ corrections over the first audit pass:
    `Registry.demote_current(scope_key, reason, actor)` behind a new
    `--scope-key` argument (was an A.9 stub). `registry promote` and `registry
    demote` gained `--dry-run` (report-only, no mutation — promote dry-run runs
-   the B8 consistency + gate checks; demote dry-run reports the current pointer).
+   the B8 consistency + gate checks for the NON-FORCED path and is tagged
+   `dry_run_scope: non_forced_only`; `--dry-run --force` is rejected cleanly
+   (exit 1, valid envelope) rather than fake a forced-promotion simulation;
+   demote dry-run reports the current pointer).
    `registry show --json` includes the B8 artifact-consistency summary. `predict
    --json` carries `calibration_applied: false` / `calibration_status:
    stored_not_applied` (honest — B3 calibration is still not applied at predict).

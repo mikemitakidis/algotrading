@@ -226,7 +226,7 @@ thinness gates — a separate `ProductionThinnessThresholds` profile of
 `production:*` blocked reasons that `--force` cannot override; the profile is
 non-bypassable — a non-locked (relaxed) profile emits
 `production_threshold_profile_not_locked` so relaxed thresholds can never create
-a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 622 OK / skipped=3
+a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 626 OK / skipped=3
 
 M18.B.5 (explicit NaN/missingness policy) is DONE: central
 `bot/ml/features/missingness.py` (`m18_missingness_v1`) covers all 10 feature

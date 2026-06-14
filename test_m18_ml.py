@@ -10359,6 +10359,81 @@ class G9_CliDryRun(unittest.TestCase):
             # current pointer STILL present (no mutation)
             self.assertIsNotNone(reg.get_current(scope))
 
+    # ---- B9.A fix: --dry-run --force is rejected cleanly -----------
+
+    def test_promote_dry_run_force_rejected_no_mutation(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            before = reg.get_entry(e.model_id).status
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["registry", "promote", "--model-id", e.model_id,
+                     "--dry-run", "--force",
+                     "--override-gate", "sample_count",
+                     "--reason", "x"], _registry_root=root)
+            self.assertEqual(rc, 1)             # clean non-zero
+            self.assertIn("not supported", err.getvalue())
+            # no mutation
+            self.assertEqual(reg.get_entry(e.model_id).status, before)
+
+    def test_promote_dry_run_force_rejected_json_envelope(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "promote",
+                     "--model-id", e.model_id, "--dry-run", "--force"],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())   # valid JSON envelope
+            self.assertFalse(d["ok"])
+            self.assertEqual(d["status"], "dry_run_force_unsupported")
+            self.assertEqual(d["errors"][0]["code"],
+                             "dry_run_force_unsupported")
+
+    def test_non_force_dry_run_still_works_with_scope_tag(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["registry", "promote", "--model-id", e.model_id,
+                     "--dry-run"], _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "dry_run")
+            self.assertEqual(d["dry_run_scope"], "non_forced_only")
+            self.assertTrue(d["would_promote"])
+
+    def test_integrity_broken_blocked_even_with_force_not_dry(self):
+        # real (non-dry) forced promotion of a B8-inconsistent model is
+        # still blocked — --force cannot override integrity.
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            import bot.ml.registry.storage as _s
+            from pathlib import Path as _P
+            _s.artifact_path(_P(root), e.model_id,
+                             _s.ARTIFACT_TRAINING_META).unlink()
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["registry", "promote", "--model-id", e.model_id,
+                     "--force", "--override-gate", "sample_count",
+                     "--reason", "x"], _registry_root=root)
+            self.assertEqual(rc, 1)
+            self.assertNotEqual(reg.get_entry(e.model_id).status,
+                                "current")
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G9_CliSafety — B9.A promote-still-blocked + no forbidden side effects

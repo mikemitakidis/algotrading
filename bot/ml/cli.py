@@ -194,9 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     rg_promote.add_argument("--reason",
         help="Operator justification (required with --force).")
     rg_promote.add_argument("--dry-run", action="store_true",
-        help="Check whether promotion would pass (runs the B8 "
-              "artifact-consistency + gate checks) WITHOUT mutating "
-              "the registry.")
+        help="Check whether NON-FORCED promotion would pass (runs the "
+              "B8 artifact-consistency + gate checks) WITHOUT mutating "
+              "the registry. Not supported with --force (forced-"
+              "promotion simulation is not implemented).")
 
     rg_demote = rg_sub.add_parser(
         "demote",
@@ -422,10 +423,40 @@ def _cmd_registry_promote(args: argparse.Namespace,
         registry = _make_registry(_registry_root)
 
         if dry_run:
-            # B9.A: report whether promotion WOULD pass without
-            # mutating the registry. Runs the B8 consistency check and
-            # inspects the entry's blocked reasons; never calls
-            # promote_to_current (no pointer move, no status change).
+            # B9.A: report whether NON-FORCED promotion would pass
+            # without mutating the registry. Runs the B8 consistency
+            # check and inspects the entry's blocked reasons; never
+            # calls promote_to_current (no pointer move, no status
+            # change).
+            #
+            # IMPORTANT (B9.A fix): this models ONLY the non-forced
+            # promotion path. It deliberately does NOT simulate the
+            # --force / --override-gate / --reason judgment-gate logic
+            # in Registry.promote_to_current, so combining --dry-run
+            # with --force would be MISLEADING (a judgment-blocked
+            # model that --force could promote would show
+            # would_promote=false). Rather than fake that path, we
+            # reject the combination cleanly until a real no-mutation
+            # forced-promotion simulation exists.
+            if args.force:
+                msg = ("registry promote --dry-run --force is not "
+                       "supported: dry-run models only the non-forced "
+                       "promotion path and cannot faithfully simulate "
+                       "--force/--override-gate judgment-gate logic "
+                       "without risking a misleading result. Run "
+                       "--dry-run without --force to preview, or run "
+                       "the real --force promotion.")
+                if use_json:
+                    _emit_json_envelope(
+                        "registry-promote", ok=False,
+                        status="dry_run_force_unsupported",
+                        errors=[_err_obj(
+                            "dry_run_force_unsupported", msg)],
+                        stream=sys.stderr)
+                else:
+                    print(f"registry promote: {msg}", file=sys.stderr)
+                return 1
+
             entry = registry.get_entry(args.model_id)   # raises if absent
             consistency = registry.verify_artifact_consistency(
                 args.model_id)
@@ -434,6 +465,7 @@ def _cmd_registry_promote(args: argparse.Namespace,
                           and entry.promotion_eligible)
             result = {
                 "outcome":            "dry_run",
+                "dry_run_scope":      "non_forced_only",
                 "would_promote":      bool(would_pass),
                 "model_id":           args.model_id,
                 "artifact_consistent": consistency["consistent"],
