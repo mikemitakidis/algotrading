@@ -3581,6 +3581,219 @@ class G4_AVStatusPersistence(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G4_ContentAddressedStores — feature/label cache (M18.B.7)
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_ContentAddressedStores(unittest.TestCase):
+    """Content-addressed feature_store + label_store: identity = hash of
+    schema/bars/missingness/config, deterministic paths, hit/miss,
+    safe invalidation, round-trip fidelity, JSON-safe reports."""
+
+    def _digest(self):
+        return {"15m": {"n_bars": 100, "first_ts": "t0",
+                        "last_ts": "t9", "close_sum_str": "1",
+                        "close_sum_sq_str": "2"}}
+
+    def _fkey_kw(self):
+        return dict(symbol="AAPL", anchor_tf="15m", anchor_set="A",
+                    timeframes=["15m", "1H"], feature_specs_hash="FEAT1",
+                    m16_bars_digest=self._digest(),
+                    missingness_policy_hash="MP1")
+
+    def test_feature_store_deterministic_path_and_hash(self):
+        from bot.ml.store import make_feature_key
+        k1 = make_feature_key(**self._fkey_kw())
+        k2 = make_feature_key(**self._fkey_kw())
+        self.assertEqual(k1.content_hash(), k2.content_hash())
+        self.assertEqual(len(k1.content_hash()), 64)
+        self.assertEqual(k1.partition_path(), k2.partition_path())
+        self.assertTrue(k1.partition_path().startswith(
+            "feature/AAPL/15m/A/"))
+
+    def test_label_store_deterministic_path_and_hash(self):
+        from bot.ml.store import make_label_key
+        kw = dict(symbol="AAPL", anchor_tf="15m", anchor_set="A",
+                  timeframes=["15m"], label_specs_hash="LBL1",
+                  m16_bars_digest=self._digest())
+        k1 = make_label_key(**kw)
+        k2 = make_label_key(**kw)
+        self.assertEqual(k1.content_hash(), k2.content_hash())
+        self.assertTrue(k1.partition_path().startswith(
+            "label/AAPL/15m/A/"))
+
+    def test_same_inputs_produce_cache_hit(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        key = make_feature_key(**self._fkey_kw())
+        df = pd.DataFrame({"trend.a": [1.0, 2.0, 3.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            calls = {"n": 0}
+
+            def compute():
+                calls["n"] += 1
+                return df
+            _o1, r1 = fs.get_or_compute(key, compute)
+            _o2, r2 = fs.get_or_compute(key, compute)
+            self.assertEqual(calls["n"], 1)       # computed once only
+            self.assertFalse(r1.hit)              # first was a miss
+            self.assertTrue(r2.hit)               # second was a hit
+
+    def test_feature_schema_change_produces_cache_miss(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        df = pd.DataFrame({"trend.a": [1.0, 2.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            k1 = make_feature_key(**self._fkey_kw())
+            fs.write(k1, df)
+            self.assertTrue(fs.lookup(k1).hit)
+            kw2 = self._fkey_kw()
+            kw2["feature_specs_hash"] = "FEAT2"
+            k2 = make_feature_key(**kw2)
+            self.assertFalse(fs.lookup(k2).hit)   # different identity
+
+    def test_m16_bars_digest_change_produces_cache_miss(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        df = pd.DataFrame({"trend.a": [1.0, 2.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            k1 = make_feature_key(**self._fkey_kw())
+            fs.write(k1, df)
+            kw2 = self._fkey_kw()
+            kw2["m16_bars_digest"] = {"15m": {"n_bars": 999}}
+            self.assertFalse(fs.lookup(make_feature_key(**kw2)).hit)
+
+    def test_missingness_policy_hash_changes_feature_identity(self):
+        from bot.ml.store import make_feature_key
+        k1 = make_feature_key(**self._fkey_kw())
+        kw2 = self._fkey_kw()
+        kw2["missingness_policy_hash"] = "MP2"
+        self.assertNotEqual(k1.content_hash(),
+                             make_feature_key(**kw2).content_hash())
+
+    def test_corrupt_metadata_detected_as_miss(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        df = pd.DataFrame({"trend.a": [1.0, 2.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            key = make_feature_key(**self._fkey_kw())
+            fs.write(key, df)
+            self.assertTrue(fs.lookup(key).hit)
+            fs.metadata_path(key).write_text("{ not valid json")
+            res = fs.lookup(key)
+            self.assertFalse(res.hit)
+            self.assertEqual(res.reason, "miss_corrupt_metadata")
+
+    def test_hash_mismatch_metadata_detected_as_miss(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        import json as _json
+        df = pd.DataFrame({"trend.a": [1.0, 2.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            key = make_feature_key(**self._fkey_kw())
+            fs.write(key, df)
+            md = _json.loads(fs.metadata_path(key).read_text())
+            md["content_hash"] = "0" * 64        # tamper
+            fs.metadata_path(key).write_text(_json.dumps(md))
+            res = fs.lookup(key)
+            self.assertFalse(res.hit)
+            self.assertEqual(res.reason, "miss_hash_mismatch")
+
+    def test_feature_store_round_trip_preserves_dataframe(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        df = pd.DataFrame({
+            "trend.a": [1.0, np.nan, 3.0],
+            "vol_regime.x": pd.array([1, 2, 3], dtype="int8"),
+        })
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            key = make_feature_key(**self._fkey_kw())
+            fs.write(key, df)
+            got = fs.read(key)
+            self.assertEqual(list(got.columns), list(df.columns))
+            self.assertEqual(str(got["vol_regime.x"].dtype), "int8")
+            self.assertTrue(np.isnan(got["trend.a"].iloc[1]))
+            self.assertEqual(got["trend.a"].iloc[0], 1.0)
+
+    def test_label_store_round_trip_preserves_pending(self):
+        from bot.ml.store import LabelStore, make_label_key
+        ldf = pd.DataFrame({
+            "tb.won": [1, 0, 1],
+            "tb.is_pending": [False, True, False],
+        })
+        with tempfile.TemporaryDirectory() as root:
+            ls = LabelStore(root)
+            key = make_label_key(
+                symbol="AAPL", anchor_tf="15m", anchor_set="A",
+                timeframes=["15m"], label_specs_hash="LBL1",
+                m16_bars_digest=self._digest())
+            ls.write(key, ldf)
+            got = ls.read(key)
+            self.assertEqual(got["tb.is_pending"].tolist(),
+                             [False, True, False])
+            self.assertEqual(got["tb.won"].tolist(), [1, 0, 1])
+
+    def test_cache_report_is_json_safe(self):
+        from bot.ml.store import FeatureStore, make_feature_key
+        df = pd.DataFrame({"trend.a": [1.0, 2.0]})
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            key = make_feature_key(**self._fkey_kw())
+            _o, res = fs.get_or_compute(key, lambda: df)
+            s = json.dumps(res.to_dict(), allow_nan=False)
+            self.assertIsInstance(s, str)
+
+    def test_assembler_uses_store_hit_on_second_build(self):
+        from bot.ml.store import FeatureStore, LabelStore
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        cfg_kw = dict(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors.ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=False, embargo_bars_override=10)
+        with tempfile.TemporaryDirectory() as root:
+            fs, ls = FeatureStore(root), LabelStore(root)
+            r1 = ds_assembler.DatasetAssembler(
+                ds_assembler.AssemblerConfig(
+                    **cfg_kw, feature_store=fs,
+                    label_store=ls)).build(per_tf_bars=per_tf)
+            r2 = ds_assembler.DatasetAssembler(
+                ds_assembler.AssemblerConfig(
+                    **cfg_kw, feature_store=fs,
+                    label_store=ls)).build(per_tf_bars=per_tf)
+            self.assertFalse(r1.cache_report["feature_store"]["hit"])
+            self.assertTrue(r2.cache_report["feature_store"]["hit"])
+            self.assertTrue(r2.cache_report["label_store"]["hit"])
+            # cached build reproduces the SAME dataset identity
+            self.assertEqual(r1.manifest.dataset_hash_sha256,
+                             r2.manifest.dataset_hash_sha256)
+            self.assertTrue(isinstance(
+                json.dumps(r2.cache_report, allow_nan=False), str))
+
+    def test_old_in_memory_assembler_behaviour_preserved(self):
+        # No store configured -> empty cache_report, build still works.
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        res = ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=False,
+                embargo_bars_override=10)).build(per_tf_bars=per_tf)
+        self.assertIsNone(res.cache_report.get("feature_store"))
+        self.assertIsNone(res.cache_report.get("label_store"))
+        self.assertGreater(res.dataset.shape[0], 0)
+
+    def test_feature_and_label_keys_never_collide(self):
+        from bot.ml.store import make_feature_key, make_label_key
+        fk = make_feature_key(**self._fkey_kw())
+        lk = make_label_key(
+            symbol="AAPL", anchor_tf="15m", anchor_set="A",
+            timeframes=["15m", "1H"], label_specs_hash="FEAT1",
+            m16_bars_digest=self._digest())
+        # even with overlapping inputs, the 'kind' makes them distinct
+        self.assertNotEqual(fk.content_hash(), lk.content_hash())
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G4_Assembler — end-to-end
 # ─────────────────────────────────────────────────────────────────────
 

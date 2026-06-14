@@ -101,6 +101,12 @@ class AssemblerConfig:
     skip_adversarial: bool = False   # set True when sample sizes
                                        # are too small to be meaningful
                                        # (e.g. fixture_mode)
+    # M18.B.7 — optional content-addressed caches. Default None keeps
+    # the original in-memory behaviour (always recompute). When set, the
+    # assembler caches/reuses computed feature/label DataFrames keyed by
+    # the schema/bars/missingness identity (see bot.ml.store).
+    feature_store: Optional[Any] = None
+    label_store: Optional[Any] = None
 
     def resolved_embargo_bars(self) -> int:
         if self.embargo_bars_override is not None:
@@ -121,6 +127,9 @@ class AssemblerResult:
     # downstream consumers read an unambiguous string, never a bare None.
     adversarial_validation_status: str = ""
     adversarial_validation_reason: str = ""
+    # M18.B.7 — content-addressed store cache report (JSON-safe). Empty
+    # dicts/None when no store is configured (default in-memory build).
+    cache_report: Dict[str, Any] = field(default_factory=dict)
 
 
 class DatasetAssembler:
@@ -289,20 +298,60 @@ class DatasetAssembler:
 
         anchor_bars = per_tf_bars[anchor_tf].reset_index(drop=True)
 
-        # 2. Compute features (all groups)
-        feature_df = self._compute_features(
-            anchor_bars=anchor_bars,
-            per_tf_bars=per_tf_bars,
-            symbol_metadata_path=symbol_metadata_path,
-            flywheel_reader=flywheel_reader,
-            benchmark_bars=benchmark_bars,
-        )
+        # M18.B.7 — identity inputs for the content-addressed stores
+        # (computed up-front so cache lookup precedes any compute).
+        _bd = _bars_digest(per_tf_bars)
+        _feat_hash_id = compute_feature_specs_hash(ALL_FEATURE_GROUPS)
+        _lbl_hash_id = compute_label_specs_hash(ALL_LABEL_GROUPS)
+        from bot.ml.features.missingness import (
+            missingness_policy_hash as _mp_hash_id)
+        _miss_hash_id = _mp_hash_id()
+        cache_report: Dict[str, Any] = {
+            "feature_store": None, "label_store": None}
 
-        # 3. Compute labels (all groups)
-        label_df = self._compute_labels(
-            anchor_bars=anchor_bars,
-            feature_df=feature_df,
-        )
+        # 2. Compute features (all groups) — store-backed if configured.
+        def _compute_features_fn():
+            return self._compute_features(
+                anchor_bars=anchor_bars,
+                per_tf_bars=per_tf_bars,
+                symbol_metadata_path=symbol_metadata_path,
+                flywheel_reader=flywheel_reader,
+                benchmark_bars=benchmark_bars,
+            )
+        if self.cfg.feature_store is not None:
+            from bot.ml.store import make_feature_key
+            fkey = make_feature_key(
+                symbol=self.cfg.symbol, anchor_tf=anchor_tf,
+                anchor_set=self.cfg.anchor_set,
+                timeframes=list(self.cfg.timeframes),
+                feature_specs_hash=_feat_hash_id,
+                m16_bars_digest=_bd,
+                missingness_policy_hash=_miss_hash_id)
+            feature_df, _fres = self.cfg.feature_store.get_or_compute(
+                fkey, _compute_features_fn)
+            cache_report["feature_store"] = _fres.to_dict()
+        else:
+            feature_df = _compute_features_fn()
+
+        # 3. Compute labels (all groups) — store-backed if configured.
+        def _compute_labels_fn():
+            return self._compute_labels(
+                anchor_bars=anchor_bars,
+                feature_df=feature_df,
+            )
+        if self.cfg.label_store is not None:
+            from bot.ml.store import make_label_key
+            lkey = make_label_key(
+                symbol=self.cfg.symbol, anchor_tf=anchor_tf,
+                anchor_set=self.cfg.anchor_set,
+                timeframes=list(self.cfg.timeframes),
+                label_specs_hash=_lbl_hash_id,
+                m16_bars_digest=_bd)
+            label_df, _lres = self.cfg.label_store.get_or_compute(
+                lkey, _compute_labels_fn)
+            cache_report["label_store"] = _lres.to_dict()
+        else:
+            label_df = _compute_labels_fn()
 
         # 4. Join
         dataset = pd.concat([
@@ -564,4 +613,5 @@ class DatasetAssembler:
             adversarial_validation=av_result,
             adversarial_validation_status=av_status,
             adversarial_validation_reason=av_reason,
+            cache_report=cache_report,
         )

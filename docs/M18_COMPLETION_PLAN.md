@@ -179,10 +179,32 @@ corrections over the first audit pass:
    `dataset:adversarial_validation_not_run`/`_failed` (integrity gates), so a
    failed/unrunnable AV blocks promotion with the explicit reason preserved on the
    manifest.
-7. **Content-addressed feature_store / label_store** —
-   `bot/ml/store/{feature_store,label_store}.py`, partitions by
-   symbol/timeframe/date/schema-hash, `schema.json`/`meta.json`, cache
-   hit/miss, no committed artifacts.
+7. **Content-addressed feature_store / label_store** — **RESOLVED (M18.B.7).**
+   New `bot/ml/store/` package: `metadata.py` (`StoreKey` content-address +
+   `StoreMetadata` sidecar), `feature_store.py` (`FeatureStore`, `CacheResult`,
+   `make_feature_key`, shared `_ContentAddressedStore` with
+   lookup/read/write/`get_or_compute`), `label_store.py` (`LabelStore`,
+   `make_label_key`). Identity = SHA-256 of (kind, symbol, anchor_tf,
+   anchor_set, timeframes, feature/label schema hash, M16 bars digest,
+   missingness policy hash, extra config) — so any change to those inputs
+   yields a different content hash and the old artifact is no longer addressed
+   (automatic safe invalidation). Browsable partition path
+   `<kind>/<symbol>/<anchor_tf>/<anchor_set>/<hash>`. Parquet artifact +
+   JSON-safe metadata sidecar; reads are FAIL-CLOSED (missing / corrupt /
+   hash-mismatch metadata → cache MISS + safe recompute, never stale data).
+   `get_or_compute` only computes on a miss; `CacheResult` reports
+   hit/miss + reason and is JSON-safe. The assembler gained optional
+   `feature_store`/`label_store` config fields (default `None` = original
+   in-memory recompute behaviour) and a JSON-safe `cache_report` on
+   `AssemblerResult`; a cached build reproduces a byte-identical dataset (same
+   `dataset_hash_sha256`). Artifacts are written under a caller-supplied root
+   (tmp in tests) and are NEVER committed. **Known limitations:** no atomic
+   write / file-locking yet (last-write-wins, single-process assumption); no
+   eviction / size cap / TTL; store is opt-in (not wired into any production
+   build path yet); per-build identity does not include the train/val/test
+   split fractions for the feature/label artifacts (features/labels are
+   pre-split, so this is correct, but the *dataset* identity still depends on
+   them via the manifest, not the store).
 8. **Dataset/model artifact persistence** — persisted dataset splits +
    manifest + model artifacts so commands can hand off between invocations.
 9. **Full CLI** — build-dataset / train / evaluate / demote (currently
@@ -426,7 +448,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.4** | Strict production thinness gates (separate profile) — **DONE** | — |
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) — **DONE** | — |
 | **M18.B.6** | AV failure-reason persistence — **DONE** | — |
-| **M18.B.7** | Content-addressed feature_store / label_store (atomic, parallel-safe) | — |
+| **M18.B.7** | Content-addressed feature_store / label_store (opt-in; atomic/parallel-safe deferred) — **DONE** | — |
 | **M18.B.8** | Dataset/model artifact persistence + model-card output | B.7 |
 | **M18.B.9** | Full CLI completion (build/train/evaluate/demote) | B.8 |
 | **M18.B.10** | Advanced monitoring (leaderboard, run manifest, cache stats, data-quality gate, regime-aware validation, shadow monitoring) + one-command audit + final docs | B.1–B.9 |
