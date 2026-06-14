@@ -3452,6 +3452,135 @@ class G4_AdversarialValidation(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G4_AVStatusPersistence — explicit AV status/reason (M18.B.6)
+# ─────────────────────────────────────────────────────────────────────
+
+class G4_AVStatusPersistence(unittest.TestCase):
+    """AV outcome must carry an explicit, JSON-safe status + stable
+    reason string (never an ambiguous bare None) that the manifest
+    persists and gating consumes."""
+
+    def _build(self, *, cv_folds=5, fixture_mode=False, n_15m=2000,
+               seed=21):
+        per_tf = _multi_tf_for_assembler(n_15m=n_15m, seed=seed)
+        return ds_assembler.DatasetAssembler(
+            ds_assembler.AssemblerConfig(
+                symbol="X", anchor_tf="15m",
+                anchor_set=ds_anchors
+                    .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                require_intraday=False, embargo_bars_override=10,
+                adversarial_cv_folds=cv_folds,
+                adversarial_threshold=0.55,
+                fixture_mode=fixture_mode)
+        ).build(per_tf_bars=per_tf)
+
+    def test_av_success_has_explicit_status(self):
+        res = _assemble_for_training()   # deterministically passes AV
+        self.assertEqual(res.adversarial_validation_status, "passed")
+        self.assertEqual(res.adversarial_validation_reason, "av_passed")
+        self.assertIsNotNone(res.adversarial_validation)
+        self.assertEqual(
+            res.manifest.adversarial_validation_status, "passed")
+
+    def test_av_exception_has_explicit_unavailable_or_skip_reason(self):
+        # Absurd cv_folds forces an AV exception (not enough rows/side).
+        res = self._build(cv_folds=50, n_15m=300, seed=11)
+        self.assertEqual(res.adversarial_validation_status,
+                          "skipped_not_enough_data")
+        self.assertEqual(res.adversarial_validation_reason,
+                          "av_not_enough_rows")
+        # av_result collapses to None, but the REASON is preserved
+        self.assertIsNone(res.adversarial_validation)
+        self.assertNotEqual(
+            res.manifest.adversarial_validation_reason, "")
+
+    def test_not_enough_data_case_has_explicit_status_reason(self):
+        res = self._build(cv_folds=50, n_15m=300, seed=11)
+        self.assertEqual(res.manifest.adversarial_validation_status,
+                          "skipped_not_enough_data")
+        self.assertIn(res.manifest.adversarial_validation_reason,
+                       ("av_not_enough_rows",
+                        "av_not_enough_classes",
+                        "av_no_usable_features"))
+
+    def test_fixture_mode_av_disabled_status(self):
+        res = self._build(fixture_mode=True)
+        self.assertEqual(res.adversarial_validation_status,
+                          "disabled_fixture_mode")
+        self.assertEqual(res.adversarial_validation_reason,
+                          "av_fixture_mode")
+
+    def test_manifest_persists_av_status_reason(self):
+        res = _assemble_for_training()
+        d = res.manifest.to_dict()
+        self.assertIn("adversarial_validation_status", d)
+        self.assertIn("adversarial_validation_reason", d)
+        self.assertEqual(d["adversarial_validation_status"], "passed")
+
+    def test_old_manifest_round_trip_av_defaults(self):
+        res = _assemble_for_training()
+        d = res.manifest.to_dict()
+        d_old = {k: v for k, v in d.items()
+                 if not k.startswith("adversarial_validation_status")
+                 and not k.startswith("adversarial_validation_reason")}
+        m = ds_manifest.DatasetManifest.from_dict(d_old)
+        self.assertEqual(m.adversarial_validation_status, "")
+        self.assertEqual(m.adversarial_validation_reason, "")
+        # new manifest round-trips intact
+        m2 = ds_manifest.DatasetManifest.from_dict(d)
+        self.assertEqual(m2.adversarial_validation_status, "passed")
+
+    def test_av_failure_blocks_promotion_with_explicit_reason(self):
+        res = self._build(cv_folds=50, n_15m=300, seed=11)
+        out = ModelTrainer().train_one(
+            _make_train_config(
+                "B0_majority", dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertFalse(out.promotion_eligible)
+        self.assertTrue(any("adversarial_validation_not_run" in r
+                            for r in out.promotion_blocked_reasons))
+        # explicit reason still available on the manifest
+        self.assertEqual(res.manifest.adversarial_validation_reason,
+                          "av_not_enough_rows")
+
+    def test_av_status_json_strict_safe(self):
+        for res in (self._build(),
+                     self._build(cv_folds=50, n_15m=300, seed=11),
+                     self._build(fixture_mode=True)):
+            s = json.dumps(res.manifest.to_dict(), allow_nan=False)
+            self.assertIsInstance(s, str)
+
+    def test_no_ambiguous_none_status_in_assembler_output(self):
+        # Every build path sets a non-empty explicit status string.
+        for res in (self._build(),
+                     self._build(cv_folds=50, n_15m=300, seed=11),
+                     self._build(fixture_mode=True)):
+            self.assertNotEqual(res.adversarial_validation_status, "")
+            self.assertNotEqual(res.adversarial_validation_reason, "")
+            self.assertIsNotNone(res.adversarial_validation_status)
+
+    def test_classify_av_error_reason_mapping(self):
+        # The classifier maps known AV error messages to stable reasons.
+        from bot.ml.dataset.adversarial_validation import (
+            classify_av_error_reason, AdversarialValidationError,
+            AV_REASON_NOT_ENOUGH_ROWS, AV_REASON_NO_USABLE_FEATURES,
+            AV_REASON_EXCEPTION)
+        self.assertEqual(
+            classify_av_error_reason(AdversarialValidationError(
+                "adversarial validation needs >= cv_folds=5 rows per "
+                "side after NaN drop; got X_train=2")),
+            AV_REASON_NOT_ENOUGH_ROWS)
+        self.assertEqual(
+            classify_av_error_reason(AdversarialValidationError(
+                "adversarial validation has no usable features after "
+                "NaN/constant filtering; dropped 8")),
+            AV_REASON_NO_USABLE_FEATURES)
+        self.assertEqual(
+            classify_av_error_reason(RuntimeError("something weird")),
+            AV_REASON_EXCEPTION)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G4_Assembler — end-to-end
 # ─────────────────────────────────────────────────────────────────────
 

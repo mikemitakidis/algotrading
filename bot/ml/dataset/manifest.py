@@ -132,6 +132,14 @@ class DatasetManifest:
 
     # Adversarial validation (set AFTER AV runs; None until then)
     adversarial_validation: Optional[Dict[str, Any]] = None
+    # M18.B.6 — explicit AV status + stable reason string, set for EVERY
+    # outcome (passed / failed / skipped_not_enough_data /
+    # unavailable_error / disabled_fixture_mode / skipped_no_split) so
+    # the reason never collapses to an ambiguous bare None. Backward-
+    # compatible defaults; from_dict filters unknown keys for old
+    # manifests. "" default distinguishes a pre-B6 manifest.
+    adversarial_validation_status: str = ""
+    adversarial_validation_reason: str = ""
 
     # M16 input-bars digest (M18.B.2 / SR-8). The compact per-timeframe
     # fingerprint (n_bars / first_ts / last_ts / close sums) that already

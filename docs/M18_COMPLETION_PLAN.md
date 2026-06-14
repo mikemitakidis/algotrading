@@ -159,8 +159,26 @@ corrections over the first audit pass:
    `infer_initial_status` maps `production:*` blockers to `failed_sample_count`
    so a production-blocked model's initial registry status is not a misleading
    `candidate` (promotion remains independently blocked by the integrity gate).
-6. **AV failure-reason persistence** — record exception class/message/cause
-   (too-few-rows vs NaN vs one-class vs sklearn-missing) in the manifest.
+6. **AV failure-reason persistence** — **RESOLVED (M18.B.6).** Every adversarial-
+   validation outcome now carries an EXPLICIT status + stable reason instead of
+   collapsing to a bare `av_result=None`. `adversarial_validation.py` defines the
+   status vocabulary (`passed` / `failed` / `skipped_not_enough_data` /
+   `unavailable_error` / `disabled_fixture_mode` / `skipped_no_split`) and reason
+   strings (`av_passed` / `av_failed` / `av_not_enough_rows` /
+   `av_not_enough_classes` / `av_no_usable_features` / `av_exception` /
+   `av_fixture_mode` / `av_missing_split`), plus `classify_av_error_reason()`. The
+   assembler sets `av_status`/`av_reason` on every path (exception → classified
+   reason + `skipped_not_enough_data`/`unavailable_error`; fixture/skip →
+   `disabled_fixture_mode`; no split → `skipped_no_split`), keeps `av_result` as
+   the structured result only on success, and bases the `adversarial_validation_*`
+   promotion blocker on the explicit status. `DatasetManifest` and
+   `AssemblerResult` persist `adversarial_validation_status` +
+   `adversarial_validation_reason` (backward-compatible `""` defaults; old
+   manifests round-trip via the `from_dict` filter). JSON-safe under
+   `allow_nan=False`. The trainer still inherits the dataset blocker as
+   `dataset:adversarial_validation_not_run`/`_failed` (integrity gates), so a
+   failed/unrunnable AV blocks promotion with the explicit reason preserved on the
+   manifest.
 7. **Content-addressed feature_store / label_store** —
    `bot/ml/store/{feature_store,label_store}.py`, partitions by
    symbol/timeframe/date/schema-hash, `schema.json`/`meta.json`, cache
@@ -407,7 +425,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.3** | Real isotonic calibration (fit-val / apply-test / persist) — **DONE** | — |
 | **M18.B.4** | Strict production thinness gates (separate profile) — **DONE** | — |
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) — **DONE** | — |
-| **M18.B.6** | AV failure-reason persistence | — |
+| **M18.B.6** | AV failure-reason persistence — **DONE** | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (atomic, parallel-safe) | — |
 | **M18.B.8** | Dataset/model artifact persistence + model-card output | B.7 |
 | **M18.B.9** | Full CLI completion (build/train/evaluate/demote) | B.8 |

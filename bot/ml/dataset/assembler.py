@@ -62,6 +62,13 @@ from bot.ml.dataset.walk_forward import (
 from bot.ml.dataset.adversarial_validation import (
     AdversarialValidationResult,
     run_adversarial_validation,
+    classify_av_error_reason,
+    av_reason_is_not_enough_data,
+    AV_STATUS_PASSED, AV_STATUS_FAILED,
+    AV_STATUS_SKIPPED_NOT_ENOUGH_DATA, AV_STATUS_UNAVAILABLE_ERROR,
+    AV_STATUS_DISABLED_FIXTURE_MODE, AV_STATUS_SKIPPED_NO_SPLIT,
+    AV_REASON_PASSED, AV_REASON_FAILED, AV_REASON_FIXTURE_MODE,
+    AV_REASON_MISSING_SPLIT,
 )
 from bot.ml.dataset.flywheel_reader import FlywheelReader
 
@@ -110,6 +117,10 @@ class AssemblerResult:
     split: Optional[WalkForwardSplit]
     coverage_report: CoverageReport
     adversarial_validation: Optional[AdversarialValidationResult]
+    # M18.B.6 — explicit AV status + reason (mirrors the manifest), so
+    # downstream consumers read an unambiguous string, never a bare None.
+    adversarial_validation_status: str = ""
+    adversarial_validation_reason: str = ""
 
 
 class DatasetAssembler:
@@ -358,9 +369,21 @@ class DatasetAssembler:
                 # Anchor count too small for requested fractions.
                 split = None
 
-        # 8. Adversarial validation (TRAIN vs TEST cohort)
+        # 8. Adversarial validation (TRAIN vs TEST cohort).
+        # M18.B.6: every outcome gets an EXPLICIT status + stable reason
+        # string (never an ambiguous bare None). av_result stays the
+        # structured result on success; av_status/av_reason are always
+        # set so the manifest and gating are unambiguous.
         av_result: Optional[AdversarialValidationResult] = None
-        if split is not None and not self.cfg.skip_adversarial:
+        av_status: str
+        av_reason: str
+        if self.cfg.skip_adversarial or self.cfg.fixture_mode:
+            av_status = AV_STATUS_DISABLED_FIXTURE_MODE
+            av_reason = AV_REASON_FIXTURE_MODE
+        elif split is None:
+            av_status = AV_STATUS_SKIPPED_NO_SPLIT
+            av_reason = AV_REASON_MISSING_SPLIT
+        else:
             feature_cols = list(feature_df.columns)
             X_train = dataset.iloc[
                 split.train_anchor_indices][feature_cols]
@@ -374,10 +397,22 @@ class DatasetAssembler:
                     cv_folds=self.cfg.adversarial_cv_folds,
                     random_state=self.cfg.adversarial_random_state,
                 )
-            except Exception:
-                # Don't fail the whole build if AV can't run (e.g.
-                # too few rows after NaN drop). Manifest records
-                # av=None so the caller can choose to block.
+                if av_result.passed:
+                    av_status = AV_STATUS_PASSED
+                    av_reason = AV_REASON_PASSED
+                else:
+                    av_status = AV_STATUS_FAILED
+                    av_reason = AV_REASON_FAILED
+            except Exception as exc:
+                # Don't fail the whole build if AV can't run, but DO
+                # preserve why: classify the reason and pick the status
+                # (not-enough-data vs a genuine error). av_result stays
+                # None, but av_status/av_reason carry the explanation.
+                av_reason = classify_av_error_reason(exc)
+                if av_reason_is_not_enough_data(av_reason):
+                    av_status = AV_STATUS_SKIPPED_NOT_ENOUGH_DATA
+                else:
+                    av_status = AV_STATUS_UNAVAILABLE_ERROR
                 av_result = None
 
         # 9. Manifest
@@ -435,12 +470,22 @@ class DatasetAssembler:
             promotion_blocked_reasons.append("coverage_degraded")
         if fixture_only:
             promotion_blocked_reasons.append("fixture_only")
-        if av_result is None:
-            promotion_blocked_reasons.append(
-                "adversarial_validation_not_run")
-        elif not av_result.passed:
+        if av_status == AV_STATUS_PASSED:
+            pass  # no AV blocker
+        elif av_status == AV_STATUS_FAILED:
             promotion_blocked_reasons.append(
                 "adversarial_validation_failed")
+        elif av_status == AV_STATUS_DISABLED_FIXTURE_MODE:
+            # fixture/skip — fixture_only already blocks; AV is not run
+            # by design, so no separate AV blocker is added here.
+            pass
+        else:
+            # SKIPPED_NO_SPLIT / SKIPPED_NOT_ENOUGH_DATA /
+            # UNAVAILABLE_ERROR — AV did not produce a verdict, so this
+            # is the "not run" blocker (now backed by an explicit
+            # av_status/av_reason rather than a bare None).
+            promotion_blocked_reasons.append(
+                "adversarial_validation_not_run")
         promotion_eligible = (len(promotion_blocked_reasons) == 0)
 
         manifest = DatasetManifest(
@@ -504,6 +549,8 @@ class DatasetAssembler:
             promotion_blocked_reasons=promotion_blocked_reasons,
             adversarial_validation=(av_result.to_dict()
                                       if av_result else None),
+            adversarial_validation_status=av_status,
+            adversarial_validation_reason=av_reason,
             m16_bars_digest=bars_digest_dict,
             missingness_policy_hash=missingness_hash,
             missingness_report=missingness_report,
@@ -515,4 +562,6 @@ class DatasetAssembler:
             split=split,
             coverage_report=coverage,
             adversarial_validation=av_result,
+            adversarial_validation_status=av_status,
+            adversarial_validation_reason=av_reason,
         )

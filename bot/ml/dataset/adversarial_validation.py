@@ -40,6 +40,56 @@ import pandas as pd
 from bot.ml.errors import M18Error
 
 
+# ─── Explicit AV status / reason vocabulary (M18.B.6) ────────────────
+# Before B.6 a failed/unrunnable AV collapsed to av_result=None, which
+# conflated "exception", "no split", and "fixture skip" and lost the
+# reason. These give every AV outcome an explicit, JSON-safe status +
+# stable reason string that the manifest persists and gating consumes.
+AV_STATUS_PASSED                 = "passed"
+AV_STATUS_FAILED                 = "failed"
+AV_STATUS_SKIPPED_NOT_ENOUGH_DATA = "skipped_not_enough_data"
+AV_STATUS_UNAVAILABLE_ERROR      = "unavailable_error"
+AV_STATUS_DISABLED_FIXTURE_MODE  = "disabled_fixture_mode"
+AV_STATUS_SKIPPED_NO_SPLIT       = "skipped_no_split"
+
+AV_REASON_PASSED          = "av_passed"
+AV_REASON_FAILED          = "av_failed"
+AV_REASON_NOT_ENOUGH_ROWS = "av_not_enough_rows"
+AV_REASON_NOT_ENOUGH_CLASSES = "av_not_enough_classes"
+AV_REASON_NO_USABLE_FEATURES = "av_no_usable_features"
+AV_REASON_EXCEPTION       = "av_exception"
+AV_REASON_FIXTURE_MODE    = "av_fixture_mode"
+AV_REASON_MISSING_SPLIT   = "av_missing_split"
+
+
+def classify_av_error_reason(exc: Exception) -> str:
+    """Map an AdversarialValidationError (or other exception) raised by
+    run_adversarial_validation to a STABLE reason string. Inspects the
+    message text for the known not-enough-data conditions; anything
+    unrecognised is the generic av_exception."""
+    msg = str(exc).lower()
+    if "needs >= cv_folds" in msg or "rows per side" in msg:
+        return AV_REASON_NOT_ENOUGH_ROWS
+    if "non-empty inputs" in msg:
+        return AV_REASON_NOT_ENOUGH_ROWS
+    if "no usable features" in msg:
+        return AV_REASON_NO_USABLE_FEATURES
+    if "no usable folds" in msg or "class balance" in msg:
+        return AV_REASON_NOT_ENOUGH_CLASSES
+    return AV_REASON_EXCEPTION
+
+
+def av_reason_is_not_enough_data(reason: str) -> bool:
+    """True iff the reason is a 'not enough data' condition (vs a true
+    error). Determines status skipped_not_enough_data vs
+    unavailable_error."""
+    return reason in (
+        AV_REASON_NOT_ENOUGH_ROWS,
+        AV_REASON_NOT_ENOUGH_CLASSES,
+        AV_REASON_NO_USABLE_FEATURES,
+    )
+
+
 class AdversarialValidationError(M18Error):
     """Raised when adversarial validation cannot run (e.g. sklearn
     missing, empty inputs, no usable features)."""

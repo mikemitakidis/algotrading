@@ -55,10 +55,10 @@ of byte-identical restoration.
 > JSON-safe report + policy hash persisted in DatasetManifest and
 > surfaced on TrainOutputs, policy hash folded into dataset_hash so
 > repro_hash_v2 changes with the policy, and a finite-matrix guard that
-> raises M18DataError on NaN/inf/object before .fit(); indicators are appended to the model matrix as real features so n_features = base + indicators; registry artifacts, permutation importance, and the predict path were all aligned to the model columns, and production:* blockers map to failed_sample_count status) are DONE on the
+> raises M18DataError on NaN/inf/object before .fit(); indicators are appended to the model matrix as real features so n_features = base + indicators; registry artifacts, permutation importance, and the predict path were all aligned to the model columns, and production:* blockers map to failed_sample_count status), and M18.B.6 (explicit adversarial-validation status + reason persisted on the manifest/AssemblerResult instead of an ambiguous av_result=None, with gating driven by the explicit status) are DONE on the
 > branch, plus a B1–B3 audit hardening pass (RF 0/1-only +
 > finite-target checks; repro_hash_v2 fail-closed; isotonic
-> shape/non-binary/strict-JSON/artifact validation). Suite is at 546
+> shape/non-binary/strict-JSON/artifact validation). Suite is at 556
 > OK / skipped=3 with these phases added (recovery-baseline above
 > reflects the pre-M18.B state).
 
