@@ -221,6 +221,32 @@ corrections over the first audit pass:
    builds.
 8. **Dataset/model artifact persistence** — persisted dataset splits +
    manifest + model artifacts so commands can hand off between invocations.
+   **Artifact-consistency hardening RESOLVED (M18.B.8).** `training_metadata.json`
+   now persists the full identity needed to prove the stored artifacts match the
+   model/data path that produced them: `artifact_schema_version`,
+   `dataset_hash_sha256`, `dataset_manifest_hash`, `repro_hash_v2`,
+   `missingness_policy_hash`, `n_train`/`n_val`/`n_test`, and
+   `training_X_rows`/`training_X_columns`/`training_y_rows` (in addition to the
+   B.5 feature/base/indicator column lists + counts). New
+   `Registry.verify_artifact_consistency(model_id)` returns a JSON-safe
+   `{consistent, problems, model_id}` and FAIL-CLOSED reports: missing
+   train_outputs (model-artifact proxy) / training_metadata / training_X /
+   training_y; `training_X` width ≠ metadata `n_features` ≠ `len(feature_columns)`;
+   `training_y` rows ≠ `training_X` rows; `training_X` columns ≠
+   `feature_columns`; `base + indicators ≠ model_feature_columns`; metadata
+   `dataset_hash` ≠ entry `dataset_hash`; empty `repro_hash_v2`.
+   `promote_to_current` now calls this verification first and raises
+   `PromotionBlockedError` (integrity, `--force` cannot override) on any
+   inconsistency, so a model with missing/mismatched artifacts can never become
+   `current`. Prediction-path consistency was already enforced in B.5
+   (`predict_from_registry` validates BASE input columns and derives the
+   missingness indicators, reporting the full model width). **Limitations:** the
+   "model artifact" is the deterministic-refit source (`train_outputs.json` +
+   `training_X/y`), not a serialized fitted estimator, so the consistency check
+   proves refit-input identity, not a frozen-weights hash; there is no separate
+   `model_artifact_hash`/`training_metadata_hash`/`evaluation_report_hash` yet
+   (the dataset/repro identity is the implemented safe subset); the check reads
+   artifacts at promote time (not continuously).
 9. **Full CLI** — build-dataset / train / evaluate / demote (currently
    documented stubs, blocked on item 8).
 10. **Original artifact layout / model-card output** — the plan's per-model
@@ -463,7 +489,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.5** | NaN/missingness policy (per-group fill + indicators) — **DONE** | — |
 | **M18.B.6** | AV failure-reason persistence — **DONE** | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (opt-in; atomic/parallel-safe deferred) — **DONE** | — |
-| **M18.B.8** | Dataset/model artifact persistence + model-card output | B.7 |
+| **M18.B.8** | Dataset/model artifact persistence — consistency gate **DONE** (model-card output deferred) | B.7 |
 | **M18.B.9** | Full CLI completion (build/train/evaluate/demote) | B.8 |
 | **M18.B.10** | Advanced monitoring (leaderboard, run manifest, cache stats, data-quality gate, regime-aware validation, shadow monitoring) + one-command audit + final docs | B.1–B.9 |
 

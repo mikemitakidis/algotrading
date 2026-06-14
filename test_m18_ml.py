@@ -8502,6 +8502,201 @@ class G8_RegistrationFlow(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# G8_ArtifactConsistency — persisted-artifact agreement (M18.B.8)
+# ─────────────────────────────────────────────────────────────────────
+
+class G8_ArtifactConsistency(unittest.TestCase):
+    """Every persisted artifact must match the model/data path that
+    produced it; promotion fails closed when they disagree."""
+
+    def _store(self):
+        import bot.ml.registry.storage as _s
+        return _s
+
+    def _ap(self, root, model_id, name):
+        from pathlib import Path
+        return self._store().artifact_path(Path(root), model_id, name)
+
+    def test_metadata_round_trip_json_safe(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            meta = self._store().read_json(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_TRAINING_META))
+            s = json.dumps(meta, allow_nan=False)
+            self.assertIsInstance(s, str)
+
+    def test_registry_entry_stores_dataset_manifest_identity(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            self.assertEqual(e.dataset_hash_sha256,
+                             res.manifest.dataset_hash_sha256)
+            meta = self._store().read_json(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_TRAINING_META))
+            self.assertEqual(meta["dataset_manifest_hash"],
+                             res.manifest.dataset_hash_sha256)
+            self.assertNotEqual(meta["repro_hash_v2"], "")
+
+    def test_registry_entry_stores_model_feature_columns(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            meta = self._store().read_json(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_TRAINING_META))
+            self.assertEqual(len(meta["feature_columns"]),
+                             meta["model_feature_count"])
+            self.assertEqual(
+                meta["base_feature_columns"]
+                + meta["missingness_indicator_names"],
+                meta["feature_columns"])
+
+    def test_n_features_equals_training_X_width(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            Xdf = pd.read_parquet(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_X_TRAIN))
+            self.assertEqual(Xdf.shape[1], out.n_features)
+
+    def test_fresh_model_is_consistent(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(c["consistent"], c["problems"])
+            self.assertEqual(c["problems"], [])
+            self.assertIsInstance(
+                json.dumps(c, allow_nan=False), str)
+
+    def test_promote_blocks_when_model_artifact_missing(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_TRAIN_OUTPUTS).unlink()
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("missing_train_outputs", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_training_metadata_missing(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_TRAINING_META).unlink()
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_feature_count_mismatches(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            xp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_X_TRAIN)
+            pd.read_parquet(xp).iloc[:, :10].to_parquet(xp, index=False)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertFalse(c["consistent"])
+            self.assertTrue(any("training_X_width" in p
+                                for p in c["problems"]))
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_training_y_length_mismatches(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            yp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_Y_TRAIN)
+            pd.read_parquet(yp).iloc[:5].to_parquet(yp, index=False)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(any("training_y_rows" in p
+                                for p in c["problems"]))
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_dataset_identity_mismatches(self):
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            mp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_TRAINING_META)
+            meta = self._store().read_json(mp)
+            meta["dataset_hash_sha256"] = "0" * 64   # tamper identity
+            self._store().atomic_write_json(mp, meta)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("metadata_dataset_hash!=entry_dataset_hash",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_clean_model_still_promotes(self):
+        # control: consistency gate does NOT block a clean model
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            promoted = reg.promote_to_current(e.model_id)
+            self.assertEqual(promoted.status, "current")
+
+    def test_end_to_end_predict_uses_stored_model_columns(self):
+        # assemble -> train -> register -> load -> predict through the
+        # registry metadata; model feature count/order identical.
+        from bot.ml.registry.predictions import predict_from_registry
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            meta = self._store().read_json(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_TRAINING_META))
+            base_cols = meta["base_feature_columns"]
+            # build a predict input with the BASE columns only
+            X_in = res.dataset.iloc[:3][base_cols].reset_index(drop=True)
+            result = predict_from_registry(
+                registry=reg, model_id=e.model_id, X_input=X_in,
+                write_output=False)
+            # prediction reports the FULL model width (base+indicators)
+            self.assertEqual(result.n_features,
+                             meta["model_feature_count"])
+            self.assertEqual(len(result.predictions), 3)
+
+    def test_predict_rejects_missing_base_feature_columns(self):
+        from bot.ml.registry.predictions import predict_from_registry
+        from bot.ml.errors import M18ConfigError as _Cfg
+        res, out, rep = _g8_build_clean_b2()
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            meta = self._store().read_json(
+                self._ap(root, e.model_id,
+                         self._store().ARTIFACT_TRAINING_META))
+            base_cols = meta["base_feature_columns"]
+            # drop one required base column
+            X_bad = res.dataset.iloc[:3][base_cols[1:]].reset_index(
+                drop=True)
+            with self.assertRaises(_Cfg):
+                predict_from_registry(
+                    registry=reg, model_id=e.model_id, X_input=X_bad,
+                    write_output=False)
+
+
+# ─────────────────────────────────────────────────────────────────────
 # G8_FixtureOnly — Q16 invariant
 # ─────────────────────────────────────────────────────────────────────
 
