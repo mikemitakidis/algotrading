@@ -9965,20 +9965,16 @@ class G9_CliStubs(unittest.TestCase):
         self.assertIn("M18.A.10+", err.getvalue())
 
     def test_registry_demote_stub_documents_flag_mismatch(self):
-        """The M18.A.1 surface gave `registry demote` no flags but
-        demote_current() needs a scope_key. The stub message points
-        at this gap rather than silently choosing a default."""
+        """B9.A: `registry demote` is now WIRED via
+        Registry.demote_current(scope_key, ...). Without --scope-key it
+        is an argparse error (exit 2); the surface gap the A.9 stub
+        described is resolved. (Functional demote behaviour is covered
+        in G9_CliDemote.)"""
         err = _g9_io.StringIO()
         with _g9_redirect_stderr(err):
             rc = _g9_cli.main(["registry", "demote"])
-        self.assertEqual(rc, 2)
-        msg = err.getvalue()
-        # Either --scope-key or --model-id mentioned as the missing
-        # surface bit
-        self.assertTrue(
-            "--scope-key" in msg or "--model-id" in msg,
-            f"demote stub message must explain the surface gap; "
-            f"got: {msg!r}")
+        self.assertEqual(rc, 2)        # argparse: --scope-key required
+        self.assertIn("scope-key", err.getvalue())
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -10170,6 +10166,275 @@ class G9_CliRegistryPromote(unittest.TestCase):
                     ["registry", "promote", "--model-id", "NO_SUCH"],
                     _registry_root=root)
             self.assertEqual(rc, 1)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G9_CliJsonEnvelope — B9.A strict --json envelope
+# ─────────────────────────────────────────────────────────────────────
+
+class G9_CliJsonEnvelope(unittest.TestCase):
+    """--json emits {ok, command, status, result, warnings, errors};
+    valid JSON on success AND failure; legacy default output unchanged."""
+
+    def _env_keys(self, d):
+        return {"ok", "command", "status", "result",
+                "warnings", "errors"} <= set(d.keys())
+
+    def test_registry_list_json_envelope_success(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(["--json", "registry", "list"],
+                                  _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertTrue(self._env_keys(d))
+            self.assertTrue(d["ok"])
+            self.assertEqual(d["command"], "registry-list")
+            self.assertIn("entries", d["result"])
+
+    def test_registry_show_json_envelope_failure_valid_json(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "show",
+                     "--model-id", "does_not_exist"],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())   # valid JSON on failure
+            self.assertTrue(self._env_keys(d))
+            self.assertFalse(d["ok"])
+            self.assertEqual(d["status"], "failed")
+            self.assertTrue(len(d["errors"]) >= 1)
+
+    def test_registry_show_json_includes_consistency(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "show",
+                     "--model-id", e.model_id], _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertIn("artifact_consistency", d["result"])
+            self.assertTrue(
+                d["result"]["artifact_consistency"]["consistent"])
+
+    def test_default_output_unchanged_no_json_flag(self):
+        # legacy A.9 default: registry-list prints a dict WITHOUT the
+        # envelope keys (no top-level "ok").
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(["registry", "list"],
+                                  _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertNotIn("ok", d)
+            self.assertEqual(d["command"], "registry-list")
+
+    def test_stub_json_envelope_not_implemented(self):
+        err = _g9_io.StringIO()
+        with _g9_redirect_stderr(err):
+            rc = _g9_cli.main(["--json", "build-dataset"],
+                              _registry_root=None)
+        self.assertEqual(rc, 2)
+        d = _g9_json.loads(err.getvalue())
+        self.assertFalse(d["ok"])
+        self.assertEqual(d["status"], "not_implemented")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G9_CliDemote — B9.A wired demote via --scope-key
+# ─────────────────────────────────────────────────────────────────────
+
+class G9_CliDemote(unittest.TestCase):
+
+    def _promote_one(self, reg, root):
+        res, out, rep = _g8_build_clean_b2()
+        e = reg.register_candidate(out, rep, res)
+        promoted = reg.promote_to_current(e.model_id)
+        return promoted
+
+    def test_demote_current_model_succeeds(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            promoted = self._promote_one(reg, root)
+            scope = self._scope_of(promoted)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["registry", "demote", "--scope-key", scope],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "demoted")
+            # current pointer is gone
+            self.assertIsNone(reg.get_current(scope))
+
+    def _scope_of(self, entry):
+        import bot.ml.registry.storage as _s
+        return _s.make_scope_key(
+            dataset_anchor_set=entry.dataset_anchor_set,
+            train_mode=entry.train_mode,
+            target_label_id=entry.target_label_id,
+            model_type=entry.model_type)
+
+    def test_demote_unknown_scope_fails_nonzero(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["registry", "demote",
+                     "--scope-key", "no_such_scope"],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+
+    def test_demote_missing_scope_key_is_argparse_error(self):
+        err = _g9_io.StringIO()
+        with _g9_redirect_stderr(err):
+            rc = _g9_cli.main(["registry", "demote"])
+        self.assertEqual(rc, 2)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G9_CliDryRun — B9.A dry-run never mutates
+# ─────────────────────────────────────────────────────────────────────
+
+class G9_CliDryRun(unittest.TestCase):
+
+    def test_promote_dry_run_does_not_mutate(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            before = reg.get_entry(e.model_id).status
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["registry", "promote", "--model-id", e.model_id,
+                     "--dry-run"], _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "dry_run")
+            self.assertTrue(d["would_promote"])
+            # status unchanged (no mutation)
+            self.assertEqual(reg.get_entry(e.model_id).status, before)
+
+    def test_promote_dry_run_reports_would_not_promote_when_blocked(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            # fixture-mode model is production/fixture-blocked
+            res, out, rep = _g8_build_clean_b2(fixture_mode=True)
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["registry", "promote", "--model-id", e.model_id,
+                     "--dry-run"], _registry_root=root)
+            self.assertEqual(rc, 0)         # dry-run itself succeeds
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertFalse(d["would_promote"])
+
+    def test_demote_dry_run_does_not_mutate(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            res, out, rep = _g8_build_clean_b2()
+            e = reg.register_candidate(out, rep, res)
+            promoted = reg.promote_to_current(e.model_id)
+            scope = G9_CliDemote()._scope_of(promoted)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["registry", "demote", "--scope-key", scope,
+                     "--dry-run"], _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "dry_run")
+            self.assertTrue(d["would_demote"])
+            # current pointer STILL present (no mutation)
+            self.assertIsNotNone(reg.get_current(scope))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G9_CliSafety — B9.A promote-still-blocked + no forbidden side effects
+# ─────────────────────────────────────────────────────────────────────
+
+class G9_CliSafety(unittest.TestCase):
+
+    def test_promote_still_blocked_by_b8_integrity_via_cli(self):
+        # A model with an artifact-consistency failure cannot be
+        # promoted through the CLI, even with --force.
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            # break the persisted training metadata
+            import bot.ml.registry.storage as _s
+            from pathlib import Path as _P
+            _s.artifact_path(_P(root), e.model_id,
+                             _s.ARTIFACT_TRAINING_META).unlink()
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "promote",
+                     "--model-id", e.model_id,
+                     "--force", "--override-gate", "sample_count",
+                     "--reason", "x"], _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+            self.assertEqual(d["status"], "blocked")
+            # still 'candidate'/unpromoted on disk
+            self.assertNotEqual(reg.get_entry(e.model_id).status,
+                                "current")
+
+    def test_cli_module_imports_no_live_paths(self):
+        # The CLI must not IMPORT or CALL broker / scanner / dashboard /
+        # live execution paths. We scan for import/call patterns, not
+        # bare words (the module docstring legitimately promises it will
+        # never touch signals.db / live trading).
+        import bot.ml.cli as _cli
+        with open(_cli.__file__) as _fh:
+            src = _fh.read()
+        forbidden_patterns = (
+            "import bot.scanner", "from bot.scanner",
+            "import bot.brokers", "from bot.brokers",
+            "import dashboard", "from dashboard",
+            "placeOrder", ".submit(",
+            "sqlite3", "signals.db\"",   # an actual signals.db literal
+        )
+        for pat in forbidden_patterns:
+            self.assertNotIn(pat, src,
+                f"cli.py must not contain {pat!r}")
+
+    def test_cli_predict_reports_calibration_not_applied(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            res, out, rep = _g8_build_clean_b2()
+            reg = Registry(root=root)
+            e = reg.register_candidate(out, rep, res)
+            import bot.ml.registry.storage as _s
+            from pathlib import Path as _P
+            meta = _s.read_json(_s.artifact_path(
+                _P(root), e.model_id, _s.ARTIFACT_TRAINING_META))
+            X_in = res.dataset.iloc[:2][
+                meta["base_feature_columns"]].reset_index(drop=True)
+            inp = _P(root) / "in.parquet"
+            X_in.to_parquet(inp, index=False)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "predict", "--model-id", e.model_id,
+                     "--input", str(inp)], _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertFalse(d["result"]["calibration_applied"])
+            self.assertEqual(d["result"]["calibration_status"],
+                             "stored_not_applied")
 
 
 # ─────────────────────────────────────────────────────────────────────

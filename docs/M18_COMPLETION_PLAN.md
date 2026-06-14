@@ -258,8 +258,24 @@ corrections over the first audit pass:
    `model_artifact_hash`/`training_metadata_hash`/`evaluation_report_hash` yet
    (the dataset/repro identity is the implemented safe subset); the check reads
    artifacts at promote time (not continuously).
-9. **Full CLI** — build-dataset / train / evaluate / demote (currently
-   documented stubs, blocked on item 8).
+9. **Full CLI** — **B9.A DONE** (registry/predict hardening): the CLI gained a
+   global `--json` flag emitting a strict `{ok, command, status, result,
+   warnings, errors}` envelope (valid JSON on success AND failure, routed to
+   stderr on failure), a global `--debug` flag (tracebacks only when set;
+   otherwise clean messages), and `registry demote` is now WIRED via
+   `Registry.demote_current(scope_key, reason, actor)` behind a new
+   `--scope-key` argument (was an A.9 stub). `registry promote` and `registry
+   demote` gained `--dry-run` (report-only, no mutation — promote dry-run runs
+   the B8 consistency + gate checks; demote dry-run reports the current pointer).
+   `registry show --json` includes the B8 artifact-consistency summary. `predict
+   --json` carries `calibration_applied: false` / `calibration_status:
+   stored_not_applied` (honest — B3 calibration is still not applied at predict).
+   Legacy A.9 default output for the already-wired commands is preserved
+   byte-for-byte (locked G9 tests unchanged); the envelope is opt-in only. Only
+   `bot/ml/cli.py` + tests changed — no pipeline modules touched.
+   **B9.B deferred:** build-dataset / train / evaluate real implementations
+   (still exit-2 stubs; need the dataset/config persistence surface), real M16
+   data wiring, and any config-file parser.
 10. **Original artifact layout / model-card output** — the plan's per-model
     directory (`model.joblib`/`model_card.json`/`train_config.json`/
     `training_log.jsonl`/`eval_report.json`/`calibration.json`/
@@ -501,7 +517,7 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.6** | AV failure-reason persistence — **DONE** | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (opt-in; atomic/parallel-safe deferred) — **DONE** | — |
 | **M18.B.8** | Dataset/model artifact persistence — consistency gate **DONE** (model-card output deferred) | B.7 |
-| **M18.B.9** | Full CLI completion (build/train/evaluate/demote) | B.8 |
+| **M18.B.9** | Full CLI: B9.A (json envelope, --debug, demote wired, dry-run) **DONE**; B9.B (build/train/evaluate) deferred | B.8 |
 | **M18.B.10** | Advanced monitoring (leaderboard, run manifest, cache stats, data-quality gate, regime-aware validation, shadow monitoring) + one-command audit + final docs | B.1–B.9 |
 
 Self-contained, low-risk phases (B.1, B.2, B.3, B.4, B.5, B.6) can land first in
