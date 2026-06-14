@@ -180,6 +180,15 @@ def permutation_importance(
         dataset, eval_idx,
         target_label_id=target, feature_columns=feature_columns)
 
+    # M18.B.5: the model matrix is base features + appended missingness
+    # indicators, so permutation importance must permute/report the FULL
+    # model columns (X_eval has width len(model_feature_columns)), not
+    # just the base feature_columns — otherwise the indicator features
+    # the model actually uses are never permuted or reported.
+    from bot.ml.features.missingness import missingness_indicator_names
+    model_feature_columns = (list(feature_columns)
+                              + missingness_indicator_names(feature_columns))
+
     # Refit the model. Dispatch by model_type — uses the same inner
     # trainer classes the M18.A.6 orchestrator uses.
     from bot.ml.models.baselines import LogisticRegressionTrainer
@@ -238,10 +247,11 @@ def permutation_importance(
     # Permute each feature for n_repeats and record score drop
     importances: List[Dict[str, Any]] = []
     base_seed = seed * 1000
-    for j, feat in enumerate(feature_columns):
+    for j, feat in enumerate(model_feature_columns):
         deltas: List[float] = []
         for r in range(n_repeats):
-            rng = np.random.default_rng(base_seed + r * len(feature_columns) + j)
+            rng = np.random.default_rng(
+                base_seed + r * len(model_feature_columns) + j)
             X_perm = X_eval.copy()
             X_perm[:, j] = rng.permutation(X_perm[:, j])
             perm_proba = model.predict_proba(X_perm)
@@ -270,7 +280,7 @@ def permutation_importance(
         "n_repeats":          int(n_repeats),
         "n_train":            n_train,
         "n_evaluation":       n_eval,
-        "n_features":         int(len(feature_columns)),
+        "n_features":         int(len(model_feature_columns)),
         "seed":               seed,
         "top_n":              int(n_top),
         "top_features":       importances[:int(n_top)],

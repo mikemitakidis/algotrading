@@ -144,6 +144,21 @@ corrections over the first audit pass:
    is via the policy hash in the dataset hash, and repro_hash_v2 sensitivity is
    indirect (through dataset_hash), not a standalone repro component. Constant
    neutral fill only (no learned imputation). Live/predict path unchanged.
+
+   **B.5 downstream alignment (registry + permutation + predict):**
+   `Registry.register_candidate` persists the ACTUAL model matrix (base +
+   indicators, via `extract_xy_for_split`) to `training_X.parquet`;
+   `training_metadata.json` carries `feature_columns` (= model columns),
+   `base_feature_columns`, `missingness_indicator_names`, and the
+   base/indicator/model counts. `permutation_importance` permutes/reports the
+   full model columns (`n_features` = base + indicators; indicator features can
+   appear in `all_features`). The predict path (`predictions.py`) validates BASE
+   input columns and DERIVES indicators via `apply_missingness_fill` +
+   `assert_finite_matrix` (the prior `X[np.isnan]=0.0` blanket fills there are
+   removed); extrapolation is computed on base features only.
+   `infer_initial_status` maps `production:*` blockers to `failed_sample_count`
+   so a production-blocked model's initial registry status is not a misleading
+   `candidate` (promotion remains independently blocked by the integrity gate).
 6. **AV failure-reason persistence** — record exception class/message/cause
    (too-few-rows vs NaN vs one-class vs sklearn-missing) in the manifest.
 7. **Content-addressed feature_store / label_store** —

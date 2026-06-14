@@ -188,8 +188,14 @@ def infer_initial_status(
                 "drift_warning"):
             return "failed_drift_check"
 
-    # 5. sample count / thinness
+    # 5. sample count / thinness — includes the strict production
+    #    thinness gates (M18.B.4). A production-blocked model is not a
+    #    clean 'candidate'; map it to the existing safe non-candidate
+    #    status so the registry status is not misleading. (Promotion is
+    #    independently blocked by the integrity gate regardless.)
     if any(r.startswith("thinness:") for r in reasons):
+        return "failed_sample_count"
+    if any(r.startswith("production:") for r in reasons):
         return "failed_sample_count"
 
     # Default

@@ -6827,6 +6827,49 @@ class G7_PermutationImportance(unittest.TestCase):
             self.assertEqual(f1["importance_mean"],
                               f2["importance_mean"])
 
+    def test_permutation_includes_missingness_indicator_features(self):
+        # B.5: permutation importance must permute/report base + the
+        # appended missingness indicators (model width), not base only.
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        from bot.ml.models.base import select_feature_columns
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "B2_logistic", dataset_id=res.manifest.dataset_id)
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(feat_cols))
+        self.assertGreater(n_ind, 0)
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=2,
+            evaluation_split="test", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["n_features"], len(feat_cols) + n_ind)
+        self.assertEqual(len(pi["all_features"]),
+                          len(feat_cols) + n_ind)
+        self.assertTrue(
+            any("__was_missing" in f["feature"]
+                for f in pi["all_features"]))
+
+    def test_rf_permutation_uses_expanded_model_features(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        from bot.ml.models.base import select_feature_columns
+        res = _assemble_for_training()
+        cfg = _make_train_config(
+            "M_random_forest", dataset_id=res.manifest.dataset_id)
+        feat_cols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(feat_cols))
+        pi = permutation_importance(
+            train_config=cfg, assembler_result=res,
+            feature_columns=feat_cols, n_repeats=2,
+            evaluation_split="val", min_samples=10)
+        self.assertTrue(pi["available"], pi.get("unavailable_reason"))
+        self.assertEqual(pi["n_features"], len(feat_cols) + n_ind)
+        self.assertTrue(
+            any("__was_missing" in f["feature"]
+                for f in pi["all_features"]))
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G7_Breakdowns — segment metrics
@@ -7928,6 +7971,68 @@ class G8_RegistrationFlow(unittest.TestCase):
             with self.assertRaises(G8M18ConfigError):
                 reg.register_candidate(out, rep, res2)
 
+    # ---- B.5 downstream alignment: registry artifacts == model X -----
+
+    def test_registry_training_X_width_matches_n_features(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        import pandas as _pd
+        res, out, rep = _g8_build_clean_b2()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(fcols))
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            entry = reg.register_candidate(out, rep, res)
+            Xp = _pd.read_parquet(
+                __import__('pathlib').Path(root)
+                / entry.training_X_path)
+            self.assertEqual(Xp.shape[1], out.n_features)
+            self.assertEqual(Xp.shape[1], len(fcols) + n_ind)
+            self.assertTrue(
+                any("__was_missing" in c for c in Xp.columns))
+
+    def test_registry_metadata_feature_columns_match_model(self):
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        res, out, rep = _g8_build_clean_b2()
+        fcols = select_feature_columns(list(res.dataset.columns))
+        n_ind = len(missingness_indicator_names(fcols))
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg = Registry(root=root)
+            entry = reg.register_candidate(out, rep, res)
+            meta = json.load(open(
+                str(__import__('pathlib').Path(root)
+                    / entry.training_metadata_path)))
+            self.assertEqual(
+                len(meta["feature_columns"]), out.n_features)
+            self.assertIn("base_feature_columns", meta)
+            self.assertIn("missingness_indicator_names", meta)
+            self.assertEqual(meta["base_feature_count"], len(fcols))
+            self.assertEqual(
+                meta["missingness_indicator_count"], n_ind)
+            self.assertEqual(
+                meta["model_feature_count"], out.n_features)
+            self.assertEqual(
+                meta["base_feature_columns"]
+                + meta["missingness_indicator_names"],
+                meta["feature_columns"])
+
+    def test_production_blocked_initial_status_not_candidate(self):
+        # A small fixture (strict default Trainer) is production-blocked;
+        # its initial registry status must NOT be a clean 'candidate'.
+        res = _assemble_for_training()
+        out = ModelTrainer().train_one(
+            _make_train_config(
+                "B2_logistic", dataset_id=res.manifest.dataset_id),
+            res)
+        self.assertTrue(any(r.startswith("production:")
+                            for r in out.promotion_blocked_reasons))
+        rep = evaluate_model(out, res, drift_warning_threshold=100.0)
+        from bot.ml.registry.entry import infer_initial_status
+        status = infer_initial_status(out, rep)
+        self.assertNotEqual(status, "candidate")
+        self.assertEqual(status, "failed_sample_count")
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G8_FixtureOnly — Q16 invariant
@@ -8384,7 +8489,6 @@ class G8_DemoteCurrent(unittest.TestCase):
             self.assertEqual(hist[-1]["event"], "demote")
             self.assertEqual(hist[-1]["reason"], "manual")
             self.assertEqual(hist[-1]["actor"], "mike")
-
 
 class G8_Q20Extrapolation(unittest.TestCase):
     """Q20 locked rule:

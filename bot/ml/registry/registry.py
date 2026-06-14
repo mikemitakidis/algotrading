@@ -159,8 +159,29 @@ class Registry:
                 "training X/y for predict-time refit")
 
         train_idx = split.train_anchor_indices
-        X_train_df = (dataset.iloc[train_idx][feature_columns]
-                        .reset_index(drop=True))
+        # M18.B.5: persist the ACTUAL model matrix used at fit — base
+        # features + appended missingness indicators — so registry
+        # artifacts match train_outputs.n_features and deterministic
+        # refit/predict use the same columns. Using extract_xy_for_split
+        # guarantees identical fill + indicator order as training.
+        from bot.ml.models.base import extract_xy_for_split
+        from bot.ml.features.missingness import (
+            missingness_indicator_names)
+        base_feature_columns = list(feature_columns)
+        indicator_names = missingness_indicator_names(base_feature_columns)
+        model_feature_columns = base_feature_columns + indicator_names
+        X_train_model, _y_train_arr = extract_xy_for_split(
+            dataset, train_idx,
+            target_label_id=train_outputs.target_label_id,
+            feature_columns=base_feature_columns)
+        if X_train_model.shape[1] != len(model_feature_columns):
+            raise M18ConfigError(
+                f"registry training X width {X_train_model.shape[1]} != "
+                f"model feature schema width "
+                f"{len(model_feature_columns)} — missingness indicator "
+                f"mismatch")
+        X_train_df = pd.DataFrame(
+            X_train_model, columns=model_feature_columns)
         y_train_df = pd.DataFrame({
             train_outputs.target_label_id:
                 dataset.iloc[train_idx][train_outputs.target_label_id]
@@ -182,7 +203,7 @@ class Registry:
         # 99th percentiles). min/max are also recorded for context
         # / debugging but are NOT the envelope.
         summary: Dict[str, Dict[str, float]] = {}
-        for c in feature_columns:
+        for c in model_feature_columns:
             vals = X_train_df[c].to_numpy(dtype=np.float64)
             finite = vals[np.isfinite(vals)]
             if len(finite) == 0:
@@ -210,7 +231,12 @@ class Registry:
 
         # training_metadata.json
         meta = {
-            "feature_columns":    list(feature_columns),
+            "feature_columns":    list(model_feature_columns),
+            "base_feature_columns": list(base_feature_columns),
+            "missingness_indicator_names": list(indicator_names),
+            "base_feature_count":  int(len(base_feature_columns)),
+            "missingness_indicator_count": int(len(indicator_names)),
+            "model_feature_count": int(len(model_feature_columns)),
             "target_label_id":    train_outputs.target_label_id,
             "target_label_class": train_outputs.target_label_class,
             "model_type":         train_outputs.model_type,

@@ -88,10 +88,13 @@ class PredictionResult:
 
 def _refit_model(
     entry: RegistryEntry, root: Path,
-) -> Tuple[Any, List[str]]:
+) -> Tuple[Any, List[str], List[str]]:
     """Refit the model deterministically from the artifacts.
 
-    Returns (fitted_model, feature_columns_used).
+    Returns (fitted_model, base_feature_columns, model_feature_columns).
+    base_feature_columns are the raw dataset columns a caller must
+    supply at predict time; model_feature_columns are base + appended
+    missingness indicators (the actual fit width).
 
     For B0_majority: emits a constant proba (no input features).
     For B1_scanner_replica: passthrough on scanner_replica.signal_fires.
@@ -101,14 +104,20 @@ def _refit_model(
     # Load training metadata + X/y
     meta = _store.read_json(
         root / entry.training_metadata_path)
-    feature_columns = list(meta["feature_columns"])
+    # M18.B.5: training_X.parquet now stores the MODEL matrix (base +
+    # missingness indicators). meta["feature_columns"] is the model
+    # column list; base_feature_columns is the raw-input subset.
+    model_feature_columns = list(meta["feature_columns"])
+    base_feature_columns = list(meta.get(
+        "base_feature_columns", model_feature_columns))
     X_train_df = pd.read_parquet(root / entry.training_X_path)
     y_train = pd.read_parquet(
         root / entry.training_y_path)[entry.target_label_id]\
         .to_numpy(dtype=np.float64)
-    X_train = X_train_df[feature_columns].to_numpy(
+    # The persisted model matrix is already filled + indicator-appended
+    # (no NaN), so select the model columns directly.
+    X_train = X_train_df[model_feature_columns].to_numpy(
         dtype=np.float64, copy=True)
-    X_train[np.isnan(X_train)] = 0.0   # match extract_xy_for_split
 
     mt = entry.model_type
     seed = int(entry.seed)
@@ -118,7 +127,7 @@ def _refit_model(
         from bot.ml.models.baselines import MajorityClassTrainer
         m = MajorityClassTrainer()
         m.fit(y_train, label_class=label_class, seed=seed)
-        return m, feature_columns
+        return m, base_feature_columns, model_feature_columns
 
     if mt == "B1_scanner_replica":
         from bot.ml.models.baselines import ScannerReplicaTrainer
@@ -133,13 +142,13 @@ def _refit_model(
             fires = np.zeros(len(X_train_df), dtype=np.float64)
         m = ScannerReplicaTrainer()
         m.fit(fires, label_class=label_class, seed=seed)
-        return m, feature_columns
+        return m, base_feature_columns, model_feature_columns
 
     if mt == "B2_logistic":
         from bot.ml.models.baselines import LogisticRegressionTrainer
         m = LogisticRegressionTrainer()
         m.fit(X_train, y_train, label_class=label_class, seed=seed)
-        return m, feature_columns
+        return m, base_feature_columns, model_feature_columns
 
     if mt == "M_lightgbm":
         from bot.ml.models.lightgbm_trainer import (
@@ -153,7 +162,7 @@ def _refit_model(
         # determinism. If not stored, use the locked defaults.
         # (M18.A.6 trainer stores them in train_config.)
         m.fit(X_train, y_train, label_class=label_class, seed=seed)
-        return m, feature_columns
+        return m, base_feature_columns, model_feature_columns
 
     raise M18ConfigError(
         f"model_type={mt!r} is in the registry but predict refit is "
@@ -249,19 +258,36 @@ def predict_from_registry(
     # Load feature_summary and refit
     feature_summary = _store.read_json(
         root / entry.training_feature_summary_path)
-    model, feature_columns = _refit_model(entry, root)
+    model, base_feature_columns, model_feature_columns = _refit_model(
+        entry, root)
 
-    # Validate / select input columns
-    missing = [c for c in feature_columns if c not in X_input.columns]
+    # M18.B.5: the caller supplies BASE feature columns; the missingness
+    # indicators are DERIVED here (identical policy as training) so the
+    # model receives base + indicators. Validate base columns only.
+    missing = [c for c in base_feature_columns
+               if c not in X_input.columns]
     if missing:
         raise M18ConfigError(
-            f"X_input is missing {len(missing)} feature columns "
+            f"X_input is missing {len(missing)} base feature columns "
             f"that were used at training time: {missing[:5]}"
             f"{'...' if len(missing) > 5 else ''}")
 
-    X_df_aligned = X_input[feature_columns].reset_index(drop=True)
-    X_arr = X_df_aligned.to_numpy(dtype=np.float64, copy=True)
-    X_arr[np.isnan(X_arr)] = 0.0
+    X_base_df = X_input[base_feature_columns].reset_index(drop=True)
+    X_base_arr = X_base_df.to_numpy(dtype=np.float64, copy=True)
+    # Derive the model matrix exactly as extract_xy_for_split does:
+    # neutral fill + appended indicators (deterministic, same order).
+    from bot.ml.features.missingness import (
+        apply_missingness_fill, assert_finite_matrix)
+    X_filled, indicators, _ind_names = apply_missingness_fill(
+        X_base_arr, base_feature_columns)
+    if indicators.shape[1]:
+        X_arr = np.column_stack([X_filled, indicators])
+    else:
+        X_arr = X_filled
+    assert_finite_matrix(X_arr, name="predict feature matrix")
+    # Extrapolation is computed on the BASE features only (indicators
+    # are 0/1 flags, not continuous values with a [q01,q99] envelope).
+    X_df_aligned = X_base_df
 
     # Predict — dispatch on model_type because B0/B1 have specialised
     # predict_proba signatures (B0 takes n_rows, B1 takes signal_fires)
@@ -295,7 +321,7 @@ def predict_from_registry(
 
     # Extrapolation
     counts, flags, rowwise = _compute_extrapolation(
-        X_df_aligned, feature_summary, feature_columns)
+        X_df_aligned, feature_summary, base_feature_columns)
 
     # ─── Build output frame ─────────────────────────────────────────
     # Q20 LOCKED prediction-row schema:
@@ -363,7 +389,7 @@ def predict_from_registry(
     return PredictionResult(
         model_id=model_id,
         n_input_rows=n_rows,
-        n_features=len(feature_columns),
+        n_features=len(model_feature_columns),
         output_path=str(out_path),
         batch_id=bid,
         predicted_at_utc=_utc_now_iso(),
