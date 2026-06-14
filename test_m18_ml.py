@@ -8695,6 +8695,206 @@ class G8_ArtifactConsistency(unittest.TestCase):
                     registry=reg, model_id=e.model_id, X_input=X_bad,
                     write_output=False)
 
+    # ---- B.8 review fix: read+validate all artifacts ---------------
+
+    def _fresh(self, root):
+        reg = Registry(root=root)
+        res, out, rep = _g8_build_clean_b2()
+        e = reg.register_candidate(out, rep, res)
+        return reg, e
+
+    def _meta_path(self, root, mid):
+        return self._ap(root, mid, self._store().ARTIFACT_TRAINING_META)
+
+    def test_promote_blocks_when_train_outputs_corrupt(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_TRAIN_OUTPUTS
+                     ).write_text("{ not json")
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("corrupt_train_outputs", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_train_outputs_dataset_hash_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            tp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_TRAIN_OUTPUTS)
+            t = self._store().read_json(tp)
+            t["dataset_hash_sha256"] = "0" * 64
+            self._store().atomic_write_json(tp, t)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(any("train_outputs_dataset_hash" in p
+                                for p in c["problems"]))
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_train_outputs_repro_hash_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            tp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_TRAIN_OUTPUTS)
+            t = self._store().read_json(tp)
+            t["repro_hash_v2"] = "deadbeef" * 8
+            self._store().atomic_write_json(tp, t)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("train_outputs_repro_hash!=metadata_repro_hash",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_train_outputs_n_features_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            tp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_TRAIN_OUTPUTS)
+            t = self._store().read_json(tp)
+            t["n_features"] = 12345
+            self._store().atomic_write_json(tp, t)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(any("train_outputs_n_features" in p
+                                for p in c["problems"]))
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_missing(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_EVAL_REPORT).unlink()
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("missing_evaluation_report", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_corrupt(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_EVAL_REPORT
+                     ).write_text("{bad json")
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("corrupt_evaluation_report", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_feature_summary_missing(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_FEATURE_SUMMARY).unlink()
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("missing_feature_summary", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_feature_summary_corrupt(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._ap(root, e.model_id,
+                     self._store().ARTIFACT_FEATURE_SUMMARY
+                     ).write_text("{nope")
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("corrupt_feature_summary", c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_feature_summary_missing_quantiles(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            fp = self._ap(root, e.model_id,
+                          self._store().ARTIFACT_FEATURE_SUMMARY)
+            fs = self._store().read_json(fp)
+            k0 = list(fs.keys())[0]
+            del fs[k0]["q99"]
+            self._store().atomic_write_json(fp, fs)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(any("missing_q01_q99" in p
+                                for p in c["problems"]))
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_metadata_X_rows_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            mp = self._meta_path(root, e.model_id)
+            m = self._store().read_json(mp)
+            m["training_X_rows"] = 3
+            self._store().atomic_write_json(mp, m)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("metadata_training_X_rows!=actual_X_rows",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_metadata_X_columns_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            mp = self._meta_path(root, e.model_id)
+            m = self._store().read_json(mp)
+            m["training_X_columns"] = 3
+            self._store().atomic_write_json(mp, m)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("metadata_training_X_columns!=actual_X_columns",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_metadata_y_rows_mismatch(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            mp = self._meta_path(root, e.model_id)
+            m = self._store().read_json(mp)
+            m["training_y_rows"] = 3
+            self._store().atomic_write_json(mp, m)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("metadata_training_y_rows!=actual_y_rows",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_v2_metadata_missing_base_columns(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            mp = self._meta_path(root, e.model_id)
+            m = self._store().read_json(mp)
+            self.assertGreaterEqual(
+                int(m.get("artifact_schema_version", 1)), 2)
+            del m["base_feature_columns"]
+            self._store().atomic_write_json(mp, m)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("metadata_missing_field:base_feature_columns",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_clean_model_still_promotes_after_deep_checks(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertTrue(c["consistent"], c["problems"])
+            self.assertEqual(
+                reg.promote_to_current(e.model_id).status, "current")
+
+    def test_predict_works_after_clean_promotion(self):
+        from bot.ml.registry.predictions import predict_from_registry
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            promoted = reg.promote_to_current(e.model_id)
+            meta = self._store().read_json(
+                self._meta_path(root, promoted.model_id))
+            res, _o, _r = _g8_build_clean_b2()
+            X_in = res.dataset.iloc[:3][
+                meta["base_feature_columns"]].reset_index(drop=True)
+            result = predict_from_registry(
+                registry=reg, model_id=promoted.model_id,
+                X_input=X_in, write_output=False)
+            self.assertEqual(result.n_features,
+                             meta["model_feature_count"])
+            self.assertEqual(len(result.predictions), 3)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G8_FixtureOnly — Q16 invariant

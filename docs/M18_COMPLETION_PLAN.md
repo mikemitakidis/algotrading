@@ -229,16 +229,27 @@ corrections over the first audit pass:
    `training_X_rows`/`training_X_columns`/`training_y_rows` (in addition to the
    B.5 feature/base/indicator column lists + counts). New
    `Registry.verify_artifact_consistency(model_id)` returns a JSON-safe
-   `{consistent, problems, model_id}` and FAIL-CLOSED reports: missing
-   train_outputs (model-artifact proxy) / training_metadata / training_X /
-   training_y; `training_X` width ≠ metadata `n_features` ≠ `len(feature_columns)`;
-   `training_y` rows ≠ `training_X` rows; `training_X` columns ≠
-   `feature_columns`; `base + indicators ≠ model_feature_columns`; metadata
-   `dataset_hash` ≠ entry `dataset_hash`; empty `repro_hash_v2`.
-   `promote_to_current` now calls this verification first and raises
-   `PromotionBlockedError` (integrity, `--force` cannot override) on any
-   inconsistency, so a model with missing/mismatched artifacts can never become
-   `current`. Prediction-path consistency was already enforced in B.5
+   `{consistent, problems, model_id}` and FAIL-CLOSED reports across ALL
+   persisted artifacts (post-review hardening — it now READS and validates
+   each, not just checks existence): missing/corrupt train_outputs,
+   evaluation_report, training_feature_summary, training_metadata, training_X,
+   training_y; `training_X` width ≠ metadata `n_features` ≠
+   `len(feature_columns)`; `training_y` rows ≠ `training_X` rows; `training_X`
+   columns ≠ `feature_columns`; persisted `training_X_rows`/
+   `training_X_columns`/`training_y_rows` ≠ actual parquet shapes;
+   `base + indicators ≠ model_feature_columns`; for
+   `artifact_schema_version ≥ 2`, any missing/empty required model-boundary
+   field (`feature_columns`, `base_feature_columns`, counts, hashes); identity
+   cross-checks train_outputs↔metadata↔entry (`dataset_hash_sha256`,
+   `repro_hash_v2`, `n_features`/`model_feature_count`, `n_train`/`n_val`/
+   `n_test`) and train_outputs `n_features` ↔ actual `training_X` width;
+   evaluation_report `dataset_hash`/`model_type` ↔ entry; and feature_summary
+   keys = model feature columns with `q01`+`q99` present for every model
+   feature (predict/extrapolation depends on it). `promote_to_current` calls
+   this verification first and raises `PromotionBlockedError` (integrity,
+   `--force` cannot override) on any inconsistency, so a model with
+   missing/mismatched/corrupt artifacts can never become `current`.
+   Prediction-path consistency was already enforced in B.5
    (`predict_from_registry` validates BASE input columns and derives the
    missingness indicators, reporting the full model width). **Limitations:** the
    "model artifact" is the deterministic-refit source (`train_outputs.json` +

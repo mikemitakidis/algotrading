@@ -328,62 +328,124 @@ class Registry:
         entry = self.get_entry(model_id)            # raises if no entry
         problems: List[str] = []
         root = self.root
+        import pandas as _pd
 
         def _ap(rel_name: str) -> Path:
             return _store.artifact_path(root, model_id, rel_name)
 
-        # 1. training_metadata.json present + readable
-        meta: Optional[Dict[str, Any]] = None
-        meta_p = _ap(_store.ARTIFACT_TRAINING_META)
-        if not meta_p.exists():
-            problems.append("missing_training_metadata")
-        else:
+        def _read_json_safe(p: Path, missing_tag: str,
+                            corrupt_tag: str):
+            if not p.exists():
+                problems.append(missing_tag)
+                return None
             try:
-                meta = _store.read_json(meta_p)
+                return _store.read_json(p)
             except Exception:
-                problems.append("corrupt_training_metadata")
+                problems.append(corrupt_tag)
+                return None
 
-        # 2. train_outputs.json present (the "model artifact" proxy —
-        #    the deterministic refit source; without it predict cannot
-        #    reconstruct the model).
-        if not _ap(_store.ARTIFACT_TRAIN_OUTPUTS).exists():
-            problems.append("missing_train_outputs")
-        # training_X / training_y present (refit inputs)
+        # ── 1. training_metadata.json ─────────────────────────────
+        meta = _read_json_safe(
+            _ap(_store.ARTIFACT_TRAINING_META),
+            "missing_training_metadata", "corrupt_training_metadata")
+
+        # ── 2. train_outputs.json (READ + cross-check, not just exist)
+        tout = _read_json_safe(
+            _ap(_store.ARTIFACT_TRAIN_OUTPUTS),
+            "missing_train_outputs", "corrupt_train_outputs")
+
+        # ── 3. evaluation_report.json (READ) ──────────────────────
+        ev = _read_json_safe(
+            _ap(_store.ARTIFACT_EVAL_REPORT),
+            "missing_evaluation_report", "corrupt_evaluation_report")
+
+        # ── 4. training_feature_summary.json (READ) ───────────────
+        fsum = _read_json_safe(
+            _ap(_store.ARTIFACT_FEATURE_SUMMARY),
+            "missing_feature_summary", "corrupt_feature_summary")
+
+        # ── parquet artifacts ─────────────────────────────────────
         xp = _ap(_store.ARTIFACT_X_TRAIN)
         yp = _ap(_store.ARTIFACT_Y_TRAIN)
+        Xdf = Ydf = None
         if not xp.exists():
             problems.append("missing_training_X")
+        else:
+            try:
+                Xdf = _pd.read_parquet(xp)
+            except Exception:
+                problems.append("corrupt_training_X")
         if not yp.exists():
             problems.append("missing_training_y")
-
-        # 3. width / length / column agreement (only if we can read)
-        if meta is not None and xp.exists():
+        else:
             try:
-                import pandas as _pd
-                Xdf = _pd.read_parquet(xp)
-                n_meta_cols = int(meta.get("model_feature_count",
-                                           meta.get("n_features", -1)))
-                feat_cols = list(meta.get("feature_columns", []))
-                if Xdf.shape[1] != n_meta_cols:
-                    problems.append(
-                        f"training_X_width_{Xdf.shape[1]}!="
-                        f"metadata_n_features_{n_meta_cols}")
-                if len(feat_cols) != n_meta_cols:
-                    problems.append(
-                        f"feature_columns_len_{len(feat_cols)}!="
-                        f"n_features_{n_meta_cols}")
-                if list(Xdf.columns) != feat_cols:
-                    problems.append("training_X_columns!=feature_columns")
-                if yp.exists():
-                    ydf = _pd.read_parquet(yp)
-                    if ydf.shape[0] != Xdf.shape[0]:
-                        problems.append(
-                            f"training_y_rows_{ydf.shape[0]}!="
-                            f"training_X_rows_{Xdf.shape[0]}")
-            except Exception as exc:  # unreadable artifact → fail closed
-                problems.append(f"artifact_read_error:{type(exc).__name__}")
+                Ydf = _pd.read_parquet(yp)
+            except Exception:
+                problems.append("corrupt_training_y")
 
-        # 4. base + indicators == model columns
+        # ── 5. schema-v2 required metadata must be present+non-empty
+        REQUIRED_V2 = (
+            "feature_columns", "base_feature_columns",
+            "model_feature_count", "base_feature_count",
+            "missingness_indicator_names", "missingness_indicator_count",
+            "n_features", "dataset_hash_sha256",
+            "dataset_manifest_hash", "repro_hash_v2",
+        )
+        if meta is not None:
+            schema_v = int(meta.get("artifact_schema_version", 1))
+            if schema_v >= 2:
+                for k in REQUIRED_V2:
+                    if k not in meta:
+                        problems.append(f"metadata_missing_field:{k}")
+                    else:
+                        v = meta[k]
+                        # base_feature_columns / feature_columns must be
+                        # non-empty (predict depends on them); hashes
+                        # must be non-empty strings.
+                        if k in ("feature_columns",
+                                 "base_feature_columns") and not v:
+                            problems.append(f"metadata_empty_field:{k}")
+                        if k in ("dataset_hash_sha256",
+                                 "dataset_manifest_hash",
+                                 "repro_hash_v2") and v == "":
+                            problems.append(f"metadata_empty_field:{k}")
+
+        # ── 6. width / length / column agreement (X/y vs metadata) ─
+        if meta is not None and Xdf is not None:
+            n_meta_cols = int(meta.get("model_feature_count",
+                                       meta.get("n_features", -1)))
+            feat_cols = list(meta.get("feature_columns", []))
+            if Xdf.shape[1] != n_meta_cols:
+                problems.append(
+                    f"training_X_width_{Xdf.shape[1]}!="
+                    f"metadata_n_features_{n_meta_cols}")
+            if len(feat_cols) != n_meta_cols:
+                problems.append(
+                    f"feature_columns_len_{len(feat_cols)}!="
+                    f"n_features_{n_meta_cols}")
+            if list(Xdf.columns) != feat_cols:
+                problems.append("training_X_columns!=feature_columns")
+            # persisted row/col fields must match actual parquet shapes
+            if "training_X_columns" in meta and \
+                    int(meta["training_X_columns"]) != Xdf.shape[1]:
+                problems.append(
+                    "metadata_training_X_columns!=actual_X_columns")
+            if "training_X_rows" in meta and \
+                    int(meta["training_X_rows"]) != Xdf.shape[0]:
+                problems.append(
+                    "metadata_training_X_rows!=actual_X_rows")
+        if meta is not None and Ydf is not None:
+            if "training_y_rows" in meta and \
+                    int(meta["training_y_rows"]) != Ydf.shape[0]:
+                problems.append(
+                    "metadata_training_y_rows!=actual_y_rows")
+        if Xdf is not None and Ydf is not None:
+            if Ydf.shape[0] != Xdf.shape[0]:
+                problems.append(
+                    f"training_y_rows_{Ydf.shape[0]}!="
+                    f"training_X_rows_{Xdf.shape[0]}")
+
+        # ── 7. base + indicators == model columns ─────────────────
         if meta is not None:
             base = list(meta.get("base_feature_columns", []))
             inds = list(meta.get("missingness_indicator_names", []))
@@ -391,15 +453,75 @@ class Registry:
             if base and (base + inds) != cols:
                 problems.append("base+indicators!=model_feature_columns")
 
-        # 5. dataset identity agreement (entry vs metadata)
+        # ── 8. dataset/repro identity: entry vs metadata vs train_outputs
         if meta is not None:
             md_ds = meta.get("dataset_hash_sha256", "")
             if md_ds and md_ds != entry.dataset_hash_sha256:
                 problems.append("metadata_dataset_hash!=entry_dataset_hash")
-            # repro_hash_v2 must be recorded (non-empty) for a model
-            # that claims to be reproducible.
             if "repro_hash_v2" in meta and meta["repro_hash_v2"] == "":
                 problems.append("repro_hash_v2_missing")
+        if tout is not None:
+            to_ds = tout.get("dataset_hash_sha256", "")
+            if to_ds and to_ds != entry.dataset_hash_sha256:
+                problems.append(
+                    "train_outputs_dataset_hash!=entry_dataset_hash")
+            if meta is not None:
+                if to_ds and meta.get("dataset_hash_sha256", "") and \
+                        to_ds != meta["dataset_hash_sha256"]:
+                    problems.append(
+                        "train_outputs_dataset_hash!=metadata_dataset_hash")
+                if tout.get("repro_hash_v2", "") and \
+                        meta.get("repro_hash_v2", "") and \
+                        tout["repro_hash_v2"] != meta["repro_hash_v2"]:
+                    problems.append(
+                        "train_outputs_repro_hash!=metadata_repro_hash")
+                for nf_key in ("n_features",):
+                    if nf_key in tout and nf_key in meta and \
+                            int(tout[nf_key]) != int(meta[nf_key]):
+                        problems.append(
+                            "train_outputs_n_features!=metadata_n_features")
+                if "n_features" in tout and \
+                        int(tout["n_features"]) != \
+                        int(meta.get("model_feature_count", -1)):
+                    problems.append(
+                        "train_outputs_n_features!=model_feature_count")
+                for k in ("n_train", "n_val", "n_test"):
+                    if k in tout and k in meta and \
+                            int(tout[k]) != int(meta[k]):
+                        problems.append(
+                            f"train_outputs_{k}!=metadata_{k}")
+            # train_outputs n_features vs actual training_X width
+            if Xdf is not None and "n_features" in tout and \
+                    int(tout["n_features"]) != Xdf.shape[1]:
+                problems.append(
+                    "train_outputs_n_features!=training_X_width")
+
+        # ── 9. evaluation_report identity (where fields available) ─
+        if ev is not None and tout is not None:
+            ev_ds = ev.get("dataset_hash_sha256", "")
+            if ev_ds and ev_ds != entry.dataset_hash_sha256:
+                problems.append(
+                    "eval_report_dataset_hash!=entry_dataset_hash")
+            ev_mt = ev.get("model_type", "")
+            if ev_mt and ev_mt != entry.model_type:
+                problems.append("eval_report_model_type!=entry_model_type")
+
+        # ── 10. feature_summary covers every model feature w/ q01/q99
+        if fsum is not None and meta is not None:
+            model_cols = list(meta.get("feature_columns", []))
+            if model_cols:
+                summary_keys = set(fsum.keys())
+                if summary_keys != set(model_cols):
+                    problems.append(
+                        "feature_summary_keys!=model_feature_columns")
+                missing_q = [c for c in model_cols
+                             if c not in fsum
+                             or "q01" not in fsum[c]
+                             or "q99" not in fsum[c]]
+                if missing_q:
+                    problems.append(
+                        f"feature_summary_missing_q01_q99:"
+                        f"{len(missing_q)}_features")
 
         return {
             "model_id":   model_id,
