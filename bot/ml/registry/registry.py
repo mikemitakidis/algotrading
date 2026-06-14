@@ -497,7 +497,7 @@ class Registry:
                     "train_outputs_n_features!=training_X_width")
 
         # ── 9. evaluation_report identity (where fields available) ─
-        if ev is not None and tout is not None:
+        if ev is not None:
             ev_ds = ev.get("dataset_hash_sha256", "")
             if ev_ds and ev_ds != entry.dataset_hash_sha256:
                 problems.append(
@@ -505,6 +505,16 @@ class Registry:
             ev_mt = ev.get("model_type", "")
             if ev_mt and ev_mt != entry.model_type:
                 problems.append("eval_report_model_type!=entry_model_type")
+            # split counts must agree with metadata and (where present)
+            # train_outputs — the report, the model, and the dataset
+            # manifest must describe the SAME train/val/test split.
+            for k in ("n_train", "n_val", "n_test"):
+                if k in ev and meta is not None and k in meta and \
+                        int(ev[k]) != int(meta[k]):
+                    problems.append(f"eval_report_{k}!=metadata_{k}")
+                if k in ev and tout is not None and k in tout and \
+                        int(ev[k]) != int(tout[k]):
+                    problems.append(f"eval_report_{k}!=train_outputs_{k}")
 
         # ── 10. feature_summary covers every model feature w/ q01/q99
         if fsum is not None and meta is not None:

@@ -243,7 +243,7 @@ corrections over the first audit pass:
    cross-checks train_outputs↔metadata↔entry (`dataset_hash_sha256`,
    `repro_hash_v2`, `n_features`/`model_feature_count`, `n_train`/`n_val`/
    `n_test`) and train_outputs `n_features` ↔ actual `training_X` width;
-   evaluation_report `dataset_hash`/`model_type` ↔ entry; and feature_summary
+   evaluation_report `dataset_hash`/`model_type` ↔ entry and `n_train`/`n_val`/`n_test` ↔ metadata + train_outputs; and feature_summary
    keys = model feature columns with `q01`+`q99` present for every model
    feature (predict/extrapolation depends on it). `promote_to_current` calls
    this verification first and raises `PromotionBlockedError` (integrity,

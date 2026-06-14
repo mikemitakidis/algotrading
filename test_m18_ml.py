@@ -8895,6 +8895,72 @@ class G8_ArtifactConsistency(unittest.TestCase):
                              meta["model_feature_count"])
             self.assertEqual(len(result.predictions), 3)
 
+    # ---- B.8 follow-up: evaluation_report split-count identity ------
+
+    def _tamper_eval(self, root, mid, field, value):
+        ep = self._ap(root, mid, self._store().ARTIFACT_EVAL_REPORT)
+        ev = self._store().read_json(ep)
+        ev[field] = value
+        self._store().atomic_write_json(ep, ev)
+
+    def test_promote_blocks_when_eval_report_n_train_mismatches(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._tamper_eval(root, e.model_id, "n_train", 99999)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("eval_report_n_train!=metadata_n_train",
+                          c["problems"])
+            self.assertIn("eval_report_n_train!=train_outputs_n_train",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_n_val_mismatches(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._tamper_eval(root, e.model_id, "n_val", 99999)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("eval_report_n_val!=metadata_n_val",
+                          c["problems"])
+            self.assertIn("eval_report_n_val!=train_outputs_n_val",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_n_test_mismatches(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._tamper_eval(root, e.model_id, "n_test", 99999)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("eval_report_n_test!=metadata_n_test",
+                          c["problems"])
+            self.assertIn("eval_report_n_test!=train_outputs_n_test",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_dataset_hash_mismatches(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._tamper_eval(root, e.model_id,
+                              "dataset_hash_sha256", "0" * 64)
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("eval_report_dataset_hash!=entry_dataset_hash",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
+    def test_promote_blocks_when_eval_report_model_type_mismatches(self):
+        with _g8_tempfile.TemporaryDirectory() as root:
+            reg, e = self._fresh(root)
+            self._tamper_eval(root, e.model_id,
+                              "model_type", "WRONG_MODEL")
+            c = reg.verify_artifact_consistency(e.model_id)
+            self.assertIn("eval_report_model_type!=entry_model_type",
+                          c["problems"])
+            with self.assertRaises(G8PromotionBlocked):
+                reg.promote_to_current(e.model_id)
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G8_FixtureOnly — Q16 invariant
