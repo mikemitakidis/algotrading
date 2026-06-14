@@ -3792,6 +3792,131 @@ class G4_ContentAddressedStores(unittest.TestCase):
         # even with overlapping inputs, the 'kind' makes them distinct
         self.assertNotEqual(fk.content_hash(), lk.content_hash())
 
+    # ---- B.7 fix: complete feature identity + label<-feature binding ----
+
+    def _asm_cfg(self, **extra):
+        return ds_assembler.AssemblerConfig(
+            symbol="X", anchor_tf="15m",
+            anchor_set=ds_anchors.ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+            require_intraday=False, embargo_bars_override=10, **extra)
+
+    def test_feature_cache_miss_when_benchmark_bars_change(self):
+        from bot.ml.store import FeatureStore, LabelStore
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        benchA = {"1D": per_tf["1D"].copy()}
+        benchB = {"1D": per_tf["1D"].assign(
+            close=per_tf["1D"]["close"] * 1.05)}
+        with tempfile.TemporaryDirectory() as root:
+            fs, ls = FeatureStore(root), LabelStore(root)
+            rA = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs, label_store=ls)
+            ).build(per_tf_bars=per_tf, benchmark_bars=benchA)
+            rB = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs, label_store=ls)
+            ).build(per_tf_bars=per_tf, benchmark_bars=benchB)
+            # B must NOT reuse A's cached features
+            self.assertFalse(rB.cache_report["feature_store"]["hit"])
+            self.assertNotEqual(
+                rA.cache_report["feature_store"]["content_hash"],
+                rB.cache_report["feature_store"]["content_hash"])
+            # rebuild A -> hit
+            rA2 = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs, label_store=ls)
+            ).build(per_tf_bars=per_tf, benchmark_bars=benchA)
+            self.assertTrue(rA2.cache_report["feature_store"]["hit"])
+
+    def test_feature_cache_miss_when_symbol_metadata_changes(self):
+        asm = ds_assembler.DatasetAssembler(self._asm_cfg())
+        per_tf = _multi_tf_for_assembler(n_15m=500, seed=5)
+        e_default = asm._feature_dependency_extra(
+            per_tf_bars=per_tf, symbol_metadata_path=None,
+            benchmark_bars=None, flywheel_reader=None)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "meta.json")
+            with open(p, "w") as fh:
+                fh.write('{"schema_version":1,"symbols":{},'
+                         '"encodings":{}}')
+            e_path = asm._feature_dependency_extra(
+                per_tf_bars=per_tf, symbol_metadata_path=p,
+                benchmark_bars=None, flywheel_reader=None)
+            with open(p, "w") as fh:
+                fh.write('{"schema_version":1,"symbols":'
+                         '{"X":{"sector":"tech"}},"encodings":{}}')
+            e_path2 = asm._feature_dependency_extra(
+                per_tf_bars=per_tf, symbol_metadata_path=p,
+                benchmark_bars=None, flywheel_reader=None)
+        self.assertEqual(e_default["symbol_metadata_digest"], "default")
+        self.assertNotEqual(e_default["symbol_metadata_digest"],
+                            e_path["symbol_metadata_digest"])
+        self.assertNotEqual(e_path["symbol_metadata_digest"],
+                            e_path2["symbol_metadata_digest"])
+
+    def test_feature_store_disabled_when_flywheel_reader_present(self):
+        from bot.ml.store import FeatureStore
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+
+        class _FakeReader:
+            db_path = "/tmp/does_not_exist_signals.db"
+
+            def is_available(self):
+                return False
+        # fail-closed: store is bypassed (not a stale hit) for builds
+        # that read signal history.
+        self.assertFalse(
+            ds_assembler.DatasetAssembler._feature_store_usable(
+                _FakeReader()))
+        self.assertTrue(
+            ds_assembler.DatasetAssembler._feature_store_usable(None))
+        with tempfile.TemporaryDirectory() as root:
+            fs = FeatureStore(root)
+            r = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs)
+            ).build(per_tf_bars=per_tf, flywheel_reader=_FakeReader())
+            self.assertFalse(r.cache_report["feature_store"]["hit"])
+            self.assertEqual(
+                r.cache_report["feature_store"]["reason"],
+                "disabled_signal_history_dependency")
+
+    def test_label_cache_miss_when_feature_identity_changes(self):
+        from bot.ml.store import FeatureStore, LabelStore
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        benchA = {"1D": per_tf["1D"].copy()}
+        benchB = {"1D": per_tf["1D"].assign(
+            close=per_tf["1D"]["close"] * 1.05)}
+        with tempfile.TemporaryDirectory() as root:
+            fs, ls = FeatureStore(root), LabelStore(root)
+            rA = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs, label_store=ls)
+            ).build(per_tf_bars=per_tf, benchmark_bars=benchA)
+            rB = ds_assembler.DatasetAssembler(
+                self._asm_cfg(feature_store=fs, label_store=ls)
+            ).build(per_tf_bars=per_tf, benchmark_bars=benchB)
+            # label identity must change with feature identity
+            self.assertNotEqual(
+                rA.cache_report["label_store"]["content_hash"],
+                rB.cache_report["label_store"]["content_hash"])
+            self.assertFalse(rB.cache_report["label_store"]["hit"])
+
+    def test_label_key_includes_feature_identity(self):
+        from bot.ml.store import make_feature_key, make_label_key
+        fk1 = make_feature_key(**self._fkey_kw())
+        kw2 = self._fkey_kw()
+        kw2["feature_specs_hash"] = "FEATX"
+        fk2 = make_feature_key(**kw2)
+        lk1 = make_label_key(
+            symbol="AAPL", anchor_tf="15m", anchor_set="A",
+            timeframes=["15m"], label_specs_hash="LBL1",
+            m16_bars_digest=self._digest(),
+            extra={"feature_identity": fk1.content_hash()})
+        lk2 = make_label_key(
+            symbol="AAPL", anchor_tf="15m", anchor_set="A",
+            timeframes=["15m"], label_specs_hash="LBL1",
+            m16_bars_digest=self._digest(),
+            extra={"feature_identity": fk2.content_hash()})
+        # same label schema/bars but different feature identity ->
+        # different label key
+        self.assertNotEqual(lk1.content_hash(), lk2.content_hash())
+
 
 # ─────────────────────────────────────────────────────────────────────
 # G4_Assembler — end-to-end

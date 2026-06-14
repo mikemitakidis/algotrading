@@ -54,6 +54,7 @@ from bot.ml.dataset.manifest import (
     compute_label_specs_hash,
     current_utc_iso,
 )
+from bot.ml.hashing import sha256_hex
 from bot.ml.dataset.walk_forward import (
     WalkForwardSplit,
     default_embargo_bars,
@@ -204,6 +205,75 @@ class DatasetAssembler:
         out = pd.concat(parts, axis=1)
         return out
 
+    # ── Feature-compute dependency identity (M18.B.7 fix) ───────────
+
+    def _feature_dependency_extra(
+        self,
+        *,
+        per_tf_bars: Dict[str, pd.DataFrame],
+        symbol_metadata_path: Optional[Union[str, Path]],
+        benchmark_bars: Optional[Dict[str, pd.DataFrame]],
+        flywheel_reader: Optional["FlywheelReader"],
+    ) -> Dict[str, Any]:
+        """Digest EVERY input that can change _compute_features output
+        beyond bars + feature schema + missingness policy. This goes in
+        the feature StoreKey.extra so different benchmark bars / symbol
+        metadata / signal-history inputs cannot collide on one cache
+        key. Flywheel/signal_history is handled separately (fail-closed)
+        because signals.db is mutable external state we cannot stably
+        content-address — see _feature_store_usable()."""
+        # market_context: benchmark bars (or explicit "none")
+        if benchmark_bars:
+            bench_digest: Any = _bars_digest(benchmark_bars)
+        else:
+            bench_digest = "none"
+        # symbol_meta: metadata path identity (or explicit "default"
+        # when the assembler injects the minimal default metadata).
+        if symbol_metadata_path is None:
+            sym_meta_digest: Any = "default"
+        else:
+            p = Path(symbol_metadata_path)
+            try:
+                content = p.read_bytes()
+                sym_meta_digest = {
+                    "path": str(p),
+                    "content_sha256": sha256_hex(content),
+                }
+            except Exception:
+                # path supplied but unreadable — bind to the path string
+                # so a later readable file with the same path still
+                # differs from "default"/None and a content change is
+                # at least path-scoped.
+                sym_meta_digest = {"path": str(p),
+                                   "content_sha256": "unreadable"}
+        # signal_history: see _feature_store_usable(); we record the
+        # identity for completeness but the store is disabled when a
+        # reader is present.
+        if flywheel_reader is None:
+            fly_digest: Any = "none"
+        else:
+            fly_digest = {
+                "db_path": str(getattr(flywheel_reader, "db_path", "")),
+                "stable": False,
+            }
+        return {
+            "benchmark_bars_digest": bench_digest,
+            "symbol_metadata_digest": sym_meta_digest,
+            "signal_history_digest": fly_digest,
+        }
+
+    @staticmethod
+    def _feature_store_usable(
+        flywheel_reader: Optional["FlywheelReader"],
+    ) -> bool:
+        """FAIL-CLOSED: the feature store is only safe to use when there
+        is NO flywheel_reader. signal_history features depend on the
+        flywheel signals DB, which is mutable external state we cannot
+        cheaply give a stable content digest — so rather than risk a
+        stale cache hit, we disable feature caching entirely for builds
+        that read signal history."""
+        return flywheel_reader is None
+
     # ── Label compute ───────────────────────────────────────────────
 
     def _compute_labels(
@@ -318,35 +388,77 @@ class DatasetAssembler:
                 flywheel_reader=flywheel_reader,
                 benchmark_bars=benchmark_bars,
             )
+        # M18.B.7 fix — the feature StoreKey must include EVERY input
+        # that changes feature output (benchmark bars, symbol metadata,
+        # signal-history dep), and the feature store is FAIL-CLOSED
+        # disabled when a flywheel_reader is present (mutable signals.db
+        # cannot be stably content-addressed).
+        feature_key = None
+        _feat_store_usable = self._feature_store_usable(flywheel_reader)
         if self.cfg.feature_store is not None:
             from bot.ml.store import make_feature_key
-            fkey = make_feature_key(
+            _dep_extra = self._feature_dependency_extra(
+                per_tf_bars=per_tf_bars,
+                symbol_metadata_path=symbol_metadata_path,
+                benchmark_bars=benchmark_bars,
+                flywheel_reader=flywheel_reader)
+            feature_key = make_feature_key(
                 symbol=self.cfg.symbol, anchor_tf=anchor_tf,
                 anchor_set=self.cfg.anchor_set,
                 timeframes=list(self.cfg.timeframes),
                 feature_specs_hash=_feat_hash_id,
                 m16_bars_digest=_bd,
-                missingness_policy_hash=_miss_hash_id)
+                missingness_policy_hash=_miss_hash_id,
+                extra=_dep_extra)
+        if self.cfg.feature_store is not None and _feat_store_usable:
             feature_df, _fres = self.cfg.feature_store.get_or_compute(
-                fkey, _compute_features_fn)
+                feature_key, _compute_features_fn)
             cache_report["feature_store"] = _fres.to_dict()
         else:
             feature_df = _compute_features_fn()
+            if self.cfg.feature_store is not None and not _feat_store_usable:
+                # store configured but deliberately bypassed
+                cache_report["feature_store"] = {
+                    "hit": False, "kind": "feature",
+                    "content_hash": (feature_key.content_hash()
+                                     if feature_key else ""),
+                    "reason": "disabled_signal_history_dependency",
+                    "artifact_path": None}
 
         # 3. Compute labels (all groups) — store-backed if configured.
+        # M18.B.7 fix — labels consume the ATR series from the feature
+        # frame (vol_regime.atr_*), so label identity is bound to the
+        # FEATURE identity: feature_key.content_hash() goes into the
+        # label key extra. If feature inputs change, the label cache is
+        # invalidated too.
         def _compute_labels_fn():
             return self._compute_labels(
                 anchor_bars=anchor_bars,
                 feature_df=feature_df,
             )
         if self.cfg.label_store is not None:
-            from bot.ml.store import make_label_key
+            from bot.ml.store import make_feature_key, make_label_key
+            if feature_key is None:
+                _dep_extra = self._feature_dependency_extra(
+                    per_tf_bars=per_tf_bars,
+                    symbol_metadata_path=symbol_metadata_path,
+                    benchmark_bars=benchmark_bars,
+                    flywheel_reader=flywheel_reader)
+                feature_key = make_feature_key(
+                    symbol=self.cfg.symbol, anchor_tf=anchor_tf,
+                    anchor_set=self.cfg.anchor_set,
+                    timeframes=list(self.cfg.timeframes),
+                    feature_specs_hash=_feat_hash_id,
+                    m16_bars_digest=_bd,
+                    missingness_policy_hash=_miss_hash_id,
+                    extra=_dep_extra)
             lkey = make_label_key(
                 symbol=self.cfg.symbol, anchor_tf=anchor_tf,
                 anchor_set=self.cfg.anchor_set,
                 timeframes=list(self.cfg.timeframes),
                 label_specs_hash=_lbl_hash_id,
-                m16_bars_digest=_bd)
+                m16_bars_digest=_bd,
+                extra={"feature_identity": feature_key.content_hash()})
             label_df, _lres = self.cfg.label_store.get_or_compute(
                 lkey, _compute_labels_fn)
             cache_report["label_store"] = _lres.to_dict()

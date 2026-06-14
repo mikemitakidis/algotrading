@@ -205,6 +205,20 @@ corrections over the first audit pass:
    split fractions for the feature/label artifacts (features/labels are
    pre-split, so this is correct, but the *dataset* identity still depends on
    them via the manifest, not the store).
+   **B.7 identity-completeness fix (post-review):** the feature StoreKey now
+   includes a digest of EVERY feature-compute dependency via `extra` —
+   `benchmark_bars` digest (or `"none"`), symbol-metadata digest (path +
+   content sha256, or `"default"`), and the signal-history/flywheel identity —
+   and the feature store is FAIL-CLOSED disabled
+   (`reason=disabled_signal_history_dependency`) whenever a `flywheel_reader`
+   is supplied (the mutable signals DB cannot be stably content-addressed). The
+   label StoreKey is bound to the feature identity
+   (`extra={"feature_identity": feature_key.content_hash()}`) because labels
+   consume the ATR series (`vol_regime.atr_*`) from the feature frame, so any
+   change to feature inputs invalidates the label cache too. Added limitation:
+   builds that read signal history bypass the feature store entirely
+   (fail-closed), so caching currently applies only to non-signal-history
+   builds.
 8. **Dataset/model artifact persistence** — persisted dataset splits +
    manifest + model artifacts so commands can hand off between invocations.
 9. **Full CLI** — build-dataset / train / evaluate / demote (currently

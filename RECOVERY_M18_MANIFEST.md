@@ -226,7 +226,7 @@ thinness gates — a separate `ProductionThinnessThresholds` profile of
 `production:*` blocked reasons that `--force` cannot override; the profile is
 non-bypassable — a non-locked (relaxed) profile emits
 `production_threshold_profile_not_locked` so relaxed thresholds can never create
-a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 570 OK / skipped=3
+a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 575 OK / skipped=3
 
 M18.B.5 (explicit NaN/missingness policy) is DONE: central
 `bot/ml/features/missingness.py` (`m18_missingness_v1`) covers all 10 feature
@@ -245,7 +245,7 @@ the dataset hash, not via schema columns; indicators live at the model boundary,
 
 M18.B.6 (AV failure-reason persistence) is DONE: every adversarial-validation outcome carries an explicit status (passed/failed/skipped_not_enough_data/unavailable_error/disabled_fixture_mode/skipped_no_split) + stable reason string, persisted on DatasetManifest + AssemblerResult (backward-compatible defaults, old manifests round-trip), JSON-safe; the assembler no longer reduces AV failures to a bare av_result=None, and gating is driven by the explicit status (dataset:adversarial_validation_not_run/_failed remain integrity gates).
 
-M18.B.7 (content-addressed feature/label stores) is DONE: new bot/ml/store package (metadata/feature_store/label_store) content-addresses computed features/labels by schema+bars+missingness+config identity; fail-closed reads (corrupt/mismatch -> safe miss), get_or_compute caches on miss / reuses on hit, JSON-safe CacheResult; assembler gained optional feature_store/label_store (default None = original in-memory behaviour) + JSON-safe cache_report, and a cached build reproduces a byte-identical dataset_hash. No data/ml artifacts committed. Deferred: atomic/locked writes, eviction, production wiring.
+M18.B.7 (content-addressed feature/label stores) is DONE: new bot/ml/store package (metadata/feature_store/label_store) content-addresses computed features/labels by schema+bars+missingness+config identity; fail-closed reads (corrupt/mismatch -> safe miss), get_or_compute caches on miss / reuses on hit, JSON-safe CacheResult; assembler gained optional feature_store/label_store (default None = original in-memory behaviour) + JSON-safe cache_report, and a cached build reproduces a byte-identical dataset_hash. No data/ml artifacts committed. Identity fix (post-review): feature key includes benchmark_bars/symbol-metadata/signal-history dependency digests; feature store fail-closed-disabled when a flywheel_reader is present (mutable signals.db); label key bound to feature_key.content_hash() (labels consume ATR from features). Deferred: atomic/locked writes, eviction, production wiring; signal-history builds bypass the feature cache.
 with these added.
 The 428-OK figures above are the pre-M18.B recovery baseline.
 

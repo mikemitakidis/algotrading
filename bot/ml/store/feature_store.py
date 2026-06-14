@@ -152,7 +152,15 @@ def make_feature_key(
     missingness_policy_hash: str = "", extra: Optional[Dict] = None,
 ) -> StoreKey:
     """Build a StoreKey for a FEATURE artifact. label_specs_hash is not
-    part of feature identity (features don't depend on labels)."""
+    part of feature identity (features don't depend on labels).
+
+    IMPORTANT (M18.B.7 fix): the caller MUST pass, via ``extra``, a
+    digest of EVERY input that can change feature output beyond the
+    bars + feature schema + missingness policy — specifically the
+    benchmark_bars (market_context), the symbol metadata (symbol_meta),
+    and the signal-history/flywheel dependency (signal_history).
+    Omitting any of these would let two builds with different such
+    inputs collide on the same cache key and reuse stale features."""
     return StoreKey(
         kind="feature", symbol=symbol, anchor_tf=anchor_tf,
         anchor_set=anchor_set, timeframes=list(timeframes),
