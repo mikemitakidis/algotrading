@@ -5,7 +5,7 @@
 **Final phase:** B12 (final docs / acceptance / merge-prep)
 **Consolidated acceptance:** see `docs/M18_ACCEPTANCE.md`
 **Current branch tip:** see `git log` on `m18-recovery-from-transcripts`
-**Ahead of `main`:** 50 commits ahead, 0 behind (`origin/main` = `a8d8ca4`
+**Ahead of `main`:** 51 commits ahead, 0 behind (`origin/main` = `a8d8ca4`
 M17.B.closeout); **M18 not merged to main**.
 
 **Mode throughout:** read-only / shadow-only — no live promotion, no live
