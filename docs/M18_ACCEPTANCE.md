@@ -70,7 +70,11 @@ feature/label stores).
 - `origin/main` = `a8d8ca4` — **M17.B.closeout**.
 - M1–M17 are on main; M17.B full regression is 200 OK (skipped=2).
 - M18 lives entirely on `m18-recovery-from-transcripts`.
-- Branch is **ahead 51, behind 0** of `origin/main`.
+- Branch is **0 behind** `origin/main`; the exact ahead count is
+  intentionally not pinned in docs because docs-only commits change it.
+  Verify the live count with
+  `git rev-list --left-right --count origin/main...HEAD` immediately
+  before merge.
 - **M18 is not on main** (`git ls-tree -r origin/main | grep -c bot/ml/` = 0).
 
 ---
@@ -112,6 +116,6 @@ git merge --ff-only m18-recovery-from-transcripts
 git push origin main
 ```
 
-No squash. No merge commit. No force push. The branch is ahead 51 / behind 0,
-so a fast-forward is possible and preserves the audited per-phase history.
+No squash. No merge commit. No force push. The branch is 0 behind
+`origin/main`, so a fast-forward is possible and preserves the audited per-phase history.
 **This is not executed during B12.**
