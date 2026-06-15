@@ -1,5 +1,17 @@
 # Project Status Reconciliation
 
+> **Update 2026 (M18 acceptance).** This document below was written at
+> repo HEAD `729ad2d` (M14.D) and predates M16/M17 closure and M18. Current
+> truth: M16 CLOSED; **M17 CLOSED** (`origin/main` = `M17.B.closeout`
+> `a8d8ca4`, `test_m17_backtesting` 200 OK); **M18 (ML strategy/criteria
+> foundation, read-only/shadow-only) is FOUNDATION-COMPLETE on branch
+> `m18-recovery-from-transcripts` and is NOT yet merged to main**
+> (`test_m18_ml` 668 OK — see `docs/M18_ACCEPTANCE.md`). Where the text below
+> says ML closed-loop / sentiment / scoring is "M17 or M18 scope", note that
+> M18 delivers the ML *foundation* only (sklearn/RandomForest, gated,
+> shadow-only); it is **not** live trading and **not** M19 signal scoring.
+> M19 (signal scoring) is the next concrete milestone after M18 merges.
+
 **Date:** 2026-05-29
 **Repo HEAD at writing:** `729ad2d` (M14.D bugfix; M14.D accepted on VPS)
 **Scope:** docs-only reconciliation. No code change, no broker writes,

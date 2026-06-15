@@ -39,7 +39,7 @@ project-wide reconciliation narrative lives in
 | 6 | Modular Data-Provider Architecture | CLOSED | `bot/providers/{base,yfinance_provider,alpaca_provider}.py` |
 | 7 | More Indicators / Richer Logging | CLOSED | `_ml_features` block per signal in `bot/scanner.py:~245` |
 | 8 | News / Sentiment Module | IMPLEMENTED, NOT CLOSED-LOOP | `bot/sentiment/news_provider.py` (456 lines, real NewsAPI); single-provider; macro/multi-source → M18 |
-| 9 | ML Pipeline | INFRASTRUCTURE COMPLETE, NOT CLOSED-LOOP | `ml_train.py` (541 lines XGBoost meta-labeling), `ml_build_dataset.py`; not wired as a live filter in `scanner.py`; closed-loop → M17 |
+| 9 | ML Pipeline | INFRASTRUCTURE COMPLETE, NOT CLOSED-LOOP | `ml_train.py` (541 lines XGBoost meta-labeling), `ml_build_dataset.py`; not wired as a live filter in `scanner.py`. **Superseded by the M18 ML foundation** (`bot/ml/*`, sklearn/RandomForest, read-only/shadow-only) on branch `m18-recovery-from-transcripts` — see row 18 + `docs/M18_ACCEPTANCE.md`. The old `ml_train.py` remains on main as historical infra; M18 is the current ML direction |
 | 10 | Broker Execution Architecture | CLOSED | `bot/brokers/{base,ibkr_broker,paper_broker}.py`; flywheel schema |
 | 11 | IBKR Paper Trading | CLOSED | `bot/brokers/ibkr_broker.py` + IBC 3.22.0; `test_m11.py` |
 | 12 | IBKR Live Trading | CLOSED | Real broker acceptance proven; live `permId`; truthful `execution_intents`; no remaining F exposure |
@@ -47,7 +47,9 @@ project-wide reconciliation narrative lives in
 | 14 | Portfolio / Risk Layer | CLOSED | All sub-milestones A–H closed; see `docs/M14_FINAL_AUDIT.md` |
 | 15 | Production Hardening | CLOSED (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2/.3.A.cutover/.3.B/.3.C all CLOSED 2026-06-05) | See M15 detail below |
 | 16 | Historical Data + First Signal Engine | CLOSED 2026-06-05 (M16.A + M16.B + fixes 1-4) | See M16 detail below; `bot/historical/*`, `data/historical/yfinance/1D/AAPL.parquet` (real data); commit chain `c6e98b7` → `aef8335` |
-| 17–23 | Future scope | PENDING | See `ROADMAP.md`. The M1–M16 audit-only pass is now CLOSED (P0 batch verified 2026-06-05, commit chain `655c955` → `268a50b`); the next concrete work item is operator-chosen. M17 has not started. |
+| 17 | Backtesting engine (scanner_replica + multi-TF confluence) | CLOSED — `origin/main` is `M17.B.closeout` (`a8d8ca4`) | `test_m17_backtesting` 200 OK (skipped=2); on main |
+| 18 | ML strategy/criteria foundation (read-only / shadow-only) | FOUNDATION COMPLETE on branch `m18-recovery-from-transcripts`; **NOT merged to main** | sklearn/RandomForest foundation; `test_m18_ml` 668 OK (skipped=3); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
+| 19–23 | Future scope | PENDING | See `ROADMAP.md`. M19 signal scoring is the next concrete milestone after M18 merges. |
 
 ---
 
@@ -376,7 +378,7 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - M15.4 — IB Gateway visibility/truth layer (CLOSED 2026-06-02)
   - M15.5 — IBKR paper exposure wiring (CLOSED earlier)
   - M15.3.A / .A.2 / .A.cutover / .B / .C — Dashboard auth + 2FA + TLS + manual_reset + audit export (all CLOSED, see above)
-**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **The M1–M16 audit-only pass is now CLOSED** (P0 batch verified 2026-06-05, commit chain `655c955` → `268a50b`; see "P0 audit batch" block below). The next concrete work item is operator-chosen; **M17 has not started**. Dashboard work stops unless safety- or compliance-driven.
+**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **M17 is now CLOSED** — `origin/main` is `M17.B.closeout` (`a8d8ca4`), `test_m17_backtesting` 200 OK (skipped=2). **M18 (ML strategy/criteria foundation, read-only/shadow-only) is FOUNDATION-COMPLETE on branch `m18-recovery-from-transcripts` and is NOT yet merged to main** (`test_m18_ml` 668 OK skipped=3; see `docs/M18_ACCEPTANCE.md`). M18 is the ML foundation only — not live trading and not M19 signal scoring. The next concrete work item after M18 merges is M19. Dashboard work stops unless safety- or compliance-driven.
 
 ---
 

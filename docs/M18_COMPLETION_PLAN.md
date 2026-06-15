@@ -569,8 +569,10 @@ pattern (a passing fixture and a failing fixture that trips the guard).
 | **M18.B.6** | AV failure-reason persistence — **DONE** | — |
 | **M18.B.7** | Content-addressed feature_store / label_store (opt-in; atomic/parallel-safe deferred) — **DONE** | — |
 | **M18.B.8** | Dataset/model artifact persistence — consistency gate **DONE** (model-card output deferred) | B.7 |
-| **M18.B.9** | Full CLI: B9.A (json envelope, --debug, demote wired, dry-run) **DONE**; B9.B (build/train/evaluate) deferred | B.8 |
-| **M18.B.10** | Advanced monitoring (leaderboard, run manifest, cache stats, data-quality gate, regime-aware validation, shadow monitoring) + one-command audit + final docs | B.1–B.9 |
+| **M18.B.9** | Full CLI: B9.A (json envelope, --debug, demote wired, dry-run) **DONE**; B9.B-1 (build/train/evaluate in-process wiring) **DONE**; B9.C (AssemblerResult persistence/reload for a real build→train handoff) deferred | B.8 |
+| **M18.B.10** | Read-only audit/safety runner (`bot/ml/audit.py` + `cli audit`, static/hygiene/full) **DONE** | B.1–B.9 |
+| **M18.B.11** | Advisory model-readiness reporter (`bot/ml/readiness.py` + `cli readiness`) **DONE** — advisory only, not a promotion gate | B.8–B.10 |
+| **M18.B.12** | Final docs / acceptance / merge-prep **DONE** — see `docs/M18_ACCEPTANCE.md`; status docs reconciled; merge plan prepared (fast-forward only, NOT executed) | B.1–B.11 |
 
 Self-contained, low-risk phases (B.1, B.2, B.3, B.4, B.5, B.6) can land first in
 any order; B.7→B.8→B.9 are the larger dependent chain; B.10 closes out.

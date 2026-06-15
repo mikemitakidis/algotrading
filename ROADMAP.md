@@ -11,6 +11,16 @@ For the live state of every milestone (✅ closed / ⚠ partial / ⏳ pending /
 narrative snapshot of where the project is right now, see
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
+> **Current state (M18 acceptance, read-only/shadow-only).**
+> `origin/main` is `M17.B.closeout` (`a8d8ca4`); M1–M17 are on main
+> (M17 backtesting CLOSED, `test_m17_backtesting` 200 OK). **M18 — the ML
+> strategy/criteria foundation — is FOUNDATION-COMPLETE on branch
+> `m18-recovery-from-transcripts` and is NOT yet merged to main**
+> (`test_m18_ml` 668 OK; see [`docs/M18_ACCEPTANCE.md`](docs/M18_ACCEPTANCE.md)).
+> M18 is read-only/shadow-only: it is the ML foundation, **not** live trading
+> and **not** M19 signal scoring. The next concrete milestone after M18 merges
+> is M19 (signal scoring).
+
 ---
 
 ## Original 15-Milestone Plan (intact)

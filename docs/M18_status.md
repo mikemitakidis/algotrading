@@ -1,24 +1,43 @@
-# M18.A — ML Pipeline / Closed-Loop ML — Status
+# M18 — ML Strategy/Criteria Foundation — Status
 
-**Milestone:** M18.A (ML Pipeline / Closed-Loop ML)
-**Recovered branch:** `m18-recovery-from-transcripts`
-**Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene)
-**Final audit documentation checkpoint:** `4fe264b`
-**Metadata correction checkpoint:** `519878d`
+**Milestone:** M18 (ML strategy/criteria foundation — read-only / shadow-only)
+**Branch:** `m18-recovery-from-transcripts`
+**Final phase:** B12 (final docs / acceptance / merge-prep)
+**Consolidated acceptance:** see `docs/M18_ACCEPTANCE.md`
 **Current branch tip:** see `git log` on `m18-recovery-from-transcripts`
-**Ahead-of-`main` count:**
-- Implementation recovery chain through `baedf9f`: 23 commits
-- After final audit documentation commit `4fe264b`: 24 commits ahead of `main`
-- After metadata correction commit `519878d`: 25 commits ahead of `main`
-- Current exact ahead count: verify with `git rev-list --count main..HEAD`
+**Ahead of `main`:** 50 commits ahead, 0 behind (`origin/main` = `a8d8ca4`
+M17.B.closeout); **M18 not merged to main**.
 
-**Mode throughout:** read-only / shadow-only — no live promotion.
+**Mode throughout:** read-only / shadow-only — no live promotion, no live
+trading, no broker/dashboard/scanner/signals.db writes.
 
-### Current recovered state
+### Current state (B12)
 
 | Metric | Value |
 |---|---|
-| `test_m18_ml` | **428 OK, skipped=3** |
+| `test_m18_ml` | **668 OK, skipped=3** |
+| M18 `G10_Hygiene` | **10 OK** |
+| M17.B `G10_Hygiene` | **9 OK** |
+| M17.B full regression | **200 OK, skipped=2** |
+| Cleared B-phases | B1–B11 (B12 = this docs/acceptance phase) |
+
+Phases B8–B11 added: artifact-consistency verification (B8), CLI hardening +
+JSON envelope + demote + dry-run (B9.A), in-process build/train/evaluate
+wiring (B9.B-1), read-only audit runner (B10), advisory readiness reporter
+(B11). See `docs/M18_ACCEPTANCE.md` for the full proof table and limitations.
+
+<details><summary>Historical recovery note (superseded)</summary>
+
+The earlier recovery checkpoints below are retained for history; the suite has
+since advanced well past the original recovery target.
+
+</details>
+
+## (historical) M18.A recovery record
+
+| Metric | Value |
+|---|---|
+| `test_m18_ml` (recovery checkpoint) | 428 OK, skipped=3 |
 | M18 `G10_Hygiene` | **10 OK** |
 | M17.B safety gate | **200 OK, skipped=2** |
 | Original local-only target | 452 OK, skipped=2 |
