@@ -226,7 +226,10 @@ thinness gates — a separate `ProductionThinnessThresholds` profile of
 `production:*` blocked reasons that `--force` cannot override; the profile is
 non-bypassable — a non-locked (relaxed) profile emits
 `production_threshold_profile_not_locked` so relaxed thresholds can never create
-a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 626 OK / skipped=3
+a promotable model; trainability gates unchanged so fixtures still train) is DONE. Suite at 639 OK / skipped=3
+
+M18.B.9 CLI is DONE through B9.B-1. B9.A: global --json strict envelope {ok,command,status,result,warnings,errors} (valid on success+failure, failure to stderr), --debug, registry demote wired via Registry.demote_current(--scope-key), --dry-run for promote/demote (promote dry-run rejects --dry-run --force cleanly and is tagged non_forced_only), registry show --json includes B8 consistency, predict --json reports calibration_applied=false/stored_not_applied; legacy A.9 default output preserved (envelope opt-in). B9.B-1: build-dataset/train/evaluate WIRED in-process through existing real interfaces (load_bars->DatasetAssembler.build; Trainer.train_one->evaluate_model->register_candidate; evaluate=get_entry+read evaluation_report.json+verify_artifact_consistency, strict). build-dataset emits dataset.parquet+manifest.json, explicitly NOT a reloadable handoff. train assembles its own dataset in-process. Explicit flags only (no config parser). Test-only _bars_provider supplies fixture bars into the real path. Only bot/ml/cli.py + tests changed. B9.C DEFERRED: true AssemblerResult persistence/reload for the build-dataset->train handoff (new dataset-layer architecture).
+
 
 M18.B.5 (explicit NaN/missingness policy) is DONE: central
 `bot/ml/features/missingness.py` (`m18_missingness_v1`) covers all 10 feature

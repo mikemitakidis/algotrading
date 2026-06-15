@@ -64,25 +64,6 @@ from typing import List, Optional
 # ── Stub messages (phase-tagged; exit 2) ────────────────────────────
 # Each names the exact missing surface bit, per the accepted closeout.
 
-STUB_BUILD_DATASET = (
-    "build-dataset is not wired as of M18.A.10+: AssemblerResult has "
-    "no persistence layer (and the DatasetConfig/AssemblerConfig "
-    "surfaces differ). Use bot.ml.dataset.assembler.DatasetAssembler "
-    "directly from a fixture script until that surface is approved."
-)
-STUB_TRAIN = (
-    "train is not wired as of M18.A.10+: it needs a persisted "
-    "AssemblerResult to load from, and no persistence layer exists "
-    "yet. Use bot.ml.models.trainer directly from a fixture script."
-)
-STUB_EVALUATE = (
-    "evaluate is not wired as of M18.A.10+: blocked on the same "
-    "AssemblerResult persistence gap as train. The most recent "
-    "evaluation report for a model is already accessible via "
-    "`registry show`."
-)
-
-
 def _stub(message: str) -> int:
     print(message, file=sys.stderr)
     return 2
@@ -142,21 +123,57 @@ def build_parser() -> argparse.ArgumentParser:
 
     bd = sub.add_parser(
         "build-dataset",
-        help="Assemble a dataset from M16 bars + flywheel (stub).")
-    bd.add_argument("--config",
-        help="Path to a DatasetConfig JSON file.")
+        help="Assemble a dataset from M16 bars (real in-process "
+              "assembler). Emits an inspectable dataset+manifest "
+              "report — NOT a reloadable training handoff (see B9.C).")
+    bd.add_argument("--symbol", required=True, help="Ticker, e.g. AAPL.")
+    bd.add_argument("--anchor-tf", default="15m",
+        help="Anchor timeframe (default 15m).")
+    bd.add_argument("--anchor-set", default=None,
+        help="Anchor set name (default: assembler default).")
+    bd.add_argument("--timeframes", default="1D,4H,1H,15m",
+        help="Comma-separated timeframes to load (default "
+              "1D,4H,1H,15m).")
+    bd.add_argument("--output",
+        help="Directory to write dataset.parquet + manifest.json. "
+              "If omitted, nothing is written (summary only).")
+    bd.add_argument("--fixture-mode", action="store_true",
+        help="Assemble in fixture mode (small-sample friendly).")
+    bd.add_argument("--dry-run", action="store_true",
+        help="Validate config and report the planned build WITHOUT "
+              "loading bars or writing artifacts.")
 
     tr = sub.add_parser(
         "train",
-        help="Train a model from a TrainConfig (stub).")
-    tr.add_argument("--config",
-        help="Path to a TrainConfig JSON file.")
+        help="Train + evaluate + register a candidate, in-process "
+              "(load bars -> assemble -> train -> evaluate -> "
+              "register). Assembles its OWN dataset each run; does not "
+              "consume a build-dataset output yet (see B9.C).")
+    tr.add_argument("--symbol", required=True, help="Ticker, e.g. AAPL.")
+    tr.add_argument("--model-type", required=True,
+        help="Model type (e.g. B2_logistic, M_random_forest).")
+    tr.add_argument("--anchor-tf", default="15m")
+    tr.add_argument("--anchor-set", default=None)
+    tr.add_argument("--timeframes", default="1D,4H,1H,15m")
+    tr.add_argument("--target-label-id",
+        default="triple_barrier_atr_2_3_50_won")
+    tr.add_argument("--train-mode", default="model_b_candidate_quality")
+    tr.add_argument("--seed", type=int, default=42)
+    tr.add_argument("--fixture-mode", action="store_true")
+    tr.add_argument("--registry-root",
+        help="Registry root dir (default: the package default).")
+    tr.add_argument("--dry-run", action="store_true",
+        help="Validate config + assemble, but do NOT train or "
+              "register.")
 
     ev = sub.add_parser(
         "evaluate",
-        help="Build the EvaluationReport for a trained model (stub).")
-    ev.add_argument("--model-id",
+        help="Strict inspection of a registered model: read its "
+              "evaluation_report.json + run B8 artifact-consistency.")
+    ev.add_argument("--model-id", required=True,
         help="Registry model_id to evaluate.")
+    ev.add_argument("--registry-root",
+        help="Registry root dir (default: the package default).")
 
     pr = sub.add_parser(
         "predict",
@@ -222,6 +239,300 @@ def _make_registry(_registry_root: Optional[str]):
     if _registry_root is not None:
         return Registry(root=_registry_root)
     return Registry()
+
+
+# ── B9.B-1: real in-process build-dataset / train / evaluate ────────
+# The CLI calls the EXISTING real interfaces:
+#   m16_loader.load_bars  -> DatasetAssembler.build
+#   Trainer.train_one -> evaluate_model -> Registry.register_candidate
+#   Registry.get_entry / verify_artifact_consistency
+# No new architecture, no AssemblerResult persistence (deferred: B9.C).
+#
+# `_bars_provider` is an INTERNAL, test-only Python kwarg (like
+# `_registry_root`): a callable (symbol, timeframes) -> {tf: DataFrame}.
+# Production default loads read-only from M16 via load_bars. Tests
+# inject deterministic fixture bars into the SAME real code path — they
+# never fake the assembler/trainer/registry logic.
+
+def _default_bars_provider(symbol, timeframes):
+    from bot.ml.dataset import m16_loader
+    return {tf: m16_loader.load_bars(symbol, tf) for tf in timeframes}
+
+
+def _build_assembler_config(args):
+    from bot.ml.dataset import assembler as _asm
+    kwargs = dict(
+        symbol=args.symbol,
+        anchor_tf=args.anchor_tf,
+        timeframes=tuple(t.strip() for t in args.timeframes.split(",")
+                         if t.strip()),
+        fixture_mode=getattr(args, "fixture_mode", False),
+    )
+    if getattr(args, "anchor_set", None):
+        kwargs["anchor_set"] = args.anchor_set
+    if getattr(args, "fixture_mode", False):
+        # fixture samples are too small for a meaningful AV test
+        kwargs["skip_adversarial"] = True
+    return _asm.AssemblerConfig(**kwargs)
+
+
+def _cmd_build_dataset(args, _registry_root, _bars_provider) -> int:
+    from bot.ml.errors import M18Error
+    from bot.ml.dataset import assembler as _asm
+    use_json = getattr(args, "json", False)
+    try:
+        cfg = _build_assembler_config(args)
+
+        if getattr(args, "dry_run", False):
+            result = {
+                "outcome":    "dry_run",
+                "symbol":     cfg.symbol,
+                "anchor_tf":  cfg.anchor_tf,
+                "anchor_set": cfg.anchor_set,
+                "timeframes": list(cfg.timeframes),
+                "would_write": bool(args.output),
+            }
+            if use_json:
+                _emit_json_envelope("build-dataset", ok=True,
+                                    status="dry_run", result=result)
+            else:
+                print(json.dumps(result, sort_keys=True))
+            return 0
+
+        provider = _bars_provider or _default_bars_provider
+        per_tf = provider(cfg.symbol, list(cfg.timeframes))
+        res = _asm.DatasetAssembler(cfg).build(per_tf_bars=per_tf)
+
+        summary = {
+            "command":              "build-dataset",
+            "symbol":               cfg.symbol,
+            "dataset_id":           res.manifest.dataset_id,
+            "dataset_hash_sha256":  res.manifest.dataset_hash_sha256,
+            "n_rows":               int(res.dataset.shape[0]),
+            "n_columns":            int(res.dataset.shape[1]),
+            "anchor_set":           res.manifest.anchor_set,
+            "adversarial_validation_status":
+                res.adversarial_validation_status,
+            "adversarial_validation_reason":
+                res.adversarial_validation_reason,
+            # honesty: this report is NOT a reloadable training handoff
+            "reloadable_training_handoff": False,
+        }
+
+        written = {}
+        if args.output:
+            out_dir = Path(args.output)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ds_path = out_dir / "dataset.parquet"
+            mf_path = out_dir / "manifest.json"
+            res.dataset.to_parquet(ds_path, index=False)
+            mf_path.write_text(
+                json.dumps(res.manifest.to_dict(), sort_keys=True,
+                           default=str))
+            written = {"dataset_parquet": str(ds_path),
+                       "manifest_json": str(mf_path)}
+        summary["written"] = written
+
+        if use_json:
+            _emit_json_envelope("build-dataset", ok=True,
+                                status="completed", result=summary)
+        else:
+            print(json.dumps(summary, sort_keys=True, default=str))
+        return 0
+    except M18Error as e:
+        if use_json:
+            _emit_json_envelope("build-dataset", ok=False,
+                status="failed",
+                errors=[_err_obj("m18_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"build-dataset: {type(e).__name__}: {e}",
+                file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        if getattr(args, "debug", False):
+            raise
+        if use_json:
+            _emit_json_envelope("build-dataset", ok=False,
+                status="failed",
+                errors=[_err_obj("unexpected_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"build-dataset: {type(e).__name__}: {e}",
+                file=sys.stderr)
+        return 1
+
+
+def _cmd_train(args, _registry_root, _bars_provider) -> int:
+    from bot.ml.errors import M18Error
+    from bot.ml.dataset import assembler as _asm
+    from bot.ml.models.trainer import Trainer, TrainConfig
+    from bot.ml.evaluation.evaluator import evaluate_model
+    use_json = getattr(args, "json", False)
+    try:
+        cfg = _build_assembler_config(args)
+        provider = _bars_provider or _default_bars_provider
+
+        # assemble (real) — needed for both dry-run validation and train
+        per_tf = provider(cfg.symbol, list(cfg.timeframes))
+        res = _asm.DatasetAssembler(cfg).build(per_tf_bars=per_tf)
+
+        train_config = TrainConfig(
+            dataset_id=res.manifest.dataset_id,
+            model_type=args.model_type,
+            train_mode=args.train_mode,
+            target_label_id=args.target_label_id,
+            hyperparameters={},
+            seed=int(args.seed),
+            fixture_mode=getattr(args, "fixture_mode", False),
+        )
+
+        if getattr(args, "dry_run", False):
+            result = {
+                "outcome":    "dry_run",
+                "symbol":     cfg.symbol,
+                "model_type": args.model_type,
+                "dataset_id": res.manifest.dataset_id,
+                "n_rows":     int(res.dataset.shape[0]),
+                "registered": False,
+            }
+            if use_json:
+                _emit_json_envelope("train", ok=True, status="dry_run",
+                                    result=result)
+            else:
+                print(json.dumps(result, sort_keys=True))
+            return 0
+
+        out = Trainer().train_one(train_config, res)
+        rep = evaluate_model(out, res)
+        registry = _make_registry(_registry_root)
+        entry = registry.register_candidate(out, rep, res)
+
+        result = {
+            "command":             "train",
+            "model_id":            entry.model_id,
+            "status":              entry.status,
+            "model_type":          entry.model_type,
+            "dataset_hash_sha256": entry.dataset_hash_sha256,
+            "n_features":          out.n_features,
+            "approved_for_live":   entry.approved_for_live,
+            "assembles_own_dataset_in_process": True,
+        }
+        if use_json:
+            _emit_json_envelope("train", ok=True, status="completed",
+                                result=result)
+        else:
+            print(json.dumps(result, sort_keys=True, default=str))
+        return 0
+    except M18Error as e:
+        if use_json:
+            _emit_json_envelope("train", ok=False, status="failed",
+                errors=[_err_obj("m18_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"train: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        if getattr(args, "debug", False):
+            raise
+        if use_json:
+            _emit_json_envelope("train", ok=False, status="failed",
+                errors=[_err_obj("unexpected_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"train: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_evaluate(args, _registry_root) -> int:
+    """Strict inspection: read the persisted evaluation_report.json and
+    run the B8 artifact-consistency check. Fails non-zero if the report
+    is missing/corrupt OR the artifacts are inconsistent."""
+    from bot.ml.errors import M18Error
+    import bot.ml.registry.storage as _store
+    use_json = getattr(args, "json", False)
+    try:
+        registry = _make_registry(_registry_root)
+        entry = registry.get_entry(args.model_id)   # raises if absent
+        consistency = registry.verify_artifact_consistency(
+            args.model_id)
+
+        ev_path = _store.artifact_path(
+            registry.root, args.model_id, _store.ARTIFACT_EVAL_REPORT)
+        if not ev_path.exists():
+            msg = (f"evaluate: evaluation_report.json missing for "
+                   f"model_id={args.model_id!r}")
+            if use_json:
+                _emit_json_envelope("evaluate", ok=False,
+                    status="failed",
+                    errors=[_err_obj("missing_evaluation_report", msg)],
+                    stream=sys.stderr)
+            else:
+                print(msg, file=sys.stderr)
+            return 1
+        try:
+            ev_report = _store.read_json(ev_path)
+        except Exception:
+            msg = (f"evaluate: evaluation_report.json corrupt for "
+                   f"model_id={args.model_id!r}")
+            if use_json:
+                _emit_json_envelope("evaluate", ok=False,
+                    status="failed",
+                    errors=[_err_obj("corrupt_evaluation_report", msg)],
+                    stream=sys.stderr)
+            else:
+                print(msg, file=sys.stderr)
+            return 1
+
+        if not consistency["consistent"]:
+            # strict by default: inconsistent artifacts fail non-zero
+            if use_json:
+                _emit_json_envelope("evaluate", ok=False,
+                    status="inconsistent",
+                    result={"model_id": args.model_id,
+                            "artifact_consistency": consistency},
+                    errors=[_err_obj("artifact_inconsistent",
+                            f"problems: {consistency['problems']}")],
+                    stream=sys.stderr)
+            else:
+                print(json.dumps(
+                    {"command": "evaluate", "outcome": "inconsistent",
+                     "problems": consistency["problems"]},
+                    sort_keys=True), file=sys.stderr)
+            return 1
+
+        result = {
+            "command":              "evaluate",
+            "model_id":             args.model_id,
+            "model_type":           entry.model_type,
+            "dataset_hash_sha256":  entry.dataset_hash_sha256,
+            "artifact_consistency": consistency,
+            "evaluation_report":    ev_report,
+        }
+        if use_json:
+            _emit_json_envelope("evaluate", ok=True, status="completed",
+                                result=result)
+        else:
+            print(json.dumps(result, sort_keys=True, default=str))
+        return 0
+    except M18Error as e:
+        if use_json:
+            _emit_json_envelope("evaluate", ok=False, status="failed",
+                errors=[_err_obj("m18_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"evaluate: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        if getattr(args, "debug", False):
+            raise
+        if use_json:
+            _emit_json_envelope("evaluate", ok=False, status="failed",
+                errors=[_err_obj("unexpected_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"evaluate: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
 
 
 def _cmd_predict(args: argparse.Namespace,
@@ -628,14 +939,18 @@ def _cmd_registry_demote(args: argparse.Namespace,
 
 def main(argv: Optional[List[str]] = None,
           *,
-          _registry_root: Optional[str] = None) -> int:
+          _registry_root: Optional[str] = None,
+          _bars_provider=None) -> int:
     """CLI entry point.
 
-    `_registry_root` is an INTERNAL, test-only Python kwarg (note the
-    leading underscore). It is intentionally NOT exposed as an
-    argparse flag — production callers never see it. G9 tests use it
-    to point the registry at a tempfile.TemporaryDirectory so the
-    real on-disk data/ml/ tree is never touched.
+    `_registry_root` and `_bars_provider` are INTERNAL, test-only
+    Python kwargs (note the leading underscore). They are intentionally
+    NOT exposed as argparse flags — production callers never see them.
+    `_registry_root` points the registry at a tempdir; `_bars_provider`
+    is a callable (symbol, timeframes) -> {tf: DataFrame} that supplies
+    deterministic fixture bars INTO the real assembler code path (it
+    does not fake the assembler/trainer/registry logic). Production
+    defaults to a read-only M16 load.
     """
     parser = build_parser()
     try:
@@ -651,21 +966,12 @@ def main(argv: Optional[List[str]] = None,
         parser.print_help(file=sys.stderr)
         return 2
 
-    def _stub_or_envelope(message: str, command: str) -> int:
-        if use_json:
-            _emit_json_envelope(
-                command, ok=False, status="not_implemented",
-                errors=[_err_obj("not_implemented", message)],
-                stream=sys.stderr)
-            return 2
-        return _stub(message)
-
     if cmd == "build-dataset":
-        return _stub_or_envelope(STUB_BUILD_DATASET, "build-dataset")
+        return _cmd_build_dataset(args, _registry_root, _bars_provider)
     if cmd == "train":
-        return _stub_or_envelope(STUB_TRAIN, "train")
+        return _cmd_train(args, _registry_root, _bars_provider)
     if cmd == "evaluate":
-        return _stub_or_envelope(STUB_EVALUATE, "evaluate")
+        return _cmd_evaluate(args, _registry_root)
     if cmd == "predict":
         return _cmd_predict(args, _registry_root)
     if cmd == "registry":

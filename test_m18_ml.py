@@ -860,13 +860,15 @@ class G1_CLI(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def test_subcommand_stub_returns_2(self):
-        # build-dataset is a documented stub in M18.A.10: exits 2.
+        # B9.B-1: build-dataset is WIRED but --symbol is required, so
+        # calling it bare is an argparse error (exit 2).
         rc, _, _ = self._run(["build-dataset"])
         self.assertEqual(rc, 2)
 
     def test_train_requires_config(self):
-        # train is a documented stub (needs persisted AssemblerResult):
-        # it must not silently succeed — exits 2.
+        # B9.B-1: train is WIRED but --symbol/--model-type are required,
+        # so calling it bare is an argparse error (exit 2). It must not
+        # silently succeed.
         rc, _, _ = self._run(["train"])
         self.assertEqual(rc, 2)
 
@@ -9940,29 +9942,33 @@ class G9_CliSurface(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────
 
 class G9_CliStubs(unittest.TestCase):
-    """Four subcommands remain stubbed in M18.A.9 pending interface
-    decisions. Each stub returns exit 2 with a phase tag."""
+    """B9.B-1: build-dataset / train / evaluate are now WIRED (real
+    in-process assembler/trainer/registry path). Functional success is
+    covered in G9_CliBuildDataset / G9_CliTrain / G9_CliEvaluate. Here
+    we only assert the surface contract: each requires its real flags,
+    so calling them without required args is an argparse error (exit
+    2). registry demote likewise requires --scope-key."""
 
-    def test_build_dataset_stub(self):
+    def test_build_dataset_requires_symbol(self):
         err = _g9_io.StringIO()
         with _g9_redirect_stderr(err):
-            rc = _g9_cli.main(["build-dataset", "--config", "/dev/null"])
-        self.assertEqual(rc, 2)
-        self.assertIn("M18.A.10+", err.getvalue())
+            rc = _g9_cli.main(["build-dataset"])
+        self.assertEqual(rc, 2)        # argparse: --symbol required
+        self.assertIn("symbol", err.getvalue())
 
-    def test_train_stub(self):
+    def test_train_requires_symbol_and_model_type(self):
         err = _g9_io.StringIO()
         with _g9_redirect_stderr(err):
-            rc = _g9_cli.main(["train", "--config", "/dev/null"])
-        self.assertEqual(rc, 2)
-        self.assertIn("M18.A.10+", err.getvalue())
+            rc = _g9_cli.main(["train"])
+        self.assertEqual(rc, 2)        # argparse: required args missing
+        self.assertIn("required", err.getvalue())
 
-    def test_evaluate_stub(self):
+    def test_evaluate_requires_model_id(self):
         err = _g9_io.StringIO()
         with _g9_redirect_stderr(err):
-            rc = _g9_cli.main(["evaluate", "--model-id", "x"])
-        self.assertEqual(rc, 2)
-        self.assertIn("M18.A.10+", err.getvalue())
+            rc = _g9_cli.main(["evaluate"])
+        self.assertEqual(rc, 2)        # argparse: --model-id required
+        self.assertIn("model-id", err.getvalue())
 
     def test_registry_demote_stub_documents_flag_mismatch(self):
         """B9.A: `registry demote` is now WIRED via
@@ -10237,15 +10243,18 @@ class G9_CliJsonEnvelope(unittest.TestCase):
             self.assertNotIn("ok", d)
             self.assertEqual(d["command"], "registry-list")
 
-    def test_stub_json_envelope_not_implemented(self):
+    def test_json_with_bare_wired_command_is_argparse_error(self):
+        # B9.B-1: no command is a stub anymore. `--json build-dataset`
+        # without the required --symbol is an argparse usage error
+        # (exit 2). argparse writes its own usage text to stderr (not
+        # the envelope) and exits before the handler runs — that is the
+        # correct, locked argparse contract.
         err = _g9_io.StringIO()
         with _g9_redirect_stderr(err):
             rc = _g9_cli.main(["--json", "build-dataset"],
                               _registry_root=None)
         self.assertEqual(rc, 2)
-        d = _g9_json.loads(err.getvalue())
-        self.assertFalse(d["ok"])
-        self.assertEqual(d["status"], "not_implemented")
+        self.assertIn("symbol", err.getvalue())
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -10510,6 +10519,293 @@ class G9_CliSafety(unittest.TestCase):
             self.assertFalse(d["result"]["calibration_applied"])
             self.assertEqual(d["result"]["calibration_status"],
                              "stored_not_applied")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# B9.B-1: real in-process build-dataset / train / evaluate wiring
+# ─────────────────────────────────────────────────────────────────────
+
+_B9B_ANCHOR = ds_anchors.ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES
+
+
+def _b9b_bars_provider(symbol, timeframes):
+    """Test-only fixture provider: supplies deterministic multi-TF bars
+    INTO the real assembler path. Does NOT fake assembler/trainer/
+    registry logic — only the bar input."""
+    return _multi_tf_for_assembler(n_15m=2000, seed=21)
+
+
+class G9_CliBuildDataset(unittest.TestCase):
+
+    def test_build_dataset_success_real_assembler(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "build-dataset", "--symbol", "X",
+                     "--anchor-set", _B9B_ANCHOR,
+                     "--output", root + "/ds"],
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertTrue(d["ok"])
+            self.assertEqual(d["command"], "build-dataset")
+            self.assertGreater(d["result"]["n_rows"], 0)
+            self.assertTrue(d["result"]["dataset_hash_sha256"])
+            # honesty: not a reloadable training handoff
+            self.assertFalse(
+                d["result"]["reloadable_training_handoff"])
+            # artifacts actually written
+            import os
+            self.assertTrue(
+                os.path.exists(root + "/ds/dataset.parquet"))
+            self.assertTrue(
+                os.path.exists(root + "/ds/manifest.json"))
+
+    def test_build_dataset_bad_anchor_set_fails_clean(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "build-dataset", "--symbol", "X",
+                     "--anchor-set", "NOT_A_REAL_ANCHOR_SET"],
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+            self.assertEqual(d["status"], "failed")
+
+    def test_build_dataset_dry_run_writes_nothing(self):
+        import os
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["build-dataset", "--symbol", "X",
+                     "--anchor-set", _B9B_ANCHOR,
+                     "--output", root + "/ds_dry", "--dry-run"],
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "dry_run")
+            self.assertFalse(os.path.exists(root + "/ds_dry"))
+
+    def test_build_dataset_json_failure_valid(self):
+        # bad anchor-set -> failure envelope is valid JSON on stderr
+        with _g9_tempfile.TemporaryDirectory():
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "build-dataset", "--symbol", "X",
+                     "--anchor-set", "BAD"],
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())   # valid JSON
+            self.assertFalse(d["ok"])
+            self.assertTrue(len(d["errors"]) >= 1)
+
+
+class G9_CliTrain(unittest.TestCase):
+
+    def test_train_creates_real_candidate_entry(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "train", "--symbol", "X",
+                     "--model-type", "B2_logistic",
+                     "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                    _registry_root=root,
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertTrue(d["ok"])
+            mid = d["result"]["model_id"]
+            self.assertTrue(mid)
+            # the entry is real and loadable from the registry
+            reg = Registry(root=root)
+            entry = reg.get_entry(mid)
+            self.assertEqual(entry.model_id, mid)
+            self.assertFalse(entry.approved_for_live)
+
+    def test_train_writes_real_b8_artifacts(self):
+        import bot.ml.registry.storage as _s
+        from pathlib import Path as _P
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "train", "--symbol", "X",
+                     "--model-type", "B2_logistic",
+                     "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                    _registry_root=root,
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            mid = _g9_json.loads(out_buf.getvalue())["result"]["model_id"]
+            for art in (_s.ARTIFACT_TRAIN_OUTPUTS,
+                        _s.ARTIFACT_EVAL_REPORT,
+                        _s.ARTIFACT_TRAINING_META,
+                        _s.ARTIFACT_X_TRAIN, _s.ARTIFACT_Y_TRAIN,
+                        _s.ARTIFACT_FEATURE_SUMMARY):
+                self.assertTrue(
+                    _s.artifact_path(_P(root), mid, art).exists(),
+                    f"missing artifact {art}")
+            # and the B8 consistency check passes on the real artifacts
+            self.assertTrue(
+                Registry(root=root)
+                .verify_artifact_consistency(mid)["consistent"])
+
+    def test_train_invalid_model_type_fails_clean(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "train", "--symbol", "X",
+                     "--model-type", "NOT_A_MODEL",
+                     "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                    _registry_root=root,
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+            self.assertEqual(d["status"], "failed")
+
+    def test_train_dry_run_does_not_register(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["train", "--symbol", "X",
+                     "--model-type", "B2_logistic",
+                     "--anchor-set", _B9B_ANCHOR, "--fixture-mode",
+                     "--dry-run"],
+                    _registry_root=root,
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertEqual(d["outcome"], "dry_run")
+            self.assertFalse(d["registered"])
+            # nothing registered
+            self.assertEqual(len(Registry(root=root).list_entries()), 0)
+
+
+class G9_CliEvaluate(unittest.TestCase):
+
+    def _train_one(self, root):
+        out_buf = _g9_io.StringIO()
+        with _g9_redirect_stdout(out_buf):
+            _g9_cli.main(
+                ["--json", "train", "--symbol", "X",
+                 "--model-type", "B2_logistic",
+                 "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                _registry_root=root, _bars_provider=_b9b_bars_provider)
+        return _g9_json.loads(out_buf.getvalue())["result"]["model_id"]
+
+    def test_evaluate_reads_real_report_and_consistency(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "evaluate", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertTrue(d["ok"])
+            self.assertTrue(
+                d["result"]["artifact_consistency"]["consistent"])
+            self.assertIn("evaluation_report", d["result"])
+
+    def test_evaluate_unknown_model_fails(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "evaluate", "--model-id", "ghost"],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+
+    def test_evaluate_corrupt_report_fails_nonzero(self):
+        import bot.ml.registry.storage as _s
+        from pathlib import Path as _P
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            # corrupt the evaluation report
+            _s.artifact_path(_P(root), mid,
+                _s.ARTIFACT_EVAL_REPORT).write_text("{ not json")
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "evaluate", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+
+    def test_evaluate_inconsistent_artifacts_fails_nonzero(self):
+        import bot.ml.registry.storage as _s
+        from pathlib import Path as _P
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            # break consistency: delete training metadata
+            _s.artifact_path(_P(root), mid,
+                _s.ARTIFACT_TRAINING_META).unlink()
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "evaluate", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+
+
+class G9_CliWorkflow(unittest.TestCase):
+
+    def test_train_evaluate_show_promote_dry_run_in_process(self):
+        # fixture in-process workflow exercising the real chain end to
+        # end: train -> evaluate -> registry show -> promote --dry-run.
+        with _g9_tempfile.TemporaryDirectory() as root:
+            # train
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "train", "--symbol", "X",
+                     "--model-type", "B2_logistic",
+                     "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                    _registry_root=root,
+                    _bars_provider=_b9b_bars_provider)
+            self.assertEqual(rc, 0)
+            mid = _g9_json.loads(out_buf.getvalue())["result"]["model_id"]
+
+            # evaluate
+            with _g9_redirect_stdout(_g9_io.StringIO()):
+                rc = _g9_cli.main(
+                    ["--json", "evaluate", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+
+            # registry show
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "show", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            self.assertTrue(_g9_json.loads(
+                out_buf.getvalue())["result"]["artifact_consistency"]
+                ["consistent"])
+
+            # promote --dry-run (non-forced) — no mutation
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "registry", "promote",
+                     "--model-id", mid, "--dry-run"],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            self.assertEqual(Registry(root=root).get_entry(mid).status,
+                             "fixture_only")   # unchanged by dry-run
 
 
 # ─────────────────────────────────────────────────────────────────────

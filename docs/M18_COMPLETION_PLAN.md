@@ -276,9 +276,22 @@ corrections over the first audit pass:
    Legacy A.9 default output for the already-wired commands is preserved
    byte-for-byte (locked G9 tests unchanged); the envelope is opt-in only. Only
    `bot/ml/cli.py` + tests changed — no pipeline modules touched.
-   **B9.B deferred:** build-dataset / train / evaluate real implementations
-   (still exit-2 stubs; need the dataset/config persistence surface), real M16
-   data wiring, and any config-file parser.
+   **B9.B-1 DONE:** build-dataset / train / evaluate are now WIRED in-process
+   through the existing real interfaces (load_bars -> DatasetAssembler.build;
+   Trainer.train_one -> evaluate_model -> register_candidate;
+   get_entry + verify_artifact_consistency). build-dataset emits an inspectable
+   dataset.parquet + manifest.json (+ hash/row/AV summary) and explicitly does
+   NOT claim to be a reloadable training handoff. train assembles its OWN
+   dataset each run (honest: `assembles_own_dataset_in_process: true`), trains,
+   evaluates, and registers the real B8-protected artifacts; production thinness
+   and B8 consistency gates remain non-bypassable. evaluate is strict registry/
+   artifact inspection (reads evaluation_report.json + B8 consistency; fails
+   non-zero on missing/corrupt/inconsistent). Explicit flags only (no config
+   parser invented; --config support deferred). Only bot/ml/cli.py + tests
+   changed. **B9.C deferred:** true AssemblerResult persistence/reload so a
+   build-dataset output can be consumed by train (the real build->train
+   handoff) — this is new dataset-layer architecture, intentionally out of
+   B9.B scope.
 10. **Original artifact layout / model-card output** — the plan's per-model
     directory (`model.joblib`/`model_card.json`/`train_config.json`/
     `training_log.jsonl`/`eval_report.json`/`calibration.json`/
