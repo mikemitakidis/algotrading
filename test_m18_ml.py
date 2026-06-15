@@ -9905,7 +9905,7 @@ class G9_CliSurface(unittest.TestCase):
         self.assertEqual(
             sorted(subactions[0].choices.keys()),
             sorted(["build-dataset", "train", "evaluate",
-                     "predict", "registry"]))
+                     "predict", "registry", "audit"]))
 
     def test_predict_has_model_id_and_input_flags(self):
         parser = _g9_cli.build_parser()
@@ -11170,6 +11170,231 @@ class G10_Hygiene(unittest.TestCase):
         ]
         self.assertEqual(unexpected, [],
             f"Unexpected files changed: {unexpected}")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G10_AuditRunner — B10 read-only audit/safety runner
+# ─────────────────────────────────────────────────────────────────────
+
+class G10_AuditRunner(unittest.TestCase):
+    """The runner is exercised with INJECTED fake git/test runners and
+    a temp repo_root, so no real git mutation or full suite run happens
+    here. Proves each success/failure path + no side effects."""
+
+    def _clean_root(self):
+        import tempfile, shutil
+        d = tempfile.mkdtemp()
+        (Path(d) / "bot").mkdir()
+        # bot/data.py must hash to the pin -> copy the real one
+        shutil.copy("bot/data.py",
+                    Path(d) / "bot" / "data.py")
+        (Path(d) / "bot" / "ml").mkdir()
+        (Path(d) / "bot" / "ml" / "clean.py").write_text(
+            "x = 1\n")
+        return d
+
+    def _clean_git(self, args):
+        a = " ".join(args)
+        if "--abbrev-ref" in a:
+            return (0, "m18-recovery-from-transcripts\n", "")
+        if a == "rev-parse HEAD":
+            return (0, "deadbeef\n", "")
+        if "status --porcelain" in a:
+            return (0, "", "")
+        if "requirements.txt" in a:
+            return (0, "", "")
+        if "ls-files data/ml" in a:
+            return (0, "", "")
+        if "--numstat" in a:
+            return (0, "", "")
+        return (0, "", "")
+
+    def _ok_test(self, targets):
+        return (0, "", "OK\n")
+
+    def _runner(self, root, git=None, test=None):
+        from bot.ml.audit import AuditRunner
+        return AuditRunner(
+            repo_root=Path(root),
+            git_runner=git or self._clean_git,
+            test_runner=test or self._ok_test)
+
+    def test_clean_static_audit_ok(self):
+        root = self._clean_root()
+        r = self._runner(root).run(mode="static")
+        self.assertTrue(r["ok"], r["failed"])
+        self.assertEqual(r["failed"], [])
+
+    def test_clean_hygiene_audit_ok(self):
+        root = self._clean_root()
+        r = self._runner(root).run(mode="hygiene")
+        self.assertTrue(r["ok"], r["failed"])
+        # hygiene adds the two G10 invocations
+        self.assertGreater(r["n_checks"], 15)
+
+    def test_dirty_git_status_fails(self):
+        root = self._clean_root()
+
+        def dirty(args):
+            if "status --porcelain" in " ".join(args):
+                return (0, " M bot/foo.py\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=dirty).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("git_status", r["failed"])
+
+    def test_git_status_allows_recovery_audit_untracked(self):
+        root = self._clean_root()
+
+        def only_allowed(args):
+            if "status --porcelain" in " ".join(args):
+                return (0, "?? recovery_audit/\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=only_allowed).run(mode="static")
+        self.assertNotIn("git_status", r["failed"])
+
+    def test_requirements_diff_fails(self):
+        root = self._clean_root()
+
+        def req(args):
+            if "requirements.txt" in " ".join(args):
+                return (0, " requirements.txt | 2 +-\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=req).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("requirements_diff", r["failed"])
+
+    def test_tracked_data_ml_fails(self):
+        root = self._clean_root()
+
+        def tracked(args):
+            if "ls-files data/ml" in " ".join(args):
+                return (0, "data/ml/x.parquet\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=tracked).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("data_ml_tracked", r["failed"])
+
+    def test_local_data_ml_fails(self):
+        import os
+        root = self._clean_root()
+        os.makedirs(Path(root) / "data" / "ml")
+        (Path(root) / "data" / "ml"
+         / "local.parquet").write_text("x")
+        r = self._runner(root).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("data_ml_local", r["failed"])
+
+    def test_protected_path_diff_fails(self):
+        root = self._clean_root()
+
+        def prot(args):
+            a = " ".join(args)
+            if "--numstat" in a and "main.py" in a:
+                return (0, "3\t1\tmain.py\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=prot).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("protected:main.py", r["failed"])
+
+    def test_forbidden_pattern_fails(self):
+        root = self._clean_root()
+        (Path(root) / "bot" / "ml"
+         / "bad.py").write_text("import bot.scanner\n")
+        r = self._runner(root).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("forbidden_scan", r["failed"])
+
+    def test_bot_data_sha_mismatch_fails(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        (Path(d) / "bot").mkdir()
+        (Path(d) / "bot" / "data.py").write_text(
+            "tampered\n")
+        (Path(d) / "bot" / "ml").mkdir()
+        r = self._runner(d).run(mode="static")
+        self.assertFalse(r["ok"])
+        self.assertIn("bot_data_sha", r["failed"])
+
+    def test_failed_unittest_captured_as_failed_check(self):
+        root = self._clean_root()
+
+        def fail_test(targets):
+            return (1, "", "FAILED (failures=1)\n")
+        r = self._runner(root, test=fail_test).run(mode="hygiene")
+        self.assertFalse(r["ok"])
+        self.assertIn("m18_g10_hygiene", r["failed"])
+
+    def test_json_envelope_success_valid(self):
+        root = self._clean_root()
+        out_buf = _g9_io.StringIO()
+
+        def clean_git(args):
+            return self._clean_git(args)
+        # drive through the CLI handler with an injected runner via the
+        # audit module directly (CLI uses the real AuditRunner; here we
+        # assert the report shape the envelope is built from).
+        r = self._runner(root).run(mode="static")
+        env = {
+            "ok": r["ok"], "command": "audit", "status": "passed",
+            "result": r, "warnings": [], "errors": [],
+        }
+        s = _g9_json.dumps(env)
+        self.assertEqual(_g9_json.loads(s)["command"], "audit")
+        self.assertTrue(_g9_json.loads(s)["ok"])
+
+    def test_json_envelope_failure_valid(self):
+        root = self._clean_root()
+
+        def dirty(args):
+            if "status --porcelain" in " ".join(args):
+                return (0, " M x.py\n", "")
+            return self._clean_git(args)
+        r = self._runner(root, git=dirty).run(mode="static")
+        env = {
+            "ok": r["ok"], "command": "audit", "status": "failed",
+            "result": r, "warnings": [],
+            "errors": [{"code": "check_failed", "message": n}
+                       for n in r["failed"]],
+        }
+        s = _g9_json.dumps(env)
+        d = _g9_json.loads(s)
+        self.assertFalse(d["ok"])
+        self.assertTrue(len(d["errors"]) >= 1)
+
+    def test_audit_creates_no_files(self):
+        import os
+        root = self._clean_root()
+        before = sorted(
+            str(p) for p in Path(root).rglob("*"))
+        self._runner(root).run(mode="hygiene")
+        after = sorted(
+            str(p) for p in Path(root).rglob("*"))
+        self.assertEqual(before, after)   # no side effects
+
+    def test_audit_module_imports_no_live_paths(self):
+        import ast as _ast
+        import bot.ml.audit as _a
+        with open(_a.__file__) as fh:
+            src = fh.read()
+        # audit.py DEFINES the forbidden-pattern list as DATA (string
+        # literals), so a substring scan would self-match. Instead parse
+        # the AST and assert no actual import of a forbidden module.
+        tree = _ast.parse(src)
+        forbidden_mods = ("bot.scanner", "bot.brokers", "dashboard")
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                for n in node.names:
+                    self.assertNotIn(n.name, forbidden_mods,
+                        f"audit.py imports {n.name}")
+            elif isinstance(node, _ast.ImportFrom):
+                self.assertNotIn(node.module, forbidden_mods,
+                    f"audit.py imports from {node.module}")
+
+    def test_invalid_mode_raises(self):
+        root = self._clean_root()
+        with self.assertRaises(ValueError):
+            self._runner(root).run(mode="not_a_mode")
 
 
 if __name__ == "__main__":

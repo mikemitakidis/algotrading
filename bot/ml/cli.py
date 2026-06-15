@@ -229,6 +229,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report what would be demoted WITHOUT mutating the "
               "registry.")
 
+    au = sub.add_parser(
+        "audit",
+        help="Read-only audit/safety runner (M18.B.10). Consolidates "
+              "the per-phase repo/hygiene verification into one "
+              "parseable verdict. Never mutates anything.")
+    au.add_argument("--mode", choices=("static", "hygiene", "full"),
+        default="hygiene",
+        help="static = fast repo/file checks; hygiene (default) = "
+              "static + G10 hygiene test classes; full = + M17.B full "
+              "regression (opt-in, heavier).")
+
     return p
 
 
@@ -532,6 +543,48 @@ def _cmd_evaluate(args, _registry_root) -> int:
                 stream=sys.stderr)
         else:
             print(f"evaluate: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_audit(args, _registry_root) -> int:
+    """B10: thin wrapper over the read-only AuditRunner. Default
+    output is human-readable; --json emits the B9 envelope. Exit 0 if
+    every sub-check passed, 1 otherwise."""
+    use_json = getattr(args, "json", False)
+    try:
+        from bot.ml.audit import AuditRunner
+        report = AuditRunner().run(mode=args.mode)
+        ok = report["ok"]
+        if use_json:
+            errors = [
+                _err_obj("check_failed", name)
+                for name in report["failed"]
+            ]
+            _emit_json_envelope(
+                "audit", ok=ok,
+                status="passed" if ok else "failed",
+                result=report, errors=errors,
+                stream=(None if ok else sys.stderr))
+        else:
+            print(f"audit mode={report['mode']} "
+                  f"{report['n_checks']} checks, "
+                  f"{report['n_failed']} failed -> "
+                  f"{'OK' if ok else 'FAIL'}")
+            for c in report["checks"]:
+                print(f"  [{c['status']}] {c['name']}: {c['details']}")
+            if not ok:
+                print(f"FAILED: {report['failed']}", file=sys.stderr)
+        return 0 if ok else 1
+    except Exception as e:  # noqa: BLE001
+        if getattr(args, "debug", False):
+            raise
+        if use_json:
+            _emit_json_envelope(
+                "audit", ok=False, status="failed",
+                errors=[_err_obj("unexpected_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"audit: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
 
@@ -972,6 +1025,8 @@ def main(argv: Optional[List[str]] = None,
         return _cmd_train(args, _registry_root, _bars_provider)
     if cmd == "evaluate":
         return _cmd_evaluate(args, _registry_root)
+    if cmd == "audit":
+        return _cmd_audit(args, _registry_root)
     if cmd == "predict":
         return _cmd_predict(args, _registry_root)
     if cmd == "registry":

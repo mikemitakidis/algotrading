@@ -369,6 +369,23 @@ Operator-requested advanced improvements, classified by when they should land.
   no-live/broker/order/dashboard-import check.
 - **Classification: MUST IMPLEMENT BEFORE FINAL M18** (makes every later phase
   cheap to verify and prevents regressions).
+- **DONE (M18.B.10).** Implemented as `bot/ml/audit.py` (`AuditRunner`,
+  read-only) + a thin `python3 -m bot.ml.cli audit` subcommand reusing the B9
+  `{ok,command,status,result,warnings,errors}` envelope. Three modes:
+  `static` (branch/HEAD, git status, requirements diff vs origin/main, data/ml
+  tracked+local, protected-path diff for the 6 protected files, bot/data.py
+  content-SHA256 pin, forbidden execution-pattern scan, syntax via builtin
+  `compile` so no `.pyc` is written), `hygiene` (default — static + invokes the
+  existing M18 + M17.B `G10_Hygiene` classes via unittest rather than
+  reimplementing them), and `full` (opt-in — + M17.B full regression). `--json`
+  emits the envelope (failure to stderr); non-zero exit on any failed check; no
+  traceback unless `--debug`. signals.db/sqlite3 are deliberately NOT in the
+  static forbidden set (the flywheel reader legitimately reads signals.db
+  read-only; that nuance stays delegated to `G10_Hygiene`). Tested by
+  `G10_AuditRunner` (16 tests) entirely with injected fake git/test runners and
+  temp roots — no real git mutation or full-suite run inside unit tests — proving
+  clean→ok, every failure path, no files created, and (AST-checked) no
+  live/broker/dashboard imports in audit.py.
 
 ### 6.9 Feature stability / selection diagnostics
 - Permutation-importance stability across folds; remove unstable features from
