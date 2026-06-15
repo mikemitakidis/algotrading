@@ -9905,7 +9905,7 @@ class G9_CliSurface(unittest.TestCase):
         self.assertEqual(
             sorted(subactions[0].choices.keys()),
             sorted(["build-dataset", "train", "evaluate",
-                     "predict", "registry", "audit"]))
+                     "predict", "registry", "audit", "readiness"]))
 
     def test_predict_has_model_id_and_input_flags(self):
         parser = _g9_cli.build_parser()
@@ -11395,6 +11395,198 @@ class G10_AuditRunner(unittest.TestCase):
         root = self._clean_root()
         with self.assertRaises(ValueError):
             self._runner(root).run(mode="not_a_mode")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# G11_Readiness — B11 read-only advisory model-readiness reporter
+# ─────────────────────────────────────────────────────────────────────
+
+def _g11_clean_report():
+    """A synthetic EvaluationReport dict that should assess ready."""
+    return {
+        "ml_metrics_extended": {
+            "train": {"pr_auc": 0.70, "roc_auc": 0.72,
+                      "brier_score": 0.20},
+            "val":   {"pr_auc": 0.66, "roc_auc": 0.68,
+                      "brier_score": 0.22},
+            "test":  {"pr_auc": 0.64, "roc_auc": 0.66,
+                      "brier_score": 0.23},
+        },
+        "calibration": {"test": {
+            "expected_calibration_error": 0.05,
+            "maximum_calibration_error": 0.12}},
+        "breakdowns": {"test": {"volatility_regime": {
+            "available": True, "segments": {"a": {}},
+            "skipped_segments": []}}},
+        "promotion_eligible": True,
+        "promotion_blocked_reasons": [],
+        "n_train": 2000, "n_val": 500, "n_test": 300,
+    }
+
+
+class G11_Readiness(unittest.TestCase):
+    """Pure-function readiness logic on synthetic reports + CLI
+    success/failure. No model training in the unit tests except the one
+    real fixture train used to exercise the end-to-end CLI path."""
+
+    # ---- pure assess_readiness logic -------------------------------
+
+    def test_clean_report_advisory_ready_true(self):
+        from bot.ml.readiness import assess_readiness
+        a = assess_readiness(_g11_clean_report())
+        self.assertTrue(a["ready"], a["reasons"])
+        self.assertEqual(a["reasons"], [])
+        self.assertTrue(a["readiness_is_advisory"])
+        self.assertFalse(a["promotion_gate"])
+        self.assertFalse(a["predict_time_calibration_applied"])
+
+    def test_overfit_gap_math_and_flag(self):
+        from bot.ml.readiness import assess_readiness
+        r = _g11_clean_report()
+        r["ml_metrics_extended"] = {
+            "train": {"pr_auc": 0.95, "roc_auc": 0.96},
+            "val":   {"pr_auc": 0.70, "roc_auc": 0.72},
+            "test":  {"pr_auc": 0.70, "roc_auc": 0.72},
+        }
+        a = assess_readiness(r)
+        gap = a["overfit_gap"]["per_metric"]["pr_auc"]
+        self.assertAlmostEqual(gap["train_minus_test"], 0.25, places=6)
+        self.assertTrue(a["overfit_gap"]["overfit_suspected"])
+        self.assertFalse(a["ready"])
+        self.assertTrue(any("overfit" in r_ for r_ in a["reasons"]))
+
+    def test_calibration_failure_named_reason(self):
+        from bot.ml.readiness import assess_readiness
+        r = _g11_clean_report()
+        r["calibration"]["test"]["expected_calibration_error"] = 0.30
+        a = assess_readiness(r)
+        self.assertFalse(a["ready"])
+        self.assertTrue(any("calibration" in x for x in a["reasons"]))
+
+    def test_production_thinness_named_reason(self):
+        from bot.ml.readiness import assess_readiness
+        r = _g11_clean_report()
+        r["promotion_blocked_reasons"] = ["production:sample_count"]
+        a = assess_readiness(r)
+        self.assertFalse(a["ready"])
+        self.assertTrue(any("thinness" in x or "production" in x
+                            for x in a["reasons"]))
+
+    def test_thin_regime_segment_is_warning_not_block(self):
+        from bot.ml.readiness import assess_readiness
+        r = _g11_clean_report()
+        r["breakdowns"]["test"]["volatility_regime"] = {
+            "available": True, "segments": {},
+            "skipped_segments": [
+                {"segment": "0", "n_samples": 10,
+                 "reason": "below_min_samples"}]}
+        a = assess_readiness(r)
+        # thin segments are advisory warnings, not ready=false reasons
+        self.assertTrue(any("thin_regime_segments" in w
+                            for w in a["warnings"]))
+
+    def test_baseline_unavailable_is_warning(self):
+        from bot.ml.readiness import assess_readiness
+        a = assess_readiness(_g11_clean_report())
+        self.assertTrue(any("baseline" in w for w in a["warnings"]))
+
+    def test_calibration_disclaimer_present(self):
+        from bot.ml.readiness import assess_readiness
+        a = assess_readiness(_g11_clean_report())
+        self.assertFalse(a["predict_time_calibration_applied"])
+        self.assertIn("note", a["calibration"])
+
+    # ---- CLI path (one real fixture train for end-to-end) ----------
+
+    def _train_one(self, root):
+        out_buf = _g9_io.StringIO()
+        with _g9_redirect_stdout(out_buf):
+            _g9_cli.main(
+                ["--json", "train", "--symbol", "X",
+                 "--model-type", "B2_logistic",
+                 "--anchor-set", _B9B_ANCHOR, "--fixture-mode"],
+                _registry_root=root, _bars_provider=_b9b_bars_provider)
+        return _g9_json.loads(out_buf.getvalue())["result"]["model_id"]
+
+    def test_cli_readiness_json_success_envelope(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["--json", "readiness", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            d = _g9_json.loads(out_buf.getvalue())
+            self.assertTrue(d["ok"])
+            self.assertEqual(d["command"], "readiness")
+            a = d["result"]["assessment"]
+            self.assertFalse(a["promotion_gate"])
+            self.assertFalse(a["predict_time_calibration_applied"])
+
+    def test_cli_readiness_human_readable(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            out_buf = _g9_io.StringIO()
+            with _g9_redirect_stdout(out_buf):
+                rc = _g9_cli.main(
+                    ["readiness", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 0)
+            self.assertIn("ADVISORY", out_buf.getvalue())
+
+    def test_cli_readiness_unknown_model_fails(self):
+        with _g9_tempfile.TemporaryDirectory() as root:
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "readiness", "--model-id", "ghost"],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertFalse(d["ok"])
+
+    def test_cli_readiness_corrupt_report_fails(self):
+        import bot.ml.registry.storage as _s
+        from pathlib import Path as _P
+        with _g9_tempfile.TemporaryDirectory() as root:
+            mid = self._train_one(root)
+            _s.artifact_path(_P(root), mid,
+                _s.ARTIFACT_EVAL_REPORT).write_text("{bad")
+            err = _g9_io.StringIO()
+            with _g9_redirect_stderr(err):
+                rc = _g9_cli.main(
+                    ["--json", "readiness", "--model-id", mid],
+                    _registry_root=root)
+            self.assertEqual(rc, 1)
+            d = _g9_json.loads(err.getvalue())
+            self.assertEqual(d["errors"][0]["code"],
+                             "corrupt_evaluation_report")
+
+    # ---- no side effects / no live imports -------------------------
+
+    def test_readiness_run_creates_no_files(self):
+        import os
+        from bot.ml.readiness import assess_readiness
+        with _g9_tempfile.TemporaryDirectory() as root:
+            before = sorted(os.listdir(root))
+            assess_readiness(_g11_clean_report())   # pure function
+            after = sorted(os.listdir(root))
+            self.assertEqual(before, after)
+
+    def test_readiness_module_imports_no_live_paths(self):
+        import ast as _ast
+        import bot.ml.readiness as _r
+        with open(_r.__file__) as fh:
+            tree = _ast.parse(fh.read())
+        forbidden = ("bot.scanner", "bot.brokers", "dashboard",
+                     "bot.broker")
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                for n in node.names:
+                    self.assertNotIn(n.name, forbidden)
+            elif isinstance(node, _ast.ImportFrom):
+                self.assertNotIn(node.module, forbidden)
 
 
 if __name__ == "__main__":

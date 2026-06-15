@@ -387,6 +387,25 @@ Operator-requested advanced improvements, classified by when they should land.
   clean→ok, every failure path, no files created, and (AST-checked) no
   live/broker/dashboard imports in audit.py.
 
+### 6.8.1 Model-readiness reporter (M18.B.11) — DONE
+- `bot/ml/readiness.py` (`assess_readiness`, pure read-only) + a thin
+  `python3 -m bot.ml.cli readiness --model-id <id>` subcommand reusing the B9
+  envelope. ADVISORY/DIAGNOSTIC ONLY — `readiness_is_advisory: true`,
+  `promotion_gate: false`; promotion stays owned by the B4/B8 gates. It
+  CONSUMES the stored `evaluation_report.json` (does not recompute metrics or
+  edit evaluator/report/trainer/registry). Reports: overfit gap (train-minus-
+  val / train-minus-test on PR-AUC & ROC-AUC, warn delta 0.15), stored-
+  calibration verdict (ECE/MCE/Brier; explicitly notes calibration is NOT
+  applied at predict — `predict_time_calibration_applied: false`), baseline
+  verdict (read if present; honestly 'unavailable' otherwise — not recomputed),
+  regime/symbol coverage (flags thin segments as warnings), production-thinness
+  status, and an aggregate advisory `ready` + `reasons`/`warnings`/
+  `limitations`. Timing is intentionally NOT gated. Tested by `G11_Readiness`
+  (13) on synthetic reports + one real fixture-trained CLI path; no side
+  effects, AST-checked no live/broker/dashboard imports.
+- **Deferred (B11.x / M21-style):** cross-fold feature-importance stability
+  (needs walk-forward refits) and any speed pass/fail thresholds.
+
 ### 6.9 Feature stability / selection diagnostics
 - Permutation-importance stability across folds; remove unstable features from
   promotion eligibility; feature-leakage suspicion report.

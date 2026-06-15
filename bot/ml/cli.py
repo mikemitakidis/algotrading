@@ -240,6 +240,16 @@ def build_parser() -> argparse.ArgumentParser:
               "static + G10 hygiene test classes; full = + M17.B full "
               "regression (opt-in, heavier).")
 
+    rd = sub.add_parser(
+        "readiness",
+        help="Read-only ADVISORY model-readiness report (M18.B.11) for "
+              "a registered model. Diagnostic only — NOT a promotion "
+              "gate. Consumes the stored evaluation_report.json.")
+    rd.add_argument("--model-id", required=True,
+        help="Registry model_id to assess.")
+    rd.add_argument("--registry-root",
+        help="Registry root dir (default: the package default).")
+
     return p
 
 
@@ -585,6 +595,99 @@ def _cmd_audit(args, _registry_root) -> int:
                 stream=sys.stderr)
         else:
             print(f"audit: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_readiness(args, _registry_root) -> int:
+    """B11: read-only advisory readiness report. Reads the registered
+    model's stored evaluation_report.json and aggregates it via
+    bot.ml.readiness.assess_readiness. NOT a promotion gate. Exit 0 on
+    a successfully-produced report regardless of the advisory verdict;
+    exit 1 only if the report cannot be read (missing/corrupt/unknown
+    model)."""
+    use_json = getattr(args, "json", False)
+    try:
+        from bot.ml.errors import M18Error
+        from bot.ml.readiness import assess_readiness
+        import bot.ml.registry.storage as _store
+
+        registry = _make_registry(_registry_root)
+        entry = registry.get_entry(args.model_id)   # raises if absent
+        ev_path = _store.artifact_path(
+            registry.root, args.model_id, _store.ARTIFACT_EVAL_REPORT)
+        if not ev_path.exists():
+            msg = (f"readiness: evaluation_report.json missing for "
+                   f"model_id={args.model_id!r}")
+            if use_json:
+                _emit_json_envelope(
+                    "readiness", ok=False, status="failed",
+                    errors=[_err_obj("missing_evaluation_report", msg)],
+                    stream=sys.stderr)
+            else:
+                print(msg, file=sys.stderr)
+            return 1
+        try:
+            report = _store.read_json(ev_path)
+        except Exception:
+            msg = (f"readiness: evaluation_report.json corrupt for "
+                   f"model_id={args.model_id!r}")
+            if use_json:
+                _emit_json_envelope(
+                    "readiness", ok=False, status="failed",
+                    errors=[_err_obj("corrupt_evaluation_report", msg)],
+                    stream=sys.stderr)
+            else:
+                print(msg, file=sys.stderr)
+            return 1
+
+        assessment = assess_readiness(
+            report, entry_meta=entry.to_dict())
+        result = {
+            "command":  "readiness",
+            "model_id": args.model_id,
+            "assessment": assessment,
+        }
+        if use_json:
+            # the COMMAND succeeded (we produced a report); the advisory
+            # verdict lives inside result.assessment.ready.
+            _emit_json_envelope(
+                "readiness", ok=True, status="completed",
+                result=result)
+        else:
+            a = assessment
+            print(f"readiness model_id={args.model_id} "
+                  f"-> ready={a['ready']} (ADVISORY, not a promotion "
+                  f"gate)")
+            if a["reasons"]:
+                print(f"  reasons: {a['reasons']}")
+            if a["warnings"]:
+                print(f"  warnings: {a['warnings']}")
+            print(f"  overfit_suspected: "
+                  f"{a['overfit_gap']['overfit_suspected']}")
+            print(f"  predict_time_calibration_applied: "
+                  f"{a['predict_time_calibration_applied']}")
+        return 0
+    except M18Error as e:
+        if use_json:
+            _emit_json_envelope(
+                "readiness", ok=False, status="failed",
+                errors=[_err_obj("m18_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"readiness: {type(e).__name__}: {e}",
+                file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        if getattr(args, "debug", False):
+            raise
+        if use_json:
+            _emit_json_envelope(
+                "readiness", ok=False, status="failed",
+                errors=[_err_obj("unexpected_error", str(e))],
+                stream=sys.stderr)
+        else:
+            print(f"readiness: {type(e).__name__}: {e}",
+                file=sys.stderr)
         return 1
 
 
@@ -1027,6 +1130,8 @@ def main(argv: Optional[List[str]] = None,
         return _cmd_evaluate(args, _registry_root)
     if cmd == "audit":
         return _cmd_audit(args, _registry_root)
+    if cmd == "readiness":
+        return _cmd_readiness(args, _registry_root)
     if cmd == "predict":
         return _cmd_predict(args, _registry_root)
     if cmd == "registry":
