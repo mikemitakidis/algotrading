@@ -1,9 +1,9 @@
 # M18 Acceptance Report
 
 **Milestone:** M18 — ML strategy/criteria foundation (read-only / shadow-only)
-**Branch:** `m18-recovery-from-transcripts`
-**Status:** foundation complete on the branch; **NOT merged to main**; awaiting
-explicit operator approval to merge.
+**Branch:** merged to `main` at `264fba84` (developed on recovery branch
+`m18-recovery-from-transcripts`)
+**Status:** CLOSED — merged to `main`.
 **Mode throughout:** read-only / shadow-only. No live trading, no broker
 execution, no dashboard mutation, no scanner production-path mutation, no
 `signals.db` writes from the M18 workflow.
@@ -67,15 +67,12 @@ feature/label stores).
 
 ## 4. Final branch / main state
 
-- `origin/main` = `a8d8ca4` — **M17.B.closeout**.
-- M1–M17 are on main; M17.B full regression is 200 OK (skipped=2).
-- M18 lives entirely on `m18-recovery-from-transcripts`.
-- Branch is **0 behind** `origin/main`; the exact ahead count is
-  intentionally not pinned in docs because docs-only commits change it.
-  Verify the live count with
-  `git rev-list --left-right --count origin/main...HEAD` immediately
-  before merge.
-- **M18 is not on main** (`git ls-tree -r origin/main | grep -c bot/ml/` = 0).
+- `origin/main` includes M18 at `264fba84` (M18.B12 closeout).
+- M1–M17 are on main; M17.B full regression is 200 OK (skipped=2 in a
+  clean checkout without `data/signals.db`; skipped=1 on the VPS).
+- M18 has been fast-forward merged into `main`; the recovery branch
+  `m18-recovery-from-transcripts` is now equal to `main`.
+- **M18 is on main** (`git ls-tree -r origin/main | grep -c bot/ml/` = 64 files).
 
 ---
 
@@ -90,24 +87,28 @@ feature/label stores).
   are calibrated.
 - **B11.x / M21 deferred:** cross-fold feature-importance stability (needs
   walk-forward refits) and any speed pass/fail thresholds.
-- **Duplicate G7 test classes** (`G7_PermutationImportance`, `G7_ThresholdTable`
-  defined twice) remain a latent **test-organisation** trap — Python keeps the
-  last definition, so the earlier ones are shadowed. This is **not** a current
-  suite-correctness blocker: the suite as executed passes and the batched
-  counts reconcile to the loader count. Recorded as a future cleanup item; not
-  deduplicated in B12 because removing/merging test classes during final
-  acceptance risks silently dropping coverage.
+- **Duplicate G7 test classes — RESOLVED (pre-M19 cleanup).** Seven `G7_*`
+  classes were each defined twice in `test_m18_ml.py`; Python kept the last
+  definition, shadowing the earlier ones and misfiling a block of
+  RandomForest permutation-importance tests into `G7_Breakdowns`. The
+  pre-M19 cleanup de-duplicated all seven (relocating the RF tests to
+  `G7_PermutationImportance`) with zero unique-test loss, and added
+  `G10_Hygiene.test_no_duplicate_test_class_definitions` as a guard against
+  recurrence. Executable test count is unchanged (the shadowed tests were
+  duplicated into surviving classes, so they had still been running); the
+  loader count is now 669 (668 + the new guard test).
 - M18 is **not** live trading and **not** M19 signal scoring.
 - Readiness is **advisory**, not a promotion gate (promotion stays owned by the
   B4 thinness gates + B8 consistency + registry rules).
 
 ---
 
-## 6. Main-merge plan (NOT executed in B12)
+## 6. Main-merge plan (EXECUTED)
 
-Fast-forward only, after explicit operator approval, on a clean verified
-checkout, after reviewing the full `git diff origin/main..HEAD` (all changes
-under `bot/ml/`, `test_m18_ml.py`, and `docs/` — zero protected-file changes):
+M18 was fast-forward merged into `main` after operator approval, on a clean
+verified checkout, after reviewing the full `git diff origin/main..HEAD` (all
+changes under `bot/ml/`, `test_m18_ml.py`, and `docs/` — zero protected-file
+changes). Resulting `main` HEAD: `264fba84`. The commands used were:
 
 ```
 git checkout main
@@ -116,6 +117,5 @@ git merge --ff-only m18-recovery-from-transcripts
 git push origin main
 ```
 
-No squash. No merge commit. No force push. The branch is 0 behind
-`origin/main`, so a fast-forward is possible and preserves the audited per-phase history.
-**This is not executed during B12.**
+No squash. No merge commit. No force push. The fast-forward preserved the
+audited per-phase history. **This merge has been executed; `main` is at `264fba84`.**

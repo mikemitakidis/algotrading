@@ -1,15 +1,11 @@
 # M18 — ML Strategy/Criteria Foundation — Status
 
 **Milestone:** M18 (ML strategy/criteria foundation — read-only / shadow-only)
-**Branch:** `m18-recovery-from-transcripts`
-**Final phase:** B12 (final docs / acceptance / merge-prep)
+**Branch:** merged to `main` at `264fba84` (originally developed on the
+recovery branch `m18-recovery-from-transcripts`)
+**Final phase:** B12 (final docs / acceptance / merge-prep) — COMPLETE
 **Consolidated acceptance:** see `docs/M18_ACCEPTANCE.md`
-**Current branch tip:** see `git log` on `m18-recovery-from-transcripts`
-**Ahead of `main`:** 0 behind (`origin/main` = `a8d8ca4`
-M17.B.closeout); the exact ahead count is not pinned in docs (docs-only
-commits change it) — verify live with
-`git rev-list --left-right --count origin/main...HEAD` before merge;
-**M18 not merged to main**.
+**Status:** CLOSED and merged to `main`. M19 is the next milestone (not started).
 
 **Mode throughout:** read-only / shadow-only — no live promotion, no live
 trading, no broker/dashboard/scanner/signals.db writes.

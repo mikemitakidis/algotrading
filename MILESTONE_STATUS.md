@@ -48,7 +48,7 @@ project-wide reconciliation narrative lives in
 | 15 | Production Hardening | CLOSED (M15.0-pre/.0/.1/.2/.4/.5/.3.A/.3.A.2/.3.A.cutover/.3.B/.3.C all CLOSED 2026-06-05) | See M15 detail below |
 | 16 | Historical Data + First Signal Engine | CLOSED 2026-06-05 (M16.A + M16.B + fixes 1-4) | See M16 detail below; `bot/historical/*`, `data/historical/yfinance/1D/AAPL.parquet` (real data); commit chain `c6e98b7` → `aef8335` |
 | 17 | Backtesting engine (scanner_replica + multi-TF confluence) | CLOSED — `origin/main` is `M17.B.closeout` (`a8d8ca4`) | `test_m17_backtesting` 200 OK (skipped=2); on main |
-| 18 | ML strategy/criteria foundation (read-only / shadow-only) | FOUNDATION COMPLETE on branch `m18-recovery-from-transcripts`; **NOT merged to main** | sklearn/RandomForest foundation; `test_m18_ml` 668 OK (skipped=3); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
+| 18 | ML strategy/criteria foundation (read-only / shadow-only) | **CLOSED — merged to `main` at `264fba84`** | sklearn/RandomForest foundation; `test_m18_ml` loader 669 (668 + duplicate-class guard added in pre-M19 cleanup); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
 | 19–23 | Future scope | PENDING | See `ROADMAP.md`. M19 signal scoring is the next concrete milestone after M18 merges. |
 
 ---
@@ -378,7 +378,7 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - M15.4 — IB Gateway visibility/truth layer (CLOSED 2026-06-02)
   - M15.5 — IBKR paper exposure wiring (CLOSED earlier)
   - M15.3.A / .A.2 / .A.cutover / .B / .C — Dashboard auth + 2FA + TLS + manual_reset + audit export (all CLOSED, see above)
-**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **M17 is now CLOSED** — `origin/main` is `M17.B.closeout` (`a8d8ca4`), `test_m17_backtesting` 200 OK (skipped=2). **M18 (ML strategy/criteria foundation, read-only/shadow-only) is FOUNDATION-COMPLETE on branch `m18-recovery-from-transcripts` and is NOT yet merged to main** (`test_m18_ml` 668 OK skipped=3; see `docs/M18_ACCEPTANCE.md`). M18 is the ML foundation only — not live trading and not M19 signal scoring. The next concrete work item after M18 merges is M19. Dashboard work stops unless safety- or compliance-driven.
+**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **M17 is now CLOSED** — `origin/main` is `M17.B.closeout` (`a8d8ca4`), `test_m17_backtesting` 200 OK (skipped=2). **M18 (ML strategy/criteria foundation, read-only/shadow-only) is CLOSED and merged to `main` at `264fba84`** (`test_m18_ml` loader 669 — 668 + the duplicate-class guard added in the pre-M19 cleanup; see `docs/M18_ACCEPTANCE.md`). M18 is the ML foundation only — not live trading and not M19 signal scoring. The next concrete work item is M19 (not started). Dashboard work stops unless safety- or compliance-driven.
 
 ---
 
@@ -847,12 +847,13 @@ These are the project's permanent ground rules (per user constitution):
 
 ## M18 — ML foundation / meta-labelling / file-based registry / read-only prediction pipeline
 
-**Status:** Recovered on branch `m18-recovery-from-transcripts`.
+**Status:** CLOSED — merged to `main` at `264fba84`. (Originally
+recovered on branch `m18-recovery-from-transcripts`; that branch has
+since been fast-forward merged into `main`.)
 **Latest functional recovery checkpoint:** `baedf9f` (Checkpoint 4E — G10 hygiene).
 **Final audit documentation checkpoint:** `4fe264b`.
 **Metadata correction checkpoint:** `519878d`.
-**Current branch tip:** see `git log` on `m18-recovery-from-transcripts`.
-**Current exact ahead count:** verify with `git rev-list --count main..HEAD`.
+**Current branch tip:** merged into `main` at `264fba84`.
 
 **M18 recovery branch reached 428 OK / G10 10 OK.**
 The original 452 OK target was **not** byte-identically recoverable
@@ -882,16 +883,24 @@ chat session for A.9 and A.10).
 **Read-only / shadow-only throughout:** no live promotion attempted.
 `ALWAYS_FALSE_APPROVED_FOR_LIVE = False` on every registry entry.
 
-**Coming next:** M18.B and beyond (closed-loop ML toward live-readiness).
-M13.4A (Dashboard Broker Allocation + Budget Controls) remains
-deferred per its design handoff document.
+**Coming next:** M19 — Signal scoring engine (not started). M18 is the
+read-only ML foundation; M19 will consume it to produce ranked, read-only
+signals.
 
-**Not accepted as final M18.** The recovered branch is a safe baseline.
-An original-plan-vs-code audit found items missing or materially reduced
-versus "M18 Final Architecture v2" (RandomForest fallback, repro_hash_v2,
+**M13.4A note (reconciliation).** An earlier handoff described M13.4A
+(Dashboard Broker Allocation + Budget Controls) as deferred. That is stale:
+M13.4A was **implemented** (commit `91d2a76`, `docs/M13_4A_broker_allocation.md`,
+proven by `test_m13_4a_allocation.py` + `test_m13_4a_runtime_enforcement.py`,
+61 tests) and its kill-switch allocation policy is referenced by M14/M15.3.B.
+M13.4A is on `main`, consistent with the M13/M14/M15 detail elsewhere in
+this file.
+
+**M18 accepted as final and merged.** The recovered branch was completed
+through the M18.B hardening phases (RandomForest fallback, repro_hash_v2,
 real isotonic calibration, strict production thinness gates,
 NaN/missingness policy, AV failure-reason persistence,
-feature_store/label_store, dataset/model artifact persistence, full CLI).
-The M18.B completion roadmap, advanced M18+ requirements, per-phase tests,
-push-safe workflow, and final acceptance criteria are in
-`docs/M18_COMPLETION_PLAN.md`.
+feature_store/label_store, dataset/model artifact persistence, full CLI,
+audit + advisory readiness) and fast-forward merged into `main` at
+`264fba84`. The per-phase roadmap and acceptance criteria are in
+`docs/M18_COMPLETION_PLAN.md`; the consolidated acceptance is in
+`docs/M18_ACCEPTANCE.md`.
