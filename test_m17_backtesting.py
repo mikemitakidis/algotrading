@@ -4141,7 +4141,8 @@ class G10_Hygiene(unittest.TestCase):
         unexpected = [
             p for p in unexpected
             if not any(p.startswith(r) for r in _M18_ALLOWED_ROOTS)
-            and p not in ('RECOVERY_M18_MANIFEST.md', '.gitignore')
+            and p not in ('RECOVERY_M18_MANIFEST.md', '.gitignore',
+                          'docs/PROJECT_STATUS_RECONCILIATION.md')
         ]
         self.assertEqual(unexpected, [],
             f"Unexpected files changed: {unexpected}")

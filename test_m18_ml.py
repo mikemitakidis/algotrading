@@ -11159,6 +11159,9 @@ class G10_Hygiene(unittest.TestCase):
             # M18 from transcripts; these document/support that effort).
             ".gitignore",
             "RECOVERY_M18_MANIFEST.md",
+            # B12 doc reconciliation updates the project-status
+            # reconciliation narrative alongside MILESTONE_STATUS/ROADMAP.
+            "docs/PROJECT_STATUS_RECONCILIATION.md",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
