@@ -34,6 +34,9 @@
 ### Signal Generation
 - REQ-G1: Signal generated when ≥3 timeframes score 1 in same direction
 - REQ-G2: 4/4 = route ETORO, 3/4 = route IBKR
+  <!-- Superseded (ISSUE-011): the current rule is configurable and defaults
+  to routing.ibkr_min_tfs=2, i.e. ETORO at 4/4, IBKR at 2-3/4, WATCH below
+  ibkr_min_tfs. Authoritative source: bot/strategy.py + bot/scanner.py. -->
 - REQ-G3: Signal logged to SQLite with all raw indicator values
 - REQ-G4: No duplicate signal for same symbol+direction within 4 hours
 

@@ -3623,6 +3623,21 @@ _PROTECTED_PATHS = (
     "dashboard/auth/audit_export.py",
 )
 
+# Reviewed, operator-approved exceptions to the protected-file freeze.
+# Maps a protected path -> the EXACT sha256 of its approved post-change
+# content. A protected file that differs from the M17 baseline is allowed
+# ONLY if its current content sha256 matches the pin here. Any other
+# protected file change, or any further change to these files (sha mismatch),
+# still fails the guard. See pre-M19 Group C (ISSUE-012, ISSUE-015).
+_PROTECTED_APPROVED_SHA256 = {
+    # ISSUE-012: removed no-op .replace("h","h") in the flywheel tfs_passing
+    # list comprehension (behaviour-preserving).
+    "main.py": "b5a56433f7450dcb5bb3b358e00da17e6b364a47cf99715628c288ed6ebc9a19",
+    # ISSUE-015: parameterised _load_open_intents() NOT IN clause (bound
+    # params; identical result set, no risk-behaviour change).
+    "bot/risk.py": "1118fd2e6677c6d34112bd1a7b68884699df72fa42aea0a981b90c8f1c13812e",
+}
+
 # Forbidden imports for any module in bot/backtesting/ (except
 # data_loader.py which is the SOLE allowed gateway to bot.historical).
 # Forbidden imports inside bot/backtesting/*.
@@ -4019,11 +4034,21 @@ class G10_Hygiene(unittest.TestCase):
     # ---- Protected files: unchanged vs M17 baseline ----------------
 
     def test_protected_files_unchanged_vs_M17_baseline(self):
-        """Every file in _PROTECTED_PATHS is byte-identical to its
-        content at the M17 baseline commit (13a3aa4)."""
+        """Every file in _PROTECTED_PATHS is byte-identical to its content at
+        the M17 baseline commit (13a3aa4), EXCEPT for reviewed,
+        operator-approved exceptions pinned by exact sha256 in
+        _PROTECTED_APPROVED_SHA256 (pre-M19 Group C: main.py, bot/risk.py).
+
+        A protected file that differs from baseline is permitted only if its
+        current content sha256 matches the pin. Any other protected file
+        change, or any drift of a pinned file beyond its approved content,
+        still fails."""
         import subprocess
-        unchanged = []
-        changed = []
+        import hashlib
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parent
+        changed = []          # disallowed changes
+        approved = []         # changed-but-pinned (allowed)
         missing = []
         for path in _PROTECTED_PATHS:
             try:
@@ -4037,15 +4062,25 @@ class G10_Hygiene(unittest.TestCase):
                     missing.append(path)
                     continue
                 if current.stdout.strip() == baseline.stdout.strip():
-                    unchanged.append(path)
+                    continue  # unchanged vs baseline — fine
+                # Changed vs baseline: allow only if sha256 matches the pin.
+                pin = _PROTECTED_APPROVED_SHA256.get(path)
+                if pin is not None:
+                    content = (repo_root / path).read_bytes()
+                    actual = hashlib.sha256(content).hexdigest()
+                    if actual == pin:
+                        approved.append(path)
+                        continue
+                    changed.append(
+                        f"{path} (sha256 {actual} != approved {pin})")
                 else:
                     changed.append(path)
             except Exception as e:
                 missing.append((path, str(e)))
         self.assertEqual(changed, [],
-            f"Protected files modified by M17.A: {changed}")
+            f"Protected files changed beyond approved exceptions: {changed}")
         # Missing files are OK (they may not exist at the baseline or now);
-        # we just need NO changed files.
+        # we just need NO disallowed changes.
 
     def test_bot_data_py_byte_identical(self):
         """Hard invariant: bot/data.py must be byte-identical to the
@@ -4134,6 +4169,15 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group B (ISSUE-020): static quarantine guard keeping the
             # script-style operator tests non-discoverable (operator-approved).
             "test_quarantine_guard.py",
+            # pre-M19 Group C (ISSUE-012/015/011): cleanup proof tests
+            # (operator-approved).
+            "test_group_c_cleanup.py",
+            # pre-M19 Group C (ISSUE-012/015): operator-approved edits to two
+            # protected runtime files. Content additionally pinned by exact
+            # sha256 in _PROTECTED_APPROVED_SHA256 (protected-content guard
+            # still fails on any drift beyond approved).
+            "main.py",
+            "bot/risk.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

@@ -10433,6 +10433,15 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group B (ISSUE-020): static quarantine guard keeping the
             # script-style operator tests non-discoverable (operator-approved).
             "test_quarantine_guard.py",
+            # pre-M19 Group C (ISSUE-012/015/011): cleanup proof tests
+            # (operator-approved).
+            "test_group_c_cleanup.py",
+            # pre-M19 Group C (ISSUE-012/015): operator-approved edits to two
+            # protected runtime files. Content is additionally pinned by exact
+            # sha256 in test_m17_backtesting._PROTECTED_APPROVED_SHA256, so the
+            # protected-content guard still fails on any drift beyond approved.
+            "main.py",
+            "bot/risk.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

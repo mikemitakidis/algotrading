@@ -241,7 +241,7 @@ def main():
                         stage='final_signal',
                         valid_count=signal.get('valid_count', 0),
                         tfs_passing=[k for k in ('1D','4H','1H','15m')
-                                     if signal.get(f'tf_{k.lower().replace("h","h")}', 0)],
+                                     if signal.get(f'tf_{k.lower()}', 0)],
                         available_tfs=meta.get('tfs_available', 0),
                         min_valid=0,
                         route=signal.get('route',''),

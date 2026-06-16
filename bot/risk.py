@@ -46,13 +46,15 @@ def _load_open_intents() -> list:
     try:
         import sqlite3
         conn = sqlite3.connect(str(db))
+        # ISSUE-015: build only '?' placeholders in the SQL text and pass the
+        # synthetic test ids as bound parameters (no value interpolation).
+        placeholders = ','.join('?' for _ in _TEST_SIGNAL_IDS)
         rows = conn.execute(
-            """SELECT symbol, direction, signal_id, status
-               FROM execution_intents
-               WHERE status IN ('accepted', 'paper_logged')
-               AND signal_id NOT IN ({})\n""".format(
-                ','.join(str(i) for i in _TEST_SIGNAL_IDS)
-            )
+            "SELECT symbol, direction, signal_id, status "
+            "FROM execution_intents "
+            "WHERE status IN ('accepted', 'paper_logged') "
+            f"AND signal_id NOT IN ({placeholders})",
+            tuple(_TEST_SIGNAL_IDS),
         ).fetchall()
         conn.close()
         return [{'symbol': r[0], 'direction': r[1],

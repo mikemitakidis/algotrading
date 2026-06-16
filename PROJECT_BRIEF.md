@@ -41,6 +41,12 @@ An automated multi-timeframe trading signal scanner that:
 | 3 out of 4 | Telegram alert labelled IBKR (high confidence) |
 | 0–2 out of 4 | Discarded silently |
 
+> **Superseded (ISSUE-011).** The V1 table above used "3 of 4" for the IBKR
+> label. The current rule is configurable and defaults to
+> `routing.ibkr_min_tfs = 2`, i.e. ETORO at 4/4, **IBKR at 2–3/4**, and WATCH
+> below `ibkr_min_tfs`. See `bot/strategy.py` (DEFAULTS) and `bot/scanner.py`
+> for the authoritative behaviour, and `MILESTONE_STATUS.md` for status.
+
 ## Server
 
 - Provider: Hetzner VPS
