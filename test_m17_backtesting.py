@@ -4131,6 +4131,9 @@ class G10_Hygiene(unittest.TestCase):
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",
             "docs/TESTING.md",
+            # pre-M19 Group B (ISSUE-020): static quarantine guard keeping the
+            # script-style operator tests non-discoverable (operator-approved).
+            "test_quarantine_guard.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

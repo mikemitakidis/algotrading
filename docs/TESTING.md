@@ -68,3 +68,13 @@ files (without importing or executing them) and fails if any top-level test
 class name is duplicated, or any test method name is duplicated within a
 class. This guards against the silent unittest class-shadowing problem that
 was fixed in the pre-M19 cleanup.
+
+A second static guard (`test_quarantine_guard.py::QuarantineGuard`) keeps the
+five script-style operator tests listed above **quarantined**. It parses each
+of them with `ast` (never importing or executing them, so it never runs their
+script bodies, never writes `signals.db`, and never touches live/broker code)
+and fails if any of them gains a `unittest.TestCase` subclass or a top-level
+`test*`/`Test*` callable — i.e. if a change would make them auto-discoverable
+by `python -m unittest`. If you intend to convert one of these scripts into a
+real unittest, you must first make it CI-safe (temp DB, no live calls), then
+update both `docs/TESTING.md` and that guard in the same change.
