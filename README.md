@@ -1,7 +1,24 @@
-# Algo Trader v1
+# Algo Trader
 
-Multi-timeframe algorithmic trading bot. Currently running IBKR paper trading (account DUP623346). Live trading safety envelope built (M12), not yet activated.
-Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.md) for the full 15-milestone plan.
+Multi-timeframe algorithmic trading bot for US equities.
+
+**Current state (2026):** Milestones **M1–M18 are complete**. M18 (the ML
+strategy/criteria foundation) has been merged to `main` at
+`264fba841298d852deb9ccffc059e35fc896cd38`. The active cleanup branch is
+`pre-m19-audit-fixes`. **M19 (signal scoring engine) is the next milestone
+and has not been started.**
+
+Important scope notes:
+
+- **Live trading is NOT enabled by M18 or M19.** M12 built a live-trading
+  safety envelope; live trading remains gated and is not activated here.
+- **M18 is the ML foundation only** — feature engineering, labels, dataset
+  assembly, models, evaluation, registry, audit, and advisory readiness. It
+  is read-only / shadow-only: **not** live signal scoring, **not** broker
+  execution, **not** a `signals.db` writer.
+- For authoritative, up-to-date status see
+  [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) and [`ROADMAP.md`](ROADMAP.md).
+  This README is a high-level entry point only.
 
 ## Current Status
 
@@ -11,15 +28,22 @@ Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.
 | 2 | Telegram from Dashboard | ✅ Complete |
 | 3 | Dashboard Observability | ✅ Complete |
 | 4 | Strategy Engine | ✅ Complete |
-| 5 | Backtesting | ✅ Complete |
+| 5 | Backtesting (legacy) | ✅ Complete |
 | 6  | Modular Data-Provider Architecture | ✅ Complete |
 | 7  | Feature Engine + ML Logging        | ✅ Complete |
 | 8  | News/Sentiment Module              | ✅ Complete |
-| 9  | ML Meta-Labeling Pipeline          | ✅ Baseline complete |
+| 9  | ML Meta-Labeling Pipeline (legacy) | ✅ Baseline complete |
 | 10 | Broker Execution + Data Flywheel   | ✅ Complete |
-| 11 | IBKR Paper Trading                 | ✅ Active (DUP623346) |
-| 12 | IBKR Live Trading                  | 🔒 Safety envelope built, not activated |
-| 13–15 | See ROADMAP.md                  | ⬜ Planned |
+| 11 | IBKR Paper Trading                 | ✅ Complete (paper) |
+| 12 | IBKR Live Trading (safety envelope)| 🔒 Built, not activated |
+| 13 | eToro integration + broker allocation (M13.4A) | ✅ Complete |
+| 14 | Portfolio / risk intelligence layer | ✅ Complete |
+| 15 | Production hardening (systemd, auth, health, audit) | ✅ Complete |
+| 16 | Historical data engine | ✅ Complete |
+| 17 | Backtesting engine v2 (scanner-replica, MTF, ATR exits) | ✅ Complete |
+| 18 | ML strategy/criteria foundation (read-only/shadow-only) | ✅ Complete — merged to `main` |
+| 19 | Signal scoring engine | ⬜ Next — not started |
+| 20–23 | Paper automation, optimisation, controlled live, advanced intelligence | ⬜ Planned (see ROADMAP.md) |
 
 ## What the Bot Does
 
@@ -32,9 +56,12 @@ Milestones 1–11 complete. M12 safety envelope built. See [ROADMAP.md](ROADMAP.
 
 ## What It Does NOT Do
 
-- No live-money trades yet. IBKR paper trading active via IB Gateway (M11).
-- No ML filtering yet (Milestone 9)
-- Automated paper execution via IBKR bracket orders (M11 active). Live execution ready behind safety gate (M12).
+- **No live-money trading is enabled.** IBKR paper trading works via IB
+  Gateway (M11); the M12 live envelope exists but is gated and not activated.
+- **M18 does not perform live ML signal scoring.** It is the read-only ML
+  foundation; live scoring is M19 (not started).
+- Automated paper execution via IBKR bracket orders is available (M11);
+  live execution stays behind the M12 safety gate.
 
 ---
 

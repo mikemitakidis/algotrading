@@ -1,5 +1,12 @@
 # Requirements
 
+> **⚠️ HISTORICAL V1 DOCUMENT.** These are the original V1 functional
+> requirements. The "Out of Scope — V1" items (Alpaca, sentiment, ML, IBKR,
+> eToro, backtesting) were all subsequently implemented in milestones
+> M8–M18. This document does **not** describe the full current M1–M18 state.
+> For current status see [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) and
+> [`ROADMAP.md`](ROADMAP.md).
+
 ## Functional Requirements — V1
 
 ### Data

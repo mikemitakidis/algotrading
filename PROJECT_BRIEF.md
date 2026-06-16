@@ -1,5 +1,13 @@
 # Algo Trader — Project Brief
 
+> **⚠️ HISTORICAL V1 DOCUMENT.** This describes the original V1 scope (the
+> shadow-mode scanner with manual execution). Later milestones M10–M18 added
+> broker abstraction, IBKR/eToro integration, live-safety infrastructure,
+> a portfolio/risk layer, production hardening, a historical data engine,
+> a backtesting engine, and the ML foundation. It does **not** describe the
+> full current M1–M18 state. For current status see
+> [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) and [`ROADMAP.md`](ROADMAP.md).
+
 ## What This System Does
 
 An automated multi-timeframe trading signal scanner that:

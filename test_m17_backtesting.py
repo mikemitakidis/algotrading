@@ -4127,6 +4127,16 @@ class G10_Hygiene(unittest.TestCase):
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
             "docs/NEXT_WORK_REGISTER.md",
+            # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
+            # hygiene guard + testing notes (operator-approved bump).
+            "test_hygiene_suite.py",
+            "docs/TESTING.md",
+            # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
+            # historical-V1 banners (operator-approved bump).
+            "README.md",
+            "ARCHITECTURE.md",
+            "PROJECT_BRIEF.md",
+            "REQUIREMENTS.md",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

@@ -1,5 +1,18 @@
 # Architecture
 
+> **⚠️ HISTORICAL V1 DOCUMENT.** This maps the original V1 module layout
+> (`bot/data.py`, `bot/indicators.py`, `bot/scanner.py`, `bot/database.py`,
+> `bot/notifier.py`, `bot/config.py`, `dashboard/app.py`). Those files still
+> exist, but the codebase has since grown many more modules and subpackages
+> (`bot/brokers/`, `bot/etoro/`, `bot/risk_authority/`, `bot/historical/`,
+> `bot/backtesting/`, `bot/ml/`, plus `bot/risk.py`, `bot/kill_switch.py`,
+> `bot/flywheel.py`, `bot/broker_allocation.py`, `bot/gateway_*` and others)
+> across milestones M10–M18. This document does **not** describe the full
+> current architecture. For current status see
+> [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) and [`ROADMAP.md`](ROADMAP.md).
+> The "What Failed in Old Build" section below remains valuable institutional
+> memory and is intentionally preserved.
+
 ## Folder Structure
 
 ```

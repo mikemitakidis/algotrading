@@ -10426,6 +10426,16 @@ class G10_Hygiene(unittest.TestCase):
             # B12 doc reconciliation updates the project-status
             # reconciliation narrative alongside MILESTONE_STATUS/ROADMAP.
             "docs/PROJECT_STATUS_RECONCILIATION.md",
+            # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
+            # hygiene guard + testing notes (operator-approved bump).
+            "test_hygiene_suite.py",
+            "docs/TESTING.md",
+            # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
+            # historical-V1 banners (operator-approved bump).
+            "README.md",
+            "ARCHITECTURE.md",
+            "PROJECT_BRIEF.md",
+            "REQUIREMENTS.md",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
