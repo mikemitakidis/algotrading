@@ -48,11 +48,29 @@ class Issue012TfKeyMapping(unittest.TestCase):
 class Issue015LoadOpenIntents(unittest.TestCase):
     """_load_open_intents() must return accepted + paper_logged rows, exclude
     risk_rejected and the synthetic test ids, using bound parameters — proven
-    against a temp db, never the real signals.db."""
+    against a fully isolated temp db inside a TemporaryDirectory, never the
+    real signals.db and never a shared /tmp/data path."""
 
-    def _make_temp_db(self, rows):
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="m_groupc_")) / "signals.db"
-        conn = sqlite3.connect(str(tmp))
+    def setUp(self):
+        import bot.risk as risk
+        # Isolated temp root, auto-removed on test completion.
+        self._tmp = tempfile.TemporaryDirectory(prefix="m_groupc_")
+        self.addCleanup(self._tmp.cleanup)
+        self.temp_root = pathlib.Path(self._tmp.name)
+        # Point bot.risk at the temp root itself; it derives
+        # <BASE_DIR>/data/signals.db. Restore the original on cleanup.
+        self._orig_base = risk.BASE_DIR
+        self.addCleanup(self._restore_base, risk)
+        risk.BASE_DIR = self.temp_root
+        # The DB path the production code will use.
+        self.db_path = self.temp_root / "data" / "signals.db"
+
+    def _restore_base(self, risk):
+        risk.BASE_DIR = self._orig_base
+
+    def _seed_db(self, rows):
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path))
         conn.execute(
             "CREATE TABLE execution_intents "
             "(symbol TEXT, direction TEXT, signal_id INTEGER, status TEXT)")
@@ -60,7 +78,17 @@ class Issue015LoadOpenIntents(unittest.TestCase):
             "INSERT INTO execution_intents VALUES (?,?,?,?)", rows)
         conn.commit()
         conn.close()
-        return tmp
+
+    def test_db_path_is_inside_temp_root(self):
+        """Prove the production DB path resolves strictly inside the isolated
+        temp root — not /tmp/data, not the repo's real data/signals.db."""
+        resolved = self.db_path.resolve()
+        self.assertTrue(
+            str(resolved).startswith(str(self.temp_root.resolve())),
+            f"db path {resolved} must live inside temp root {self.temp_root}")
+        # And it must NOT be the repo's real data/signals.db.
+        real = (_REPO_ROOT / "data" / "signals.db").resolve()
+        self.assertNotEqual(resolved, real)
 
     def test_inclusion_exclusion_behaviour(self):
         import bot.risk as risk
@@ -72,35 +100,21 @@ class Issue015LoadOpenIntents(unittest.TestCase):
             ("SPY",  "long", 888888, "accepted"),        # excluded (test id)
             ("QQQ",  "long", 999999, "paper_logged"),    # excluded (test id)
         ]
-        tmp = self._make_temp_db(rows)
-        # Point bot.risk at the temp db for the duration of this test.
-        orig_base = risk.BASE_DIR
-        try:
-            risk.BASE_DIR = tmp.parent.parent  # BASE_DIR/'data'/'signals.db'
-            (tmp.parent.parent / "data").mkdir(exist_ok=True)
-            # move temp db into the expected data/signals.db location
-            target = tmp.parent.parent / "data" / "signals.db"
-            target.write_bytes(tmp.read_bytes())
-            result = risk._load_open_intents()
-        finally:
-            risk.BASE_DIR = orig_base
+        self._seed_db(rows)
+        result = risk._load_open_intents()
         ids = sorted(r["signal_id"] for r in result)
         self.assertEqual(ids, [1001, 1002],
                          "only non-test accepted/paper_logged rows expected")
         statuses = {r["status"] for r in result}
         self.assertTrue(statuses <= {"accepted", "paper_logged"})
 
-    def test_no_real_signals_db_touched(self):
-        """The function returns [] gracefully when the db path does not
-        exist — proving it does not create/seek the real signals.db."""
+    def test_no_db_returns_empty(self):
+        """With BASE_DIR pointed at the temp root and no data/signals.db
+        created, the function returns [] gracefully — proving it does not
+        create/seek any other (real) signals.db."""
         import bot.risk as risk
-        orig_base = risk.BASE_DIR
-        try:
-            empty = pathlib.Path(tempfile.mkdtemp(prefix="m_groupc_empty_"))
-            risk.BASE_DIR = empty  # empty/'data'/'signals.db' does not exist
-            self.assertEqual(risk._load_open_intents(), [])
-        finally:
-            risk.BASE_DIR = orig_base
+        self.assertFalse(self.db_path.exists())
+        self.assertEqual(risk._load_open_intents(), [])
 
     def test_old_format_sql_pattern_removed(self):
         """Static negative check: the .format()-built NOT IN SQL must be gone
