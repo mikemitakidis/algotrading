@@ -156,17 +156,37 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
         log.warning('[CYCLE] No TF data. Cache may be empty — retrying next cycle.')
         return [], {'tfs_available': 0, 'tfs_list': [], 'symbols_scanned': len(focus)}
 
-    # Minimum valid TFs scales with available data, but respects confluence setting
+    # ISSUE-009: partial-data handling. No silent auto-relaxation of the
+    # confluence bar. By default every enabled timeframe must be available;
+    # otherwise the cycle is hard-blocked (no signals). An operator may opt
+    # into partial-data scanning, but even then min_valid stays equal to the
+    # configured confluence bar — partial mode means "scan with fewer TFs",
+    # NOT "make signals easier".
     cfg_min = int(confluence.get('min_valid_tfs', 3))
-    if available_tfs >= len(timeframes):
-        min_valid = cfg_min
-    elif available_tfs >= 2:
-        min_valid = max(2, cfg_min - 1)
-    else:
-        min_valid = 1
+    allow_partial = bool(confluence.get('allow_partial_data', False))
+    min_available = int(confluence.get('min_available_tfs', len(timeframes)))
 
-    log.info('[CYCLE] Signal threshold: %d/%d valid TFs (config=%d)',
-             min_valid, available_tfs, cfg_min)
+    if available_tfs < min_available and not allow_partial:
+        log.warning(
+            '[CYCLE] insufficient TF data: %d/%d available '
+            '(min_available_tfs=%d, allow_partial_data=False) — '
+            'no signals this cycle',
+            available_tfs, len(timeframes), min_available)
+        return [], {
+            'tfs_available':     available_tfs,
+            'tfs_list':          tfs_with_data,
+            'symbols_scanned':   len(focus),
+            'blocked_partial_data': True,
+            'min_available_tfs': min_available,
+            'allow_partial_data': allow_partial,
+        }
+
+    # min_valid never auto-relaxes below the configured confluence bar.
+    min_valid = cfg_min
+
+    log.info('[CYCLE] Signal threshold: %d valid TFs required '
+             '(config=%d, available=%d, allow_partial=%s)',
+             min_valid, cfg_min, available_tfs, allow_partial)
 
     signals  = []
     now_utc  = datetime.now(timezone.utc).isoformat()
@@ -205,7 +225,28 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
             elif count >= ibkr_min:
                 route = 'IBKR'
             else:
+                # ISSUE-010: WATCH is logged-only and MUST NOT become an
+                # actionable signal. Drop it before it is built/appended, so
+                # it never reaches insert_signal / OrderIntent / risk / broker.
                 route = 'WATCH'
+                if conn is not None:
+                    from bot.flywheel import log_candidate
+                    log_candidate(
+                        conn, cycle_id, sym, direction,
+                        stage='watch_only',
+                        valid_count=count,
+                        tfs_passing=list(tfs.keys()),
+                        available_tfs=available_tfs,
+                        min_valid=min_valid,
+                        rejection_reason='below_ibkr_min_watch_only',
+                        strategy_version=strat_ver,
+                        ind=next(
+                            (cached_inds[sym][t]
+                             for t in ('1D', '4H', '1H', '15m')
+                             if sym in cached_inds and t in cached_inds[sym]),
+                            None),
+                    )
+                continue  # never stored as actionable, never executed
 
             # Use best available indicator set (prefer higher TFs)
             best_ind = next(

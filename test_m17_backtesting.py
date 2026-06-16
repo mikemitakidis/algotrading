@@ -3636,6 +3636,10 @@ _PROTECTED_APPROVED_SHA256 = {
     # ISSUE-015: parameterised _load_open_intents() NOT IN clause (bound
     # params; identical result set, no risk-behaviour change).
     "bot/risk.py": "1118fd2e6677c6d34112bd1a7b68884699df72fa42aea0a981b90c8f1c13812e",
+    # pre-M19 Group D (ISSUE-009/010): hard-block partial-data relaxation
+    # (no auto-lowering; explicit allow_partial_data) + WATCH route is
+    # logged-only and never appended to actionable signals.
+    "bot/scanner.py": "5d1da9587f7bffbdcf978c53d56fe77a33c306c8d1eb811a0e92f0691907a04b",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except
@@ -4178,6 +4182,10 @@ class G10_Hygiene(unittest.TestCase):
             # still fails on any drift beyond approved).
             "main.py",
             "bot/risk.py",
+            # pre-M19 Group D (ISSUE-009/010): scanner hard-block + WATCH drop
+            # (sha256-pinned) + its proof tests (operator-approved).
+            "bot/scanner.py",
+            "test_group_d_scanner.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

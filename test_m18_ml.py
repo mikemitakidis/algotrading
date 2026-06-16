@@ -10442,6 +10442,10 @@ class G10_Hygiene(unittest.TestCase):
             # protected-content guard still fails on any drift beyond approved.
             "main.py",
             "bot/risk.py",
+            # pre-M19 Group D (ISSUE-009/010): scanner hard-block + WATCH drop
+            # (sha256-pinned in M17.B guard) + its proof tests.
+            "bot/scanner.py",
+            "test_group_d_scanner.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
