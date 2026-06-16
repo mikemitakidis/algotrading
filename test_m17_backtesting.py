@@ -4196,6 +4196,8 @@ class G10_Hygiene(unittest.TestCase):
             "bot/brokers/__init__.py",
             "dashboard/app.py",
             "test_group_e_safety.py",
+            # pre-M19 Group F1 (ISSUE-007): predict-time calibration proof tests.
+            "test_group_f_calibration.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

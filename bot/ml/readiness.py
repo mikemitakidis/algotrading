@@ -11,10 +11,11 @@ evaluation_report.json) plus optional registry/entry metadata. It does
 NOT recompute metrics and does NOT import evaluator/trainer/registry
 internals to recompute anything — it reads what is already stored.
 
-B3 limitation carried honestly: stored calibration can be assessed, but
-calibration is NOT applied at predict time, so the output explicitly
-flags predict_time_calibration_applied = false and never implies live
-predictions are calibrated.
+B3 limitation history: stored calibration can be assessed. As of F1
+(ISSUE-007) the stored isotonic artifact IS applied at predict time when
+available; each PredictionResult carries predict_time_calibration_applied
+and calibration_source so the output never implies calibration that was
+not actually applied.
 
 Primary metric for M18 is PR-AUC (higher is better); ROC-AUC also
 higher-is-better; Brier is lower-is-better.
@@ -113,8 +114,10 @@ def _calibration_verdict(report: Dict[str, Any]) -> Dict[str, Any]:
             "brier_score"),
         "well_calibrated_stored": well,
         "problems": problems,
-        # B3 honesty — assesses STORED calibration only.
-        "note": "assesses stored calibration; NOT applied at predict",
+        # B3 honesty — assesses STORED calibration quality. As of F1
+        # (ISSUE-007) the stored artifact IS applied at predict time when
+        # available; this verdict only scores its quality, not application.
+        "note": "assesses stored calibration quality; applied at predict when available",
     }
 
 
@@ -247,5 +250,12 @@ def assess_readiness(
         # explicit, non-misleading disclaimers
         "readiness_is_advisory": True,
         "promotion_gate": False,
+        # This readiness REPORT does not itself apply calibration (it only
+        # reads stored artifacts) — so this flag stays False for the report.
         "predict_time_calibration_applied": False,
+        # F1 / ISSUE-007: the PREDICT PATH (bot.ml.registry.predictions) now
+        # applies the stored isotonic artifact when available; each
+        # PredictionResult carries the per-batch truth. This companion flag
+        # records that capability without changing the report-level field.
+        "predict_path_applies_calibration_when_available": True,
     }

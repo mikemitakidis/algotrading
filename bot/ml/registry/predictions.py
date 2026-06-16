@@ -27,6 +27,18 @@ work unchanged):
   feature_extrapolation_flag     bool   convenience flag, == count > 0
   features_out_of_range          list   alias of `feature_extrapolation_flags`
 
+F1 / ISSUE-007 — predict-time isotonic calibration columns (ALWAYS present):
+  prediction_raw                 float  raw predict_proba (never calibrated)
+  pred_proba_raw                 float  alias of `prediction_raw`
+  prediction_calibrated          float  calibrated proba when applied; equals
+                                          raw (NOT null) when not applied
+  pred_proba_calibrated          float  alias of `prediction_calibrated`
+  prediction_calibration_applied bool   True iff the stored isotonic artifact
+                                          was actually applied for that row
+  When calibration is applied, `prediction`/`pred_proba` carry the CALIBRATED
+  probability; otherwise they carry the raw probability. The code never claims
+  calibrated output unless the artifact was actually applied.
+
 If `ts_utc` is supplied, it is prepended as the first column.
 
 A `PredictionResult` also carries:
@@ -80,6 +92,10 @@ class PredictionResult:
     predicted_at_utc:   str
     extrapolation_summary: Dict[str, Any]  # aggregate counters
     predictions:        pd.DataFrame
+    # F1 / ISSUE-007 — truthful predict-time calibration metadata.
+    predict_time_calibration_applied: bool = False
+    calibration_source: str = "none"
+    calibration_unavailable_reason: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -323,6 +339,54 @@ def predict_from_registry(
     counts, flags, rowwise = _compute_extrapolation(
         X_df_aligned, feature_summary, base_feature_columns)
 
+    # ─── F1 / ISSUE-007: predict-time isotonic calibration ──────────
+    # Load the stored isotonic artifact from evaluation_report.json and
+    # apply it to the raw probabilities WHEN available. Always preserve
+    # the raw probabilities. Never claim calibrated output unless the
+    # artifact was actually applied. Missing / corrupt / unavailable
+    # calibration must NOT crash prediction — fall back to raw and
+    # record not-applied metadata truthfully.
+    proba_raw = proba
+    proba_calibrated = proba_raw          # default: identical to raw
+    calibration_applied = False
+    calibration_source = "none"
+    calibration_unavailable_reason: Optional[str] = None
+    try:
+        ev_path = _store.artifact_path(
+            root, model_id, _store.ARTIFACT_EVAL_REPORT)
+        if not ev_path.exists():
+            calibration_unavailable_reason = "evaluation_report_missing"
+        else:
+            ev_report = _store.read_json(ev_path)
+            iso = (ev_report or {}).get("isotonic_calibration", {}) or {}
+            if not iso.get("available", False):
+                calibration_unavailable_reason = (
+                    iso.get("unavailable_reason")
+                    or "isotonic_calibration_unavailable")
+            else:
+                artifact = iso.get("artifact")
+                if not isinstance(artifact, dict):
+                    calibration_unavailable_reason = "artifact_missing"
+                else:
+                    from bot.ml.evaluation.calibration import (
+                        apply_isotonic_artifact)
+                    proba_calibrated = np.asarray(
+                        apply_isotonic_artifact(proba_raw, artifact),
+                        dtype=np.float64)
+                    calibration_applied = True
+                    calibration_source = (
+                        "evaluation_report.isotonic_calibration.artifact")
+    except Exception as e:
+        # Any failure (corrupt JSON, malformed artifact, interp error)
+        # falls back to raw and is recorded — never crashes prediction.
+        calibration_applied = False
+        proba_calibrated = proba_raw
+        calibration_source = "none"
+        calibration_unavailable_reason = f"calibration_error:{type(e).__name__}"
+
+    # The reported probability is calibrated WHEN applied, else raw.
+    proba = proba_calibrated if calibration_applied else proba_raw
+
     # ─── Build output frame ─────────────────────────────────────────
     # Q20 LOCKED prediction-row schema:
     #   model_id                       str    every row carries the
@@ -345,11 +409,14 @@ def predict_from_registry(
     #                                            (kept under the prior name)
     n_rows = len(X_arr)
     pred_class = (proba >= 0.5).astype(np.int8)
+    pred_class_raw = (proba_raw >= 0.5).astype(np.int8)
+    pred_class_cal = (proba_calibrated >= 0.5).astype(np.int8)
     flags_list = [list(f) for f in rowwise]
 
     out = pd.DataFrame({
         "model_id":                     [model_id] * n_rows,
         # Q20 locked names ─────────────────────────────────────────
+        # `prediction` = calibrated when applied, else raw (F1).
         "prediction":                   proba,
         "predicted_class":              pred_class,
         "feature_extrapolation_flags":  flags_list,
@@ -359,6 +426,13 @@ def predict_from_registry(
         "pred_class":                   pred_class,
         "feature_extrapolation_flag":   flags.astype(bool),
         "features_out_of_range":        flags_list,
+        # F1 / ISSUE-007 — raw + calibrated, always present ────────
+        "prediction_raw":               proba_raw,
+        "pred_proba_raw":               proba_raw,
+        "prediction_calibrated":        proba_calibrated,
+        "pred_proba_calibrated":        proba_calibrated,
+        "prediction_calibration_applied": (
+            np.full(n_rows, calibration_applied, dtype=bool)),
     })
     if ts_utc is not None:
         out.insert(0, "ts_utc",
@@ -395,4 +469,7 @@ def predict_from_registry(
         predicted_at_utc=_utc_now_iso(),
         extrapolation_summary=extrap_summary,
         predictions=out,
+        predict_time_calibration_applied=calibration_applied,
+        calibration_source=calibration_source,
+        calibration_unavailable_reason=calibration_unavailable_reason,
     )
