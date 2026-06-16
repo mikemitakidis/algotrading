@@ -105,6 +105,7 @@ def get_broker() -> BrokerAdapter:
         from bot.etoro.signal_only_broker import (
             SignalOnlyBroker,
             determine_signal_only_reason,
+            REASON_POLICY_UNAVAILABLE,
         )
     except Exception as e:
         log.debug('[BROKER] SignalOnlyBroker not available: %s', e)
@@ -112,8 +113,24 @@ def get_broker() -> BrokerAdapter:
 
     policy = _maybe_load_policy()
     if policy is None:
-        # No policy available — fall back to concrete broker. This
-        # preserves the M10-M13.3 behaviour for fresh installs.
+        # ISSUE-014: policy load failed / unavailable. Do NOT silently return
+        # the bare concrete broker. Consult the runtime-policy fail-safe (the
+        # same source the submit() paths use) so the factory-level decision
+        # matches the submit-level fail-safe. Never fail OPEN.
+        try:
+            from bot.runtime_policy import get_signal_only_reason
+            skip, reason = get_signal_only_reason(get_broker_name())
+        except Exception as e:
+            log.warning('[BROKER] policy unavailable and runtime-policy '
+                        'fail-safe errored (%s) — wrapping %s in '
+                        'SignalOnlyBroker(policy_unavailable)',
+                        e, concrete.name)
+            return SignalOnlyBroker(
+                concrete, reason=REASON_POLICY_UNAVAILABLE)
+        if skip:
+            log.warning('[BROKER] policy unavailable — wrapping %s in '
+                        'SignalOnlyBroker: reason=%s', concrete.name, reason)
+            return SignalOnlyBroker(concrete, reason=reason)
         return concrete
 
     skip, reason = determine_signal_only_reason(policy, get_broker_name())

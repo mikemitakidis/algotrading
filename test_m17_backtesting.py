@@ -3640,6 +3640,10 @@ _PROTECTED_APPROVED_SHA256 = {
     # (no auto-lowering; explicit allow_partial_data) + WATCH route is
     # logged-only and never appended to actionable signals.
     "bot/scanner.py": "5d1da9587f7bffbdcf978c53d56fe77a33c306c8d1eb811a0e92f0691907a04b",
+    # pre-M19 Group E (ISSUE-013): dashboard refuses to start without an
+    # explicit DASHBOARD_SECRET_KEY when DASHBOARD_ENV=production (dev/local
+    # keeps the warned fallback). No route/auth/CSRF logic changed.
+    "dashboard/app.py": "e6a120afac2d9e4e8759209d70ae866551393b7622fbe834713d815eff963e53",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except
@@ -4186,6 +4190,12 @@ class G10_Hygiene(unittest.TestCase):
             # (sha256-pinned) + its proof tests (operator-approved).
             "bot/scanner.py",
             "test_group_d_scanner.py",
+            # pre-M19 Group E (ISSUE-014/013): broker factory fail-safe (not
+            # sha256-pinned; not a protected runtime file) + dashboard
+            # production secret hard-fail (sha256-pinned) + its proof tests.
+            "bot/brokers/__init__.py",
+            "dashboard/app.py",
+            "test_group_e_safety.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

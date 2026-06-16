@@ -10446,6 +10446,11 @@ class G10_Hygiene(unittest.TestCase):
             # (sha256-pinned in M17.B guard) + its proof tests.
             "bot/scanner.py",
             "test_group_d_scanner.py",
+            # pre-M19 Group E (ISSUE-014/013): broker factory fail-safe +
+            # dashboard production secret hard-fail + its proof tests.
+            "bot/brokers/__init__.py",
+            "dashboard/app.py",
+            "test_group_e_safety.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

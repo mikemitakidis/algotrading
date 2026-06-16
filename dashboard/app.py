@@ -80,12 +80,24 @@ if _secret_env:
     app.secret_key = _secret_env
     _m153a_log.info("Using DASHBOARD_SECRET_KEY from env (stable across password rotations).")
 else:
-    # Transitional fallback. Loud one-time warning at startup.
+    # ISSUE-013: in production (DASHBOARD_ENV=production) refuse to start
+    # without an explicit secret — a password-derived / default session key
+    # is unsafe for production session signing. Dev/local keeps the
+    # transitional fallback with a loud warning.
+    if os.getenv('DASHBOARD_ENV', '').strip().lower() == 'production':
+        raise RuntimeError(
+            "DASHBOARD_SECRET_KEY must be set when DASHBOARD_ENV=production. "
+            "Refusing to start with a password-derived or default session "
+            "key in production. Run `python tools/set_dashboard_password.py` "
+            "to write a stable random secret to .env. "
+            "See docs/M15_3_A_dashboard_auth.md §4."
+        )
+    # Transitional fallback (dev/local only). Loud one-time warning at startup.
     _fallback_pw = os.getenv('DASHBOARD_PASSWORD', 'changeme')
     app.secret_key = _fallback_pw + '_algo_session'
     _m153a_log.warning(
         "DASHBOARD_SECRET_KEY not set — falling back to password-derived "
-        "secret key (transitional behaviour). Run "
+        "secret key (transitional behaviour, dev/local only). Run "
         "`python tools/set_dashboard_password.py` to write a stable "
         "secret to .env. See docs/M15_3_A_dashboard_auth.md §4."
     )
