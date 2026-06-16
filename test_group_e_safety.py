@@ -131,14 +131,28 @@ class Issue014BrokerFailSafe(unittest.TestCase):
 # ───────────────────────── ISSUE-013 ─────────────────────────
 class Issue013DashboardSecret(unittest.TestCase):
 
-    def _import_dashboard(self, env):
-        """Import dashboard.app in an isolated subprocess with the given env
-        overrides. Returns (returncode, stdout, stderr)."""
-        full_env = dict(os.environ)
-        # Strip the vars we control so the test env is deterministic.
-        for k in ("DASHBOARD_SECRET_KEY", "DASHBOARD_ENV"):
-            full_env.pop(k, None)
-        full_env.update(env)
+    # Keys that .env could otherwise inject into the subprocess. We always
+    # strip them from the inherited environment first, then apply extra_env
+    # explicitly. Critically, for "no secret" cases extra_env sets
+    # DASHBOARD_SECRET_KEY="" (empty string) — because dashboard/app.py calls
+    # load_dotenv() WITHOUT override, an explicitly-present (even empty) env
+    # var prevents .env from repopulating it. Merely omitting the key would
+    # let .env on a real host (e.g. the VPS) inject a real secret, defeating
+    # the "no secret" test (this was the Group E VPS failure).
+    _CONTROLLED_KEYS = (
+        "DASHBOARD_ENV",
+        "DASHBOARD_SECRET_KEY",
+        "DASHBOARD_PASSWORD",
+        "FLASK_ENV",
+    )
+
+    def _import_dashboard(self, extra_env):
+        """Import dashboard.app in an isolated subprocess with fully controlled
+        env. Returns (returncode, stdout, stderr)."""
+        env = os.environ.copy()
+        for key in self._CONTROLLED_KEYS:
+            env.pop(key, None)
+        env.update(extra_env)
         code = (
             "import dashboard.app as a;"
             "print('SECRET=' + a.app.secret_key)"
@@ -146,42 +160,67 @@ class Issue013DashboardSecret(unittest.TestCase):
         p = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True, text=True, timeout=120,
-            cwd=str(_REPO_ROOT), env=full_env)
+            cwd=str(_REPO_ROOT), env=env)
         return p.returncode, p.stdout, p.stderr
 
+    def test_helper_does_not_inherit_real_secret_for_no_secret_cases(self):
+        """Prove the 'no secret' path truly has no secret: a subprocess that
+        prints the effective DASHBOARD_SECRET_KEY (after the same env control,
+        BUT skipping dashboard import so .env is not loaded) sees an empty
+        string — i.e. the controlled env wins over any inherited value."""
+        env = os.environ.copy()
+        for key in self._CONTROLLED_KEYS:
+            env.pop(key, None)
+        env.update({"DASHBOARD_SECRET_KEY": ""})
+        p = subprocess.run(
+            [sys.executable, "-c",
+             "import os; print('KEY=' + repr(os.environ.get('DASHBOARD_SECRET_KEY')))"],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(_REPO_ROOT), env=env)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("KEY=''", p.stdout,
+                      "controlled env must force DASHBOARD_SECRET_KEY empty")
+
     def test_production_without_secret_fails(self):
-        rc, out, err = self._import_dashboard({"DASHBOARD_ENV": "production"})
+        rc, out, err = self._import_dashboard({
+            "DASHBOARD_ENV": "production",
+            "DASHBOARD_SECRET_KEY": "",
+        })
         self.assertNotEqual(rc, 0, "production without secret must fail import")
         self.assertIn("RuntimeError", err)
         self.assertIn("DASHBOARD_SECRET_KEY must be set", err)
 
     def test_dev_without_secret_starts_with_fallback(self):
-        rc, out, err = self._import_dashboard({})  # no DASHBOARD_ENV
+        rc, out, err = self._import_dashboard({
+            "DASHBOARD_ENV": "",
+            "DASHBOARD_SECRET_KEY": "",
+            "DASHBOARD_PASSWORD": "group_e_dev_password",
+        })
         self.assertEqual(rc, 0, f"dev import should succeed; err={err[-500:]}")
-        self.assertIn("SECRET=", out)
-        self.assertTrue(out.strip().split("SECRET=")[-1].endswith("_algo_session"))
+        self.assertIn("SECRET=group_e_dev_password_algo_session", out)
 
     def test_production_with_secret_works(self):
-        rc, out, err = self._import_dashboard(
-            {"DASHBOARD_ENV": "production", "DASHBOARD_SECRET_KEY": "prodkey123"})
+        rc, out, err = self._import_dashboard({
+            "DASHBOARD_ENV": "production",
+            "DASHBOARD_SECRET_KEY": "group_e_secret",
+        })
         self.assertEqual(rc, 0, f"prod+secret should import; err={err[-500:]}")
-        self.assertIn("SECRET=prodkey123", out)
+        self.assertIn("SECRET=group_e_secret", out)
 
     def test_dev_with_secret_works(self):
-        rc, out, err = self._import_dashboard(
-            {"DASHBOARD_SECRET_KEY": "devkey456"})
+        rc, out, err = self._import_dashboard({
+            "DASHBOARD_SECRET_KEY": "group_e_secret",
+        })
         self.assertEqual(rc, 0, f"dev+secret should import; err={err[-500:]}")
-        self.assertIn("SECRET=devkey456", out)
+        self.assertIn("SECRET=group_e_secret", out)
 
     def test_no_route_auth_csrf_decorators_modified(self):
         """Static: the auth/CSRF decorators and key routes still exist
-        unchanged in count — the Group E edit only touched the secret block."""
+        unchanged — the Group E edit only touched the secret block."""
         src = (_REPO_ROOT / "dashboard" / "app.py").read_text()
-        # Core decorators/endpoints must still be present.
         self.assertIn("@require_auth", src)
         self.assertIn("csrf_required", src)
         self.assertIn("/api/login", src)
-        # The edit must not have removed the CSRF issuance endpoint.
         self.assertIn("/api/auth/csrf", src)
 
     def test_fallback_warning_says_dev_local_only(self):
