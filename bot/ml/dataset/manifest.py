@@ -171,6 +171,18 @@ class DatasetManifest:
     adjusted_close_real:     bool = False
     allow_adjusted_prices_for_ml: bool = False
 
+    # F3 / ISSUE-018 + ISSUE-019 — advisory provenance only (no behaviour
+    # change). 4H bars are derived on FIXED UTC bucket boundaries
+    # (00/04/08/12/16/20 UTC), NOT aligned to the US cash-session open
+    # (13:30 UTC); a 4H bucket straddles the session open. The M17
+    # scanner-replica backtest validates the LONG execution path only —
+    # shorts are skipped (bot/backtesting/strategy.py), so the short side is
+    # NOT equally validated. These flags exist so downstream M19 code/readiness
+    # never overclaim session alignment or short-side validation.
+    fourh_bucket_alignment: str = "utc_fixed"        # NEVER "session_aligned"
+    scanner_replica_long_side_validated:  bool = True
+    scanner_replica_short_side_validated: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 

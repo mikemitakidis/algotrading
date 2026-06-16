@@ -4201,6 +4201,9 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group F2 (ISSUE-016/017): price-adjustment provenance +
             # PIT-leakage gate proof tests.
             "test_group_f_price_adjustment.py",
+            # pre-M19 Group F3 (ISSUE-018/019): 4H alignment + long/short
+            # validation advisory proof tests.
+            "test_group_f_advisories.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

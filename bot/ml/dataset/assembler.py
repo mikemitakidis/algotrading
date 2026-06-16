@@ -742,6 +742,12 @@ class DatasetAssembler:
             adjusted_close_real=bool(self.cfg.adjusted),
             allow_adjusted_prices_for_ml=bool(
                 self.cfg.allow_adjusted_prices_for_ml),
+            # F3 / ISSUE-018 + ISSUE-019 — advisory-only provenance (constant
+            # for V1; no behaviour change). 4H is UTC-fixed (not session
+            # aligned); M17 scanner-replica validates longs only.
+            fourh_bucket_alignment="utc_fixed",
+            scanner_replica_long_side_validated=True,
+            scanner_replica_short_side_validated=False,
         )
 
         return AssemblerResult(

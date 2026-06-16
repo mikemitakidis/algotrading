@@ -260,6 +260,22 @@ def assess_readiness(
         # explicit, non-misleading disclaimers
         "readiness_is_advisory": True,
         "promotion_gate": False,
+        # F3 / ISSUE-018 + ISSUE-019 — advisory provenance (never overclaim).
+        # 4H bars are UTC-fixed, NOT US-session aligned. The M17 scanner-replica
+        # validates the LONG path only; the short side is NOT validated. M19
+        # must not assume session-aligned 4H or claim short-side validation.
+        "fourh_bucket_alignment": "utc_fixed",
+        "fourh_session_aligned": False,
+        "fourh_alignment_note": (
+            "4H bars use fixed UTC buckets (00/04/08/12/16/20 UTC); they are "
+            "NOT aligned to the US cash-session open (13:30 UTC) and a bucket "
+            "straddles the open."),
+        "scanner_replica_long_side_validated": True,
+        "scanner_replica_short_side_validated": False,
+        "scanner_replica_short_side_note": (
+            "M17 scanner-replica backtest validates the long execution path "
+            "only; shorts are skipped, so the short side is NOT equally "
+            "validated."),
         # This readiness REPORT does not itself apply calibration (it only
         # reads stored artifacts) — so this flag stays False for the report.
         "predict_time_calibration_applied": False,
