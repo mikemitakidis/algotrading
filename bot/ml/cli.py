@@ -139,6 +139,14 @@ def build_parser() -> argparse.ArgumentParser:
               "If omitted, nothing is written (summary only).")
     bd.add_argument("--fixture-mode", action="store_true",
         help="Assemble in fixture mode (small-sample friendly).")
+    bd.add_argument("--adjusted", action="store_true",
+        help="Load corporate-action-ADJUSTED prices (synthetic O/H/L, "
+              "point-in-time leakage risk). Default OFF (raw). Adjusted mode "
+              "is blocked for ML readiness/promotion unless "
+              "--allow-adjusted-prices-for-ml is also set.")
+    bd.add_argument("--allow-adjusted-prices-for-ml", action="store_true",
+        help="Explicitly permit adjusted prices for ML despite the "
+              "point-in-time leakage risk (only meaningful with --adjusted).")
     bd.add_argument("--dry-run", action="store_true",
         help="Validate config and report the planned build WITHOUT "
               "loading bars or writing artifacts.")
@@ -160,6 +168,12 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--train-mode", default="model_b_candidate_quality")
     tr.add_argument("--seed", type=int, default=42)
     tr.add_argument("--fixture-mode", action="store_true")
+    tr.add_argument("--adjusted", action="store_true",
+        help="Load corporate-action-ADJUSTED prices (synthetic O/H/L, PIT "
+              "leakage risk). Default OFF (raw). Blocked for ML unless "
+              "--allow-adjusted-prices-for-ml is also set.")
+    tr.add_argument("--allow-adjusted-prices-for-ml", action="store_true",
+        help="Explicitly permit adjusted prices for ML (only with --adjusted).")
     tr.add_argument("--registry-root",
         help="Registry root dir (default: the package default).")
     tr.add_argument("--dry-run", action="store_true",
@@ -275,9 +289,13 @@ def _make_registry(_registry_root: Optional[str]):
 # inject deterministic fixture bars into the SAME real code path — they
 # never fake the assembler/trainer/registry logic.
 
-def _default_bars_provider(symbol, timeframes):
+def _default_bars_provider(symbol, timeframes, adjusted=False):
     from bot.ml.dataset import m16_loader
-    return {tf: m16_loader.load_bars(symbol, tf) for tf in timeframes}
+    # F2 / ISSUE-017: load with the SAME adjustment mode the config declares
+    # (default raw). This is what makes the manifest's price_adjustment_mode
+    # truthful — the loader and the manifest can never silently disagree.
+    return {tf: m16_loader.load_bars(symbol, tf, adjusted=adjusted)
+            for tf in timeframes}
 
 
 def _build_assembler_config(args):
@@ -288,6 +306,13 @@ def _build_assembler_config(args):
         timeframes=tuple(t.strip() for t in args.timeframes.split(",")
                          if t.strip()),
         fixture_mode=getattr(args, "fixture_mode", False),
+        # F2 / ISSUE-016+017: price-adjustment mode is explicit and defaults
+        # to raw/safe. The SAME value is threaded into load_bars(adjusted=...)
+        # by _default_bars_provider, so the manifest can never declare a mode
+        # that disagrees with how the bars were actually loaded.
+        adjusted=bool(getattr(args, "adjusted", False)),
+        allow_adjusted_prices_for_ml=bool(
+            getattr(args, "allow_adjusted_prices_for_ml", False)),
     )
     if getattr(args, "anchor_set", None):
         kwargs["anchor_set"] = args.anchor_set
@@ -321,7 +346,11 @@ def _cmd_build_dataset(args, _registry_root, _bars_provider) -> int:
             return 0
 
         provider = _bars_provider or _default_bars_provider
-        per_tf = provider(cfg.symbol, list(cfg.timeframes))
+        per_tf = (provider(cfg.symbol, list(cfg.timeframes))
+                  if _bars_provider is not None
+                  else _default_bars_provider(
+                      cfg.symbol, list(cfg.timeframes),
+                      adjusted=cfg.adjusted))
         res = _asm.DatasetAssembler(cfg).build(per_tf_bars=per_tf)
 
         summary = {
@@ -395,7 +424,11 @@ def _cmd_train(args, _registry_root, _bars_provider) -> int:
         provider = _bars_provider or _default_bars_provider
 
         # assemble (real) — needed for both dry-run validation and train
-        per_tf = provider(cfg.symbol, list(cfg.timeframes))
+        per_tf = (provider(cfg.symbol, list(cfg.timeframes))
+                  if _bars_provider is not None
+                  else _default_bars_provider(
+                      cfg.symbol, list(cfg.timeframes),
+                      adjusted=cfg.adjusted))
         res = _asm.DatasetAssembler(cfg).build(per_tf_bars=per_tf)
 
         train_config = TrainConfig(

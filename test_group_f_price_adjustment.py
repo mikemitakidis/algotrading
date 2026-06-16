@@ -123,5 +123,82 @@ class GroupF2PriceAdjustment(unittest.TestCase):
         self.assertTrue(m2.allow_adjusted_prices_for_ml)
 
 
+class GroupF2RealBuildPathThreading(unittest.TestCase):
+    """Prove the REAL CLI build path threads the SAME adjusted value into both
+    m16_loader.load_bars(adjusted=...) and AssemblerConfig.adjusted, so the
+    manifest can never silently disagree with how bars were actually loaded.
+
+    We spy on the default provider's load_bars and on the assembler build, and
+    drive the real bot.ml.cli build-dataset command (no _bars_provider
+    injected, so the DEFAULT provider path is exercised). load_bars itself is
+    patched to return deterministic fixture bars (so no real M16/network/IO).
+    """
+
+    def _run_build(self, extra_argv):
+        import io
+        import json as _json
+        import tempfile as _tf
+        from contextlib import redirect_stdout, redirect_stderr
+        from unittest import mock
+        import bot.ml.cli as cli
+
+        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        calls = {}
+
+        def fake_load_bars(symbol, tf, adjusted=True, **kw):
+            # record the adjusted value the REAL provider passes in
+            calls.setdefault("adjusted_values", []).append(adjusted)
+            return per_tf[tf]
+
+        out, err = io.StringIO(), io.StringIO()
+        with _tf.TemporaryDirectory() as root:
+            with mock.patch("bot.ml.dataset.m16_loader.load_bars",
+                            side_effect=fake_load_bars):
+                argv = ["--json", "build-dataset", "--symbol", "X",
+                        "--anchor-set",
+                        # Model B union anchors (same as other F2 builds)
+                        __import__("bot.ml.dataset.anchors",
+                                   fromlist=["ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES"])
+                        .ANCHOR_SET_MODEL_B_1H_UNION_CANDIDATES,
+                        "--output", root + "/ds"] + extra_argv
+                with redirect_stdout(out), redirect_stderr(err):
+                    rc = cli.main(argv)   # NO _bars_provider -> default path
+            manifest = None
+            mpath = root + "/ds/manifest.json"
+            import os
+            if os.path.exists(mpath):
+                with open(mpath) as _mf:
+                    manifest = _json.load(_mf)
+        return rc, calls, out.getvalue(), err.getvalue(), manifest
+
+    def test_raw_config_loads_raw_and_manifest_says_raw(self):
+        rc, calls, out, err, manifest = self._run_build([])  # default raw
+        self.assertEqual(rc, 0, f"build failed: {err[-400:]}")
+        # default provider must have called load_bars with adjusted=False
+        self.assertTrue(calls["adjusted_values"])
+        self.assertTrue(all(v is False for v in calls["adjusted_values"]),
+                        f"loader adjusted values: {calls['adjusted_values']}")
+        self.assertEqual(manifest["price_adjustment_mode"], "raw")
+
+    def test_adjusted_config_loads_adjusted_and_manifest_says_adjusted(self):
+        # adjusted + allow flag so the build is not blocked from writing.
+        rc, calls, out, err, manifest = self._run_build(
+            ["--adjusted", "--allow-adjusted-prices-for-ml"])
+        self.assertEqual(rc, 0, f"build failed: {err[-400:]}")
+        self.assertTrue(all(v is True for v in calls["adjusted_values"]),
+                        f"loader adjusted values: {calls['adjusted_values']}")
+        self.assertEqual(manifest["price_adjustment_mode"], "adjusted")
+        self.assertTrue(manifest["adjusted_ohlc_synthetic"])
+
+    def test_adjusted_without_allow_flag_blocks_promotion(self):
+        rc, calls, out, err, manifest = self._run_build(["--adjusted"])
+        # build still completes (writes manifest) but is promotion-blocked
+        self.assertTrue(all(v is True for v in calls["adjusted_values"]))
+        self.assertEqual(manifest["price_adjustment_mode"], "adjusted")
+        self.assertIn("adjusted_price_pit_risk",
+                      manifest["promotion_blocked_reasons"])
+        self.assertFalse(manifest["promotion_eligible"])
+
+
 if __name__ == "__main__":
     unittest.main()
