@@ -156,6 +156,21 @@ class DatasetManifest:
     missingness_policy_hash: str = ""
     missingness_report: Dict[str, Any] = field(default_factory=dict)
 
+    # F2 / ISSUE-016 + ISSUE-017 — price-adjustment provenance + PIT-leakage
+    # gate. Backward-compatible defaults (raw mode) so older manifests
+    # round-trip via from_dict. When adjusted prices are used, the adjusted
+    # O/H/L are SYNTHETIC (uniform per-bar adjustment_ratio; only adj_close is
+    # real — see bot.historical.store) and the values embed corporate actions
+    # known after each historical bar, i.e. a point-in-time look-ahead risk.
+    # ML readiness/promotion blocks adjusted mode unless
+    # allow_adjusted_prices_for_ml is explicitly True.
+    price_adjustment_mode:   str  = "raw"   # "raw" | "adjusted"
+    adjusted_ohlc_synthetic: bool = False
+    adjusted_ohlc_method:    str  = "none"  # "uniform_ratio" when adjusted
+    adjustment_ratio_source: str  = "none"  # "yfinance_adj_close" when adjusted
+    adjusted_close_real:     bool = False
+    allow_adjusted_prices_for_ml: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -221,6 +236,7 @@ def compute_dataset_hash(
     embargo_bars: int,
     fixture_mode_invocation: bool,
     missingness_policy_hash: str = "",
+    price_adjustment_mode: str = "raw",
 ) -> str:
     """Deterministic SHA-256 over the dataset's identity-relevant
     fields. Uses canonical_json (sorted keys, fixed separators) to
@@ -239,6 +255,9 @@ def compute_dataset_hash(
         "embargo_bars":           int(embargo_bars),
         "fixture_mode_invocation": bool(fixture_mode_invocation),
         "missingness_policy_hash": str(missingness_policy_hash),
+        # F2 / ISSUE-017: price-adjustment mode is identity-relevant — a
+        # dataset built on adjusted vs raw prices is a different dataset.
+        "price_adjustment_mode":  str(price_adjustment_mode),
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
     }
     return sha256_hex(canonical_json(payload))

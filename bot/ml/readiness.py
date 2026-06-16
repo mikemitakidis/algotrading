@@ -228,6 +228,16 @@ def assess_readiness(
         reasons.append(
             "production_thinness_blocked: " +
             ", ".join(thinness["production_blocked_reasons"]))
+    # F2 / ISSUE-017: adjusted-price point-in-time leakage gate. If the
+    # dataset was built on adjusted prices without the explicit allow flag,
+    # the assembler records adjusted_price_pit_risk in
+    # promotion_blocked_reasons; readiness must NOT call such a dataset ready.
+    _blocked = report.get("promotion_blocked_reasons", []) or []
+    if "adjusted_price_pit_risk" in _blocked:
+        reasons.append(
+            "adjusted_price_pit_risk: dataset uses adjusted prices "
+            "(synthetic O/H/L, point-in-time leakage risk) without "
+            "allow_adjusted_prices_for_ml=True")
 
     ready = len(reasons) == 0
 

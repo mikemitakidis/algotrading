@@ -109,6 +109,16 @@ class AssemblerConfig:
     feature_store: Optional[Any] = None
     label_store: Optional[Any] = None
 
+    # F2 / ISSUE-016 + ISSUE-017 — price-adjustment provenance + PIT gate.
+    # adjusted=False (raw) is the default and is always ML-allowed. adjusted
+    # prices have SYNTHETIC O/H/L and embed corporate actions known after each
+    # bar (point-in-time look-ahead), so adjusted mode is blocked for ML
+    # readiness/promotion unless allow_adjusted_prices_for_ml is explicitly
+    # set True. This config only DECLARES the mode (so the manifest records
+    # truthful provenance); the assembler does not itself fetch bars.
+    adjusted: bool = False
+    allow_adjusted_prices_for_ml: bool = False
+
     def resolved_embargo_bars(self) -> int:
         if self.embargo_bars_override is not None:
             return int(self.embargo_bars_override)
@@ -605,6 +615,7 @@ class DatasetAssembler:
             embargo_bars=embargo_bars,
             fixture_mode_invocation=self.cfg.fixture_mode,
             missingness_policy_hash=missingness_hash,
+            price_adjustment_mode=("adjusted" if self.cfg.adjusted else "raw"),
         )
 
         # 9. Manifest. Compute Q19 timeframe lists and the promotion
@@ -647,6 +658,12 @@ class DatasetAssembler:
             # av_status/av_reason rather than a bare None).
             promotion_blocked_reasons.append(
                 "adversarial_validation_not_run")
+        # F2 / ISSUE-017: adjusted prices are a point-in-time leakage risk.
+        # Block promotion/readiness when adjusted mode is used without the
+        # explicit operator allow flag. Never silently treat adjusted prices
+        # as PIT-safe.
+        if self.cfg.adjusted and not self.cfg.allow_adjusted_prices_for_ml:
+            promotion_blocked_reasons.append("adjusted_price_pit_risk")
         promotion_eligible = (len(promotion_blocked_reasons) == 0)
 
         manifest = DatasetManifest(
@@ -715,6 +732,16 @@ class DatasetAssembler:
             m16_bars_digest=bars_digest_dict,
             missingness_policy_hash=missingness_hash,
             missingness_report=missingness_report,
+            # F2 / ISSUE-016 + ISSUE-017 — price-adjustment provenance.
+            price_adjustment_mode=("adjusted" if self.cfg.adjusted else "raw"),
+            adjusted_ohlc_synthetic=bool(self.cfg.adjusted),
+            adjusted_ohlc_method=("uniform_ratio" if self.cfg.adjusted
+                                  else "none"),
+            adjustment_ratio_source=("yfinance_adj_close" if self.cfg.adjusted
+                                     else "none"),
+            adjusted_close_real=bool(self.cfg.adjusted),
+            allow_adjusted_prices_for_ml=bool(
+                self.cfg.allow_adjusted_prices_for_ml),
         )
 
         return AssemblerResult(
