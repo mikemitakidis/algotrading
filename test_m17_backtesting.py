@@ -4137,6 +4137,9 @@ class G10_Hygiene(unittest.TestCase):
             "ARCHITECTURE.md",
             "PROJECT_BRIEF.md",
             "REQUIREMENTS.md",
+            # pre-M19 Group A (ISSUE-006): operator-approved scikit-learn /
+            # joblib version pin (deliberate post-M18 dependency change).
+            "requirements.txt",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

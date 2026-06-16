@@ -10436,6 +10436,12 @@ class G10_Hygiene(unittest.TestCase):
             "ARCHITECTURE.md",
             "PROJECT_BRIEF.md",
             "REQUIREMENTS.md",
+            # pre-M19 Group A (ISSUE-006): operator-approved scikit-learn /
+            # joblib version pin. This is a deliberate post-M18 dependency
+            # change, explicitly approved; the requirements_diff audit check
+            # still reports it (by design) — only this file-presence guard
+            # is told the change is expected.
+            "requirements.txt",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
@@ -10672,6 +10678,39 @@ class G10_AuditRunner(unittest.TestCase):
         root = self._clean_root()
         with self.assertRaises(ValueError):
             self._runner(root).run(mode="not_a_mode")
+
+    def test_real_test_runner_uses_current_interpreter(self):
+        """ISSUE-023: the audit's unittest subprocess must launch with the
+        current interpreter (sys.executable), not a bare 'python3' resolved
+        from PATH. Otherwise the audit can run against a different
+        environment than the one that invoked it (e.g. when the venv is not
+        first in PATH), producing spurious failures.
+
+        We patch subprocess.run to capture argv without executing anything.
+        """
+        import sys as _sys
+        from unittest import mock
+        from bot.ml import audit as _audit
+
+        captured = {}
+
+        class _FakeProc:
+            returncode = 0
+            stdout = ""
+            stderr = "OK\n"
+
+        def _fake_run(cmd, *a, **k):
+            captured["cmd"] = cmd
+            return _FakeProc()
+
+        with mock.patch.object(_audit.subprocess, "run", _fake_run):
+            _audit._real_test_runner(["test_m18_ml.G10_Hygiene"])
+
+        self.assertEqual(captured["cmd"][0], _sys.executable,
+                         "audit subprocess must use sys.executable")
+        self.assertNotEqual(captured["cmd"][0], "python3",
+                            "audit subprocess must not use bare 'python3'")
+        self.assertEqual(captured["cmd"][1:3], ["-m", "unittest"])
 
 
 # ─────────────────────────────────────────────────────────────────────

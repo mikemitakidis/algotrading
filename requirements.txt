@@ -5,6 +5,8 @@ flask==3.1.0
 python-dotenv==1.0.1
 requests==2.32.3
 xgboost>=2.0
+scikit-learn==1.8.0
+joblib==1.5.3
 alpaca-py>=0.8
 pyarrow>=24,<25
 ib_insync>=0.9

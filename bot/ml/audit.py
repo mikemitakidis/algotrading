@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -83,8 +84,13 @@ def _real_git_runner(args: List[str]) -> Tuple[int, str, str]:
 
 
 def _real_test_runner(targets: List[str]) -> Tuple[int, str, str]:
+    # Use the *current* interpreter (sys.executable) rather than a bare
+    # "python3" from PATH. This makes the audit robust regardless of whether
+    # the active virtualenv is first in PATH (ISSUE-023): the subprocess runs
+    # in the same environment as the audit itself, so installed deps
+    # (scikit-learn, pandas, etc.) are guaranteed to match.
     p = subprocess.run(
-        ["python3", "-m", "unittest", *targets],
+        [sys.executable, "-m", "unittest", *targets],
         capture_output=True, text=True, timeout=1800)
     # unittest writes its summary to stderr
     return p.returncode, p.stdout, p.stderr
@@ -277,7 +283,7 @@ class AuditRunner:
         summary = tail[-1] if tail else ""
         return _check(
             name, ok, summary,
-            "python3 -m unittest " + " ".join(targets))
+            sys.executable + " -m unittest " + " ".join(targets))
 
     def _hygiene_checks(self) -> List[Dict[str, Any]]:
         return [
