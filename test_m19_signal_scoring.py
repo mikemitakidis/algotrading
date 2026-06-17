@@ -19,7 +19,9 @@ from bot.signal_scoring import (
     PenaltyItem, PenaltyResult, MultiplierItem, MultiplierResult,
     evaluate_penalties, evaluate_multipliers,
     PENALTY_NAMES, MULTIPLIER_NAMES,
+    score_candidate, assemble_score,
 )
+from bot.signal_scoring.schema import GateResult, GateFailure
 from bot.signal_scoring import provenance
 from bot.signal_scoring.config import CONFIG_SCHEMA_VERSION
 
@@ -1781,6 +1783,343 @@ class M19DPenaltiesMultipliers(unittest.TestCase):
             elif isinstance(n, ast.Attribute) and n.attr in code_forbidden:
                 offenders.append(n.attr)
         self.assertEqual(offenders, [], f"forbidden dependency: {offenders}")
+
+
+class M19EComposite(unittest.TestCase):
+    """M19.E composite score & bucket assembly. Matrices A-J + hard-BLOCK
+    transparency, manual-review cap, short cap, config-threshold movement."""
+
+    def _cfg(self, profile=None):
+        return default_config(profile) if profile else default_config()
+
+    def _comps(self, ml, support):
+        d = {"ml": ComponentScore(component="ml", score=ml)}
+        from bot.signal_scoring import COMPONENT_NAMES
+        for c in COMPONENT_NAMES:
+            if c != "ml":
+                d[c] = ComponentScore(component=c, score=support)
+        return d
+
+    def _gate(self, passed=True, bucket=None, profile=ScoringProfile.STRICT,
+              block=None, mr=None):
+        return GateResult(profile=profile, passed=passed,
+                          decision_bucket=bucket, block_reasons=block or [],
+                          manual_review_reasons=mr or [])
+
+    def _pen(self, total=0.0, raw=None, items=None):
+        return PenaltyResult(profile=ScoringProfile.STRICT, items=items or [],
+                             total_points=total,
+                             raw_total_points=raw if raw is not None else total)
+
+    def _mul(self, eff=1.0, prod=1.0, items=None):
+        return MultiplierResult(profile=ScoringProfile.STRICT,
+                                items=items or [], product=prod,
+                                effective_multiplier=eff)
+
+    def _ci(self, side="LONG"):
+        return SignalCandidateInput(symbol="AAPL", side=side,
+                                    signal_timestamp_utc="2026-06-17T10:15:00Z")
+
+    def _assemble(self, *, ml=70, support=70, gate=None, pen=None, mul=None,
+                  side="LONG", cfg=None):
+        return assemble_score(
+            gate or self._gate(), self._comps(ml, support),
+            pen or self._pen(), mul or self._mul(), self._ci(side),
+            cfg or self._cfg())
+
+    # ── Matrix B: score -> decision bucket (gate PASS, LONG) ──
+    def test_matrix_b_decision_buckets(self):
+        cases = {0: "REJECT", 44.9: "REJECT", 45: "WATCH", 57.9: "WATCH",
+                 58: "MANUAL_REVIEW", 64.9: "MANUAL_REVIEW", 65: "ELIGIBLE",
+                 81.9: "ELIGIBLE", 82: "HIGH_CONVICTION", 100: "HIGH_CONVICTION"}
+        for score, bucket in cases.items():
+            sc = self._assemble(ml=score, support=score)
+            self.assertEqual(sc.decision_bucket.value, bucket,
+                             f"score={score}")
+
+    # ── Matrix C: confidence bucket ──
+    def test_matrix_c_confidence(self):
+        cases = {44.9: "LOW", 45: "MEDIUM", 64.9: "MEDIUM", 65: "MEDIUM_HIGH",
+                 81.9: "MEDIUM_HIGH", 82: "HIGH", 100: "HIGH"}
+        for score, conf in cases.items():
+            sc = self._assemble(ml=score, support=score)
+            self.assertEqual(sc.confidence_bucket.value, conf, f"score={score}")
+
+    # ── Matrix D: composite math numerical examples ──
+    def test_matrix_d_composite_math(self):
+        # base=0.55*anchor+0.45*support ; pre=base*mult ; final=clamp(pre-pen)
+        cases = [(80, 60, 1.0, 0, 71.0), (80, 60, 0.85, 10, 50.35),
+                 (90, 90, 1.0, 0, 90.0), (30, 30, 0.70, 30, 0.0),
+                 (100, 100, 1.0, 0, 100.0)]
+        for anchor, support, m, p, expected in cases:
+            sc = self._assemble(ml=anchor, support=support,
+                                mul=self._mul(eff=m), pen=self._pen(p))
+            self.assertAlmostEqual(sc.final_score, expected, places=2,
+                                   msg=f"a={anchor} s={support} m={m} p={p}")
+
+    def test_support_renormalised_over_non_ml(self):
+        # ML weight excluded: anchor varies but support depends only on the
+        # 10 non-ML components. Two inputs with same support, different ml ->
+        # base differs only via the anchor term.
+        cfg = self._cfg()
+        sc_a = self._assemble(ml=100, support=50, cfg=cfg)
+        sc_b = self._assemble(ml=0, support=50, cfg=cfg)
+        # base_a - base_b = ml_anchor_weight*(100-0) = 0.55*100 = 55
+        self.assertAlmostEqual(sc_a.final_score - sc_b.final_score, 55.0,
+                               places=4)
+
+    def test_multiplier_applied_before_penalty(self):
+        # base=100, mult=0.9, pen=10 -> (100*0.9)-10 = 80 (not (100-10)*0.9=81)
+        sc = self._assemble(ml=100, support=100, mul=self._mul(eff=0.9),
+                            pen=self._pen(10))
+        self.assertAlmostEqual(sc.final_score, 80.0, places=4)
+
+    # ── Matrix F: clamp ──
+    def test_matrix_f_clamp_low(self):
+        sc = self._assemble(ml=0, support=0, pen=self._pen(50))
+        self.assertEqual(sc.final_score, 0.0)
+
+    def test_matrix_f_clamp_high(self):
+        sc = self._assemble(ml=100, support=100, mul=self._mul(eff=1.0))
+        self.assertEqual(sc.final_score, 100.0)
+
+    def test_final_score_equals_final_score_100(self):
+        for score in (0, 33.3, 58, 82, 100):
+            sc = self._assemble(ml=score, support=score)
+            self.assertEqual(sc.final_score, sc.final_score_100)
+
+    # ── Matrix A + hard-BLOCK transparency ──
+    def test_matrix_a_block_overrides_score(self):
+        sc = self._assemble(ml=100, support=100,
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.BLOCKED,
+                                            block=["min_liquidity"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.BLOCKED)
+        self.assertEqual(sc.final_score, 0.0)
+        self.assertEqual(sc.final_score_100, 0.0)
+        self.assertFalse(sc.execution_eligible)
+        # sub-results still embedded for explainability
+        self.assertTrue(sc.component_scores)
+        self.assertIn("effective_multiplier", sc.multipliers)
+        self.assertIn("total_points", sc.penalties)
+
+    def test_block_short_still_blocked(self):
+        sc = self._assemble(ml=100, support=100, side="SHORT",
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.BLOCKED,
+                                            block=["short_side"],
+                                            profile=ScoringProfile.STRICT))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.BLOCKED)
+        self.assertEqual(sc.final_score, 0.0)
+        self.assertFalse(sc.execution_eligible)
+
+    # ── manual-review cap matrix ──
+    def test_manual_review_caps_high_conviction(self):
+        sc = self._assemble(ml=100, support=100,
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.MANUAL_REVIEW,
+                                            profile=ScoringProfile.RESEARCH,
+                                            mr=["short_side"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.MANUAL_REVIEW)
+        self.assertFalse(sc.execution_eligible)
+        self.assertIn("would_be_high_conviction_capped_to_manual_review",
+                      sc.reason_codes)
+        self.assertIn("manual_review_gate_cap", sc.reason_codes)
+
+    def test_manual_review_caps_eligible(self):
+        sc = self._assemble(ml=70, support=70,
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.MANUAL_REVIEW,
+                                            profile=ScoringProfile.RESEARCH,
+                                            mr=["x"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.MANUAL_REVIEW)
+        self.assertIn("would_be_eligible_capped_to_manual_review",
+                      sc.reason_codes)
+
+    def test_manual_review_low_score_not_promoted(self):
+        # MR gate but a WATCH-level score stays WATCH (cap only lowers)
+        sc = self._assemble(ml=50, support=50,
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.MANUAL_REVIEW,
+                                            profile=ScoringProfile.RESEARCH,
+                                            mr=["x"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.WATCH)
+
+    # ── short cap matrix ──
+    def test_short_cannot_be_high_conviction(self):
+        sc = self._assemble(ml=100, support=100, side="SHORT",
+                            gate=self._gate(passed=True))
+        self.assertNotIn(sc.decision_bucket,
+                         (DecisionBucket.ELIGIBLE,
+                          DecisionBucket.HIGH_CONVICTION))
+        self.assertFalse(sc.execution_eligible)
+        self.assertIn("would_be_high_conviction_capped_for_short",
+                      sc.reason_codes)
+        self.assertIn("short_side_not_executable", sc.reason_codes)
+
+    def test_short_cannot_be_eligible(self):
+        sc = self._assemble(ml=70, support=70, side="SHORT",
+                            gate=self._gate(passed=True))
+        self.assertNotIn(sc.decision_bucket,
+                         (DecisionBucket.ELIGIBLE,
+                          DecisionBucket.HIGH_CONVICTION))
+        self.assertFalse(sc.execution_eligible)
+        self.assertIn("would_be_eligible_capped_for_short", sc.reason_codes)
+
+    # ── execution eligibility ──
+    def test_execution_eligible_long_happy_path(self):
+        sc = self._assemble(ml=90, support=90, gate=self._gate(passed=True))
+        self.assertTrue(sc.execution_eligible)
+        self.assertEqual(sc.decision_bucket, DecisionBucket.HIGH_CONVICTION)
+
+    def test_execution_eligible_false_when_watch(self):
+        sc = self._assemble(ml=50, support=50, gate=self._gate(passed=True))
+        self.assertFalse(sc.execution_eligible)
+
+    def test_execution_eligible_false_when_gate_not_passed(self):
+        sc = self._assemble(ml=90, support=90,
+                            gate=self._gate(passed=False,
+                                            bucket=DecisionBucket.MANUAL_REVIEW,
+                                            profile=ScoringProfile.RESEARCH,
+                                            mr=["x"]))
+        self.assertFalse(sc.execution_eligible)
+
+    # ── config-threshold movement (proves no magic numbers) ──
+    def test_config_threshold_movement(self):
+        base = default_config()
+        th = dict(base.thresholds)
+        th["eligible_min"] = 70
+        moved = SignalScoringConfig(thresholds=th)
+        sc_default = self._assemble(ml=67, support=67, cfg=base)
+        sc_moved = self._assemble(ml=67, support=67, cfg=moved)
+        self.assertEqual(sc_default.decision_bucket, DecisionBucket.ELIGIBLE)
+        self.assertEqual(sc_moved.decision_bucket, DecisionBucket.MANUAL_REVIEW)
+
+    # ── warning / reason-code union (deduped, sorted) ──
+    def test_warning_reason_code_union(self):
+        comps = self._comps(70, 70)
+        comps["ml"] = ComponentScore(component="ml", score=70,
+                                     warnings=["raw_probability_used"],
+                                     reason_codes=["ml_eligible_band"])
+        comps["scanner"] = ComponentScore(component="scanner", score=70,
+                                          warnings=["missing_soft_input"])
+        pen = PenaltyResult(profile=ScoringProfile.STRICT, items=[],
+                            total_points=0, raw_total_points=0,
+                            reason_codes=["poor_reward_risk"],
+                            warnings=["invalid_soft_input"])
+        mul = MultiplierResult(profile=ScoringProfile.STRICT, items=[],
+                               product=1.0, effective_multiplier=1.0,
+                               reason_codes=["regime_aligned"],
+                               warnings=["missing_soft_input"])
+        sc = assemble_score(self._gate(passed=True), comps, pen, mul,
+                            self._ci(), self._cfg())
+        # deduped + sorted
+        self.assertEqual(sc.warnings, sorted(set(sc.warnings)))
+        self.assertEqual(sc.reason_codes, sorted(set(sc.reason_codes)))
+        self.assertIn("raw_probability_used", sc.warnings)
+        self.assertIn("invalid_soft_input", sc.warnings)
+        # missing_soft_input came from two sources -> appears once
+        self.assertEqual(sc.warnings.count("missing_soft_input"), 1)
+        self.assertIn("poor_reward_risk", sc.reason_codes)
+        self.assertIn("regime_aligned", sc.reason_codes)
+
+    # ── ScoredSignalCandidate contract ──
+    def test_scored_candidate_roundtrip(self):
+        sc = self._assemble(ml=70, support=70)
+        sc2 = ScoredSignalCandidate.from_dict(sc.to_dict())
+        self.assertEqual(sc.to_dict(), sc2.to_dict())
+
+    def test_scored_candidate_unknown_field_rejected(self):
+        d = self._assemble(ml=70, support=70).to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            ScoredSignalCandidate.from_dict(d)
+
+    # ── deterministic provenance ──
+    def test_deterministic_provenance(self):
+        ci = SignalCandidateInput(
+            symbol="AAPL", side="LONG",
+            signal_timestamp_utc="2026-06-17T10:15:00Z",
+            ml_context={"calibration_applied": True,
+                        "prediction_calibrated": 0.7,
+                        "model_readiness_passed": True,
+                        "production_thinness_status": "ok",
+                        "price_adjustment_mode": "raw"},
+            data_quality_context={"schema_match": True, "stale_data_flag": False,
+                                  "data_freshness_minutes": 5,
+                                  "missing_feature_count": 0},
+            advisory_context={"adjusted_price_pit_risk": False},
+            timeframe_context={"available_timeframes": 4, "valid_timeframes": 4},
+            risk_preview={"risk_preview_available": True,
+                          "risk_authority_status": "ok",
+                          "reward_risk_ratio": 2.0},
+            liquidity_context={"avg_dollar_volume_20d": 60_000_000,
+                               "price": 150.0})
+        cfg = self._cfg()
+        a = score_candidate(ci, cfg)
+        b = score_candidate(ci, cfg)
+        self.assertEqual(a.to_dict(), b.to_dict())
+        self.assertEqual(a.candidate_id, b.candidate_id)
+
+    def test_provenance_differs_for_different_input(self):
+        cfg = self._cfg()
+        a = score_candidate(self._ci("LONG"), cfg)
+        b = score_candidate(self._ci("SHORT"), cfg)
+        self.assertNotEqual(a.candidate_id, b.candidate_id)
+
+    def test_score_candidate_end_to_end_no_crash(self):
+        sc = score_candidate(self._ci("LONG"), self._cfg())
+        self.assertIsInstance(sc, ScoredSignalCandidate)
+
+    # ── AST guards ──
+    def test_composite_calls_existing_evaluators(self):
+        import ast
+        src = (_PKG_DIR / "composite.py").read_text()
+        tree = ast.parse(src)
+        called = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                called.add(n.func.id)
+        for fn in ("evaluate_hard_gates", "score_all_components",
+                   "evaluate_penalties", "evaluate_multipliers",
+                   "assemble_score"):
+            self.assertIn(fn, called, f"composite must call {fn}")
+
+    def test_composite_no_forbidden_dependencies(self):
+        import ast
+        src = (_PKG_DIR / "composite.py").read_text()
+        tree = ast.parse(src)
+        offenders = []
+        forbidden_mod = ("broker", "brokers", "live", "dashboard", "main",
+                         "socket", "requests", "urllib", "aiohttp", "sqlite3",
+                         "yfinance")
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if any(a.name == m or a.name.startswith(m + ".")
+                           for m in forbidden_mod):
+                        offenders.append(a.name)
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                if any(n.module == m or n.module.startswith(m + ".")
+                       or n.module.endswith("." + m)
+                       for m in forbidden_mod):
+                    offenders.append(n.module)
+            elif isinstance(n, ast.Call):
+                fn = n.func
+                name = (fn.attr if isinstance(fn, ast.Attribute)
+                        else fn.id if isinstance(fn, ast.Name) else "")
+                if name in ("open", "write", "connect", "fetch", "get",
+                            "post", "execute", "executemany"):
+                    offenders.append(f"call:{name}")
+        self.assertEqual(offenders, [], f"forbidden dependency: {offenders}")
+
+    def test_no_files_created_on_import(self):
+        import importlib
+        import bot.signal_scoring.composite as comp
+        importlib.reload(comp)
+        self.assertEqual(
+            len([p for p in (_REPO_ROOT / "data" / "m19").glob("*")]
+                if (_REPO_ROOT / "data" / "m19").exists() else []), 0)
 
 
 if __name__ == "__main__":

@@ -61,6 +61,10 @@ from bot.signal_scoring.penalties import (  # noqa: F401
     PENALTY_NAMES,
     MULTIPLIER_NAMES,
 )
+from bot.signal_scoring.composite import (  # noqa: F401
+    score_candidate,
+    assemble_score,
+)
 
 __all__ = [
     "SCHEMA_VERSION_INPUT",
@@ -96,6 +100,8 @@ __all__ = [
     "evaluate_multipliers",
     "PENALTY_NAMES",
     "MULTIPLIER_NAMES",
+    "score_candidate",
+    "assemble_score",
 ]
 
-M19_PHASE = "M19.D"
+M19_PHASE = "M19.E"
