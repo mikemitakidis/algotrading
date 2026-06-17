@@ -17,6 +17,7 @@ from bot.paper import (
     PaperRoutingDecision, PaperOrder, PaperFill, PaperPosition,
     PaperPnLSnapshot, PaperEvent, PaperTradingConfig, default_paper_config,
     PaperSide, PaperOrderType, PaperEventType, PaperOrderStatus,
+    PaperPositionStatus,
     PaperContractViolation, InvalidPaperTransition,
     assert_m19_candidate_contract, is_valid_transition, validate_transition,
     TERMINAL_STATES, provenance,
@@ -56,7 +57,7 @@ class M20AContracts(unittest.TestCase):
         pp = PaperPosition(
             paper_position_id=provenance.paper_position_id({"p": 1}),
             symbol="AAPL", side="LONG", quantity=10,
-            average_entry_price=100.0, status="FILLED", opened_at_utc=_TS)
+            average_entry_price=100.0, status="OPEN", opened_at_utc=_TS)
         pnl = PaperPnLSnapshot(timestamp_utc=_TS, total_paper_equity=100000.0,
                                available_paper_cash=90000.0)
         ev = PaperEvent(paper_event_id=provenance.paper_event_id({"e": 1}),
@@ -339,6 +340,124 @@ class M20AStorage(unittest.TestCase):
     def test_no_sqlite_anywhere(self):
         for path in _PKG_DIR.glob("*.py"):
             self.assertNotIn("sqlite3", path.read_text(), f"{path.name}")
+
+
+class M20ACorrectivePass(unittest.TestCase):
+    """Corrective M20.A: position status separated from order status; impossible
+    numeric paper values rejected at contract-freeze time."""
+
+    def _pos(self, **over):
+        base = dict(
+            paper_position_id=provenance.paper_position_id({"p": 1}),
+            symbol="AAPL", side="LONG", quantity=10,
+            average_entry_price=100.0, status="OPEN", opened_at_utc=_TS)
+        base.update(over)
+        return PaperPosition(**base)
+
+    # ── position status separation ──
+    def test_position_status_open(self):
+        self.assertEqual(self._pos(status="OPEN").status,
+                         PaperPositionStatus.OPEN)
+
+    def test_position_status_closed(self):
+        self.assertEqual(self._pos(status="CLOSED", quantity=0,
+                                   closed_at_utc=_TS).status,
+                         PaperPositionStatus.CLOSED)
+
+    def test_position_status_filled_rejected(self):
+        with self.assertRaises(ValueError):
+            self._pos(status="FILLED")
+
+    def test_position_status_partial_fill_rejected(self):
+        with self.assertRaises(ValueError):
+            self._pos(status="PARTIAL_FILL")
+
+    def test_position_does_not_reuse_order_status(self):
+        # PaperPosition.status must be a PaperPositionStatus, not a
+        # PaperOrderStatus (schema uses `from __future__ import annotations`,
+        # so the raw annotation is a string — assert via the coerced instance
+        # and the annotation text).
+        ann = PaperPosition.__annotations__["status"]
+        self.assertEqual(ann, "PaperPositionStatus")
+        self.assertIsInstance(self._pos().status, PaperPositionStatus)
+        self.assertNotIsInstance(self._pos().status, PaperOrderStatus)
+        # PaperOrderStatus has no OPEN member; PaperPositionStatus does
+        self.assertFalse(hasattr(PaperOrderStatus, "OPEN"))
+        self.assertTrue(hasattr(PaperPositionStatus, "OPEN"))
+
+    # ── PaperOrder numeric validation ──
+    def test_order_rejects_bad_numbers(self):
+        for bad in (dict(quantity=0), dict(quantity=-1),
+                    dict(reference_price=0), dict(reference_price=-5),
+                    dict(limit_price=0), dict(limit_price=-1),
+                    dict(simulated_stop_loss=0),
+                    dict(simulated_stop_loss=-2),
+                    dict(simulated_take_profit=0),
+                    dict(simulated_take_profit=-3)):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                _order(**bad)
+
+    def test_order_accepts_valid_optionals(self):
+        po = _order(limit_price=101.0, simulated_stop_loss=98.0,
+                    simulated_take_profit=104.0)
+        self.assertEqual(po.limit_price, 101.0)
+
+    # ── PaperFill numeric validation ──
+    def test_fill_rejects_bad_numbers(self):
+        oid = provenance.paper_order_id({"o": 1})
+        fid = provenance.paper_fill_id({"f": 1})
+        for bad in (dict(fill_price=0), dict(fill_price=-1),
+                    dict(fill_quantity=0), dict(fill_quantity=-1),
+                    dict(assumed_slippage=-0.1),
+                    dict(assumed_commission=-0.1)):
+            base = dict(paper_fill_id=fid, paper_order_id=oid,
+                        fill_price=100.0, fill_quantity=10, fill_time_utc=_TS)
+            base.update(bad)
+            with self.assertRaises(ValueError, msg=str(bad)):
+                PaperFill(**base)
+
+    def test_fill_accepts_zero_slippage_commission(self):
+        pf = PaperFill(paper_fill_id=provenance.paper_fill_id({"f": 2}),
+                       paper_order_id=provenance.paper_order_id({"o": 2}),
+                       fill_price=100.0, fill_quantity=10, fill_time_utc=_TS,
+                       assumed_slippage=0.0, assumed_commission=0.0)
+        self.assertEqual(pf.assumed_slippage, 0.0)
+
+    # ── PaperPosition numeric validation ──
+    def test_position_rejects_negative_quantity(self):
+        with self.assertRaises(ValueError):
+            self._pos(quantity=-1)
+
+    def test_position_rejects_bad_entry_when_qty_positive(self):
+        for bad in (0, -5):
+            with self.assertRaises(ValueError):
+                self._pos(quantity=10, average_entry_price=bad)
+
+    def test_position_allows_zero_quantity_closed(self):
+        # a fully closed position may have quantity 0 (entry not required > 0)
+        p = self._pos(quantity=0, average_entry_price=0.0, status="CLOSED",
+                      closed_at_utc=_TS)
+        self.assertEqual(p.quantity, 0)
+
+    # ── PaperPnLSnapshot numeric validation ──
+    def test_pnl_rejects_negative_balances(self):
+        for bad in (dict(total_paper_equity=-1),
+                    dict(available_paper_cash=-1),
+                    dict(locked_paper_margin=-1),
+                    dict(drawdown_pct=-1)):
+            base = dict(timestamp_utc=_TS, total_paper_equity=100000.0,
+                        available_paper_cash=90000.0)
+            base.update(bad)
+            with self.assertRaises(ValueError, msg=str(bad)):
+                PaperPnLSnapshot(**base)
+
+    def test_pnl_allows_negative_pnl_fields(self):
+        snap = PaperPnLSnapshot(timestamp_utc=_TS, total_paper_equity=100000.0,
+                                available_paper_cash=90000.0,
+                                daily_realized_pnl=-500.0,
+                                unrealized_pnl=-1200.0)
+        self.assertEqual(snap.daily_realized_pnl, -500.0)
+        self.assertEqual(snap.unrealized_pnl, -1200.0)
 
 
 if __name__ == "__main__":

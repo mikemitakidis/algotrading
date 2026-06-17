@@ -21,6 +21,7 @@ from bot.paper.schema import (  # noqa: F401,E402
     PaperContractViolation,
     PaperSide,
     PaperOrderType,
+    PaperPositionStatus,
     PaperEventType,
     PaperRoutingDecision,
     PaperOrder,
@@ -46,6 +47,7 @@ __all__ = [
     "PaperOrderStatus",
     "PaperSide",
     "PaperOrderType",
+    "PaperPositionStatus",
     "PaperEventType",
     # schemas
     "PaperRoutingDecision",

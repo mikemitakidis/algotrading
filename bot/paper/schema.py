@@ -43,6 +43,13 @@ class PaperOrderType(str, Enum):
     LIMIT = "LIMIT"
 
 
+class PaperPositionStatus(str, Enum):
+    """Position status is distinct from order lifecycle status: a position is
+    only ever OPEN or CLOSED (it is never FILLED/PARTIAL_FILL/etc.)."""
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
 class PaperEventType(str, Enum):
     ROUTING_DECIDED = "ROUTING_DECIDED"
     ORDER_CREATED = "ORDER_CREATED"
@@ -86,6 +93,28 @@ def _coerce_enum(value, enum_cls, field_name):
             raise ValueError(f"{field_name}: unknown {enum_cls.__name__} "
                              f"{value!r}")
     raise ValueError(f"{field_name}: unknown {enum_cls.__name__} {value!r}")
+
+
+def _require_positive(value, field_name: str) -> None:
+    """Reject non-numeric, bool, NaN/inf, and <= 0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a positive number, got "
+                         f"{value!r}")
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError(f"{field_name} must be finite, got {value!r}")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be > 0, got {value!r}")
+
+
+def _require_non_negative(value, field_name: str) -> None:
+    """Reject non-numeric, bool, NaN/inf, and < 0 (zero allowed)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a non-negative number, got "
+                         f"{value!r}")
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError(f"{field_name} must be finite, got {value!r}")
+    if value < 0:
+        raise ValueError(f"{field_name} must be >= 0, got {value!r}")
 
 
 # ──────────────────────────── ingestion guard ────────────────────────────
@@ -177,6 +206,15 @@ class PaperOrder:
             raise ValueError("paper_order_id must start with 'PPR-'")
         if not isinstance(self.symbol, str) or not self.symbol:
             raise ValueError("symbol must be a non-empty string")
+        _require_positive(self.quantity, "quantity")
+        _require_positive(self.reference_price, "reference_price")
+        if self.limit_price is not None:
+            _require_positive(self.limit_price, "limit_price")
+        if self.simulated_stop_loss is not None:
+            _require_positive(self.simulated_stop_loss, "simulated_stop_loss")
+        if self.simulated_take_profit is not None:
+            _require_positive(self.simulated_take_profit,
+                              "simulated_take_profit")
         _require_utc(self.created_at_utc, "created_at_utc")
 
     def to_dict(self) -> Dict[str, Any]:
@@ -216,6 +254,10 @@ class PaperFill:
         if not isinstance(self.paper_order_id, str) or \
                 not self.paper_order_id.startswith(provenance.PPR_PREFIX):
             raise ValueError("paper_order_id must start with 'PPR-'")
+        _require_positive(self.fill_price, "fill_price")
+        _require_positive(self.fill_quantity, "fill_quantity")
+        _require_non_negative(self.assumed_slippage, "assumed_slippage")
+        _require_non_negative(self.assumed_commission, "assumed_commission")
         _require_utc(self.fill_time_utc, "fill_time_utc")
 
     def to_dict(self) -> Dict[str, Any]:
@@ -240,7 +282,7 @@ class PaperPosition:
     side: PaperSide
     quantity: float
     average_entry_price: float
-    status: PaperOrderStatus
+    status: PaperPositionStatus
     opened_at_utc: str
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
@@ -252,13 +294,16 @@ class PaperPosition:
         object.__setattr__(self, "side",
                            _coerce_enum(self.side, PaperSide, "side"))
         object.__setattr__(self, "status",
-                           _coerce_enum(self.status, PaperOrderStatus,
+                           _coerce_enum(self.status, PaperPositionStatus,
                                         "status"))
         if not isinstance(self.paper_position_id, str) or \
                 not self.paper_position_id.startswith(provenance.PPS_PREFIX):
             raise ValueError("paper_position_id must start with 'PPS-'")
         if not isinstance(self.symbol, str) or not self.symbol:
             raise ValueError("symbol must be a non-empty string")
+        _require_non_negative(self.quantity, "quantity")
+        if self.quantity > 0:
+            _require_positive(self.average_entry_price, "average_entry_price")
         _require_utc(self.opened_at_utc, "opened_at_utc")
         if self.closed_at_utc is not None:
             _require_utc(self.closed_at_utc, "closed_at_utc")
@@ -293,6 +338,11 @@ class PaperPnLSnapshot:
     IS_LIVE: bool = field(default=False, init=False)
 
     def __post_init__(self):
+        _require_non_negative(self.total_paper_equity, "total_paper_equity")
+        _require_non_negative(self.available_paper_cash, "available_paper_cash")
+        _require_non_negative(self.locked_paper_margin, "locked_paper_margin")
+        _require_non_negative(self.drawdown_pct, "drawdown_pct")
+        # daily_realized_pnl / unrealized_pnl / realized_pnl MAY be negative.
         _require_utc(self.timestamp_utc, "timestamp_utc")
 
     def to_dict(self) -> Dict[str, Any]:
