@@ -10412,6 +10412,7 @@ class G10_Hygiene(unittest.TestCase):
         allowed_prefixes = (
             "bot/backtesting/", "configs/backtests/",   # M17
             "bot/ml/",          "configs/ml/",          # M18
+            "bot/signal_scoring/", "configs/signal_scoring/",  # M19
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10459,6 +10460,8 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group F3 (ISSUE-018/019): 4H alignment + long/short
             # validation advisory proof tests.
             "test_group_f_advisories.py",
+            # M19.A: signal-scoring contracts/config/provenance proof tests.
+            "test_m19_signal_scoring.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

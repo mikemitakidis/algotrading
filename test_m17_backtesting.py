@@ -4164,7 +4164,8 @@ class G10_Hygiene(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         changed = sorted(result.stdout.strip().splitlines())
         # Build the allowed set
-        allowed_prefixes = ("bot/backtesting/", "configs/backtests/")
+        allowed_prefixes = ("bot/backtesting/", "configs/backtests/",
+                            "bot/signal_scoring/", "configs/signal_scoring/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4204,6 +4205,8 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group F3 (ISSUE-018/019): 4H alignment + long/short
             # validation advisory proof tests.
             "test_group_f_advisories.py",
+            # M19.A: signal-scoring contracts/config/provenance proof tests.
+            "test_m19_signal_scoring.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
