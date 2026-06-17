@@ -1980,8 +1980,11 @@ class M19EComposite(unittest.TestCase):
 
     # ── execution eligibility ──
     def test_execution_eligible_long_happy_path(self):
+        # M19 final contract (M19.H): execution_eligible is ALWAYS False, even
+        # for a LONG that scores into HIGH_CONVICTION. The bucket still reflects
+        # quality.
         sc = self._assemble(ml=90, support=90, gate=self._gate(passed=True))
-        self.assertTrue(sc.execution_eligible)
+        self.assertFalse(sc.execution_eligible)
         self.assertEqual(sc.decision_bucket, DecisionBucket.HIGH_CONVICTION)
 
     def test_execution_eligible_false_when_watch(self):
@@ -2656,8 +2659,10 @@ class M19GOutputAudit(unittest.TestCase):
             "warnings", "config_hash", "input_digest"})
 
     def test_matrix_e_eligible(self):
+        # M19 final contract: execution_eligible always False; bucket still
+        # reflects quality (HIGH_CONVICTION).
         r = build_scoring_audit_record(self._mk(ml=90, support=90))
-        self.assertTrue(r["execution_eligible"])
+        self.assertFalse(r["execution_eligible"])
         self.assertEqual(r["decision_bucket"], "HIGH_CONVICTION")
 
     def test_matrix_e_blocked(self):
@@ -2688,7 +2693,9 @@ class M19GOutputAudit(unittest.TestCase):
         self.assertEqual(s["total"], 3)
         self.assertEqual(s["by_decision_bucket"]["HIGH_CONVICTION"], 1)
         self.assertEqual(s["by_decision_bucket"]["BLOCKED"], 1)
-        self.assertEqual(s["execution_eligible_count"], 1)
+        # M19 final contract: execution_eligible always False -> count is 0 even
+        # though one candidate is HIGH_CONVICTION.
+        self.assertEqual(s["execution_eligible_count"], 0)
 
     def test_matrix_f_empty(self):
         s = build_scoring_audit_summary([])
@@ -2760,6 +2767,201 @@ class M19GOutputAudit(unittest.TestCase):
             for tok in ("sqlite3", "requests.", "urllib.request", "aiohttp",
                         "socket.socket"):
                 self.assertNotIn(tok, src, f"{mod} contains {tok}")
+
+
+class M19HFinalAudit(unittest.TestCase):
+    """M19.H final acceptance audit. Locks the final M19 contract:
+    execution_eligible is ALWAYS False; buckets remain quality signals; public
+    API is frozen; package is pure and safe for M20 consumption. Asserts
+    existing/final invariants only — no scoring behaviour is introduced here."""
+
+    _EXPECTED_API = {
+        "COMPONENT_NAMES", "COMPONENT_SCORERS", "ComponentScore",
+        "ConfidenceBucket", "DEFAULT_PROFILE", "DecisionBucket", "GATE_ORDER",
+        "GateFailure", "GateOutcome", "GateResult", "MULTIPLIER_NAMES",
+        "MultiplierItem", "MultiplierResult", "PENALTY_NAMES", "PenaltyItem",
+        "PenaltyResult", "PenaltySeverity", "SCHEMA_VERSION_INPUT",
+        "SCHEMA_VERSION_OUTPUT", "ScoredSignalCandidate", "ScoringProfile",
+        "SignalCandidateInput", "SignalScoringConfig", "SignalSide",
+        "adapter_from_candidate_snapshot", "adapter_from_scanner_signal",
+        "assemble_score", "build_scoring_audit_record",
+        "build_scoring_audit_summary", "default_config", "evaluate_hard_gates",
+        "evaluate_multipliers", "evaluate_penalties", "is_write_safe_path",
+        "keys", "make_component_score", "merge_ml_prediction",
+        "merge_readiness_advisories", "provenance", "score_all_components",
+        "score_candidate", "score_component", "scored_candidate_to_jsonl_line",
+        "write_scored_candidates_jsonl",
+    }
+
+    def _comps(self, ml, sup):
+        import bot.signal_scoring as ss
+        d = {"ml": ComponentScore(component="ml", score=ml)}
+        for c in ss.COMPONENT_NAMES:
+            if c != "ml":
+                d[c] = ComponentScore(component=c, score=sup)
+        return d
+
+    def _gate(self, passed=True, bucket=None, profile=ScoringProfile.STRICT,
+              block=None, mr=None):
+        return GateResult(profile=profile, passed=passed,
+                          decision_bucket=bucket, block_reasons=block or [],
+                          manual_review_reasons=mr or [])
+
+    def _pen(self):
+        return PenaltyResult(profile=ScoringProfile.STRICT, items=[],
+                             total_points=0, raw_total_points=0)
+
+    def _mul(self):
+        return MultiplierResult(profile=ScoringProfile.STRICT, items=[],
+                                product=1.0, effective_multiplier=1.0)
+
+    def _ci(self, side="LONG"):
+        return SignalCandidateInput(symbol="AAPL", side=side,
+                                    signal_timestamp_utc="2026-06-17T10:15:00Z")
+
+    def _assemble(self, ml, sup, gate, side="LONG"):
+        return assemble_score(gate, self._comps(ml, sup), self._pen(),
+                              self._mul(), self._ci(side), default_config())
+
+    # ── phase marker ──
+    def test_phase_marker_is_m19h(self):
+        import bot.signal_scoring as ss
+        self.assertEqual(ss.M19_PHASE, "M19.H")
+
+    # ── exact public API lock ──
+    def test_public_api_exact_lock(self):
+        import bot.signal_scoring as ss
+        self.assertEqual(set(ss.__all__), self._EXPECTED_API)
+        self.assertEqual(len(ss.__all__), 44)
+        # every exported name must actually be present on the package
+        for name in ss.__all__:
+            self.assertTrue(hasattr(ss, name), f"missing export: {name}")
+
+    # ── package import creates no files ──
+    def test_import_creates_no_files(self):
+        import importlib
+        for d in (_REPO_ROOT / "data" / "m19", _REPO_ROOT / "data" / "ml"):
+            before = sorted(p.name for p in d.glob("*")) if d.exists() else []
+            importlib.import_module("bot.signal_scoring")
+            after = sorted(p.name for p in d.glob("*")) if d.exists() else []
+            self.assertEqual(before, after)
+
+    # ── full score_candidate determinism ──
+    def test_score_candidate_deterministic(self):
+        ci = adapter_from_scanner_signal({
+            "symbol": "AAPL", "direction": "long",
+            "timestamp": "2026-06-17T10:15:00Z", "rsi": 60,
+            "entry_price": 100, "stop_loss": 98, "target_price": 104})
+        a = score_candidate(ci, default_config())
+        b = score_candidate(ci, default_config())
+        self.assertEqual(a.to_dict(), b.to_dict())
+        self.assertEqual(a.candidate_id, b.candidate_id)
+
+    # ── execution_eligible ALWAYS False (the final contract) ──
+    def test_exec_eligible_false_long_eligible(self):
+        sc = self._assemble(70, 70, self._gate(passed=True))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.ELIGIBLE)
+        self.assertFalse(sc.execution_eligible)
+
+    def test_exec_eligible_false_long_high_conviction(self):
+        sc = self._assemble(90, 90, self._gate(passed=True))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.HIGH_CONVICTION)
+        self.assertFalse(sc.execution_eligible)
+
+    def test_exec_eligible_false_short(self):
+        sc = self._assemble(90, 90, self._gate(passed=True), side="SHORT")
+        self.assertFalse(sc.execution_eligible)
+
+    def test_exec_eligible_false_blocked(self):
+        sc = self._assemble(90, 90, self._gate(
+            passed=False, bucket=DecisionBucket.BLOCKED, block=["x"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.BLOCKED)
+        self.assertFalse(sc.execution_eligible)
+
+    def test_exec_eligible_false_manual_review(self):
+        sc = self._assemble(90, 90, self._gate(
+            passed=False, bucket=DecisionBucket.MANUAL_REVIEW,
+            profile=ScoringProfile.RESEARCH, mr=["x"]))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.MANUAL_REVIEW)
+        self.assertFalse(sc.execution_eligible)
+
+    # ── buckets still populate (quality signal preserved) ──
+    def test_eligible_bucket_exists_with_exec_false(self):
+        sc = self._assemble(70, 70, self._gate(passed=True))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.ELIGIBLE)
+        self.assertFalse(sc.execution_eligible)
+
+    def test_high_conviction_bucket_exists_with_exec_false(self):
+        sc = self._assemble(90, 90, self._gate(passed=True))
+        self.assertEqual(sc.decision_bucket, DecisionBucket.HIGH_CONVICTION)
+        self.assertFalse(sc.execution_eligible)
+
+    # ── safety boundary: no broker/live/main/dashboard/network/sqlite ──
+    def test_no_forbidden_imports_package_wide(self):
+        forbidden_roots = {"ib_insync", "requests", "urllib", "aiohttp",
+                           "socket", "http", "main", "dashboard", "sqlite3",
+                           "yfinance"}
+        forbidden_prefixes = ("bot.brokers", "bot.live", "dashboard", "main",
+                              "bot.scanner", "bot.strategy", "bot.risk")
+        offenders = []
+        for path in sorted(_PKG_DIR.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Import):
+                    for a in n.names:
+                        root = a.name.split(".")[0]
+                        if root in forbidden_roots or \
+                                a.name.startswith(forbidden_prefixes):
+                            offenders.append(f"{path.name}:{a.name}")
+                elif isinstance(n, ast.ImportFrom) and n.module:
+                    root = n.module.split(".")[0]
+                    if root in forbidden_roots or \
+                            n.module.startswith(forbidden_prefixes):
+                        offenders.append(f"{path.name}:{n.module}")
+        self.assertEqual(offenders, [], f"forbidden imports: {offenders}")
+
+    # ── io.py is the only module allowed to write files ──
+    def test_io_is_only_file_writer(self):
+        tokens = ("open(", "mkstemp(", "os.replace(")
+        for path in _PKG_DIR.glob("*.py"):
+            src = path.read_text()
+            if path.name == "io.py":
+                self.assertTrue(any(t in src for t in tokens))
+            else:
+                for t in tokens:
+                    self.assertNotIn(t, src, f"{path.name} has {t}")
+
+    # ── JSONL remains explicit temp-path only ──
+    def test_jsonl_explicit_temp_path_only(self):
+        # no default path: missing arg -> TypeError
+        with self.assertRaises(TypeError):
+            write_scored_candidates_jsonl([self._assemble(
+                70, 70, self._gate(passed=True))])  # noqa
+        # repo / forbidden paths rejected
+        for p in (_REPO_ROOT / "x.jsonl", _REPO_ROOT / "data" / "m19" / "x.jsonl"):
+            ok, _ = is_write_safe_path(p)
+            self.assertFalse(ok)
+        # a system-temp path is accepted
+        with tempfile.TemporaryDirectory() as td:
+            ok, _ = is_write_safe_path(os.path.join(td, "out.jsonl"))
+            self.assertTrue(ok)
+
+    # ── audit helpers remain pure (no I/O) ──
+    def test_audit_helpers_pure(self):
+        with tempfile.TemporaryDirectory() as td:
+            cwd = os.getcwd()
+            os.chdir(td)
+            try:
+                sc = self._assemble(70, 70, self._gate(passed=True))
+                build_scoring_audit_record(sc)
+                build_scoring_audit_summary([sc, sc])
+                self.assertEqual(os.listdir(td), [])
+            finally:
+                os.chdir(cwd)
+        # audit.py contains no file-open tokens
+        src = (_PKG_DIR / "audit.py").read_text()
+        for t in ("open(", "mkstemp(", "os.replace(", "sqlite3"):
+            self.assertNotIn(t, src)
 
 
 if __name__ == "__main__":

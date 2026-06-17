@@ -21,11 +21,13 @@ Rules (per approved M19.E plan):
         pre_penalty = base * effective_multiplier
         final_raw   = pre_penalty - total_penalty_points
         final_score = clamp(final_raw, 0, 100)
-  * Hard BLOCK overrides: decision_bucket=BLOCKED, final_score=0,
-    execution_eligible=False; sub-results still embedded for explainability.
-  * MANUAL_REVIEW gate caps the bucket at MANUAL_REVIEW and forbids
-    execution_eligible.
-  * SHORT is never execution_eligible and never ELIGIBLE/HIGH_CONVICTION.
+  * M19 FINAL CONTRACT: execution_eligible is ALWAYS False for every M19
+    output (M19 never executes). ELIGIBLE / HIGH_CONVICTION are quality buckets
+    only, not execution permission.
+  * Hard BLOCK overrides: decision_bucket=BLOCKED, final_score=0; sub-results
+    still embedded for explainability.
+  * MANUAL_REVIEW gate caps the bucket at MANUAL_REVIEW.
+  * SHORT is never ELIGIBLE/HIGH_CONVICTION.
   * No fetch, no write, no broker/live/dashboard/main, no persistence.
 """
 from __future__ import annotations
@@ -191,13 +193,14 @@ def assemble_score(gate_result: GateResult,
                 decision_bucket = DecisionBucket.MANUAL_REVIEW
             reason_codes.add("short_side_not_executable")
 
-        # ── execution eligibility (default False) ──
-        execution_eligible = (
-            gate_result.passed is True
-            and not gate_manual_review
-            and side == SignalSide.LONG
-            and decision_bucket in (DecisionBucket.ELIGIBLE,
-                                    DecisionBucket.HIGH_CONVICTION))
+        # ── execution eligibility ──
+        # M19 FINAL CONTRACT (M19.H, option B): M19 never executes, so
+        # execution_eligible is ALWAYS False for every M19 output. The quality
+        # signal lives in decision_bucket (ELIGIBLE / HIGH_CONVICTION remain
+        # quality buckets). Any future paper-routing eligibility belongs to a
+        # clearly-named M20 field (e.g. paper_candidate_eligible), never this
+        # flag.
+        execution_eligible = False
 
     confidence_bucket = _confidence_from_score(final_score, config)
 
