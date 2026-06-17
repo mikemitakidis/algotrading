@@ -71,6 +71,15 @@ from bot.signal_scoring.adapters import (  # noqa: F401
     merge_ml_prediction,
     merge_readiness_advisories,
 )
+from bot.signal_scoring.io import (  # noqa: F401
+    scored_candidate_to_jsonl_line,
+    is_write_safe_path,
+    write_scored_candidates_jsonl,
+)
+from bot.signal_scoring.audit import (  # noqa: F401
+    build_scoring_audit_record,
+    build_scoring_audit_summary,
+)
 
 __all__ = [
     "SCHEMA_VERSION_INPUT",
@@ -112,6 +121,11 @@ __all__ = [
     "adapter_from_candidate_snapshot",
     "merge_ml_prediction",
     "merge_readiness_advisories",
+    "scored_candidate_to_jsonl_line",
+    "is_write_safe_path",
+    "write_scored_candidates_jsonl",
+    "build_scoring_audit_record",
+    "build_scoring_audit_summary",
 ]
 
-M19_PHASE = "M19.F"
+M19_PHASE = "M19.G"

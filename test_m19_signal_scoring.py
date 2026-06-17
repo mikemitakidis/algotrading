@@ -7,6 +7,9 @@ rule, and static safety guards (no broker/live/main/dashboard/network imports;
 no signals.db / data/ml / data/m19 writes anywhere in the package).
 """
 import ast
+import os
+import json
+import tempfile
 import pathlib
 import unittest
 
@@ -22,6 +25,9 @@ from bot.signal_scoring import (
     score_candidate, assemble_score,
     adapter_from_scanner_signal, adapter_from_candidate_snapshot,
     merge_ml_prediction, merge_readiness_advisories,
+    scored_candidate_to_jsonl_line, is_write_safe_path,
+    write_scored_candidates_jsonl,
+    build_scoring_audit_record, build_scoring_audit_summary,
 )
 from bot.signal_scoring.schema import GateResult, GateFailure
 from bot.signal_scoring import provenance
@@ -296,18 +302,22 @@ class M19ASafetyGuards(unittest.TestCase):
         source. We scan for actual call/usage tokens (not descriptive prose in
         docstrings/comments, which would self-match a substring scan — a known
         hazard), backed by the runtime import-writes-nothing test below."""
-        forbidden_call_tokens = [
+        db_network_tokens = [
             "sqlite3.connect", "socket.socket",
             "requests.get", "requests.post", "urlopen",
             ".to_csv(", ".to_parquet(", ".to_pickle(",
-            "open(",  # no file writes from contracts/config/provenance
         ]
+        file_open_tokens = ["open(", "mkstemp(", "os.replace("]
         offenders = []
         for path in self._iter_pkg_files():
             src = path.read_text()
-            for s in forbidden_call_tokens:
+            for s in db_network_tokens:
                 if s in src:
                     offenders.append(f"{path.name}: contains {s!r}")
+            if path.name != "io.py":
+                for s in file_open_tokens:
+                    if s in src:
+                        offenders.append(f"{path.name}: contains {s!r}")
         self.assertEqual(offenders, [], f"forbidden tokens: {offenders}")
 
     def test_importing_package_writes_nothing(self):
@@ -2441,6 +2451,269 @@ class M19FAdapters(unittest.TestCase):
         m19 = _REPO_ROOT / "data" / "m19"
         self.assertEqual(
             len(list(m19.glob("*"))) if m19.exists() else 0, 0)
+
+
+class M19GOutputAudit(unittest.TestCase):
+    """M19.G optional JSONL output + pure audit. Matrices A-G, proven through
+    the REAL writer and audit functions (not just predicates)."""
+
+    def _mk(self, side="LONG", ml=70, support=70, gate_bucket=None,
+            passed=True, block=None):
+        from bot.signal_scoring import COMPONENT_NAMES
+        comps = {"ml": ComponentScore(component="ml", score=ml)}
+        for c in COMPONENT_NAMES:
+            if c != "ml":
+                comps[c] = ComponentScore(component=c, score=support)
+        g = GateResult(profile=ScoringProfile.STRICT, passed=passed,
+                       decision_bucket=gate_bucket, block_reasons=block or [])
+        p = PenaltyResult(profile=ScoringProfile.STRICT, items=[],
+                          total_points=0, raw_total_points=0)
+        m = MultiplierResult(profile=ScoringProfile.STRICT, items=[],
+                             product=1.0, effective_multiplier=1.0)
+        ci = SignalCandidateInput(symbol="AAPL", side=side,
+                                  signal_timestamp_utc="2026-06-17T10:15:00Z")
+        return assemble_score(g, comps, p, m, ci, default_config())
+
+    # ── Matrix A: path safety (asserted via the real writer, proving no file
+    #    is created on rejection) ──
+    def test_matrix_a_tempdir_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            ok, _ = is_write_safe_path(os.path.join(td, "out.jsonl"))
+            self.assertTrue(ok)
+
+    def test_matrix_a_rejections_no_file_created(self):
+        bad_paths = [
+            _REPO_ROOT / "signals.db",
+            _REPO_ROOT / "data" / "ml" / "x.jsonl",
+            _REPO_ROOT / "data" / "m19" / "x.jsonl",
+            _REPO_ROOT / "bot" / "x.jsonl",
+            _REPO_ROOT / "configs" / "x.jsonl",
+            _REPO_ROOT / "docs" / "x.jsonl",
+            _REPO_ROOT / "x.jsonl",
+        ]
+        for p in bad_paths:
+            ok, _ = is_write_safe_path(p)
+            self.assertFalse(ok, f"should reject {p}")
+            existed = p.exists()
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk()], p)
+            # writer must not have created the file
+            self.assertEqual(p.exists(), existed, f"writer created {p}")
+
+    def test_matrix_a_missing_parent_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "nope", "x.jsonl")
+            ok, _ = is_write_safe_path(p)
+            self.assertFalse(ok)
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk()], p)
+
+    # ── Matrix B: write semantics ──
+    def test_matrix_b_three_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "o.jsonl")
+            n = write_scored_candidates_jsonl(
+                [self._mk(), self._mk(), self._mk()], out)
+            self.assertEqual(n, 3)
+            with open(out, encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for _ in fh), 3)
+
+    def test_matrix_b_existing_no_allow_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "o.jsonl")
+            write_scored_candidates_jsonl([self._mk()], out)
+            with open(out, "rb") as fh:
+                original = fh.read()
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk(), self._mk()], out)
+            with open(out, "rb") as fh:
+                self.assertEqual(fh.read(), original)
+
+    def test_matrix_b_existing_allow_overwrites(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "o.jsonl")
+            write_scored_candidates_jsonl([self._mk(), self._mk()], out)
+            n = write_scored_candidates_jsonl([self._mk()], out,
+                                              allow_existing=True)
+            self.assertEqual(n, 1)
+            with open(out, encoding="utf-8") as fh:
+                self.assertEqual(sum(1 for _ in fh), 1)
+
+    def test_matrix_b_empty_iterable(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "empty.jsonl")
+            n = write_scored_candidates_jsonl([], out)
+            self.assertEqual(n, 0)
+            self.assertTrue(os.path.exists(out))
+            self.assertEqual(os.path.getsize(out), 0)
+
+    def test_matrix_b_missing_path_arg_typeerror(self):
+        with self.assertRaises(TypeError):
+            write_scored_candidates_jsonl([self._mk()])  # noqa
+
+    # ── Matrix C: JSONL line shape ──
+    def test_matrix_c_long_roundtrip(self):
+        c = self._mk(side="LONG")
+        line = scored_candidate_to_jsonl_line(c)
+        self.assertNotIn("\n", line)
+        self.assertEqual(json.loads(line), c.to_dict())
+
+    def test_matrix_c_blocked_preserved(self):
+        c = self._mk(gate_bucket=DecisionBucket.BLOCKED, passed=False,
+                     block=["x"])
+        self.assertEqual(json.loads(scored_candidate_to_jsonl_line(c))
+                         ["decision_bucket"], "BLOCKED")
+
+    def test_matrix_c_short_preserved(self):
+        c = self._mk(side="SHORT")
+        self.assertEqual(json.loads(scored_candidate_to_jsonl_line(c))
+                         ["side"], "SHORT")
+
+    def test_matrix_c_one_newline_per_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "o.jsonl")
+            write_scored_candidates_jsonl([self._mk(), self._mk()], out)
+            content = open(out, encoding="utf-8").read()
+            self.assertEqual(content.count("\n"), 2)
+            for line in content.splitlines():
+                self.assertNotIn("\n", line)
+
+    # ── Matrix D: determinism ──
+    def test_matrix_d_same_candidate_identical_line(self):
+        c = self._mk()
+        self.assertEqual(scored_candidate_to_jsonl_line(c),
+                         scored_candidate_to_jsonl_line(c))
+
+    def test_matrix_d_same_list_identical_file(self):
+        c = self._mk()
+        with tempfile.TemporaryDirectory() as td:
+            a = os.path.join(td, "a.jsonl")
+            b = os.path.join(td, "b.jsonl")
+            write_scored_candidates_jsonl([c, c], a)
+            write_scored_candidates_jsonl([c, c], b)
+            with open(a, "rb") as fa, open(b, "rb") as fb:
+                self.assertEqual(fa.read(), fb.read())
+
+    def test_matrix_d_warnings_sorted(self):
+        line = scored_candidate_to_jsonl_line(self._mk())
+        parsed = json.loads(line)
+        self.assertEqual(parsed["reason_codes"], sorted(parsed["reason_codes"]))
+        self.assertEqual(parsed["warnings"], sorted(parsed["warnings"]))
+
+    # ── Matrix E: audit record ──
+    def test_matrix_e_record_field_set(self):
+        r = build_scoring_audit_record(self._mk())
+        self.assertEqual(set(r.keys()), {
+            "schema_version", "candidate_id", "symbol", "side", "profile",
+            "decision_bucket", "confidence_bucket", "execution_eligible",
+            "final_score", "hard_gate_passed", "block_reasons", "reason_codes",
+            "warnings", "config_hash", "input_digest"})
+
+    def test_matrix_e_eligible(self):
+        r = build_scoring_audit_record(self._mk(ml=90, support=90))
+        self.assertTrue(r["execution_eligible"])
+        self.assertEqual(r["decision_bucket"], "HIGH_CONVICTION")
+
+    def test_matrix_e_blocked(self):
+        r = build_scoring_audit_record(self._mk(
+            gate_bucket=DecisionBucket.BLOCKED, passed=False,
+            block=["min_liquidity"]))
+        self.assertEqual(r["decision_bucket"], "BLOCKED")
+        self.assertFalse(r["execution_eligible"])
+        self.assertIn("min_liquidity", r["block_reasons"])
+
+    def test_matrix_e_no_wallclock_or_runtime_fields(self):
+        r = build_scoring_audit_record(self._mk())
+        for forbidden in ("timestamp", "now", "hostname", "host", "pid",
+                          "random", "uuid", "wall_clock", "env"):
+            self.assertNotIn(forbidden, r)
+
+    def test_matrix_e_deterministic(self):
+        self.assertEqual(build_scoring_audit_record(self._mk()),
+                         build_scoring_audit_record(self._mk()))
+
+    # ── Matrix F: audit summary ──
+    def test_matrix_f_mixed_counts(self):
+        s = build_scoring_audit_summary([
+            self._mk(ml=90, support=90),                       # HIGH_CONVICTION
+            self._mk(gate_bucket=DecisionBucket.BLOCKED, passed=False,
+                     block=["x"]),                             # BLOCKED
+            self._mk(side="SHORT")])                           # capped
+        self.assertEqual(s["total"], 3)
+        self.assertEqual(s["by_decision_bucket"]["HIGH_CONVICTION"], 1)
+        self.assertEqual(s["by_decision_bucket"]["BLOCKED"], 1)
+        self.assertEqual(s["execution_eligible_count"], 1)
+
+    def test_matrix_f_empty(self):
+        s = build_scoring_audit_summary([])
+        self.assertEqual(s["total"], 0)
+        self.assertEqual(s["execution_eligible_count"], 0)
+        self.assertTrue(all(v == 0 for v in s["by_decision_bucket"].values()))
+        self.assertTrue(all(v == 0 for v in s["by_confidence_bucket"].values()))
+
+    def test_matrix_f_summary_deterministic(self):
+        cands = [self._mk(), self._mk(side="SHORT")]
+        self.assertEqual(build_scoring_audit_summary(cands),
+                         build_scoring_audit_summary(cands))
+
+    # ── Matrix G: purity ──
+    def test_matrix_g_import_creates_no_file(self):
+        import importlib
+        import bot.signal_scoring.io as io_mod
+        import bot.signal_scoring.audit as audit_mod
+        for m19 in (_REPO_ROOT / "data" / "m19",):
+            before = list(m19.glob("*")) if m19.exists() else []
+            importlib.reload(io_mod)
+            importlib.reload(audit_mod)
+            after = list(m19.glob("*")) if m19.exists() else []
+            self.assertEqual(before, after)
+
+    def test_matrix_g_audit_creates_no_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            cwd = os.getcwd()
+            os.chdir(td)
+            try:
+                build_scoring_audit_record(self._mk())
+                build_scoring_audit_summary([self._mk(), self._mk()])
+                self.assertEqual(os.listdir(td), [])
+            finally:
+                os.chdir(cwd)
+
+    def test_matrix_g_scoring_modules_do_not_import_io(self):
+        import ast
+        for mod in ("audit.py", "adapters.py", "composite.py", "gates.py",
+                    "components.py", "penalties.py"):
+            tree = ast.parse((_PKG_DIR / mod).read_text())
+            for n in ast.walk(tree):
+                if isinstance(n, ast.ImportFrom) and n.module:
+                    self.assertFalse(
+                        n.module.endswith(".io")
+                        or n.module == "bot.signal_scoring.io",
+                        f"{mod} imports io")
+                if isinstance(n, ast.Import):
+                    for a in n.names:
+                        self.assertFalse(a.name.endswith("signal_scoring.io"),
+                                         f"{mod} imports io")
+
+    def test_matrix_g_io_is_only_module_with_open_tokens(self):
+        tokens = ("open(", "mkstemp(", "os.replace(")
+        for path in _PKG_DIR.glob("*.py"):
+            src = path.read_text()
+            if path.name == "io.py":
+                self.assertTrue(any(t in src for t in tokens))
+            else:
+                for t in tokens:
+                    self.assertNotIn(t, src, f"{path.name} has {t}")
+
+    def test_no_sqlite_no_network_in_io_audit(self):
+        # io.py legitimately NAMES signals.db / data paths in order to REJECT
+        # them, so we check for genuine library-usage tokens, not the path-guard
+        # string literals.
+        for mod in ("io.py", "audit.py"):
+            src = (_PKG_DIR / mod).read_text()
+            for tok in ("sqlite3", "requests.", "urllib.request", "aiohttp",
+                        "socket.socket"):
+                self.assertNotIn(tok, src, f"{mod} contains {tok}")
 
 
 if __name__ == "__main__":
