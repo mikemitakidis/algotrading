@@ -2230,22 +2230,48 @@ class M19FAdapters(unittest.TestCase):
             entry_price="bad", stop_loss=98, target_price=104))
         self.assertNotIn("reward_risk_ratio", ci.risk_preview)
 
-    # ── Matrix F: atr_pct derivation ──
+    # ── Matrix F: atr_pct derivation (asserts downstream invalid via the
+    #     real volatility component + multiplier, not just key presence) ──
+    def _vol_invalid_fires(self, ci):
+        from bot.signal_scoring import score_component, evaluate_multipliers
+        comp = score_component("volatility", ci, default_config())
+        mult = evaluate_multipliers(ci, default_config())
+        return ("invalid_soft_input" in comp.warnings
+                and "invalid_soft_input" in mult.warnings)
+
     def test_matrix_f_atr_pct_derived(self):
         ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=100))
         self.assertAlmostEqual(ci.volatility_context["atr_pct"], 0.02)
+        self.assertFalse(self._vol_invalid_fires(ci))
 
     def test_matrix_f_atr_no_entry_omitted(self):
         ci = adapter_from_scanner_signal(self._scan(atr=2))
         self.assertNotIn("atr_pct", ci.volatility_context)
+        self.assertFalse(self._vol_invalid_fires(ci))
 
-    def test_matrix_f_atr_malformed_passthrough(self):
-        ci = adapter_from_scanner_signal(self._scan(atr="bad", entry_price=100))
-        self.assertEqual(ci.volatility_context["atr_pct"], "bad")
-
-    def test_matrix_f_entry_zero_omitted(self):
-        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=0))
+    def test_matrix_f_no_atr_omitted(self):
+        ci = adapter_from_scanner_signal(self._scan(entry_price=100))
         self.assertNotIn("atr_pct", ci.volatility_context)
+
+    def test_matrix_f_atr_malformed_triggers_downstream_invalid(self):
+        ci = adapter_from_scanner_signal(self._scan(atr="bad", entry_price=100))
+        self.assertIn("atr_pct", ci.volatility_context)
+        self.assertTrue(self._vol_invalid_fires(ci))
+
+    def test_matrix_f_entry_malformed_triggers_downstream_invalid(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price="bad"))
+        self.assertIn("atr_pct", ci.volatility_context)
+        self.assertTrue(self._vol_invalid_fires(ci))
+
+    def test_matrix_f_entry_zero_triggers_downstream_invalid(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=0))
+        self.assertIn("atr_pct", ci.volatility_context)
+        self.assertTrue(self._vol_invalid_fires(ci))
+
+    def test_matrix_f_entry_negative_triggers_downstream_invalid(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=-5))
+        self.assertIn("atr_pct", ci.volatility_context)
+        self.assertTrue(self._vol_invalid_fires(ci))
 
     # ── Matrix G: ML merge ──
     def test_matrix_g_ml_merge_full(self):

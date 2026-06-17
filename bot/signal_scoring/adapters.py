@@ -81,6 +81,41 @@ def _is_pos_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
 
 
+_OMIT = object()  # sentinel meaning "do not write this key"
+
+# Deterministic invalid sentinel: a present-but-unusable atr_pct. The downstream
+# volatility component/multiplier coerce this via as_nonneg_number, which
+# rejects it -> invalid/adverse path + invalid_soft_input (NOT missing/neutral).
+_ATR_PCT_INVALID = "invalid"
+
+
+def _derive_atr_pct(atr: Any, entry: Any) -> Any:
+    """Map (atr, entry_price) -> atr_pct value, or _OMIT to leave the key out.
+
+    * atr missing                              -> omit
+    * atr present-but-malformed                -> pass atr through (invalid)
+    * atr valid positive, entry missing        -> omit (cannot derive cleanly)
+    * atr valid positive, entry valid positive -> atr/entry
+    * atr valid positive, entry present but
+      malformed / non-positive (<=0)           -> invalid sentinel (so the
+                                                  downstream invalid path fires,
+                                                  NOT missing/neutral)
+    """
+    if atr is None:
+        return _OMIT
+    if not _is_pos_number(atr):
+        # malformed atr (non-numeric / bool / negative): preserve invalid path
+        return atr
+    # atr is a valid positive number from here on.
+    if entry is None:
+        return _OMIT
+    if _is_pos_number(entry):
+        return atr / entry
+    # entry is present but malformed or non-positive (<=0): emit invalid
+    # sentinel so downstream treats volatility as invalid/adverse, not missing.
+    return _ATR_PCT_INVALID
+
+
 def _derive_reward_risk(side: SignalSide, entry: Any, stop: Any,
                         target: Any) -> Optional[float]:
     """LONG rr=(target-entry)/(entry-stop); SHORT rr=(entry-target)/(stop-entry).
@@ -155,14 +190,9 @@ def adapter_from_scanner_signal(
     _put(technical, K.TECH_VOLUME_RATIO, sig.get("vol_ratio"))
 
     volatility: dict = {}
-    # atr_pct = atr/entry only when both are valid positive numbers; otherwise
-    # pass the malformed atr through so downstream invalid handling can fire.
-    if atr is not None:
-        if _is_pos_number(atr) and _is_pos_number(entry):
-            volatility[K.VOL_ATR_PCT] = atr / entry
-        elif not _is_pos_number(atr):
-            volatility[K.VOL_ATR_PCT] = atr  # malformed -> pass through
-        # atr valid but entry missing/invalid -> omit (cannot derive cleanly)
+    _atr_pct = _derive_atr_pct(atr, entry)
+    if _atr_pct is not _OMIT:
+        volatility[K.VOL_ATR_PCT] = _atr_pct
 
     liquidity_ctx: dict = {}
     _put(liquidity_ctx, K.LIQ_PRICE, entry)
@@ -238,11 +268,17 @@ def adapter_from_candidate_snapshot(
     _put(technical, K.TECH_VOLUME_RATIO, snap.get("vol_ratio"))
 
     volatility: dict = {}
-    # snapshot has absolute atr but no price -> cannot derive atr_pct cleanly.
-    # Pass malformed atr through; omit when not derivable.
+    # snapshot has absolute atr but NO price field -> entry is always absent,
+    # so a valid atr cannot be cleanly converted (omitted); a malformed atr is
+    # still passed through for the downstream invalid path. Optional liquidity
+    # kwarg may carry a price for derivation.
     atr = snap.get("atr")
-    if atr is not None and not _is_pos_number(atr):
-        volatility[K.VOL_ATR_PCT] = atr
+    _snap_entry = None
+    if liquidity is not None:
+        _snap_entry = dict(liquidity).get(K.LIQ_PRICE)
+    _atr_pct = _derive_atr_pct(atr, _snap_entry)
+    if _atr_pct is not _OMIT:
+        volatility[K.VOL_ATR_PCT] = _atr_pct
 
     valid_count = snap.get("valid_count")
     available_tfs = snap.get("available_tfs")
