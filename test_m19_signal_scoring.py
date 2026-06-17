@@ -2618,7 +2618,8 @@ class M19GOutputAudit(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, "o.jsonl")
             write_scored_candidates_jsonl([self._mk(), self._mk()], out)
-            content = open(out, encoding="utf-8").read()
+            with open(out, encoding="utf-8") as fh:
+                content = fh.read()
             self.assertEqual(content.count("\n"), 2)
             for line in content.splitlines():
                 self.assertNotIn("\n", line)
