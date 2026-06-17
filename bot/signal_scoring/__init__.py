@@ -31,6 +31,8 @@ from bot.signal_scoring.schema import (  # noqa: F401
     GateOutcome,
     GateFailure,
     GateResult,
+    ComponentScore,
+    make_component_score,
 )
 from bot.signal_scoring.config import (  # noqa: F401
     SignalScoringConfig,
@@ -42,6 +44,12 @@ from bot.signal_scoring import keys  # noqa: F401
 from bot.signal_scoring.gates import (  # noqa: F401
     evaluate_hard_gates,
     GATE_ORDER,
+)
+from bot.signal_scoring.components import (  # noqa: F401
+    COMPONENT_NAMES,
+    COMPONENT_SCORERS,
+    score_component,
+    score_all_components,
 )
 
 __all__ = [
@@ -57,6 +65,8 @@ __all__ = [
     "GateOutcome",
     "GateFailure",
     "GateResult",
+    "ComponentScore",
+    "make_component_score",
     "SignalScoringConfig",
     "default_config",
     "DEFAULT_PROFILE",
@@ -64,6 +74,10 @@ __all__ = [
     "keys",
     "evaluate_hard_gates",
     "GATE_ORDER",
+    "COMPONENT_NAMES",
+    "COMPONENT_SCORERS",
+    "score_component",
+    "score_all_components",
 ]
 
-M19_PHASE = "M19.B"
+M19_PHASE = "M19.C"

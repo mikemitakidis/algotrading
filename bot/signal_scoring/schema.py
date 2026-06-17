@@ -326,3 +326,85 @@ class GateResult:
             manual_review_reasons=list(d.get("manual_review_reasons", [])),
             evaluated_gates=list(d.get("evaluated_gates", [])),
         )
+
+
+# ─────────────────── M19.C component-score contract ───────────────────
+# Imported lazily to avoid a hard dependency cycle (keys imports nothing from
+# schema; schema does not import keys). COMPONENT_NAMES is duplicated as a
+# module-level frozenset check source via the builder argument instead.
+
+@dataclass(frozen=True)
+class ComponentScore:
+    """One component scorer's output. Standard shape:
+    {score: 0-100, reason_codes, warnings, inputs_used, blocked_reasons}.
+
+    `blocked_reasons` here is ADVISORY (records why a fallback was used); it is
+    NOT a gate and does not block the pipeline. Build via make_component_score
+    so score is always validated/clamped to [0,100]."""
+    component: str
+    score: float
+    reason_codes: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    inputs_used: Dict[str, Any] = field(default_factory=dict)
+    blocked_reasons: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.component, str) or not self.component:
+            raise ValueError("component must be a non-empty string")
+        if isinstance(self.score, bool) or not isinstance(
+                self.score, (int, float)):
+            raise ValueError(
+                f"score must be a non-bool number, got {self.score!r}")
+        if not (0.0 <= float(self.score) <= 100.0):
+            raise ValueError(f"score out of range [0,100]: {self.score}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "component": self.component,
+            "score": self.score,
+            "reason_codes": list(self.reason_codes),
+            "warnings": list(self.warnings),
+            "inputs_used": dict(self.inputs_used),
+            "blocked_reasons": list(self.blocked_reasons),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ComponentScore":
+        known = {"component", "score", "reason_codes", "warnings",
+                 "inputs_used", "blocked_reasons"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown ComponentScore field(s): {sorted(unknown)}")
+        return cls(
+            component=d["component"],
+            score=d["score"],
+            reason_codes=list(d.get("reason_codes", [])),
+            warnings=list(d.get("warnings", [])),
+            inputs_used=dict(d.get("inputs_used", {})),
+            blocked_reasons=list(d.get("blocked_reasons", [])),
+        )
+
+
+def make_component_score(component, score, *, allowed_components,
+                         reason_codes=None, warnings=None,
+                         inputs_used=None, blocked_reasons=None
+                         ) -> "ComponentScore":
+    """Builder enforcing: known component name, numeric (non-bool) score
+    clamped to [0,100], deterministic (sorted) reason_codes/warnings. Scorers
+    must use this so they cannot emit an invalid ComponentScore."""
+    if component not in allowed_components:
+        raise ValueError(
+            f"unknown component name: {component!r} "
+            f"(allowed {tuple(allowed_components)})")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise ValueError(f"score must be a non-bool number, got {score!r}")
+    clamped = max(0.0, min(100.0, float(score)))
+    return ComponentScore(
+        component=component,
+        score=clamped,
+        reason_codes=sorted(reason_codes or []),
+        warnings=sorted(warnings or []),
+        inputs_used=dict(inputs_used or {}),
+        blocked_reasons=sorted(blocked_reasons or []),
+    )

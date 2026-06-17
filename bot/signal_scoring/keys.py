@@ -42,6 +42,95 @@ LIQ_AVG_DOLLAR_VOLUME_20D     = "avg_dollar_volume_20d"
 LIQ_PRICE                     = "price"
 
 
+# ─────────────── M19.C component-readable (soft) keys ───────────────
+# Soft scoring inputs. Unlike gate keys, absence/invalidity must NOT block;
+# component scorers fall back conservatively (see components.py). Reuse the
+# gate-frozen constants above where the same field is used (no duplicate
+# string literals).
+
+# technical_context
+TECH_EMA20                    = "ema20"
+TECH_EMA50                    = "ema50"
+TECH_RSI                      = "rsi"
+TECH_MACD_HIST                = "macd_hist"
+TECH_MACD_SIGNAL              = "macd_signal"
+TECH_VWAP_DEV                 = "vwap_dev"
+TECH_ATR_PCT                  = "atr_pct"
+TECH_BB_POS                   = "bb_pos"
+TECH_VOLUME_RATIO             = "volume_ratio"
+TECH_SUPPORT_RESISTANCE_DIST  = "support_resistance_distance"
+
+# volatility_context  (ATR% reuses the same field name as technical atr_pct)
+VOL_ATR_PCT                   = "atr_pct"
+VOL_BAND                      = "volatility_band"
+
+# liquidity_context (soft) — volume/price reuse LIQ_* gate keys above
+LIQ_SPREAD_PCT                = "spread_pct"
+
+# regime_context
+REGIME_LABEL                  = "regime_label"
+REGIME_BENCHMARK_TREND        = "benchmark_trend"
+REGIME_SOURCE                 = "regime_source"
+
+# scanner_context
+SCAN_VALID_COUNT              = "valid_count"
+SCAN_REQUIRED_COUNT           = "required_count"
+SCAN_VALID_TIMEFRAMES         = "valid_timeframes"
+SCAN_AVAILABLE_TIMEFRAMES     = "available_timeframes"
+
+# risk_preview (soft)
+RISK_REWARD_RISK_RATIO        = "reward_risk_ratio"
+RISK_ESTIMATED_STOP           = "estimated_stop"
+RISK_ESTIMATED_TARGET         = "estimated_target"
+RISK_POSITION_SIZE_PREVIEW    = "position_size_preview"
+
+# ml_context (soft) — reuse ML_PRED_*/ML_CALIBRATION_APPLIED/ML_PRODUCTION_*
+ML_FEATURE_EXTRAPOLATION_COUNT = "feature_extrapolation_count"
+
+# Canonical, deterministic component order (used in tests + exports).
+COMPONENT_NAMES = (
+    "ml",
+    "scanner",
+    "technical_confluence",
+    "trend",
+    "momentum",
+    "volume_liquidity",
+    "volatility",
+    "market_regime",
+    "risk_adjusted",
+    "data_quality",
+    "calibration_uncertainty",
+)
+
+# Soft keys each component reads (advisory; never gate-blocking).
+COMPONENT_READABLE_KEYS = {
+    "ml": ("ml_context", (ML_PRED_CALIBRATED, ML_PRED_RAW,
+                          ML_CALIBRATION_APPLIED)),
+    "scanner": ("scanner_context", (SCAN_VALID_COUNT, SCAN_REQUIRED_COUNT,
+                                    SCAN_AVAILABLE_TIMEFRAMES)),
+    "technical_confluence": ("technical_context",
+                             (TECH_EMA20, TECH_EMA50, TECH_RSI, TECH_MACD_HIST,
+                              TECH_VOLUME_RATIO, TECH_ATR_PCT,
+                              TECH_SUPPORT_RESISTANCE_DIST)),
+    "trend": ("technical_context", (TECH_EMA20, TECH_EMA50)),
+    "momentum": ("technical_context", (TECH_RSI, TECH_MACD_HIST,
+                                       TECH_MACD_SIGNAL)),
+    "volume_liquidity": ("liquidity_context", (LIQ_AVG_DOLLAR_VOLUME_20D,
+                                               LIQ_PRICE, LIQ_SPREAD_PCT)),
+    "volatility": ("volatility_context", (VOL_ATR_PCT, VOL_BAND)),
+    "market_regime": ("regime_context", (REGIME_LABEL, REGIME_BENCHMARK_TREND,
+                                         REGIME_SOURCE)),
+    "risk_adjusted": ("risk_preview", (RISK_REWARD_RISK_RATIO,)),
+    "data_quality": ("data_quality_context",
+                     (DQ_MISSING_FEATURE_COUNT, DQ_SCHEMA_MATCH,
+                      DQ_STALE_DATA_FLAG, DQ_DATA_FRESHNESS_MINUTES)),
+    "calibration_uncertainty": ("ml_context",
+                                (ML_CALIBRATION_APPLIED,
+                                 ML_FEATURE_EXTRAPOLATION_COUNT,
+                                 ML_PRODUCTION_THINNESS_STATUS)),
+}
+
+
 # Per-block required keys that the M19.B hard gates read. If any are absent,
 # the engine emits a `missing_context_key` BLOCK (fail-safe).
 GATE_REQUIRED_KEYS = {

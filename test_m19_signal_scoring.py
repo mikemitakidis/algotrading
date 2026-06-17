@@ -15,6 +15,7 @@ from bot.signal_scoring import (
     ScoringProfile, SignalSide, DecisionBucket, ConfidenceBucket,
     PenaltySeverity, SignalCandidateInput, ScoredSignalCandidate,
     SignalScoringConfig, default_config, DEFAULT_PROFILE,
+    ComponentScore,
 )
 from bot.signal_scoring import provenance
 from bot.signal_scoring.config import CONFIG_SCHEMA_VERSION
@@ -748,6 +749,303 @@ class M19BHardGates(unittest.TestCase):
                                   "prediction_calibrated": None})
         self.assertIn("calibration_unavailable", r.block_reasons)
         self.assertNotIn("invalid_context_value", r.block_reasons)
+
+
+class M19CComponents(unittest.TestCase):
+    """M19.C component scorers: pure, profile-neutral, 0-100, fail-safe."""
+
+    def _cfg(self):
+        return default_config()
+
+    def _full_blocks(self):
+        return dict(
+            ml_context={"model_id": "m1", "calibration_applied": True,
+                        "prediction_calibrated": 0.68, "prediction_raw": 0.64,
+                        "price_adjustment_mode": "raw",
+                        "allow_adjusted_prices_for_ml": False,
+                        "model_readiness_passed": True,
+                        "production_thinness_status": "ok",
+                        "feature_extrapolation_count": 0},
+            data_quality_context={"schema_match": True, "stale_data_flag": False,
+                                  "data_freshness_minutes": 5,
+                                  "missing_feature_count": 0},
+            advisory_context={"adjusted_price_pit_risk": False},
+            timeframe_context={"available_timeframes": 4, "valid_timeframes": 4},
+            risk_preview={"risk_preview_available": True,
+                          "risk_authority_status": "ok",
+                          "reward_risk_ratio": 2.0},
+            liquidity_context={"avg_dollar_volume_20d": 60_000_000,
+                               "price": 150.0, "spread_pct": 0.05},
+            technical_context={"ema20": 151, "ema50": 148, "rsi": 60,
+                               "macd_hist": 0.4, "volume_ratio": 1.6,
+                               "atr_pct": 0.02},
+            volatility_context={"atr_pct": 0.02, "volatility_band": "normal"},
+            regime_context={"regime_label": "bull", "benchmark_trend": "up",
+                            "regime_source": "supplied_input"},
+            scanner_context={"valid_count": 4, "required_count": 4,
+                             "available_timeframes": 4, "valid_timeframes": 4},
+        )
+
+    def _ci(self, side="LONG", *, replace=None):
+        """Build input. `replace` is a dict of block_name -> full replacement
+        block (no merge), so tests can drop/replace blocks precisely."""
+        from bot.signal_scoring import SignalCandidateInput
+        blocks = self._full_blocks()
+        if replace:
+            for k, v in replace.items():
+                blocks[k] = v
+        return SignalCandidateInput(
+            symbol="AAPL", side=side,
+            signal_timestamp_utc="2026-06-17T10:15:00Z", **blocks)
+
+    def _score(self, name, **kw):
+        from bot.signal_scoring import score_component
+        return score_component(name, self._ci(**kw), self._cfg())
+
+    # one clean-input band test per component
+    def test_clean_bands(self):
+        from bot.signal_scoring import score_all_components, COMPONENT_NAMES
+        res = score_all_components(self._ci(), self._cfg())
+        self.assertEqual(set(res), set(COMPONENT_NAMES))
+        for name, c in res.items():
+            self.assertTrue(0.0 <= c.score <= 100.0)
+        self.assertGreaterEqual(res["ml"].score, 60)
+        self.assertGreaterEqual(res["scanner"].score, 85)
+        self.assertGreaterEqual(res["risk_adjusted"].score, 85)
+        self.assertGreaterEqual(res["data_quality"].score, 95)
+
+    # scanner boundaries
+    def test_scanner_4_of_4(self):
+        c = self._score("scanner", replace={"scanner_context": {
+            "valid_count": 4, "available_timeframes": 4}})
+        self.assertGreaterEqual(c.score, 90)
+
+    def test_scanner_3_of_4(self):
+        c = self._score("scanner", replace={"scanner_context": {
+            "valid_count": 3, "available_timeframes": 4}})
+        self.assertTrue(50 <= c.score <= 85)
+
+    def test_scanner_2_of_4_low(self):
+        c = self._score("scanner", replace={"scanner_context": {
+            "valid_count": 2, "available_timeframes": 4}})
+        self.assertLess(c.score, 50)
+
+    # ML calibrated/raw/missing
+    def test_ml_calibrated_used(self):
+        c = self._score("ml")
+        self.assertIn("ml_calibrated_probability_used", c.reason_codes)
+        self.assertAlmostEqual(c.score, 68.0, places=4)
+
+    def test_ml_raw_fallback_warns(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": False, "prediction_calibrated": None,
+            "prediction_raw": 0.6}})
+        self.assertIn("raw_probability_used", c.warnings)
+        self.assertAlmostEqual(c.score, 60.0, places=4)
+
+    def test_ml_both_unavailable_low(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": False, "prediction_calibrated": None,
+            "prediction_raw": None}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("ml_probability_unavailable", c.blocked_reasons)
+
+    # RSI / MACD edge + side awareness
+    def test_momentum_long_vs_short_side_aware(self):
+        long_c = self._score("momentum", side="LONG", replace={
+            "technical_context": {"rsi": 60, "macd_hist": 0.5}})
+        short_c = self._score("momentum", side="SHORT", replace={
+            "technical_context": {"rsi": 60, "macd_hist": 0.5}})
+        self.assertGreater(long_c.score, short_c.score)
+
+    def test_trend_side_awareness(self):
+        # ema20>ema50 favors LONG, penalizes SHORT
+        long_c = self._score("trend", side="LONG", replace={
+            "technical_context": {"ema20": 151, "ema50": 148}})
+        short_c = self._score("trend", side="SHORT", replace={
+            "technical_context": {"ema20": 151, "ema50": 148}})
+        self.assertGreater(long_c.score, short_c.score)
+
+    # regime side awareness
+    def test_regime_side_awareness(self):
+        long_bull = self._score("market_regime", side="LONG", replace={
+            "regime_context": {"regime_label": "bull"}})
+        short_bull = self._score("market_regime", side="SHORT", replace={
+            "regime_context": {"regime_label": "bull"}})
+        self.assertGreater(long_bull.score, short_bull.score)
+
+    def test_regime_unknown_neutral(self):
+        c = self._score("market_regime", replace={
+            "regime_context": {"regime_label": "unknown"}})
+        self.assertEqual(c.score, 50.0)
+
+    # reward:risk boundaries
+    def test_reward_risk_below_min(self):
+        c = self._score("risk_adjusted", replace={"risk_preview": {
+            "reward_risk_ratio": 1.0}})
+        self.assertLess(c.score, 50)
+
+    def test_reward_risk_at_min(self):
+        c = self._score("risk_adjusted", replace={"risk_preview": {
+            "reward_risk_ratio": 1.5}})
+        self.assertTrue(50 <= c.score < 90)
+
+    def test_reward_risk_ideal(self):
+        c = self._score("risk_adjusted", replace={"risk_preview": {
+            "reward_risk_ratio": 2.5}})
+        self.assertGreaterEqual(c.score, 90)
+
+    # ATR% bands
+    def test_volatility_below_min(self):
+        c = self._score("volatility", replace={"volatility_context": {
+            "atr_pct": 0.001}})
+        self.assertLess(c.score, 40)
+
+    def test_volatility_ideal(self):
+        c = self._score("volatility", replace={"volatility_context": {
+            "atr_pct": 0.02}})
+        self.assertGreaterEqual(c.score, 80)
+
+    def test_volatility_elevated(self):
+        c = self._score("volatility", replace={"volatility_context": {
+            "atr_pct": 0.08}})
+        self.assertLess(c.score, 40)
+
+    # liquidity ideal/thin
+    def test_liquidity_ideal(self):
+        c = self._score("volume_liquidity", replace={"liquidity_context": {
+            "avg_dollar_volume_20d": 60_000_000, "price": 150.0}})
+        self.assertGreaterEqual(c.score, 90)
+
+    def test_liquidity_thin_but_allowed(self):
+        c = self._score("volume_liquidity", replace={"liquidity_context": {
+            "avg_dollar_volume_20d": 12_000_000, "price": 150.0}})
+        self.assertTrue(50 <= c.score < 90)
+
+    # data quality degraded
+    def test_data_quality_degraded(self):
+        c = self._score("data_quality", replace={"data_quality_context": {
+            "missing_feature_count": 2, "schema_match": True,
+            "stale_data_flag": False, "data_freshness_minutes": 5}})
+        self.assertLess(c.score, 100)
+
+    # calibration uncertainty cases
+    def test_calibration_uncertainty_clean(self):
+        c = self._score("calibration_uncertainty")
+        self.assertGreaterEqual(c.score, 95)
+
+    def test_calibration_uncertainty_raw_and_extrapolation(self):
+        c = self._score("calibration_uncertainty", replace={"ml_context": {
+            "calibration_applied": False, "feature_extrapolation_count": 3,
+            "production_thinness_status": "warned"}})
+        self.assertLess(c.score, 60)
+        self.assertIn("raw_probability_used", c.warnings)
+
+    # fallback behaviour
+    def test_missing_soft_key_neutral_fallback(self):
+        c = self._score("trend", replace={"technical_context": {}})
+        self.assertEqual(c.score, 50.0)
+        self.assertIn("missing_soft_input", c.warnings)
+
+    def test_invalid_soft_value_low_fallback(self):
+        c = self._score("momentum", replace={"technical_context": {
+            "rsi": "high", "macd_hist": "x"}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_inputs_used_records_fallback(self):
+        c = self._score("risk_adjusted", replace={"risk_preview": {}})
+        self.assertEqual(c.score, 50.0)
+        self.assertIn("reward_risk_ratio", c.inputs_used)
+
+    # determinism + contract
+    def test_component_deterministic(self):
+        from bot.signal_scoring import score_all_components
+        a = {k: v.to_dict() for k, v in
+             score_all_components(self._ci(), self._cfg()).items()}
+        b = {k: v.to_dict() for k, v in
+             score_all_components(self._ci(), self._cfg()).items()}
+        self.assertEqual(a, b)
+
+    def test_component_score_roundtrip(self):
+        c = self._score("ml")
+        c2 = ComponentScore.from_dict(c.to_dict())
+        self.assertEqual(c.to_dict(), c2.to_dict())
+
+    def test_component_score_unknown_field_rejected(self):
+        c = self._score("ml")
+        d = c.to_dict(); d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            ComponentScore.from_dict(d)
+
+    def test_unknown_component_name_rejected(self):
+        from bot.signal_scoring import score_component, make_component_score
+        from bot.signal_scoring import COMPONENT_NAMES
+        with self.assertRaises(ValueError):
+            score_component("bogus", self._ci(), self._cfg())
+        with self.assertRaises(ValueError):
+            make_component_score("bogus", 50, allowed_components=COMPONENT_NAMES)
+
+    def test_non_numeric_score_rejected_by_builder(self):
+        from bot.signal_scoring import make_component_score, COMPONENT_NAMES
+        with self.assertRaises(ValueError):
+            make_component_score("ml", "x", allowed_components=COMPONENT_NAMES)
+
+    def test_bool_score_rejected_by_builder(self):
+        from bot.signal_scoring import make_component_score, COMPONENT_NAMES
+        with self.assertRaises(ValueError):
+            make_component_score("ml", True, allowed_components=COMPONENT_NAMES)
+
+    def test_builder_clamps_score(self):
+        from bot.signal_scoring import make_component_score, COMPONENT_NAMES
+        self.assertEqual(make_component_score(
+            "ml", 150, allowed_components=COMPONENT_NAMES).score, 100.0)
+        self.assertEqual(make_component_score(
+            "ml", -5, allowed_components=COMPONENT_NAMES).score, 0.0)
+
+    def test_profile_neutral(self):
+        from bot.signal_scoring import score_all_components, ScoringProfile
+        strict = {k: v.score for k, v in score_all_components(
+            self._ci(), default_config(ScoringProfile.STRICT)).items()}
+        research = {k: v.score for k, v in score_all_components(
+            self._ci(), default_config(ScoringProfile.RESEARCH)).items()}
+        self.assertEqual(strict, research)
+
+    def test_component_names_exact_order(self):
+        from bot.signal_scoring import COMPONENT_NAMES
+        self.assertEqual(COMPONENT_NAMES, (
+            "ml", "scanner", "technical_confluence", "trend", "momentum",
+            "volume_liquidity", "volatility", "market_regime",
+            "risk_adjusted", "data_quality", "calibration_uncertainty"))
+
+    def test_components_do_not_import_gates(self):
+        import ast
+        src = (_PKG_DIR / "components.py").read_text()
+        tree = ast.parse(src)
+        offenders = []
+        gate_symbols = {"evaluate_hard_gates", "GateResult", "GateFailure"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.endswith("gates"):
+                    offenders.append(f"import-module:{node.module}")
+                for a in node.names:
+                    if a.name in gate_symbols:
+                        offenders.append(f"import-name:{a.name}")
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name.endswith("gates"):
+                        offenders.append(f"import:{a.name}")
+            elif isinstance(node, ast.Call):
+                # flag any call to a gate symbol (Name or Attribute)
+                fn = node.func
+                if isinstance(fn, ast.Name) and fn.id in gate_symbols:
+                    offenders.append(f"call:{fn.id}")
+                elif isinstance(fn, ast.Attribute) and fn.attr in gate_symbols:
+                    offenders.append(f"call:{fn.attr}")
+            elif isinstance(node, ast.Name) and node.id in gate_symbols:
+                # a bare reference to a gate symbol in code (not docstring)
+                offenders.append(f"ref:{node.id}")
+        self.assertEqual(offenders, [], f"gate dependency found: {offenders}")
 
 
 if __name__ == "__main__":
