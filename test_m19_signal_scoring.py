@@ -712,6 +712,43 @@ class M19BHardGates(unittest.TestCase):
                                    "allow_adjusted_prices_for_ml": True})
         self.assertNotIn("invalid_context_value", r2.block_reasons)
 
+    # ── corrective pass: calibrated probability type/range validation ──
+    def test_calibrated_probability_non_numeric_blocks(self):
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": "abc"})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_calibrated_probability_bool_blocks(self):
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": True})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_calibrated_probability_below_zero_blocks(self):
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": -0.1})
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_calibrated_probability_above_one_blocks(self):
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": 1.2})
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_calibrated_probability_valid_passes_gate(self):
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": 0.68})
+        self.assertTrue(r.passed)
+        self.assertNotIn("invalid_context_value", r.block_reasons)
+        self.assertNotIn("calibration_unavailable", r.block_reasons)
+
+    def test_calibrated_probability_none_is_unavailable_not_invalid(self):
+        # None remains the "unavailable" path (strict BLOCK), NOT invalid value
+        r = self._run(ml_context={"calibration_applied": True,
+                                  "prediction_calibrated": None})
+        self.assertIn("calibration_unavailable", r.block_reasons)
+        self.assertNotIn("invalid_context_value", r.block_reasons)
+
 
 if __name__ == "__main__":
     unittest.main()

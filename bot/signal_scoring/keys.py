@@ -128,3 +128,17 @@ def as_enum_str(value, allowed) -> str:
         raise InvalidContextValue(
             f"value {value!r} not in allowed {tuple(allowed)}")
     return value
+
+
+def as_probability(value) -> float:
+    """Coerce a calibrated/raw probability: real int/float only (bools
+    rejected), within [0.0, 1.0]. Raises InvalidContextValue otherwise
+    (fail-safe)."""
+    if isinstance(value, bool):
+        raise InvalidContextValue(f"expected probability, got bool {value!r}")
+    if not isinstance(value, (int, float)):
+        raise InvalidContextValue(f"expected numeric probability, got {value!r}")
+    fv = float(value)
+    if not (0.0 <= fv <= 1.0):
+        raise InvalidContextValue(f"probability out of range [0,1]: {fv}")
+    return fv

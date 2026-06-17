@@ -221,8 +221,22 @@ def evaluate_hard_gates(candidate_input: SignalCandidateInput,
                         and have("ml_context", K.ML_PRED_CALIBRATED)):
                     applied = K.as_bool(ml[K.ML_CALIBRATION_APPLIED])
                     calibrated = ml[K.ML_PRED_CALIBRATED]
-                    missing_cal = (applied is not True) or (calibrated is None)
-                    if missing_cal:
+                    if applied is True:
+                        # Calibration claimed applied -> prediction_calibrated
+                        # MUST be a valid numeric probability. None is the
+                        # "unavailable" path; a non-numeric/bool/out-of-range
+                        # value is an invalid context value (fail-safe BLOCK).
+                        if calibrated is None:
+                            cal_missing = True
+                        else:
+                            # raises InvalidContextValue -> invalid_context_value
+                            K.as_probability(calibrated)
+                            cal_missing = False
+                    else:
+                        # Not applied: treat as calibration unavailable
+                        # regardless of the (unused) calibrated value.
+                        cal_missing = True
+                    if cal_missing:
                         if profile == ScoringProfile.STRICT:
                             failures.append(_block(
                                 gate, "calibration_unavailable",
