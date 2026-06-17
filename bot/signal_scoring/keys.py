@@ -110,3 +110,21 @@ def timeframe_count(value) -> int:
     if isinstance(value, (list, tuple)):
         return len(value)
     raise InvalidContextValue(f"expected int or list, got {value!r}")
+
+
+# Allowed value sets for gate-critical string fields. Unknown values must
+# fail-safe (invalid_context_value BLOCK), never pass silently.
+ALLOWED_PRICE_ADJUSTMENT_MODE = ("raw", "adjusted")
+ALLOWED_PRODUCTION_THINNESS_STATUS = ("ok", "warned", "blocked")
+ALLOWED_RISK_AUTHORITY_STATUS = ("ok", "blocked")
+
+
+def as_enum_str(value, allowed) -> str:
+    """Coerce to one of the allowed string values; raise InvalidContextValue
+    on a non-string or an unknown string (fail-safe)."""
+    if not isinstance(value, str):
+        raise InvalidContextValue(f"expected str, got {value!r}")
+    if value not in allowed:
+        raise InvalidContextValue(
+            f"value {value!r} not in allowed {tuple(allowed)}")
+    return value

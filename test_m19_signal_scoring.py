@@ -653,6 +653,65 @@ class M19BHardGates(unittest.TestCase):
             GateFailure(gate_name="x", outcome=GateOutcome.PASS,
                         reason_code="y")
 
+    # ── corrective pass: non-dict context blocks must fail safe ──
+    def test_non_dict_ml_context_blocks_safely(self):
+        r = self._run(ml_context="bad")
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", r.block_reasons)
+
+    def test_non_dict_data_quality_context_blocks_safely(self):
+        r = self._run(data_quality_context="bad")
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", r.block_reasons)
+
+    def test_non_dict_risk_preview_blocks_safely(self):
+        r = self._run(risk_preview="bad")
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", r.block_reasons)
+
+    def test_non_dict_liquidity_context_blocks_safely(self):
+        r = self._run(liquidity_context="bad")
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", r.block_reasons)
+
+    def test_non_dict_block_does_not_raise(self):
+        """All gate-critical blocks non-dict at once must still return a
+        GateResult (not raise) and BLOCK."""
+        from bot.signal_scoring import evaluate_hard_gates, SignalCandidateInput
+        ci = SignalCandidateInput(
+            symbol="AAPL", side="LONG",
+            signal_timestamp_utc="2026-06-17T10:15:00Z",
+            ml_context="x", data_quality_context="x", advisory_context="x",
+            timeframe_context="x", risk_preview="x", liquidity_context="x")
+        r = evaluate_hard_gates(ci, self._cfg())
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", r.block_reasons)
+
+    # ── corrective pass: unknown enum strings must fail safe ──
+    def test_unknown_price_adjustment_mode_blocks(self):
+        r = self._run(ml_context={"price_adjustment_mode": "banana"})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_unknown_production_thinness_status_blocks(self):
+        r = self._run(ml_context={"production_thinness_status": "mystery"})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_unknown_risk_authority_status_blocks(self):
+        r = self._run(risk_preview={"risk_authority_status": "bad_status"})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", r.block_reasons)
+
+    def test_known_enum_values_still_accepted(self):
+        # warned/ok are valid and must not trip invalid_context_value
+        for status in ("ok", "warned"):
+            r = self._run(ml_context={"production_thinness_status": status})
+            self.assertNotIn("invalid_context_value", r.block_reasons)
+        r2 = self._run(ml_context={"price_adjustment_mode": "adjusted",
+                                   "allow_adjusted_prices_for_ml": True})
+        self.assertNotIn("invalid_context_value", r2.block_reasons)
+
 
 if __name__ == "__main__":
     unittest.main()

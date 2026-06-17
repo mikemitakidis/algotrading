@@ -64,7 +64,14 @@ def _missing_keys(ci: SignalCandidateInput) -> List[str]:
     for block_name, required in K.GATE_REQUIRED_KEYS.items():
         block = block_attr.get(block_name, {})
         if not isinstance(block, dict):
+            # Fail-safe: a non-dict block means EVERY required key for that
+            # block is unreadable. Expand into all `block.key` identifiers so
+            # have() returns False for each and dependent gates never try to
+            # subscript a non-dict (no raw KeyError/TypeError). Also record an
+            # explicit marker for the detail message.
             missing.append(f"{block_name}:<not-a-dict>")
+            for key in required:
+                missing.append(f"{block_name}.{key}")
             continue
         for key in required:
             if key not in block:
@@ -126,10 +133,9 @@ def evaluate_hard_gates(candidate_input: SignalCandidateInput,
 
             elif gate == "risk_authority":
                 if have("risk_preview", K.RISK_AUTHORITY_STATUS):
-                    status = rp[K.RISK_AUTHORITY_STATUS]
-                    if not isinstance(status, str):
-                        raise K.InvalidContextValue(
-                            f"risk_authority_status not str: {status!r}")
+                    status = K.as_enum_str(
+                        rp[K.RISK_AUTHORITY_STATUS],
+                        K.ALLOWED_RISK_AUTHORITY_STATUS)
                     if status == "blocked":
                         failures.append(_block(
                             gate, "risk_authority_blocked",
@@ -165,10 +171,9 @@ def evaluate_hard_gates(candidate_input: SignalCandidateInput,
                         tripped = True
                 if (have("ml_context", K.ML_PRICE_ADJUSTMENT_MODE)
                         and have("ml_context", K.ML_ALLOW_ADJUSTED_FOR_ML)):
-                    mode = ml[K.ML_PRICE_ADJUSTMENT_MODE]
-                    if not isinstance(mode, str):
-                        raise K.InvalidContextValue(
-                            f"price_adjustment_mode not str: {mode!r}")
+                    mode = K.as_enum_str(
+                        ml[K.ML_PRICE_ADJUSTMENT_MODE],
+                        K.ALLOWED_PRICE_ADJUSTMENT_MODE)
                     allow = K.as_bool(ml[K.ML_ALLOW_ADJUSTED_FOR_ML])
                     if mode == "adjusted" and allow is not True:
                         tripped = True
@@ -186,10 +191,9 @@ def evaluate_hard_gates(candidate_input: SignalCandidateInput,
 
             elif gate == "production_thinness_blocked":
                 if have("ml_context", K.ML_PRODUCTION_THINNESS_STATUS):
-                    status = ml[K.ML_PRODUCTION_THINNESS_STATUS]
-                    if not isinstance(status, str):
-                        raise K.InvalidContextValue(
-                            f"production_thinness_status not str: {status!r}")
+                    status = K.as_enum_str(
+                        ml[K.ML_PRODUCTION_THINNESS_STATUS],
+                        K.ALLOWED_PRODUCTION_THINNESS_STATUS)
                     if status == "blocked":
                         failures.append(_block(
                             gate, "production_thinness_blocked",
