@@ -4165,7 +4165,8 @@ class G10_Hygiene(unittest.TestCase):
         changed = sorted(result.stdout.strip().splitlines())
         # Build the allowed set
         allowed_prefixes = ("bot/backtesting/", "configs/backtests/",
-                            "bot/signal_scoring/", "configs/signal_scoring/")
+                            "bot/signal_scoring/", "configs/signal_scoring/",
+                            "bot/paper/", "configs/paper/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4207,6 +4208,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_group_f_advisories.py",
             # M19.A: signal-scoring contracts/config/provenance proof tests.
             "test_m19_signal_scoring.py",
+            # M20.A: paper-trading firewall contracts proof tests.
+            "test_m20_paper.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

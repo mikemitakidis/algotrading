@@ -10413,6 +10413,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/backtesting/", "configs/backtests/",   # M17
             "bot/ml/",          "configs/ml/",          # M18
             "bot/signal_scoring/", "configs/signal_scoring/",  # M19
+            "bot/paper/",        "configs/paper/",          # M20
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10462,6 +10463,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_group_f_advisories.py",
             # M19.A: signal-scoring contracts/config/provenance proof tests.
             "test_m19_signal_scoring.py",
+            # M20.A: paper-trading firewall contracts proof tests.
+            "test_m20_paper.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
