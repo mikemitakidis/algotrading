@@ -53,6 +53,10 @@ def _get(block, key: str, coerce: Callable) -> Tuple[Any, str]:
         return None, _INVALID
     if key not in block:
         return None, _MISSING
+    if block[key] is None:
+        # Explicit None is the canonical "unavailable" sentinel -> missing,
+        # never invalid. (A present, non-None, un-coercible value is invalid.)
+        return None, _MISSING
     try:
         return coerce(block[key]), _OK
     except K.InvalidContextValue:
@@ -80,62 +84,68 @@ def _mk(name, score, reasons=None, warnings=None, used=None, blocked=None):
 def score_ml(ci: SignalCandidateInput, config: SignalScoringConfig
              ) -> ComponentScore:
     ml = _block(ci, "ml_context")
+    # 1. non-dict ml_context block -> invalid fallback
     if ml is _INVALID_BLOCK:
         return _mk("ml", INVALID_FALLBACK, reasons=["fallback_invalid_input"],
                    warnings=["invalid_soft_input"],
-                   used={"ml_context": "invalid"}, blocked=["ml_probability_invalid"])
+                   used={"ml_context": "invalid"},
+                   blocked=["ml_probability_invalid"])
+
     applied, st_app = _get(ml, K.ML_CALIBRATION_APPLIED, K.as_bool)
     cal, st_cal = _get(ml, K.ML_PRED_CALIBRATED, K.as_probability)
     raw, st_raw = _get(ml, K.ML_PRED_RAW, K.as_probability)
-    reasons, warnings, used, blocked = [], [], {}, []
+    used = {"calibration_applied": applied,
+            "prediction_calibrated": cal, "prediction_raw": raw}
 
-    use_prob = None
-    if applied is True and st_cal == _OK and cal is not None:
-        use_prob = cal
-        used["prediction_calibrated"] = cal
-        reasons.append("ml_calibrated_probability_used")
-    elif st_raw == _OK and raw is not None:
-        use_prob = raw
-        used["prediction_raw"] = raw
-        warnings.append("raw_probability_used")
-        reasons.append("ml_raw_probability_used")
-    else:
-        # No usable probability. Distinguish INVALID (a present-but-bad value)
-        # from MISSING (absent). The relevant reads are: calibrated (only when
-        # calibration is applied) and raw (the fallback).
-        used["calibration_applied"] = applied
-        used["prediction_calibrated"] = cal
-        used["prediction_raw"] = raw
-        # Explicit None is "unavailable" (missing), not a corrupt value. Only a
-        # present, non-None, un-coercible value counts as invalid.
-        raw_present = ml.get(K.ML_PRED_RAW, None) is not None \
-            if isinstance(ml, dict) else False
-        cal_present = ml.get(K.ML_PRED_CALIBRATED, None) is not None \
-            if isinstance(ml, dict) else False
-        cal_relevant_invalid = (applied is True and st_cal == _INVALID
-                                and cal_present)
-        raw_invalid = (st_raw == _INVALID and raw_present)
-        any_invalid = cal_relevant_invalid or raw_invalid or (st_app == _INVALID)
-        if any_invalid:
-            return _mk("ml", INVALID_FALLBACK,
-                       reasons=["fallback_invalid_input"],
-                       warnings=["invalid_soft_input"],
-                       used=used, blocked=["ml_probability_invalid"])
+    def _invalid():
+        return _mk("ml", INVALID_FALLBACK, reasons=["fallback_invalid_input"],
+                   warnings=["invalid_soft_input"], used=used,
+                   blocked=["ml_probability_invalid"])
+
+    def _missing():
         return _mk("ml", INVALID_FALLBACK,
                    reasons=["ml_probability_unavailable"],
-                   warnings=["missing_soft_input"],
-                   used=used, blocked=["ml_probability_unavailable"])
+                   warnings=["missing_soft_input"], used=used,
+                   blocked=["ml_probability_unavailable"])
 
-    hc = config.ml["high_conviction_probability"]
-    mn = config.ml["min_calibrated_probability_for_eligible"]
-    if use_prob >= hc:
-        reasons.append("ml_high_conviction_band")
-    elif use_prob >= mn:
-        reasons.append("ml_eligible_band")
-    else:
-        reasons.append("ml_weak_band")
-    return _mk("ml", use_prob * 100.0, reasons=reasons, warnings=warnings,
-               used=used, blocked=blocked)
+    def _use(prob, *, raw_used):
+        reasons = ["ml_raw_probability_used" if raw_used
+                   else "ml_calibrated_probability_used"]
+        warnings = ["raw_probability_used"] if raw_used else []
+        hc = config.ml["high_conviction_probability"]
+        mn = config.ml["min_calibrated_probability_for_eligible"]
+        if prob >= hc:
+            reasons.append("ml_high_conviction_band")
+        elif prob >= mn:
+            reasons.append("ml_eligible_band")
+        else:
+            reasons.append("ml_weak_band")
+        return _mk("ml", prob * 100.0, reasons=reasons, warnings=warnings,
+                   used=used)
+
+    # 3. calibration_applied itself invalid (e.g. "yes") -> invalid fallback
+    if st_app == _INVALID:
+        return _invalid()
+
+    # Helper: a raw fallback path, used when calibration is not authoritative.
+    def _raw_fallback():
+        if st_raw == _OK and raw is not None:
+            return _use(raw, raw_used=True)
+        if st_raw == _INVALID:        # present-but-bad raw value
+            return _invalid()
+        return _missing()             # raw absent or None
+
+    # 4. calibration_applied is True -> calibrated is authoritative
+    if applied is True:
+        if st_cal == _OK and cal is not None:
+            return _use(cal, raw_used=False)
+        if st_cal == _INVALID:        # present-but-bad calibrated value:
+            return _invalid()         # invalid even if raw is valid
+        # calibrated missing/None -> raw fallback permitted
+        return _raw_fallback()
+
+    # 5. calibration_applied is False or missing -> raw fallback
+    return _raw_fallback()
 
 
 # ───────────────────────── scanner ─────────────────────────

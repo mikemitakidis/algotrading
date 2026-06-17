@@ -1231,6 +1231,36 @@ class M19CComponents(unittest.TestCase):
         self.assertNotIn("invalid_soft_input", c.warnings)
         self.assertIn("ml_probability_unavailable", c.blocked_reasons)
 
+    # invalid calibrated (when applied) must NOT fall back to raw
+    def test_ml_invalid_calibrated_with_valid_raw_is_invalid(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": True, "prediction_calibrated": "bad",
+            "prediction_raw": 0.62}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+        self.assertNotIn("raw_probability_used", c.warnings)
+
+    def test_ml_none_calibrated_with_valid_raw_uses_raw(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": True, "prediction_calibrated": None,
+            "prediction_raw": 0.62}})
+        self.assertAlmostEqual(c.score, 62.0, places=4)
+        self.assertIn("raw_probability_used", c.warnings)
+        self.assertNotIn("invalid_soft_input", c.warnings)
+
+    def test_ml_applied_missing_uses_raw(self):
+        c = self._score("ml", replace={"ml_context": {
+            "prediction_raw": 0.62}})
+        self.assertAlmostEqual(c.score, 62.0, places=4)
+        self.assertIn("raw_probability_used", c.warnings)
+        self.assertNotIn("invalid_soft_input", c.warnings)
+
+    def test_ml_applied_invalid_string_is_invalid(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": "yes", "prediction_raw": 0.62}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
 
 if __name__ == "__main__":
     unittest.main()
