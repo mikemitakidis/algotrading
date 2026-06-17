@@ -319,5 +319,113 @@ class M19ASafetyGuards(unittest.TestCase):
                          "import created a forbidden artifact")
 
 
+class M19ACorrectivePass(unittest.TestCase):
+    """Corrective M19.A hardening: UTC-only timestamps, unknown-field
+    rejection on all three contracts, exact config-key validation, and
+    score-range validation."""
+
+    # 1. UTC timestamp validation
+    def test_timestamp_z_accepted(self):
+        _valid_input(signal_timestamp_utc="2026-06-17T10:15:00Z")
+
+    def test_timestamp_offset_zero_accepted(self):
+        _valid_input(signal_timestamp_utc="2026-06-17T10:15:00+00:00")
+
+    def test_timestamp_naive_rejected(self):
+        with self.assertRaises(ValueError):
+            _valid_input(signal_timestamp_utc="2026-06-17T10:15:00")
+
+    def test_timestamp_nonutc_offset_rejected(self):
+        with self.assertRaises(ValueError):
+            _valid_input(signal_timestamp_utc="2026-06-17T13:15:00+03:00")
+
+    # 2. unknown top-level fields rejected
+    def test_input_unknown_field_rejected(self):
+        d = _valid_input().to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            SignalCandidateInput.from_dict(d)
+
+    def test_output_unknown_field_rejected(self):
+        o = ScoredSignalCandidate(
+            symbol="AAPL", side="LONG",
+            signal_timestamp_utc="2026-06-17T10:15:00Z", candidate_id="x" * 64)
+        d = o.to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            ScoredSignalCandidate.from_dict(d)
+
+    def test_config_unknown_field_rejected(self):
+        d = default_config().to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            SignalScoringConfig.from_dict(d)
+
+    # 3. exact config-key validation
+    def test_missing_required_weight_key_rejected(self):
+        d = default_config().to_dict()
+        d["weights"] = dict(d["weights"])
+        d["weights"].pop("calibration_uncertainty")
+        with self.assertRaises(ValueError):
+            SignalScoringConfig.from_dict(d)
+
+    def test_unknown_extra_weight_key_rejected(self):
+        d = default_config().to_dict()
+        d["weights"] = dict(d["weights"])
+        d["weights"]["bogus_factor"] = 0.0
+        with self.assertRaises(ValueError):
+            SignalScoringConfig.from_dict(d)
+
+    def test_malformed_weights_single_key_rejected(self):
+        d = default_config().to_dict()
+        d["weights"] = {"ml": 1.0}
+        with self.assertRaises(ValueError):
+            SignalScoringConfig.from_dict(d)
+
+    def test_exact_eleven_weight_keys_enforced(self):
+        expected = {
+            "ml", "scanner", "technical_confluence", "trend", "momentum",
+            "volume_liquidity", "volatility", "market_regime",
+            "risk_adjusted", "data_quality", "calibration_uncertainty"}
+        self.assertEqual(set(default_config().weights), expected)
+
+    def test_missing_required_block_key_rejected(self):
+        for block, drop in (("thresholds", "eligible_min"),
+                            ("ml", "high_conviction_probability"),
+                            ("output", "allow_sqlite_write")):
+            d = default_config().to_dict()
+            d[block] = dict(d[block])
+            d[block].pop(drop)
+            with self.assertRaises(ValueError):
+                SignalScoringConfig.from_dict(d)
+
+    def test_extra_block_key_rejected(self):
+        d = default_config().to_dict()
+        d["ml"] = dict(d["ml"])
+        d["ml"]["secret_knob"] = 1
+        with self.assertRaises(ValueError):
+            SignalScoringConfig.from_dict(d)
+
+    # final_score range validation
+    def test_final_score_out_of_range_rejected(self):
+        for bad in (-1.0, 100.1):
+            with self.assertRaises(ValueError):
+                ScoredSignalCandidate(
+                    symbol="AAPL", side="LONG",
+                    signal_timestamp_utc="2026-06-17T10:15:00Z",
+                    candidate_id="x" * 64, final_score=bad)
+            with self.assertRaises(ValueError):
+                ScoredSignalCandidate(
+                    symbol="AAPL", side="LONG",
+                    signal_timestamp_utc="2026-06-17T10:15:00Z",
+                    candidate_id="x" * 64, final_score_100=bad)
+
+    def test_final_score_in_range_accepted(self):
+        ScoredSignalCandidate(
+            symbol="AAPL", side="LONG",
+            signal_timestamp_utc="2026-06-17T10:15:00Z",
+            candidate_id="x" * 64, final_score=76.4, final_score_100=76.4)
+
+
 if __name__ == "__main__":
     unittest.main()

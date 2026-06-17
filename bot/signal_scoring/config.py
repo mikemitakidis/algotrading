@@ -218,6 +218,41 @@ class SignalScoringConfig:
 
     # ── validation ──
     def validate(self) -> None:
+        # Exact-key validation for required nested blocks. Each block must
+        # contain EXACTLY the expected key set (no missing, no extra keys) so a
+        # malformed config like weights={"ml":1.0} is rejected up front.
+        required_keys = {
+            "weights": set(_default_weights()),
+            "thresholds": set(_default_thresholds()),
+            "hard_gates": set(_default_hard_gates()),
+            "multipliers": set(_default_multipliers()),
+            "penalties": set(_default_penalties()),
+            "ml": set(_default_ml()),
+            "scanner": set(_default_scanner()),
+            "technical": set(_default_technical()),
+            "risk": set(_default_risk()),
+            "liquidity": set(_default_liquidity()),
+            "volatility": set(_default_volatility()),
+            "regime": set(_default_regime()),
+            "data_quality": set(_default_data_quality()),
+            "output": set(_default_output()),
+        }
+        for block_name, expected in required_keys.items():
+            block = getattr(self, block_name)
+            if not isinstance(block, dict):
+                raise ValueError(f"config block {block_name!r} must be a dict")
+            actual = set(block)
+            missing = expected - actual
+            extra = actual - expected
+            if missing:
+                raise ValueError(
+                    f"config block {block_name!r} missing key(s): "
+                    f"{sorted(missing)}")
+            if extra:
+                raise ValueError(
+                    f"config block {block_name!r} has unknown key(s): "
+                    f"{sorted(extra)}")
+
         # anchor split must sum to 1
         if abs((self.ml_anchor_weight + self.support_weight) - 1.0) > _SUM_TOL:
             raise ValueError(
@@ -288,8 +323,11 @@ class SignalScoringConfig:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SignalScoringConfig":
         known = {f for f in cls.__dataclass_fields__}
-        kwargs = {k: v for k, v in d.items() if k in known}
-        return cls(**kwargs)
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown top-level config field(s): {sorted(unknown)}")
+        return cls(**d)
 
     def config_hash(self) -> str:
         return provenance.config_hash(self.to_dict())

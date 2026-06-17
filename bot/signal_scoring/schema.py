@@ -64,15 +64,24 @@ def _coerce_side(value: Any) -> SignalSide:
 
 
 def _validate_timestamp(ts: Any) -> str:
-    """Require an ISO-8601 UTC timestamp string. Returns it unchanged if
-    valid; raises ValueError otherwise. No wall-clock is used."""
+    """Require an ISO-8601 *UTC* timestamp string. Accepts a trailing 'Z' or a
+    '+00:00' offset only. Rejects naive (no timezone) and non-UTC offsets.
+    Returns the string unchanged if valid; raises ValueError otherwise. No
+    wall-clock is used."""
     if not isinstance(ts, str) or not ts:
         raise ValueError("signal_timestamp_utc must be a non-empty ISO string")
     norm = ts.replace("Z", "+00:00")
     try:
-        _dt.datetime.fromisoformat(norm)
+        parsed = _dt.datetime.fromisoformat(norm)
     except ValueError as e:
         raise ValueError(f"bad signal_timestamp_utc: {ts!r} ({e})")
+    if parsed.tzinfo is None:
+        raise ValueError(
+            f"signal_timestamp_utc must be timezone-aware UTC, got naive: {ts!r}")
+    if parsed.utcoffset() != _dt.timedelta(0):
+        raise ValueError(
+            f"signal_timestamp_utc must be UTC (+00:00 or Z), got offset "
+            f"{parsed.utcoffset()}: {ts!r}")
     return ts
 
 
@@ -123,8 +132,11 @@ class SignalCandidateInput:
         if "schema_version" not in d:
             raise ValueError("missing schema_version")
         known = {f for f in cls.__dataclass_fields__}
-        kwargs = {k: v for k, v in d.items() if k in known}
-        return cls(**kwargs)
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown top-level input field(s): {sorted(unknown)}")
+        return cls(**d)
 
 
 # ─────────────────────── output contract ───────────────────────
@@ -189,6 +201,13 @@ class ScoredSignalCandidate:
                                         DecisionBucket.HIGH_CONVICTION):
                 raise ValueError(
                     "SHORT candidate cannot be ELIGIBLE/HIGH_CONVICTION in M19")
+        # Score range invariants (M19 uses a 0-100 scale).
+        for nm, v in (("final_score", self.final_score),
+                      ("final_score_100", self.final_score_100)):
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise ValueError(f"{nm} must be numeric, got {type(v).__name__}")
+            if not (0.0 <= float(v) <= 100.0):
+                raise ValueError(f"{nm} out of range [0,100]: {v}")
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -203,5 +222,8 @@ class ScoredSignalCandidate:
         if "schema_version" not in d:
             raise ValueError("missing schema_version")
         known = {f for f in cls.__dataclass_fields__}
-        kwargs = {k: v for k, v in d.items() if k in known}
-        return cls(**kwargs)
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown top-level output field(s): {sorted(unknown)}")
+        return cls(**d)
