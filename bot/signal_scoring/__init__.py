@@ -28,6 +28,9 @@ from bot.signal_scoring.schema import (  # noqa: F401
     PenaltySeverity,
     SignalCandidateInput,
     ScoredSignalCandidate,
+    GateOutcome,
+    GateFailure,
+    GateResult,
 )
 from bot.signal_scoring.config import (  # noqa: F401
     SignalScoringConfig,
@@ -35,6 +38,11 @@ from bot.signal_scoring.config import (  # noqa: F401
     DEFAULT_PROFILE,
 )
 from bot.signal_scoring import provenance  # noqa: F401
+from bot.signal_scoring import keys  # noqa: F401
+from bot.signal_scoring.gates import (  # noqa: F401
+    evaluate_hard_gates,
+    GATE_ORDER,
+)
 
 __all__ = [
     "SCHEMA_VERSION_INPUT",
@@ -46,10 +54,16 @@ __all__ = [
     "PenaltySeverity",
     "SignalCandidateInput",
     "ScoredSignalCandidate",
+    "GateOutcome",
+    "GateFailure",
+    "GateResult",
     "SignalScoringConfig",
     "default_config",
     "DEFAULT_PROFILE",
     "provenance",
+    "keys",
+    "evaluate_hard_gates",
+    "GATE_ORDER",
 ]
 
-M19_PHASE = "M19.A"
+M19_PHASE = "M19.B"

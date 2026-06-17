@@ -427,5 +427,232 @@ class M19ACorrectivePass(unittest.TestCase):
             candidate_id="x" * 64, final_score=76.4, final_score_100=76.4)
 
 
+class M19BHardGates(unittest.TestCase):
+    """M19.B hard-gate engine: gates only, fail-safe, deterministic."""
+
+    def _cfg(self, profile=None):
+        return default_config(profile) if profile else default_config()
+
+    def _clean(self, side="LONG", **over):
+        from bot.signal_scoring import SignalCandidateInput
+        blocks = dict(
+            ml_context={
+                "model_id": "m1", "calibration_applied": True,
+                "prediction_calibrated": 0.68, "prediction_raw": 0.64,
+                "price_adjustment_mode": "raw",
+                "allow_adjusted_prices_for_ml": False,
+                "model_readiness_passed": True,
+                "production_thinness_status": "ok"},
+            data_quality_context={
+                "schema_match": True, "stale_data_flag": False,
+                "data_freshness_minutes": 5, "missing_feature_count": 0},
+            advisory_context={
+                "adjusted_price_pit_risk": False,
+                "scanner_replica_short_side_validated": False,
+                "fourh_bucket_alignment": "utc_fixed"},
+            timeframe_context={"available_timeframes": 4,
+                               "valid_timeframes": 4},
+            risk_preview={"risk_preview_available": True,
+                          "risk_authority_status": "ok"},
+            liquidity_context={"avg_dollar_volume_20d": 50_000_000,
+                               "price": 150.0},
+        )
+        # allow targeted overrides of nested keys via block kwargs
+        for blk, patch in over.items():
+            if blk in blocks and isinstance(patch, dict):
+                merged = dict(blocks[blk]); merged.update(patch)
+                blocks[blk] = merged
+            else:
+                blocks[blk] = patch
+        return SignalCandidateInput(
+            symbol="AAPL", side=side,
+            signal_timestamp_utc="2026-06-17T10:15:00Z", **blocks)
+
+    def _run(self, ci=None, profile=None, **over):
+        from bot.signal_scoring import evaluate_hard_gates
+        if ci is None:
+            ci = self._clean(**over)
+        return evaluate_hard_gates(ci, self._cfg(profile))
+
+    def _block_codes(self, r):
+        return set(r.block_reasons)
+
+    # all-pass
+    def test_clean_long_passes(self):
+        r = self._run()
+        self.assertTrue(r.passed)
+        self.assertIsNone(r.decision_bucket)
+        self.assertEqual(r.failures, [])
+
+    # individual BLOCK gates
+    def test_schema_mismatch_blocks(self):
+        r = self._run(data_quality_context={"schema_match": False})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("schema_mismatch", self._block_codes(r))
+
+    def test_risk_preview_unavailable_blocks(self):
+        r = self._run(risk_preview={"risk_preview_available": False})
+        self.assertIn("risk_preview_unavailable", self._block_codes(r))
+
+    def test_risk_authority_blocked_blocks(self):
+        r = self._run(risk_preview={"risk_authority_status": "blocked"})
+        self.assertIn("risk_authority_blocked", self._block_codes(r))
+
+    def test_insufficient_timeframes_blocks(self):
+        r = self._run(timeframe_context={"available_timeframes": 3})
+        self.assertIn("insufficient_available_timeframes", self._block_codes(r))
+
+    def test_insufficient_timeframes_list_form(self):
+        r = self._run(timeframe_context={
+            "available_timeframes": ["1D", "4H", "1H"]})  # 3 < 4
+        self.assertIn("insufficient_available_timeframes", self._block_codes(r))
+
+    def test_stale_data_flag_blocks(self):
+        r = self._run(data_quality_context={"stale_data_flag": True})
+        self.assertIn("stale_data", self._block_codes(r))
+
+    def test_stale_data_freshness_blocks(self):
+        r = self._run(data_quality_context={"data_freshness_minutes": 31})
+        self.assertIn("stale_data", self._block_codes(r))
+
+    def test_pit_via_advisory_flag_blocks(self):
+        r = self._run(advisory_context={"adjusted_price_pit_risk": True})
+        self.assertIn("adjusted_price_pit_risk", self._block_codes(r))
+
+    def test_pit_via_adjusted_mode_without_flag_blocks(self):
+        r = self._run(ml_context={"price_adjustment_mode": "adjusted",
+                                  "allow_adjusted_prices_for_ml": False})
+        self.assertIn("adjusted_price_pit_risk", self._block_codes(r))
+
+    def test_adjusted_mode_with_allow_flag_does_not_pit_block(self):
+        r = self._run(ml_context={"price_adjustment_mode": "adjusted",
+                                  "allow_adjusted_prices_for_ml": True})
+        self.assertNotIn("adjusted_price_pit_risk", self._block_codes(r))
+
+    def test_model_readiness_failed_blocks(self):
+        r = self._run(ml_context={"model_readiness_passed": False})
+        self.assertIn("model_readiness_failed", self._block_codes(r))
+
+    def test_production_thinness_blocked_blocks(self):
+        r = self._run(ml_context={"production_thinness_status": "blocked"})
+        self.assertIn("production_thinness_blocked", self._block_codes(r))
+
+    def test_thinness_warned_does_not_block(self):
+        r = self._run(ml_context={"production_thinness_status": "warned"})
+        self.assertNotIn("production_thinness_blocked", self._block_codes(r))
+        self.assertTrue(r.passed)  # warned is a later-phase penalty, not a gate
+
+    def test_below_min_liquidity_blocks(self):
+        r = self._run(liquidity_context={"avg_dollar_volume_20d": 1_000_000})
+        self.assertIn("below_min_liquidity", self._block_codes(r))
+
+    def test_price_below_min_blocks(self):
+        r = self._run(liquidity_context={"price": 1.0})
+        self.assertIn("below_min_liquidity", self._block_codes(r))
+
+    # calibration profile behaviour
+    def test_missing_calibration_strict_blocks(self):
+        r = self._run(ml_context={"calibration_applied": False,
+                                  "prediction_calibrated": None})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("calibration_unavailable", self._block_codes(r))
+
+    def test_missing_calibration_research_manual_review(self):
+        r = self._run(profile=ScoringProfile.RESEARCH,
+                      ml_context={"calibration_applied": False,
+                                  "prediction_calibrated": None})
+        self.assertEqual(r.decision_bucket.value, "MANUAL_REVIEW")
+        self.assertIn("calibration_unavailable", r.manual_review_reasons)
+
+    # short side profile behaviour
+    def test_short_strict_blocks(self):
+        r = self._run(side="SHORT")
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("short_side_blocked", self._block_codes(r))
+
+    def test_short_research_manual_review(self):
+        r = self._run(side="SHORT", profile=ScoringProfile.RESEARCH)
+        self.assertEqual(r.decision_bucket.value, "MANUAL_REVIEW")
+        self.assertIn("short_side_manual_review", r.manual_review_reasons)
+
+    # precedence
+    def test_block_takes_precedence_over_manual_review(self):
+        # research SHORT (MANUAL_REVIEW) + schema mismatch (BLOCK) -> BLOCKED
+        r = self._run(side="SHORT", profile=ScoringProfile.RESEARCH,
+                      data_quality_context={"schema_match": False})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("schema_mismatch", self._block_codes(r))
+        self.assertIn("short_side_manual_review", r.manual_review_reasons)
+
+    # missing key
+    def test_missing_required_key_blocks(self):
+        ci = self._clean()
+        d = ci.to_dict()
+        d["ml_context"] = dict(d["ml_context"])
+        d["ml_context"].pop("model_readiness_passed")
+        from bot.signal_scoring import SignalCandidateInput
+        ci2 = SignalCandidateInput.from_dict(d)
+        r = self._run(ci=ci2)
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", self._block_codes(r))
+
+    # invalid value/type fail-safe
+    def test_invalid_liquidity_value_blocks_safely(self):
+        r = self._run(liquidity_context={"avg_dollar_volume_20d": "abc"})
+        self.assertEqual(r.decision_bucket.value, "BLOCKED")
+        self.assertIn("invalid_context_value", self._block_codes(r))
+
+    def test_invalid_timeframe_value_blocks_safely(self):
+        r = self._run(timeframe_context={"available_timeframes": "four"})
+        self.assertIn("invalid_context_value", self._block_codes(r))
+
+    def test_invalid_calibration_applied_string_blocks_safely(self):
+        # "yes" must NOT be silently treated as True
+        r = self._run(ml_context={"calibration_applied": "yes"})
+        self.assertIn("invalid_context_value", self._block_codes(r))
+
+    def test_invalid_price_none_blocks_safely(self):
+        r = self._run(liquidity_context={"price": None})
+        self.assertIn("invalid_context_value", self._block_codes(r))
+
+    # determinism + ordering + round-trip
+    def test_gate_result_deterministic(self):
+        ci = self._clean(side="SHORT")
+        cfg = self._cfg()
+        from bot.signal_scoring import evaluate_hard_gates
+        r1 = evaluate_hard_gates(ci, cfg).to_dict()
+        r2 = evaluate_hard_gates(ci, cfg).to_dict()
+        self.assertEqual(r1, r2)
+
+    def test_evaluated_gates_order_stable(self):
+        from bot.signal_scoring import GATE_ORDER
+        r = self._run()
+        self.assertEqual(tuple(r.evaluated_gates), GATE_ORDER)
+
+    def test_gate_order_is_explicit_not_alphabetic(self):
+        from bot.signal_scoring import GATE_ORDER
+        self.assertEqual(GATE_ORDER[0], "missing_context_key")
+        self.assertNotEqual(list(GATE_ORDER), sorted(GATE_ORDER))
+
+    def test_gate_result_roundtrip(self):
+        from bot.signal_scoring import GateResult
+        r = self._run(side="SHORT")
+        r2 = GateResult.from_dict(r.to_dict())
+        self.assertEqual(r.to_dict(), r2.to_dict())
+
+    def test_gate_failure_roundtrip(self):
+        from bot.signal_scoring import GateFailure
+        r = self._run(side="SHORT")
+        f = r.failures[0]
+        f2 = GateFailure.from_dict(f.to_dict())
+        self.assertEqual(f.to_dict(), f2.to_dict())
+
+    def test_gate_failure_cannot_be_pass(self):
+        from bot.signal_scoring import GateFailure, GateOutcome
+        with self.assertRaises(ValueError):
+            GateFailure(gate_name="x", outcome=GateOutcome.PASS,
+                        reason_code="y")
+
+
 if __name__ == "__main__":
     unittest.main()

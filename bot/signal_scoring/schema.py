@@ -227,3 +227,102 @@ class ScoredSignalCandidate:
             raise ValueError(
                 f"unknown top-level output field(s): {sorted(unknown)}")
         return cls(**d)
+
+
+# ─────────────────── M19.B hard-gate result contract ───────────────────
+class GateOutcome(str, Enum):
+    PASS = "PASS"
+    BLOCK = "BLOCK"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+@dataclass(frozen=True)
+class GateFailure:
+    """One failing hard gate. `outcome` is BLOCK or MANUAL_REVIEW (never PASS).
+    detail is human-readable and must not contain secrets/PII."""
+    gate_name: str
+    outcome: GateOutcome
+    reason_code: str
+    detail: str = ""
+    severity: PenaltySeverity = PenaltySeverity.BLOCKING
+
+    def __post_init__(self):
+        if not isinstance(self.outcome, GateOutcome):
+            object.__setattr__(self, "outcome", GateOutcome(self.outcome))
+        if self.outcome == GateOutcome.PASS:
+            raise ValueError("GateFailure.outcome cannot be PASS")
+        if not isinstance(self.severity, PenaltySeverity):
+            object.__setattr__(self, "severity",
+                               PenaltySeverity(self.severity))
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["outcome"] = self.outcome.value
+        d["severity"] = self.severity.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "GateFailure":
+        known = {f for f in cls.__dataclass_fields__}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown GateFailure field(s): {sorted(unknown)}")
+        return cls(**d)
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """Outcome of the M19.B hard-gate engine. Standalone — does NOT populate
+    ScoredSignalCandidate (that assembly is a later phase).
+
+    passed == True iff there are no BLOCK and no MANUAL_REVIEW failures.
+    decision_bucket is BLOCKED if any BLOCK failure exists (precedence), else
+    MANUAL_REVIEW if any MANUAL_REVIEW failure exists, else None (a passing
+    gate result leaves the score-based bucket to a later phase)."""
+    profile: ScoringProfile
+    passed: bool
+    decision_bucket: Optional[DecisionBucket] = None
+    failures: List[GateFailure] = field(default_factory=list)
+    block_reasons: List[str] = field(default_factory=list)
+    manual_review_reasons: List[str] = field(default_factory=list)
+    evaluated_gates: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.profile, ScoringProfile):
+            object.__setattr__(self, "profile", ScoringProfile(self.profile))
+        if self.decision_bucket is not None and not isinstance(
+                self.decision_bucket, DecisionBucket):
+            object.__setattr__(self, "decision_bucket",
+                               DecisionBucket(self.decision_bucket))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "profile": self.profile.value,
+            "passed": self.passed,
+            "decision_bucket": (self.decision_bucket.value
+                                if self.decision_bucket is not None else None),
+            "failures": [f.to_dict() for f in self.failures],
+            "block_reasons": list(self.block_reasons),
+            "manual_review_reasons": list(self.manual_review_reasons),
+            "evaluated_gates": list(self.evaluated_gates),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "GateResult":
+        known = {"profile", "passed", "decision_bucket", "failures",
+                 "block_reasons", "manual_review_reasons", "evaluated_gates"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown GateResult field(s): {sorted(unknown)}")
+        failures = [GateFailure.from_dict(f) for f in d.get("failures", [])]
+        return cls(
+            profile=d["profile"],
+            passed=d["passed"],
+            decision_bucket=d.get("decision_bucket"),
+            failures=failures,
+            block_reasons=list(d.get("block_reasons", [])),
+            manual_review_reasons=list(d.get("manual_review_reasons", [])),
+            evaluated_gates=list(d.get("evaluated_gates", [])),
+        )
