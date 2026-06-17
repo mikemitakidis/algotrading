@@ -415,3 +415,169 @@ def make_component_score(component, score, *, allowed_components,
         inputs_used=dict(inputs_used or {}),
         blocked_reasons=sorted(blocked_reasons or []),
     )
+
+
+# ─────────────────── M19.D penalty / multiplier contracts ───────────────────
+@dataclass(frozen=True)
+class PenaltyItem:
+    """One applied penalty. points >= 0, severity is a PenaltySeverity."""
+    name: str
+    points: float
+    reason_code: str
+    severity: PenaltySeverity = PenaltySeverity.WARNING
+    detail: str = ""
+    inputs_used: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("penalty name must be a non-empty string")
+        if isinstance(self.points, bool) or not isinstance(
+                self.points, (int, float)):
+            raise ValueError(
+                f"penalty points must be a non-bool number, got {self.points!r}")
+        if self.points < 0:
+            raise ValueError(f"penalty points must be >= 0: {self.points}")
+        if not isinstance(self.severity, PenaltySeverity):
+            object.__setattr__(self, "severity",
+                               PenaltySeverity(self.severity))
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["severity"] = self.severity.value
+        return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PenaltyItem":
+        known = {"name", "points", "reason_code", "severity", "detail",
+                 "inputs_used"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(f"unknown PenaltyItem field(s): {sorted(unknown)}")
+        from bot.signal_scoring.keys import PENALTY_NAMES
+        if d.get("name") not in PENALTY_NAMES:
+            raise ValueError(f"unknown penalty name: {d.get('name')!r}")
+        return cls(name=d["name"], points=d["points"],
+                   reason_code=d.get("reason_code", ""),
+                   severity=d.get("severity", PenaltySeverity.WARNING),
+                   detail=d.get("detail", ""),
+                   inputs_used=dict(d.get("inputs_used", {})))
+
+
+@dataclass(frozen=True)
+class PenaltyResult:
+    profile: ScoringProfile
+    items: List[PenaltyItem] = field(default_factory=list)
+    total_points: float = 0.0
+    raw_total_points: float = 0.0
+    reason_codes: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.profile, ScoringProfile):
+            object.__setattr__(self, "profile", ScoringProfile(self.profile))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "profile": self.profile.value,
+            "items": [i.to_dict() for i in self.items],
+            "total_points": self.total_points,
+            "raw_total_points": self.raw_total_points,
+            "reason_codes": list(self.reason_codes),
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PenaltyResult":
+        known = {"profile", "items", "total_points", "raw_total_points",
+                 "reason_codes", "warnings"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(f"unknown PenaltyResult field(s): {sorted(unknown)}")
+        return cls(
+            profile=d["profile"],
+            items=[PenaltyItem.from_dict(i) for i in d.get("items", [])],
+            total_points=d.get("total_points", 0.0),
+            raw_total_points=d.get("raw_total_points", 0.0),
+            reason_codes=list(d.get("reason_codes", [])),
+            warnings=list(d.get("warnings", [])),
+        )
+
+
+@dataclass(frozen=True)
+class MultiplierItem:
+    """One applied multiplier. factor > 0."""
+    name: str
+    factor: float
+    reason_code: str
+    detail: str = ""
+    inputs_used: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("multiplier name must be a non-empty string")
+        if isinstance(self.factor, bool) or not isinstance(
+                self.factor, (int, float)):
+            raise ValueError(
+                f"multiplier factor must be a non-bool number, got "
+                f"{self.factor!r}")
+        if self.factor <= 0:
+            raise ValueError(f"multiplier factor must be > 0: {self.factor}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "MultiplierItem":
+        known = {"name", "factor", "reason_code", "detail", "inputs_used"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown MultiplierItem field(s): {sorted(unknown)}")
+        from bot.signal_scoring.keys import MULTIPLIER_NAMES
+        if d.get("name") not in MULTIPLIER_NAMES:
+            raise ValueError(f"unknown multiplier name: {d.get('name')!r}")
+        return cls(name=d["name"], factor=d["factor"],
+                   reason_code=d.get("reason_code", ""),
+                   detail=d.get("detail", ""),
+                   inputs_used=dict(d.get("inputs_used", {})))
+
+
+@dataclass(frozen=True)
+class MultiplierResult:
+    profile: ScoringProfile
+    items: List[MultiplierItem] = field(default_factory=list)
+    product: float = 1.0
+    effective_multiplier: float = 1.0
+    reason_codes: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not isinstance(self.profile, ScoringProfile):
+            object.__setattr__(self, "profile", ScoringProfile(self.profile))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "profile": self.profile.value,
+            "items": [i.to_dict() for i in self.items],
+            "product": self.product,
+            "effective_multiplier": self.effective_multiplier,
+            "reason_codes": list(self.reason_codes),
+            "warnings": list(self.warnings),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "MultiplierResult":
+        known = {"profile", "items", "product", "effective_multiplier",
+                 "reason_codes", "warnings"}
+        unknown = set(d) - known
+        if unknown:
+            raise ValueError(
+                f"unknown MultiplierResult field(s): {sorted(unknown)}")
+        return cls(
+            profile=d["profile"],
+            items=[MultiplierItem.from_dict(i) for i in d.get("items", [])],
+            product=d.get("product", 1.0),
+            effective_multiplier=d.get("effective_multiplier", 1.0),
+            reason_codes=list(d.get("reason_codes", [])),
+            warnings=list(d.get("warnings", [])),
+        )

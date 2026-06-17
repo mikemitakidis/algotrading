@@ -257,3 +257,69 @@ def as_str(value) -> str:
     if not isinstance(value, str) or not value:
         raise InvalidContextValue(f"expected non-empty str, got {value!r}")
     return value
+
+
+def as_nonneg_number(value) -> float:
+    """Coerce to a non-negative real number (bools rejected; negatives are
+    invalid since counts/volumes/ATR cannot be negative)."""
+    n = as_number(value)  # rejects bool / non-numeric
+    if n < 0:
+        raise InvalidContextValue(f"expected non-negative number, got {n}")
+    return n
+
+
+# ─────────────── M19.D penalty / multiplier names + readable keys ───────────────
+PENALTY_NAMES = (
+    "uncalibrated_ml_probability",
+    "each_feature_extrapolation",
+    "production_thinness_warning",
+    "missing_noncritical_timeframe",
+    "weak_scanner_confluence",
+    "poor_reward_risk",
+)
+
+MULTIPLIER_NAMES = (
+    "regime",
+    "volatility",
+    "liquidity",
+    "fourh_alignment",
+)
+
+# Soft keys each penalty trigger reads (raw context + config only; advisory).
+# Must match actual reads (anti-drift tested).
+PENALTY_READABLE_KEYS = {
+    "uncalibrated_ml_probability": (
+        ("ml_context", (ML_CALIBRATION_APPLIED,)),
+    ),
+    "each_feature_extrapolation": (
+        ("ml_context", (ML_FEATURE_EXTRAPOLATION_COUNT,)),
+    ),
+    "production_thinness_warning": (
+        ("ml_context", (ML_PRODUCTION_THINNESS_STATUS,)),
+    ),
+    "missing_noncritical_timeframe": (
+        ("scanner_context", (SCAN_VALID_COUNT, SCAN_AVAILABLE_TIMEFRAMES)),
+    ),
+    "weak_scanner_confluence": (
+        ("scanner_context", (SCAN_VALID_COUNT,)),
+    ),
+    "poor_reward_risk": (
+        ("risk_preview", (RISK_REWARD_RISK_RATIO,)),
+    ),
+}
+
+# Soft keys each multiplier trigger reads.
+MULTIPLIER_READABLE_KEYS = {
+    "regime": (
+        ("regime_context", (REGIME_LABEL,)),
+    ),
+    "volatility": (
+        ("volatility_context", (VOL_ATR_PCT,)),
+    ),
+    "liquidity": (
+        ("liquidity_context", (LIQ_AVG_DOLLAR_VOLUME_20D,)),
+    ),
+    "fourh_alignment": (
+        ("advisory_context", (ADV_FOURH_ALIGNMENT,)),
+    ),
+}

@@ -16,6 +16,9 @@ from bot.signal_scoring import (
     PenaltySeverity, SignalCandidateInput, ScoredSignalCandidate,
     SignalScoringConfig, default_config, DEFAULT_PROFILE,
     ComponentScore,
+    PenaltyItem, PenaltyResult, MultiplierItem, MultiplierResult,
+    evaluate_penalties, evaluate_multipliers,
+    PENALTY_NAMES, MULTIPLIER_NAMES,
 )
 from bot.signal_scoring import provenance
 from bot.signal_scoring.config import CONFIG_SCHEMA_VERSION
@@ -1260,6 +1263,524 @@ class M19CComponents(unittest.TestCase):
             "calibration_applied": "yes", "prediction_raw": 0.62}})
         self.assertEqual(c.score, 25.0)
         self.assertIn("invalid_soft_input", c.warnings)
+
+
+class M19DPenaltiesMultipliers(unittest.TestCase):
+    """M19.D friction layer: penalties + multipliers. Matrices A-J + extras.
+    A complete clean base is used; each row overrides one field so warning
+    assertions are precise."""
+
+    def _cfg(self, profile=None):
+        return default_config(profile) if profile else default_config()
+
+    def _clean_blocks(self):
+        # all penalty triggers benign + all multiplier inputs benign/clean
+        return dict(
+            ml_context={"calibration_applied": True,
+                        "feature_extrapolation_count": 0,
+                        "production_thinness_status": "ok"},
+            scanner_context={"valid_count": 4, "available_timeframes": 4},
+            risk_preview={"reward_risk_ratio": 2.0},
+            regime_context={"regime_label": "bull"},
+            volatility_context={"atr_pct": 0.02},
+            liquidity_context={"avg_dollar_volume_20d": 60_000_000},
+            advisory_context={"fourh_bucket_alignment": "session_aligned"},
+        )
+
+    def _ci(self, side="LONG", *, replace=None):
+        blocks = self._clean_blocks()
+        if replace:
+            for k, v in replace.items():
+                blocks[k] = v
+        return SignalCandidateInput(
+            symbol="AAPL", side=side,
+            signal_timestamp_utc="2026-06-17T10:15:00Z", **blocks)
+
+    def _pen(self, *, replace=None, profile=None):
+        return evaluate_penalties(self._ci(replace=replace), self._cfg(profile))
+
+    def _mul(self, side="LONG", *, replace=None, profile=None):
+        return evaluate_multipliers(self._ci(side=side, replace=replace),
+                                    self._cfg(profile))
+
+    def _pts(self, result, name):
+        for i in result.items:
+            if i.name == name:
+                return i.points
+        return None
+
+    def _factor(self, result, name):
+        for i in result.items:
+            if i.name == name:
+                return i.factor
+        return None
+
+    # clean baseline
+    def test_clean_input_no_penalties_no_warnings(self):
+        r = self._pen()
+        self.assertEqual(r.items, [])
+        self.assertEqual(r.total_points, 0)
+        self.assertEqual(r.warnings, [])
+
+    def test_clean_input_neutral_multipliers(self):
+        r = self._mul()
+        # bull/LONG -> aligned 1.0; session_aligned -> no item; clean otherwise
+        self.assertEqual(r.effective_multiplier, 1.0)
+        self.assertEqual(r.warnings, [])
+
+    # ── Matrix A: each_feature_extrapolation ──
+    def test_matrix_a_extrapolation(self):
+        cases = {0: None, 1: 3.0, 5: 15.0, 7: 20, 100: 20}
+        for count, expected in cases.items():
+            ml = dict(self._clean_blocks()["ml_context"])
+            ml["feature_extrapolation_count"] = count
+            r = self._pen(replace={"ml_context": ml})
+            self.assertEqual(self._pts(r, "each_feature_extrapolation"),
+                             expected, f"count={count}")
+
+    def test_matrix_a_extrapolation_missing(self):
+        ml = {"calibration_applied": True, "production_thinness_status": "ok"}
+        r = self._pen(replace={"ml_context": ml})
+        self.assertIsNone(self._pts(r, "each_feature_extrapolation"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_a_extrapolation_invalid_full_cap(self):
+        for bad in ("x", -1, True):
+            ml = dict(self._clean_blocks()["ml_context"])
+            ml["feature_extrapolation_count"] = bad
+            r = self._pen(replace={"ml_context": ml})
+            self.assertEqual(self._pts(r, "each_feature_extrapolation"), 20,
+                             f"bad={bad!r}")
+            self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix B: uncalibrated_ml_probability ──
+    def test_matrix_b_calibration(self):
+        ml = dict(self._clean_blocks()["ml_context"]); ml["calibration_applied"] = True
+        self.assertIsNone(self._pts(self._pen(replace={"ml_context": ml}),
+                                    "uncalibrated_ml_probability"))
+        ml2 = dict(ml); ml2["calibration_applied"] = False
+        self.assertEqual(self._pts(self._pen(replace={"ml_context": ml2}),
+                                   "uncalibrated_ml_probability"), 15)
+
+    def test_matrix_b_calibration_missing_no_penalty(self):
+        ml = {"feature_extrapolation_count": 0, "production_thinness_status": "ok"}
+        r = self._pen(replace={"ml_context": ml})
+        self.assertIsNone(self._pts(r, "uncalibrated_ml_probability"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_b_calibration_invalid_penalty(self):
+        ml = dict(self._clean_blocks()["ml_context"]); ml["calibration_applied"] = "yes"
+        r = self._pen(replace={"ml_context": ml})
+        self.assertEqual(self._pts(r, "uncalibrated_ml_probability"), 15)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix C: production_thinness_warning ──
+    def test_matrix_c_thinness(self):
+        for status, expected in (("ok", None), ("warned", 8), ("blocked", None)):
+            ml = dict(self._clean_blocks()["ml_context"])
+            ml["production_thinness_status"] = status
+            r = self._pen(replace={"ml_context": ml})
+            self.assertEqual(self._pts(r, "production_thinness_warning"),
+                             expected, f"status={status}")
+
+    def test_matrix_c_thinness_missing(self):
+        ml = {"calibration_applied": True, "feature_extrapolation_count": 0}
+        r = self._pen(replace={"ml_context": ml})
+        self.assertIsNone(self._pts(r, "production_thinness_warning"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_c_thinness_invalid(self):
+        ml = dict(self._clean_blocks()["ml_context"])
+        ml["production_thinness_status"] = "mystery"
+        r = self._pen(replace={"ml_context": ml})
+        self.assertEqual(self._pts(r, "production_thinness_warning"), 8)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix D: scanner ──
+    def test_matrix_d_scanner(self):
+        cases = {(4, 4): (None, None), (3, 4): (None, 5), (2, 4): (10, 10)}
+        for (v, a), (weak, miss) in cases.items():
+            r = self._pen(replace={"scanner_context": {
+                "valid_count": v, "available_timeframes": a}})
+            self.assertEqual(self._pts(r, "weak_scanner_confluence"), weak,
+                             f"valid={v} avail={a}")
+            self.assertEqual(self._pts(r, "missing_noncritical_timeframe"),
+                             miss, f"valid={v} avail={a}")
+
+    def test_matrix_d_scanner_missing(self):
+        r = self._pen(replace={"scanner_context": {"available_timeframes": 4}})
+        self.assertIsNone(self._pts(r, "weak_scanner_confluence"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_d_valid_gt_available_is_invalid(self):
+        r = self._pen(replace={"scanner_context": {
+            "valid_count": 5, "available_timeframes": 4}})
+        item = [i for i in r.items
+                if i.name == "missing_noncritical_timeframe"][0]
+        self.assertEqual(item.reason_code,
+                         "missing_noncritical_timeframe_invalid")
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    def test_matrix_d_valid_count_bool_invalid(self):
+        r = self._pen(replace={"scanner_context": {
+            "valid_count": True, "available_timeframes": 4}})
+        self.assertEqual(self._pts(r, "weak_scanner_confluence"), 10)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    def test_matrix_d_available_bool_invalid(self):
+        r = self._pen(replace={"scanner_context": {
+            "valid_count": 4, "available_timeframes": True}})
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    def test_matrix_d_available_list_form_supported(self):
+        r = self._pen(replace={"scanner_context": {
+            "valid_count": 4, "available_timeframes": ["1D", "4H", "1H", "15m"]}})
+        # 4 valid of 4 available -> no penalties from list form
+        self.assertIsNone(self._pts(r, "missing_noncritical_timeframe"))
+        self.assertNotIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix E: poor_reward_risk ──
+    def test_matrix_e_reward_risk(self):
+        for rr, expected in ((2.0, None), (1.5, None), (1.49, 15)):
+            r = self._pen(replace={"risk_preview": {"reward_risk_ratio": rr}})
+            self.assertEqual(self._pts(r, "poor_reward_risk"), expected,
+                             f"rr={rr}")
+
+    def test_matrix_e_reward_risk_missing(self):
+        r = self._pen(replace={"risk_preview": {}})
+        self.assertIsNone(self._pts(r, "poor_reward_risk"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_e_reward_risk_invalid(self):
+        r = self._pen(replace={"risk_preview": {"reward_risk_ratio": "bad"}})
+        self.assertEqual(self._pts(r, "poor_reward_risk"), 15)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix F: regime multiplier (label x side) ──
+    def test_matrix_f_regime(self):
+        cases = {
+            ("bull", "LONG"): (1.0, "regime_aligned"),
+            ("bull", "SHORT"): (0.85, "regime_countertrend"),
+            ("bear", "LONG"): (0.85, "regime_countertrend"),
+            ("bear", "SHORT"): (1.0, "regime_aligned"),
+            ("unknown", "LONG"): (0.95, "regime_unknown"),
+            ("unknown", "SHORT"): (0.95, "regime_unknown"),
+        }
+        for (label, side), (factor, rcode) in cases.items():
+            r = self._mul(side=side,
+                          replace={"regime_context": {"regime_label": label}})
+            item = [i for i in r.items if i.name == "regime"][0]
+            self.assertEqual((item.factor, item.reason_code), (factor, rcode),
+                             f"{label}/{side}")
+
+    def test_matrix_f_regime_missing_neutral(self):
+        r = self._mul(replace={"regime_context": {}})
+        self.assertIsNone(self._factor(r, "regime"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_f_regime_invalid_conservative(self):
+        r = self._mul(replace={"regime_context": {"regime_label": 123}})
+        self.assertEqual(self._factor(r, "regime"), 0.85)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix G: volatility multiplier ──
+    def test_matrix_g_volatility(self):
+        cases = {0.02: (1.0, "volatility_normal"),
+                 0.05: (0.92, "volatility_elevated"),
+                 0.07: (0.92, "volatility_above_max")}
+        for atr, (factor, rcode) in cases.items():
+            r = self._mul(replace={"volatility_context": {"atr_pct": atr}})
+            item = [i for i in r.items if i.name == "volatility"][0]
+            self.assertEqual((item.factor, item.reason_code), (factor, rcode),
+                             f"atr={atr}")
+
+    def test_matrix_g_volatility_missing_neutral(self):
+        r = self._mul(replace={"volatility_context": {}})
+        self.assertIsNone(self._factor(r, "volatility"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_g_volatility_invalid_conservative(self):
+        for bad in (True, -0.1, "bad"):
+            r = self._mul(replace={"volatility_context": {"atr_pct": bad}})
+            self.assertEqual(self._factor(r, "volatility"), 0.92, f"bad={bad!r}")
+            self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix H: liquidity multiplier ──
+    def test_matrix_h_liquidity(self):
+        cases = {60_000_000: (1.0, "liquidity_ideal"),
+                 12_000_000: (0.9, "liquidity_thin_but_allowed"),
+                 5_000_000: (0.9, "liquidity_below_min")}
+        for adv20, (factor, rcode) in cases.items():
+            r = self._mul(replace={"liquidity_context":
+                                   {"avg_dollar_volume_20d": adv20}})
+            item = [i for i in r.items if i.name == "liquidity"][0]
+            self.assertEqual((item.factor, item.reason_code), (factor, rcode),
+                             f"adv20={adv20}")
+
+    def test_matrix_h_liquidity_missing_neutral(self):
+        r = self._mul(replace={"liquidity_context": {}})
+        self.assertIsNone(self._factor(r, "liquidity"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_h_liquidity_invalid_conservative(self):
+        for bad in (True, -5, "bad"):
+            r = self._mul(replace={"liquidity_context":
+                                   {"avg_dollar_volume_20d": bad}})
+            self.assertEqual(self._factor(r, "liquidity"), 0.9, f"bad={bad!r}")
+            self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix I: fourh_alignment multiplier ──
+    def test_matrix_i_fourh(self):
+        r = self._mul(replace={"advisory_context":
+                               {"fourh_bucket_alignment": "utc_fixed"}})
+        self.assertEqual(self._factor(r, "fourh_alignment"), 0.95)
+
+    def test_matrix_i_fourh_other_string_neutral(self):
+        r = self._mul(replace={"advisory_context":
+                               {"fourh_bucket_alignment": "session_aligned"}})
+        self.assertIsNone(self._factor(r, "fourh_alignment"))
+
+    def test_matrix_i_fourh_missing_neutral(self):
+        r = self._mul(replace={"advisory_context": {}})
+        self.assertIsNone(self._factor(r, "fourh_alignment"))
+        self.assertIn("missing_soft_input", r.warnings)
+
+    def test_matrix_i_fourh_nonstring_invalid(self):
+        r = self._mul(replace={"advisory_context":
+                               {"fourh_bucket_alignment": 123}})
+        self.assertEqual(self._factor(r, "fourh_alignment"), 0.95)
+        self.assertIn("invalid_soft_input", r.warnings)
+
+    # ── Matrix J: cap / floor ──
+    def test_matrix_j_penalty_cap(self):
+        r = self._pen(replace={
+            "ml_context": {"calibration_applied": False,
+                           "feature_extrapolation_count": 100,
+                           "production_thinness_status": "warned"},
+            "scanner_context": {"valid_count": 1, "available_timeframes": 4},
+            "risk_preview": {"reward_risk_ratio": 1.0}})
+        self.assertGreater(r.raw_total_points, 30)
+        self.assertEqual(r.total_points, 30)
+
+    def test_matrix_j_multiplier_floor(self):
+        r = self._mul(side="LONG", replace={
+            "regime_context": {"regime_label": "bear"},      # 0.85
+            "volatility_context": {"atr_pct": 0.05},          # 0.92
+            "liquidity_context": {"avg_dollar_volume_20d": 12_000_000},  # 0.90
+            "advisory_context": {"fourh_bucket_alignment": "utc_fixed"}})  # 0.95
+        self.assertLess(r.product, 0.70)
+        self.assertEqual(r.effective_multiplier, 0.70)
+
+    def test_multiplier_product_above_floor_passes_through(self):
+        r = self._mul(replace={
+            "regime_context": {"regime_label": "unknown"}})  # only 0.95
+        self.assertAlmostEqual(r.product, 0.95, places=4)
+        self.assertAlmostEqual(r.effective_multiplier, 0.95, places=4)
+
+    # ── contract behaviour ──
+    def test_penalty_result_roundtrip(self):
+        r = self._pen(replace={"ml_context": {"calibration_applied": False,
+                      "feature_extrapolation_count": 0,
+                      "production_thinness_status": "ok"}})
+        r2 = PenaltyResult.from_dict(r.to_dict())
+        self.assertEqual(r.to_dict(), r2.to_dict())
+
+    def test_multiplier_result_roundtrip(self):
+        r = self._mul()
+        r2 = MultiplierResult.from_dict(r.to_dict())
+        self.assertEqual(r.to_dict(), r2.to_dict())
+
+    def test_penalty_item_unknown_field_rejected(self):
+        d = PenaltyItem(name="poor_reward_risk", points=15,
+                        reason_code="x").to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            PenaltyItem.from_dict(d)
+
+    def test_penalty_item_unknown_name_rejected(self):
+        with self.assertRaises(ValueError):
+            PenaltyItem.from_dict({"name": "bogus", "points": 5,
+                                   "reason_code": "x"})
+
+    def test_multiplier_item_unknown_field_rejected(self):
+        d = MultiplierItem(name="regime", factor=1.0, reason_code="x").to_dict()
+        d["surprise"] = 1
+        with self.assertRaises(ValueError):
+            MultiplierItem.from_dict(d)
+
+    def test_multiplier_item_unknown_name_rejected(self):
+        with self.assertRaises(ValueError):
+            MultiplierItem.from_dict({"name": "bogus", "factor": 1.0,
+                                      "reason_code": "x"})
+
+    def test_penalty_negative_points_rejected(self):
+        with self.assertRaises(ValueError):
+            PenaltyItem(name="poor_reward_risk", points=-1, reason_code="x")
+
+    def test_penalty_bool_points_rejected(self):
+        with self.assertRaises(ValueError):
+            PenaltyItem(name="poor_reward_risk", points=True, reason_code="x")
+
+    def test_penalty_nonnumeric_points_rejected(self):
+        with self.assertRaises(ValueError):
+            PenaltyItem(name="poor_reward_risk", points="x", reason_code="x")
+
+    def test_multiplier_factor_zero_rejected(self):
+        with self.assertRaises(ValueError):
+            MultiplierItem(name="regime", factor=0, reason_code="x")
+
+    def test_multiplier_factor_negative_rejected(self):
+        with self.assertRaises(ValueError):
+            MultiplierItem(name="regime", factor=-1, reason_code="x")
+
+    def test_multiplier_bool_factor_rejected(self):
+        with self.assertRaises(ValueError):
+            MultiplierItem(name="regime", factor=True, reason_code="x")
+
+    def test_multiplier_nonnumeric_factor_rejected(self):
+        with self.assertRaises(ValueError):
+            MultiplierItem(name="regime", factor="x", reason_code="x")
+
+    def test_deterministic(self):
+        ci = self._ci(replace={"ml_context": {"calibration_applied": False,
+                      "feature_extrapolation_count": 2,
+                      "production_thinness_status": "warned"}})
+        cfg = self._cfg()
+        self.assertEqual(evaluate_penalties(ci, cfg).to_dict(),
+                         evaluate_penalties(ci, cfg).to_dict())
+        self.assertEqual(evaluate_multipliers(ci, cfg).to_dict(),
+                         evaluate_multipliers(ci, cfg).to_dict())
+
+    def test_reason_codes_sorted(self):
+        r = self._pen(replace={
+            "ml_context": {"calibration_applied": False,
+                           "feature_extrapolation_count": 2,
+                           "production_thinness_status": "warned"},
+            "scanner_context": {"valid_count": 1, "available_timeframes": 4},
+            "risk_preview": {"reward_risk_ratio": 1.0}})
+        self.assertEqual(r.reason_codes, sorted(r.reason_codes))
+        self.assertEqual(r.warnings, sorted(r.warnings))
+
+    def test_profile_neutral(self):
+        for replace in (None, {"ml_context": {"calibration_applied": False,
+                                              "feature_extrapolation_count": 3,
+                                              "production_thinness_status": "warned"}}):
+            ci_s = self._ci(replace=replace)
+            strict_p = evaluate_penalties(
+                ci_s, default_config(ScoringProfile.STRICT)).to_dict()
+            research_p = evaluate_penalties(
+                ci_s, default_config(ScoringProfile.RESEARCH)).to_dict()
+            strict_p["profile"] = research_p["profile"] = "X"
+            self.assertEqual(strict_p, research_p)
+            strict_m = evaluate_multipliers(
+                ci_s, default_config(ScoringProfile.STRICT)).to_dict()
+            research_m = evaluate_multipliers(
+                ci_s, default_config(ScoringProfile.RESEARCH)).to_dict()
+            strict_m["profile"] = research_m["profile"] = "X"
+            self.assertEqual(strict_m, research_m)
+
+    def test_non_dict_block_is_invalid(self):
+        # non-dict ml_context -> uncalibrated + extrapolation + thinness all
+        # read invalid -> adverse penalties + invalid warning, no crash
+        r = evaluate_penalties(
+            SignalCandidateInput(symbol="AAPL", side="LONG",
+                signal_timestamp_utc="2026-06-17T10:15:00Z",
+                ml_context="bad"), self._cfg())
+        self.assertIn("invalid_soft_input", r.warnings)
+        self.assertEqual(self._pts(r, "uncalibrated_ml_probability"), 15)
+
+    def test_canonical_name_tuples(self):
+        self.assertEqual(PENALTY_NAMES, (
+            "uncalibrated_ml_probability", "each_feature_extrapolation",
+            "production_thinness_warning", "missing_noncritical_timeframe",
+            "weak_scanner_confluence", "poor_reward_risk"))
+        self.assertEqual(MULTIPLIER_NAMES, (
+            "regime", "volatility", "liquidity", "fourh_alignment"))
+
+    # anti-drift: declared readable keys match actual reads
+    def test_penalty_multiplier_readable_keys_match_reads(self):
+        import ast
+        from bot.signal_scoring import keys as K
+        src = (_PKG_DIR / "penalties.py").read_text()
+        tree = ast.parse(src)
+        kconsts = {n: getattr(K, n) for n in dir(K)
+                   if n.isupper() and isinstance(getattr(K, n), str)}
+        # collect all (block, key) reads in the module, grouped by function
+        func_reads = {}
+        for node in tree.body:
+            if not (isinstance(node, ast.FunctionDef)
+                    and node.name.startswith("evaluate_")):
+                continue
+            block_vars = {}
+            reads = set()
+            for n in ast.walk(node):
+                if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call) \
+                   and isinstance(n.value.func, ast.Name) \
+                   and n.value.func.id == "_block":
+                    bn = n.value.args[1].value
+                    for t in n.targets:
+                        if isinstance(t, ast.Name):
+                            block_vars[t.id] = bn
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                   and n.func.id == "_get":
+                    blk = n.args[0]
+                    bname = block_vars.get(blk.id) if isinstance(blk, ast.Name) \
+                        else None
+                    key = n.args[1]
+                    kname = kconsts.get(key.attr) if isinstance(key, ast.Attribute) \
+                        else (key.value if isinstance(key, ast.Constant) else None)
+                    if bname and kname:
+                        reads.add((bname, kname))
+            func_reads[node.name] = reads
+        # union of declared penalty keys must be subset of evaluate_penalties reads
+        declared_pen = set()
+        for pairs in K.PENALTY_READABLE_KEYS.values():
+            for b, keys in pairs:
+                for k in keys:
+                    declared_pen.add((b, k))
+        declared_mul = set()
+        for pairs in K.MULTIPLIER_READABLE_KEYS.values():
+            for b, keys in pairs:
+                for k in keys:
+                    declared_mul.add((b, k))
+        self.assertEqual(declared_pen, func_reads.get("evaluate_penalties"),
+                         "penalty declared keys != actual reads")
+        self.assertEqual(declared_mul, func_reads.get("evaluate_multipliers"),
+                         "multiplier declared keys != actual reads")
+
+    # no forbidden dependencies
+    def test_penalties_no_forbidden_dependencies(self):
+        import ast
+        src = (_PKG_DIR / "penalties.py").read_text()
+        tree = ast.parse(src)
+        forbidden = {"evaluate_hard_gates", "score_all_components",
+                     "score_component", "GateResult", "GateFailure",
+                     "ComponentScore", "ScoredSignalCandidate"}
+        offenders = []
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Call):
+                fn = n.func
+                if isinstance(fn, ast.Name) and fn.id in forbidden:
+                    offenders.append(fn.id)
+                elif isinstance(fn, ast.Attribute) and fn.attr in forbidden:
+                    offenders.append(fn.attr)
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                if n.module.endswith(("gates", "components")):
+                    offenders.append(n.module)
+            elif isinstance(n, ast.Name) and n.id in forbidden:
+                offenders.append(n.id)
+        # composite/score/bucket tokens must not appear as CODE (AST names/
+        # attributes), not merely in docstrings/comments. ScoredSignalCandidate
+        # is covered by the import/name/call walk above.
+        code_forbidden = {"final_score", "pre_penalty_score",
+                          "post_penalty_score", "decision_bucket",
+                          "confidence_bucket", "execution_eligible"}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Name) and n.id in code_forbidden:
+                offenders.append(n.id)
+            elif isinstance(n, ast.Attribute) and n.attr in code_forbidden:
+                offenders.append(n.attr)
+        self.assertEqual(offenders, [], f"forbidden dependency: {offenders}")
 
 
 if __name__ == "__main__":

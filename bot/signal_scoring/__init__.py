@@ -33,6 +33,10 @@ from bot.signal_scoring.schema import (  # noqa: F401
     GateResult,
     ComponentScore,
     make_component_score,
+    PenaltyItem,
+    PenaltyResult,
+    MultiplierItem,
+    MultiplierResult,
 )
 from bot.signal_scoring.config import (  # noqa: F401
     SignalScoringConfig,
@@ -51,6 +55,12 @@ from bot.signal_scoring.components import (  # noqa: F401
     score_component,
     score_all_components,
 )
+from bot.signal_scoring.penalties import (  # noqa: F401
+    evaluate_penalties,
+    evaluate_multipliers,
+    PENALTY_NAMES,
+    MULTIPLIER_NAMES,
+)
 
 __all__ = [
     "SCHEMA_VERSION_INPUT",
@@ -67,6 +77,10 @@ __all__ = [
     "GateResult",
     "ComponentScore",
     "make_component_score",
+    "PenaltyItem",
+    "PenaltyResult",
+    "MultiplierItem",
+    "MultiplierResult",
     "SignalScoringConfig",
     "default_config",
     "DEFAULT_PROFILE",
@@ -78,6 +92,10 @@ __all__ = [
     "COMPONENT_SCORERS",
     "score_component",
     "score_all_components",
+    "evaluate_penalties",
+    "evaluate_multipliers",
+    "PENALTY_NAMES",
+    "MULTIPLIER_NAMES",
 ]
 
-M19_PHASE = "M19.C"
+M19_PHASE = "M19.D"
