@@ -65,6 +65,12 @@ from bot.signal_scoring.composite import (  # noqa: F401
     score_candidate,
     assemble_score,
 )
+from bot.signal_scoring.adapters import (  # noqa: F401
+    adapter_from_scanner_signal,
+    adapter_from_candidate_snapshot,
+    merge_ml_prediction,
+    merge_readiness_advisories,
+)
 
 __all__ = [
     "SCHEMA_VERSION_INPUT",
@@ -102,6 +108,10 @@ __all__ = [
     "MULTIPLIER_NAMES",
     "score_candidate",
     "assemble_score",
+    "adapter_from_scanner_signal",
+    "adapter_from_candidate_snapshot",
+    "merge_ml_prediction",
+    "merge_readiness_advisories",
 ]
 
-M19_PHASE = "M19.E"
+M19_PHASE = "M19.F"

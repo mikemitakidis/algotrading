@@ -20,6 +20,8 @@ from bot.signal_scoring import (
     evaluate_penalties, evaluate_multipliers,
     PENALTY_NAMES, MULTIPLIER_NAMES,
     score_candidate, assemble_score,
+    adapter_from_scanner_signal, adapter_from_candidate_snapshot,
+    merge_ml_prediction, merge_readiness_advisories,
 )
 from bot.signal_scoring.schema import GateResult, GateFailure
 from bot.signal_scoring import provenance
@@ -2120,6 +2122,299 @@ class M19EComposite(unittest.TestCase):
         self.assertEqual(
             len([p for p in (_REPO_ROOT / "data" / "m19").glob("*")]
                 if (_REPO_ROOT / "data" / "m19").exists() else []), 0)
+
+
+class M19FAdapters(unittest.TestCase):
+    """M19.F pure adapters: upstream -> SignalCandidateInput. Matrices A-J +
+    side-channel kwargs, malformed pass-through, raw-never-copied, SHORT,
+    non-mutation, round-trip, no I/O."""
+
+    def _scan(self, **over):
+        sig = {"symbol": "AAPL", "direction": "long",
+               "timestamp": "2026-06-17T10:15:00Z"}
+        sig.update(over)
+        return sig
+
+    # ── Matrix A: side mapping ──
+    def test_matrix_a_side_mapping(self):
+        for d, expected in (("long", "LONG"), ("buy", "LONG"),
+                            ("short", "SHORT"), ("sell", "SHORT"),
+                            ("LONG", "LONG"), ("Short", "SHORT")):
+            ci = adapter_from_scanner_signal(self._scan(direction=d))
+            self.assertEqual(ci.side.value, expected, f"direction={d}")
+
+    def test_matrix_a_side_invalid(self):
+        for bad in ("", None, "flat", 123):
+            with self.assertRaises(ValueError):
+                adapter_from_scanner_signal(self._scan(direction=bad))
+
+    # ── Matrix B: timestamp normalization ──
+    def test_matrix_b_timestamp_accepted(self):
+        from datetime import datetime, timezone, timedelta
+        aware = datetime(2026, 6, 17, 10, 15, tzinfo=timezone.utc)
+        for ts in (aware, "2026-06-17T10:15:00Z", "2026-06-17T10:15:00+00:00"):
+            ci = adapter_from_scanner_signal(self._scan(timestamp=ts))
+            self.assertTrue(ci.signal_timestamp_utc.endswith("+00:00"))
+
+    def test_matrix_b_aware_nonutc_datetime_converted(self):
+        # aware datetime object (per Q7) -> converted to UTC
+        from datetime import datetime, timezone, timedelta
+        dt = datetime(2026, 6, 17, 10, 15, tzinfo=timezone(timedelta(hours=2)))
+        ci = adapter_from_scanner_signal(self._scan(timestamp=dt))
+        self.assertEqual(ci.signal_timestamp_utc, "2026-06-17T08:15:00+00:00")
+
+    def test_matrix_b_timestamp_rejected(self):
+        from datetime import datetime
+        naive = datetime(2026, 6, 17, 10, 15)
+        for ts in (naive, "2026-06-17T10:15:00", "2026-06-17T10:15:00+02:00",
+                   "not-a-date", None, 123):
+            with self.assertRaises(ValueError):
+                adapter_from_scanner_signal(self._scan(timestamp=ts))
+
+    # ── Matrix C: required field rejection ──
+    def test_matrix_c_required_fields(self):
+        for sig in ({"direction": "long", "timestamp": "2026-06-17T10:15:00Z"},
+                    {"symbol": "", "direction": "long",
+                     "timestamp": "2026-06-17T10:15:00Z"},
+                    {"symbol": "A", "timestamp": "2026-06-17T10:15:00Z"},
+                    {"symbol": "A", "direction": "long"}):
+            with self.assertRaises(ValueError):
+                adapter_from_scanner_signal(sig)
+
+    # ── Matrix D: scanner indicator mapping ──
+    def test_matrix_d_scanner_indicators(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            rsi=60, macd_hist=0.4, bb_pos=0.5, vwap_dev=0.1, vol_ratio=1.6))
+        tc = ci.technical_context
+        self.assertEqual(tc["rsi"], 60)
+        self.assertEqual(tc["macd_hist"], 0.4)
+        self.assertEqual(tc["bb_pos"], 0.5)
+        self.assertEqual(tc["vwap_dev"], 0.1)
+        self.assertEqual(tc["volume_ratio"], 1.6)
+
+    def test_matrix_d_missing_indicator_omitted(self):
+        ci = adapter_from_scanner_signal(self._scan(macd_hist=0.4))
+        self.assertNotIn("rsi", ci.technical_context)
+
+    def test_matrix_d_malformed_indicator_passthrough(self):
+        ci = adapter_from_scanner_signal(self._scan(rsi="x"))
+        self.assertEqual(ci.technical_context["rsi"], "x")
+
+    # ── Matrix E: risk preview derivation ──
+    def test_matrix_e_reward_risk(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            direction="long", entry_price=100, stop_loss=98, target_price=104))
+        self.assertAlmostEqual(ci.risk_preview["reward_risk_ratio"], 2.0)
+        self.assertTrue(ci.risk_preview["risk_preview_available"])
+
+    def test_matrix_e_reward_risk_short(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            direction="short", entry_price=100, stop_loss=102, target_price=94))
+        self.assertAlmostEqual(ci.risk_preview["reward_risk_ratio"], 3.0)
+        self.assertTrue(ci.risk_preview["risk_preview_available"])
+
+    def test_matrix_e_missing_stop_unavailable(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            entry_price=100, target_price=104))
+        self.assertNotIn("reward_risk_ratio", ci.risk_preview)
+        self.assertFalse(ci.risk_preview["risk_preview_available"])
+
+    def test_matrix_e_div_by_zero_no_crash(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            entry_price=100, stop_loss=100, target_price=104))
+        self.assertNotIn("reward_risk_ratio", ci.risk_preview)
+        self.assertFalse(ci.risk_preview["risk_preview_available"])
+
+    def test_matrix_e_invalid_price_no_crash(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            entry_price="bad", stop_loss=98, target_price=104))
+        self.assertNotIn("reward_risk_ratio", ci.risk_preview)
+
+    # ── Matrix F: atr_pct derivation ──
+    def test_matrix_f_atr_pct_derived(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=100))
+        self.assertAlmostEqual(ci.volatility_context["atr_pct"], 0.02)
+
+    def test_matrix_f_atr_no_entry_omitted(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2))
+        self.assertNotIn("atr_pct", ci.volatility_context)
+
+    def test_matrix_f_atr_malformed_passthrough(self):
+        ci = adapter_from_scanner_signal(self._scan(atr="bad", entry_price=100))
+        self.assertEqual(ci.volatility_context["atr_pct"], "bad")
+
+    def test_matrix_f_entry_zero_omitted(self):
+        ci = adapter_from_scanner_signal(self._scan(atr=2, entry_price=0))
+        self.assertNotIn("atr_pct", ci.volatility_context)
+
+    # ── Matrix G: ML merge ──
+    def test_matrix_g_ml_merge_full(self):
+        base = adapter_from_scanner_signal(self._scan())
+        m = merge_ml_prediction(base, {
+            "model_id": "m1", "prediction_raw": 0.6,
+            "prediction_calibrated": 0.68,
+            "prediction_calibration_applied": True})
+        self.assertEqual(m.ml_context["prediction_raw"], 0.6)
+        self.assertEqual(m.ml_context["prediction_calibrated"], 0.68)
+        self.assertIs(m.ml_context["calibration_applied"], True)
+        self.assertEqual(m.ml_context["model_id"], "m1")
+
+    def test_matrix_g_raw_only_calibrated_absent(self):
+        base = adapter_from_scanner_signal(self._scan())
+        m = merge_ml_prediction(base, {"prediction_raw": 0.6,
+                                       "prediction_calibration_applied": False})
+        self.assertNotIn("prediction_calibrated", m.ml_context)
+        self.assertEqual(m.ml_context["prediction_raw"], 0.6)
+
+    def test_raw_never_copied_into_calibrated(self):
+        base = adapter_from_scanner_signal(self._scan())
+        m = merge_ml_prediction(base, {"prediction_raw": 0.6})
+        self.assertNotIn("prediction_calibrated", m.ml_context)
+
+    def test_calibration_applied_from_predict_time_field(self):
+        base = adapter_from_scanner_signal(self._scan())
+        m = merge_ml_prediction(base, {
+            "prediction_raw": 0.6,
+            "predict_time_calibration_applied": True,
+            "prediction_calibrated": 0.7})
+        self.assertIs(m.ml_context["calibration_applied"], True)
+
+    # ── Matrix H: readiness merge ──
+    def test_matrix_h_readiness_merge(self):
+        base = adapter_from_scanner_signal(self._scan())
+        r = merge_readiness_advisories(base, {
+            "fourh_bucket_alignment": "utc_fixed",
+            "adjusted_price_pit_risk": False,
+            "scanner_replica_short_side_validated": False,
+            "price_adjustment_mode": "raw"})
+        self.assertEqual(r.advisory_context["fourh_bucket_alignment"],
+                         "utc_fixed")
+        self.assertIs(r.advisory_context["adjusted_price_pit_risk"], False)
+        self.assertIs(
+            r.advisory_context["scanner_replica_short_side_validated"], False)
+        self.assertEqual(r.ml_context["price_adjustment_mode"], "raw")
+
+    def test_matrix_h_readiness_absent_omitted(self):
+        base = adapter_from_scanner_signal(self._scan())
+        r = merge_readiness_advisories(base, {})
+        self.assertEqual(r.advisory_context, {})
+
+    # ── Matrix I: snapshot adapter ──
+    def test_matrix_i_snapshot_full(self):
+        snap = {"symbol": "AAPL", "direction": "long",
+                "timestamp": "2026-06-17T10:15:00Z", "valid_count": 3,
+                "available_tfs": 4, "min_valid": 3,
+                "tfs_passing": "15m+1H+4H", "rsi": 55, "macd_hist": 0.2,
+                "atr": 2.0}
+        ci = adapter_from_candidate_snapshot(snap)
+        self.assertEqual(ci.scanner_context["valid_count"], 3)
+        self.assertEqual(ci.scanner_context["available_timeframes"], 4)
+        self.assertEqual(ci.scanner_context["valid_timeframes"],
+                         ["15m", "1H", "4H"])
+        self.assertEqual(ci.technical_context["rsi"], 55)
+        self.assertEqual(ci.timeframe_context["valid_timeframes"],
+                         ["15m", "1H", "4H"])
+
+    def test_matrix_i_snapshot_required_fields(self):
+        with self.assertRaises(ValueError):
+            adapter_from_candidate_snapshot({"direction": "long",
+                "timestamp": "2026-06-17T10:15:00Z"})
+
+    # ── Matrix J: purity / determinism / non-mutation ──
+    def test_matrix_j_deterministic(self):
+        sig = self._scan(rsi=60, entry_price=100, stop_loss=98,
+                         target_price=104)
+        a = adapter_from_scanner_signal(sig)
+        b = adapter_from_scanner_signal(sig)
+        self.assertEqual(a.to_dict(), b.to_dict())
+
+    def test_merge_does_not_mutate_original(self):
+        base = adapter_from_scanner_signal(self._scan())
+        base_before = base.to_dict()
+        merge_ml_prediction(base, {"prediction_raw": 0.6})
+        merge_readiness_advisories(base, {"fourh_bucket_alignment": "utc_fixed"})
+        self.assertEqual(base.to_dict(), base_before)
+        self.assertEqual(base.ml_context, {})
+        self.assertEqual(base.advisory_context, {})
+
+    def test_adapter_output_roundtrips(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            rsi=60, entry_price=100, stop_loss=98, target_price=104))
+        ci2 = SignalCandidateInput.from_dict(ci.to_dict())
+        self.assertEqual(ci.to_dict(), ci2.to_dict())
+
+    # ── optional side-channel kwargs ──
+    def test_side_channel_kwargs(self):
+        ci = adapter_from_scanner_signal(
+            self._scan(),
+            liquidity={"avg_dollar_volume_20d": 60_000_000, "spread_pct": 0.05},
+            regime={"regime_label": "bull"},
+            data_quality={"schema_match": True})
+        self.assertEqual(ci.liquidity_context["avg_dollar_volume_20d"],
+                         60_000_000)
+        self.assertEqual(ci.regime_context["regime_label"], "bull")
+        self.assertIs(ci.data_quality_context["schema_match"], True)
+
+    def test_side_channel_absent_blocks_empty(self):
+        ci = adapter_from_scanner_signal(self._scan())
+        self.assertEqual(ci.regime_context, {})
+        self.assertEqual(ci.data_quality_context, {})
+
+    # ── SHORT faithfully built ──
+    def test_short_built_faithfully(self):
+        ci = adapter_from_scanner_signal(self._scan(direction="short"))
+        self.assertEqual(ci.side, SignalSide.SHORT)
+
+    # ── end-to-end into scoring (adapter output is valid for score_candidate) ──
+    def test_adapter_output_scores_without_crash(self):
+        ci = adapter_from_scanner_signal(self._scan(
+            rsi=60, entry_price=100, stop_loss=98, target_price=104))
+        sc = score_candidate(ci, default_config())
+        self.assertIsInstance(sc, ScoredSignalCandidate)
+
+    def test_malformed_passthrough_triggers_downstream_invalid(self):
+        # rsi malformed -> passed through -> momentum/technical see invalid
+        base = adapter_from_scanner_signal(self._scan(rsi="x", macd_hist="y"))
+        from bot.signal_scoring import score_component
+        c = score_component("momentum", base, default_config())
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    # ── AST guard: no I/O / no forbidden deps ──
+    def test_adapters_no_forbidden_dependencies(self):
+        import ast
+        src = (_PKG_DIR / "adapters.py").read_text()
+        tree = ast.parse(src)
+        offenders = []
+        forbidden_mod = ("broker", "brokers", "live", "dashboard", "main",
+                         "socket", "requests", "urllib", "aiohttp", "sqlite3",
+                         "yfinance", "bot.scanner", "bot.strategy", "bot.risk",
+                         "bot.flywheel")
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if any(a.name == m or a.name.startswith(m + ".")
+                           for m in forbidden_mod):
+                        offenders.append(a.name)
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                if any(n.module == m or n.module.startswith(m + ".")
+                       for m in forbidden_mod):
+                    offenders.append(n.module)
+            elif isinstance(n, ast.Call):
+                fn = n.func
+                name = (fn.attr if isinstance(fn, ast.Attribute)
+                        else fn.id if isinstance(fn, ast.Name) else "")
+                if name in ("open", "connect", "execute", "executemany",
+                            "fetch", "post", "commit", "write"):
+                    offenders.append(f"call:{name}")
+        self.assertEqual(offenders, [], f"forbidden dependency: {offenders}")
+
+    def test_no_files_created_on_import(self):
+        import importlib
+        import bot.signal_scoring.adapters as ad
+        importlib.reload(ad)
+        m19 = _REPO_ROOT / "data" / "m19"
+        self.assertEqual(
+            len(list(m19.glob("*"))) if m19.exists() else 0, 0)
 
 
 if __name__ == "__main__":
