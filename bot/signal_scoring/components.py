@@ -32,14 +32,25 @@ _MISSING = "missing"
 _INVALID = "invalid"
 
 
-def _block(ci: SignalCandidateInput, block_name: str) -> Dict[str, Any]:
+_INVALID_BLOCK = object()  # sentinel: the context block itself was not a dict
+
+
+def _block(ci: SignalCandidateInput, block_name: str):
+    """Return the context dict, or the _INVALID_BLOCK sentinel if the block is
+    present-but-not-a-dict / unusable. A non-dict block is INVALID (not
+    missing): components fall back to the conservative-low path."""
     b = getattr(ci, block_name, {})
-    return b if isinstance(b, dict) else {}
+    if isinstance(b, dict):
+        return b
+    return _INVALID_BLOCK
 
 
-def _get(block: Dict[str, Any], key: str, coerce: Callable
-         ) -> Tuple[Any, str]:
-    """Return (value, status). status in {ok, missing, invalid}. Never raises."""
+def _get(block, key: str, coerce: Callable) -> Tuple[Any, str]:
+    """Return (value, status). status in {ok, missing, invalid}. Never raises.
+    If the whole block is the _INVALID_BLOCK sentinel, every key reads as
+    invalid (a non-dict block is corrupt, not merely absent)."""
+    if block is _INVALID_BLOCK:
+        return None, _INVALID
     if key not in block:
         return None, _MISSING
     try:
@@ -187,6 +198,12 @@ def score_technical_confluence(ci: SignalCandidateInput,
     volr, s5 = _get(tc, K.TECH_VOLUME_RATIO, K.as_number)
     atr, s6 = _get(tc, K.TECH_ATR_PCT, K.as_number)
     statuses = {s1, s2, s3, s4, s5, s6}
+    # Non-dict block (or every key invalid) -> conservative-low fallback.
+    if tc is _INVALID_BLOCK or statuses == {_INVALID}:
+        return _mk("technical_confluence", INVALID_FALLBACK,
+                   reasons=["fallback_invalid_input"],
+                   warnings=["invalid_soft_input"],
+                   used={"technical_context": "invalid"})
     warnings = []
     if _INVALID in statuses:
         warnings.append("invalid_soft_input")
@@ -269,8 +286,14 @@ def score_volume_liquidity(ci: SignalCandidateInput,
         score = 70.0; reason = "liquidity_thin_but_allowed"
     else:
         score = 35.0; reason = "liquidity_below_min_soft"
+    # partial soft key (volume_ratio) status must surface as a warning
+    warnings = []
+    if s2 == _INVALID:
+        warnings.append("invalid_soft_input")
+    elif s2 == _MISSING:
+        warnings.append("missing_soft_input")
     vr_used = volr if s2 == _OK else None
-    return _mk("volume_liquidity", score, reasons=[reason],
+    return _mk("volume_liquidity", score, reasons=[reason], warnings=warnings,
                used={"avg_dollar_volume_20d": adv20, "volume_ratio": vr_used})
 
 
@@ -301,16 +324,16 @@ def score_volatility(ci: SignalCandidateInput, config: SignalScoringConfig
 def score_market_regime(ci: SignalCandidateInput, config: SignalScoringConfig
                         ) -> ComponentScore:
     rc = _block(ci, "regime_context")
-    label = rc.get(K.REGIME_LABEL)
-    if label is None:
-        return _mk("market_regime", NEUTRAL_FALLBACK,
-                   reasons=["fallback_missing_input"],
-                   warnings=["missing_soft_input"], used={"regime_label": None})
-    if not isinstance(label, str):
+    label, st = _get(rc, K.REGIME_LABEL, K.as_str)
+    if st == _INVALID:
         return _mk("market_regime", INVALID_FALLBACK,
                    reasons=["fallback_invalid_input"],
                    warnings=["invalid_soft_input"],
-                   used={"regime_label": label})
+                   used={"regime_label": None})
+    if st == _MISSING:
+        return _mk("market_regime", NEUTRAL_FALLBACK,
+                   reasons=["fallback_missing_input"],
+                   warnings=["missing_soft_input"], used={"regime_label": None})
     lab = label.lower()
     side = ci.side
     favorable_long = lab in ("bull", "uptrend", "above_sma", "risk_on")
@@ -372,6 +395,8 @@ def score_data_quality(ci: SignalCandidateInput, config: SignalScoringConfig
     if _INVALID in statuses:
         warnings.append("invalid_soft_input")
         score = min(score, INVALID_FALLBACK)
+    if _MISSING in statuses:
+        warnings.append("missing_soft_input")
     if s1 == _OK and miss and miss > 0:
         score -= min(40.0, 10.0 * miss); reasons.append("missing_features")
     if s2 == _OK and schema is not True:
@@ -407,6 +432,8 @@ def score_calibration_uncertainty(ci: SignalCandidateInput,
     if _INVALID in {s1, s2, s3}:
         warnings.append("invalid_soft_input")
         score = min(score, INVALID_FALLBACK)
+    if _MISSING in {s1, s2, s3}:
+        warnings.append("missing_soft_input")
     if s1 == _OK and applied is not True:
         score -= 40.0; reasons.append("calibration_not_applied")
         warnings.append("raw_probability_used")

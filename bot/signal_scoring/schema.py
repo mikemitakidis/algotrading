@@ -376,6 +376,13 @@ class ComponentScore:
         if unknown:
             raise ValueError(
                 f"unknown ComponentScore field(s): {sorted(unknown)}")
+        # Validate the component name against the canonical set. keys.py
+        # imports nothing from schema.py, so this is cycle-free.
+        from bot.signal_scoring.keys import COMPONENT_NAMES
+        if d.get("component") not in COMPONENT_NAMES:
+            raise ValueError(
+                f"unknown component name: {d.get('component')!r} "
+                f"(allowed {tuple(COMPONENT_NAMES)})")
         return cls(
             component=d["component"],
             score=d["score"],

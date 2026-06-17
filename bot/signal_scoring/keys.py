@@ -231,3 +231,10 @@ def as_probability(value) -> float:
     if not (0.0 <= fv <= 1.0):
         raise InvalidContextValue(f"probability out of range [0,1]: {fv}")
     return fv
+
+
+def as_str(value) -> str:
+    """Coerce to a non-empty string; raise InvalidContextValue otherwise."""
+    if not isinstance(value, str) or not value:
+        raise InvalidContextValue(f"expected non-empty str, got {value!r}")
+    return value

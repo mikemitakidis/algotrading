@@ -1047,6 +1047,81 @@ class M19CComponents(unittest.TestCase):
                 offenders.append(f"ref:{node.id}")
         self.assertEqual(offenders, [], f"gate dependency found: {offenders}")
 
+    # ── corrective pass ──
+    # Fix 1: ComponentScore.from_dict rejects unknown component name
+    def test_component_score_from_dict_rejects_unknown_name(self):
+        with self.assertRaises(ValueError):
+            ComponentScore.from_dict({"component": "bogus", "score": 50})
+
+    def test_component_score_from_dict_accepts_known_name(self):
+        c = ComponentScore.from_dict({"component": "ml", "score": 50})
+        self.assertEqual(c.component, "ml")
+
+    # Fix 2: non-dict soft blocks -> invalid (25), not missing (50)
+    def test_non_dict_technical_block_is_invalid(self):
+        c = self._score("technical_confluence",
+                        replace={"technical_context": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_non_dict_volatility_block_is_invalid(self):
+        c = self._score("volatility", replace={"volatility_context": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_non_dict_regime_block_is_invalid(self):
+        c = self._score("market_regime", replace={"regime_context": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_non_dict_risk_block_is_invalid(self):
+        c = self._score("risk_adjusted", replace={"risk_preview": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_non_dict_data_quality_block_is_invalid(self):
+        c = self._score("data_quality", replace={"data_quality_context": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_non_dict_ml_block_calibration_uncertainty_invalid(self):
+        c = self._score("calibration_uncertainty", replace={"ml_context": "bad"})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    # Fix 3: partial missing/invalid soft keys must warn
+    def test_volume_liquidity_missing_volume_ratio_warns(self):
+        c = self._score("volume_liquidity", replace={
+            "liquidity_context": {"avg_dollar_volume_20d": 60_000_000,
+                                  "price": 150.0},
+            "technical_context": {}})  # volume_ratio absent
+        self.assertIn("missing_soft_input", c.warnings)
+
+    def test_volume_liquidity_invalid_volume_ratio_warns(self):
+        c = self._score("volume_liquidity", replace={
+            "liquidity_context": {"avg_dollar_volume_20d": 60_000_000,
+                                  "price": 150.0},
+            "technical_context": {"volume_ratio": "x"}})
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_data_quality_partial_missing_warns(self):
+        c = self._score("data_quality", replace={
+            "data_quality_context": {"schema_match": True}})  # others missing
+        self.assertIn("missing_soft_input", c.warnings)
+
+    def test_data_quality_partial_invalid_warns(self):
+        c = self._score("data_quality", replace={
+            "data_quality_context": {"schema_match": True,
+                                     "stale_data_flag": False,
+                                     "data_freshness_minutes": 5,
+                                     "missing_feature_count": "x"}})
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_calibration_uncertainty_partial_missing_warns(self):
+        c = self._score("calibration_uncertainty", replace={
+            "ml_context": {"calibration_applied": True}})  # others missing
+        self.assertIn("missing_soft_input", c.warnings)
+
 
 if __name__ == "__main__":
     unittest.main()
