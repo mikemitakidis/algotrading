@@ -80,6 +80,10 @@ def _mk(name, score, reasons=None, warnings=None, used=None, blocked=None):
 def score_ml(ci: SignalCandidateInput, config: SignalScoringConfig
              ) -> ComponentScore:
     ml = _block(ci, "ml_context")
+    if ml is _INVALID_BLOCK:
+        return _mk("ml", INVALID_FALLBACK, reasons=["fallback_invalid_input"],
+                   warnings=["invalid_soft_input"],
+                   used={"ml_context": "invalid"}, blocked=["ml_probability_invalid"])
     applied, st_app = _get(ml, K.ML_CALIBRATION_APPLIED, K.as_bool)
     cal, st_cal = _get(ml, K.ML_PRED_CALIBRATED, K.as_probability)
     raw, st_raw = _get(ml, K.ML_PRED_RAW, K.as_probability)
@@ -96,11 +100,30 @@ def score_ml(ci: SignalCandidateInput, config: SignalScoringConfig
         warnings.append("raw_probability_used")
         reasons.append("ml_raw_probability_used")
     else:
-        # both unavailable/invalid -> conservative low (not neutral)
+        # No usable probability. Distinguish INVALID (a present-but-bad value)
+        # from MISSING (absent). The relevant reads are: calibrated (only when
+        # calibration is applied) and raw (the fallback).
         used["calibration_applied"] = applied
+        used["prediction_calibrated"] = cal
+        used["prediction_raw"] = raw
+        # Explicit None is "unavailable" (missing), not a corrupt value. Only a
+        # present, non-None, un-coercible value counts as invalid.
+        raw_present = ml.get(K.ML_PRED_RAW, None) is not None \
+            if isinstance(ml, dict) else False
+        cal_present = ml.get(K.ML_PRED_CALIBRATED, None) is not None \
+            if isinstance(ml, dict) else False
+        cal_relevant_invalid = (applied is True and st_cal == _INVALID
+                                and cal_present)
+        raw_invalid = (st_raw == _INVALID and raw_present)
+        any_invalid = cal_relevant_invalid or raw_invalid or (st_app == _INVALID)
+        if any_invalid:
+            return _mk("ml", INVALID_FALLBACK,
+                       reasons=["fallback_invalid_input"],
+                       warnings=["invalid_soft_input"],
+                       used=used, blocked=["ml_probability_invalid"])
         return _mk("ml", INVALID_FALLBACK,
                    reasons=["ml_probability_unavailable"],
-                   warnings=["ml_probability_unavailable"],
+                   warnings=["missing_soft_input"],
                    used=used, blocked=["ml_probability_unavailable"])
 
     hc = config.ml["high_conviction_probability"]
@@ -265,19 +288,25 @@ def score_momentum(ci: SignalCandidateInput, config: SignalScoringConfig
 def score_volume_liquidity(ci: SignalCandidateInput,
                            config: SignalScoringConfig) -> ComponentScore:
     lq = _block(ci, "liquidity_context")
-    adv20, s1 = _get(lq, K.LIQ_AVG_DOLLAR_VOLUME_20D, K.as_number)
-    volr, s2 = _get(_block(ci, "technical_context"),
-                    K.TECH_VOLUME_RATIO, K.as_number)
-    if s1 == _INVALID:
+    tc = _block(ci, "technical_context")
+    adv20, s_adv = _get(lq, K.LIQ_AVG_DOLLAR_VOLUME_20D, K.as_number)
+    price, s_price = _get(lq, K.LIQ_PRICE, K.as_number)
+    spread, s_spread = _get(lq, K.LIQ_SPREAD_PCT, K.as_number)
+    volr, s_vr = _get(tc, K.TECH_VOLUME_RATIO, K.as_number)
+
+    used = {"avg_dollar_volume_20d": adv20, "price": price,
+            "spread_pct": spread, "volume_ratio": volr}
+
+    # Primary driver is avg dollar volume. If it is unusable, fall back.
+    if s_adv == _INVALID:
         return _mk("volume_liquidity", INVALID_FALLBACK,
                    reasons=["fallback_invalid_input"],
-                   warnings=["invalid_soft_input"],
-                   used={"avg_dollar_volume_20d": adv20})
-    if s1 == _MISSING:
+                   warnings=["invalid_soft_input"], used=used)
+    if s_adv == _MISSING:
         return _mk("volume_liquidity", NEUTRAL_FALLBACK,
                    reasons=["fallback_missing_input"],
-                   warnings=["missing_soft_input"],
-                   used={"avg_dollar_volume_20d": adv20})
+                   warnings=["missing_soft_input"], used=used)
+
     ideal = config.liquidity["ideal_avg_dollar_volume_20d"]
     mn = config.liquidity["min_avg_dollar_volume_20d"]
     if adv20 >= ideal:
@@ -286,15 +315,27 @@ def score_volume_liquidity(ci: SignalCandidateInput,
         score = 70.0; reason = "liquidity_thin_but_allowed"
     else:
         score = 35.0; reason = "liquidity_below_min_soft"
-    # partial soft key (volume_ratio) status must surface as a warning
+    reasons = [reason]
+
+    # Secondary soft adjustments from spread / volume_ratio (small, capped).
+    if s_spread == _OK and spread is not None:
+        max_spread = config.liquidity["max_spread_pct"]
+        if spread > max_spread:
+            score = max(0.0, score - 10.0)
+            reasons.append("wide_spread_soft")
+    if s_vr == _OK and volr is not None and volr < 1.0:
+        score = max(0.0, score - 5.0)
+        reasons.append("low_volume_ratio_soft")
+
+    # Surface missing/invalid status of the secondary soft keys.
     warnings = []
-    if s2 == _INVALID:
+    sec = (s_price, s_spread, s_vr)
+    if _INVALID in sec:
         warnings.append("invalid_soft_input")
-    elif s2 == _MISSING:
+    if _MISSING in sec:
         warnings.append("missing_soft_input")
-    vr_used = volr if s2 == _OK else None
-    return _mk("volume_liquidity", score, reasons=[reason], warnings=warnings,
-               used={"avg_dollar_volume_20d": adv20, "volume_ratio": vr_used})
+    return _mk("volume_liquidity", score, reasons=reasons, warnings=warnings,
+               used=used)
 
 
 # ──────────────────────── volatility ────────────────────────

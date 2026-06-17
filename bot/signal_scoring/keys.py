@@ -102,32 +102,51 @@ COMPONENT_NAMES = (
     "calibration_uncertainty",
 )
 
-# Soft keys each component reads (advisory; never gate-blocking).
+# Soft keys each component reads (advisory; never gate-blocking). Each entry is
+# a tuple of (block_name, (keys...)) pairs so a component may declare reads from
+# more than one context block. This map MUST match what each scorer actually
+# reads (verified by test_component_readable_keys_match_reads).
 COMPONENT_READABLE_KEYS = {
-    "ml": ("ml_context", (ML_PRED_CALIBRATED, ML_PRED_RAW,
-                          ML_CALIBRATION_APPLIED)),
-    "scanner": ("scanner_context", (SCAN_VALID_COUNT, SCAN_REQUIRED_COUNT,
-                                    SCAN_AVAILABLE_TIMEFRAMES)),
-    "technical_confluence": ("technical_context",
-                             (TECH_EMA20, TECH_EMA50, TECH_RSI, TECH_MACD_HIST,
-                              TECH_VOLUME_RATIO, TECH_ATR_PCT,
-                              TECH_SUPPORT_RESISTANCE_DIST)),
-    "trend": ("technical_context", (TECH_EMA20, TECH_EMA50)),
-    "momentum": ("technical_context", (TECH_RSI, TECH_MACD_HIST,
-                                       TECH_MACD_SIGNAL)),
-    "volume_liquidity": ("liquidity_context", (LIQ_AVG_DOLLAR_VOLUME_20D,
-                                               LIQ_PRICE, LIQ_SPREAD_PCT)),
-    "volatility": ("volatility_context", (VOL_ATR_PCT, VOL_BAND)),
-    "market_regime": ("regime_context", (REGIME_LABEL, REGIME_BENCHMARK_TREND,
-                                         REGIME_SOURCE)),
-    "risk_adjusted": ("risk_preview", (RISK_REWARD_RISK_RATIO,)),
-    "data_quality": ("data_quality_context",
-                     (DQ_MISSING_FEATURE_COUNT, DQ_SCHEMA_MATCH,
-                      DQ_STALE_DATA_FLAG, DQ_DATA_FRESHNESS_MINUTES)),
-    "calibration_uncertainty": ("ml_context",
-                                (ML_CALIBRATION_APPLIED,
-                                 ML_FEATURE_EXTRAPOLATION_COUNT,
-                                 ML_PRODUCTION_THINNESS_STATUS)),
+    "ml": (
+        ("ml_context", (ML_CALIBRATION_APPLIED, ML_PRED_CALIBRATED,
+                        ML_PRED_RAW)),
+    ),
+    "scanner": (
+        ("scanner_context", (SCAN_VALID_COUNT, SCAN_AVAILABLE_TIMEFRAMES)),
+    ),
+    "technical_confluence": (
+        ("technical_context", (TECH_EMA20, TECH_EMA50, TECH_RSI,
+                               TECH_MACD_HIST, TECH_VOLUME_RATIO,
+                               TECH_ATR_PCT)),
+    ),
+    "trend": (
+        ("technical_context", (TECH_EMA20, TECH_EMA50)),
+    ),
+    "momentum": (
+        ("technical_context", (TECH_RSI, TECH_MACD_HIST)),
+    ),
+    "volume_liquidity": (
+        ("liquidity_context", (LIQ_AVG_DOLLAR_VOLUME_20D, LIQ_PRICE,
+                               LIQ_SPREAD_PCT)),
+        ("technical_context", (TECH_VOLUME_RATIO,)),
+    ),
+    "volatility": (
+        ("volatility_context", (VOL_ATR_PCT,)),
+    ),
+    "market_regime": (
+        ("regime_context", (REGIME_LABEL,)),
+    ),
+    "risk_adjusted": (
+        ("risk_preview", (RISK_REWARD_RISK_RATIO,)),
+    ),
+    "data_quality": (
+        ("data_quality_context", (DQ_MISSING_FEATURE_COUNT, DQ_SCHEMA_MATCH,
+                                  DQ_STALE_DATA_FLAG, DQ_DATA_FRESHNESS_MINUTES)),
+    ),
+    "calibration_uncertainty": (
+        ("ml_context", (ML_CALIBRATION_APPLIED, ML_FEATURE_EXTRAPOLATION_COUNT,
+                        ML_PRODUCTION_THINNESS_STATUS)),
+    ),
 }
 
 

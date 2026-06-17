@@ -1122,6 +1122,115 @@ class M19CComponents(unittest.TestCase):
             "ml_context": {"calibration_applied": True}})  # others missing
         self.assertIn("missing_soft_input", c.warnings)
 
+    # ── corrective pass (keys alignment + ml invalid/missing) ──
+    def test_component_readable_keys_match_actual_reads(self):
+        """COMPONENT_READABLE_KEYS must declare exactly the (block, key) pairs
+        each scorer actually reads via _get(...). Guards against drift."""
+        import ast
+        from bot.signal_scoring import keys as K
+        src = (_PKG_DIR / "components.py").read_text()
+        tree = ast.parse(src)
+        # resolve K.CONST -> value for translating attribute reads to strings
+        kconsts = {n: getattr(K, n) for n in dir(K)
+                   if n.isupper() and isinstance(getattr(K, n), str)}
+        declared = {}
+        for comp, pairs in K.COMPONENT_READABLE_KEYS.items():
+            s = set()
+            for block_name, keys in pairs:
+                for key in keys:
+                    s.add((block_name, key))
+            declared[comp] = s
+        actual = {}
+        for node in tree.body:
+            if not (isinstance(node, ast.FunctionDef)
+                    and node.name.startswith("score_")
+                    and node.name not in ("score_component",
+                                          "score_all_components")):
+                continue
+            comp = node.name[len("score_"):]
+            block_vars = {}
+            reads = set()
+            for n in ast.walk(node):
+                if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call) \
+                   and isinstance(n.value.func, ast.Name) \
+                   and n.value.func.id == "_block":
+                    bn = n.value.args[1].value
+                    for t in n.targets:
+                        if isinstance(t, ast.Name):
+                            block_vars[t.id] = bn
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                   and n.func.id == "_get":
+                    blk = n.args[0]
+                    if isinstance(blk, ast.Name):
+                        bname = block_vars.get(blk.id)
+                    elif isinstance(blk, ast.Call) \
+                            and isinstance(blk.func, ast.Name) \
+                            and blk.func.id == "_block":
+                        bname = blk.args[1].value
+                    else:
+                        bname = None
+                    key = n.args[1]
+                    if isinstance(key, ast.Attribute):
+                        kname = kconsts.get(key.attr)
+                    elif isinstance(key, ast.Constant):
+                        kname = key.value
+                    else:
+                        kname = None
+                    if bname and kname:
+                        reads.add((bname, kname))
+            actual[comp] = reads
+        for comp in K.COMPONENT_NAMES:
+            self.assertEqual(
+                declared.get(comp), actual.get(comp),
+                f"{comp}: declared {declared.get(comp)} != reads "
+                f"{actual.get(comp)}")
+
+    def test_volume_liquidity_records_all_four_inputs(self):
+        c = self._score("volume_liquidity")
+        for k in ("avg_dollar_volume_20d", "price", "spread_pct",
+                  "volume_ratio"):
+            self.assertIn(k, c.inputs_used)
+
+    def test_volume_liquidity_missing_spread_warns(self):
+        c = self._score("volume_liquidity", replace={
+            "liquidity_context": {"avg_dollar_volume_20d": 60_000_000,
+                                  "price": 150.0},  # spread_pct missing
+            "technical_context": {"volume_ratio": 1.6}})
+        self.assertIn("missing_soft_input", c.warnings)
+
+    def test_volume_liquidity_invalid_spread_warns(self):
+        c = self._score("volume_liquidity", replace={
+            "liquidity_context": {"avg_dollar_volume_20d": 60_000_000,
+                                  "price": 150.0, "spread_pct": "x"},
+            "technical_context": {"volume_ratio": 1.6}})
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_volume_liquidity_readable_keys_multiblock(self):
+        from bot.signal_scoring import keys as K
+        pairs = dict(K.COMPONENT_READABLE_KEYS["volume_liquidity"])
+        self.assertIn("technical_context", pairs)
+        self.assertIn("volume_ratio", pairs["technical_context"])
+
+    def test_ml_invalid_raw_emits_invalid(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": False, "prediction_raw": "bad"}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_ml_invalid_calibrated_raw_missing_emits_invalid(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": True, "prediction_calibrated": "bad"}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("invalid_soft_input", c.warnings)
+
+    def test_ml_both_missing_emits_missing_not_invalid(self):
+        c = self._score("ml", replace={"ml_context": {
+            "calibration_applied": False}})
+        self.assertEqual(c.score, 25.0)
+        self.assertIn("missing_soft_input", c.warnings)
+        self.assertNotIn("invalid_soft_input", c.warnings)
+        self.assertIn("ml_probability_unavailable", c.blocked_reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
