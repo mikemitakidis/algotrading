@@ -32,36 +32,56 @@ def _resolved(p) -> Path:
     return Path(p).resolve()
 
 
+def _has_segment_pair(parts, a: str, b: str) -> bool:
+    """True if `a` is immediately followed by `b` anywhere in the path parts."""
+    for i in range(len(parts) - 1):
+        if parts[i] == a and parts[i + 1] == b:
+            return True
+    return False
+
+
 def is_write_safe_path(output_path: "str | os.PathLike") -> Tuple[bool, str]:
-    """Return (ok, reason). Only a file path resolving under the system temp
-    directory is accepted; everything else is rejected. The parent directory
-    must already exist (no implicit mkdir)."""
+    """Return (ok, reason). Absolute forbidden names/locations are rejected
+    FIRST (even under the system temp dir); only then is a normal file under the
+    system temp directory accepted. The parent directory must already exist
+    (no implicit mkdir)."""
     try:
         target = _resolved(output_path)
     except (TypeError, ValueError) as e:
         return False, f"unresolvable path: {e}"
 
-    temp_root = Path(tempfile.gettempdir()).resolve()
+    parts = target.parts
 
-    # Must resolve UNDER the system temp directory (realpath + commonpath, not
-    # raw startswith, so /tmp symlinks and /tmpfoo edge cases are handled).
+    # (2) signals.db anywhere -> reject (before any temp allow).
+    if target.name == "signals.db":
+        return False, "rejected: signals.db is never writable"
+
+    # (3)/(4) forbidden segment sequences anywhere in the path -> reject, even
+    # if the path is under the system temp directory.
+    if _has_segment_pair(parts, "data", "ml"):
+        return False, "rejected: data/ml is never writable"
+    if _has_segment_pair(parts, "data", "m19"):
+        return False, "rejected: data/m19 is never writable in M19.G"
+
+    # (5)/(6) must resolve UNDER the system temp directory (realpath +
+    # commonpath, not raw startswith, so /tmp symlinks and /tmpfoo edge cases
+    # are handled).
+    temp_root = Path(tempfile.gettempdir()).resolve()
     try:
         under_temp = os.path.commonpath([str(target), str(temp_root)]) == \
             str(temp_root)
     except ValueError:
-        # different drives / no common path
-        under_temp = False
+        under_temp = False  # different drives / no common path
     if not under_temp:
-        # Explicit, deterministic rejection reasons for the forbidden locations.
-        reason = _classify_reject(target)
-        return False, reason
+        return False, _classify_reject(target)
 
-    # Even under temp: parent must already exist (no implicit mkdir).
+    # (7) parent must already exist (no implicit mkdir).
     if not target.parent.is_dir():
         return False, f"parent directory does not exist: {target.parent}"
-    # Refuse to treat an existing directory as a file target.
+    # (8) refuse an existing directory as a file target.
     if target.is_dir():
         return False, f"path is a directory: {target}"
+    # (9) ok
     return True, "ok"
 
 

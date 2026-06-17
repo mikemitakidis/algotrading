@@ -2508,6 +2508,51 @@ class M19GOutputAudit(unittest.TestCase):
             with self.assertRaises(ValueError):
                 write_scored_candidates_jsonl([self._mk()], p)
 
+    # ── corrective: forbidden names/segments UNDER tempdir must still reject
+    #    (parents pre-created so rejection is proven by name/segment, not by a
+    #    missing parent) ──
+    def test_temp_signals_db_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "signals.db")
+            ok, reason = is_write_safe_path(p)
+            self.assertFalse(ok)
+            self.assertIn("signals.db", reason)
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk()], p)
+            self.assertFalse(os.path.exists(p))
+
+    def test_temp_data_ml_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            parent = os.path.join(td, "data", "ml")
+            os.makedirs(parent)  # parent exists -> rejection must be by segment
+            p = os.path.join(parent, "x.jsonl")
+            ok, reason = is_write_safe_path(p)
+            self.assertFalse(ok)
+            self.assertIn("data/ml", reason)
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk()], p)
+            self.assertFalse(os.path.exists(p))
+
+    def test_temp_data_m19_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            parent = os.path.join(td, "data", "m19")
+            os.makedirs(parent)  # parent exists -> rejection must be by segment
+            p = os.path.join(parent, "x.jsonl")
+            ok, reason = is_write_safe_path(p)
+            self.assertFalse(ok)
+            self.assertIn("data/m19", reason)
+            with self.assertRaises(ValueError):
+                write_scored_candidates_jsonl([self._mk()], p)
+            self.assertFalse(os.path.exists(p))
+
+    def test_temp_normal_file_still_allowed(self):
+        # the temp-only rule is NOT weakened: a normal temp file is allowed
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "out.jsonl")
+            ok, _ = is_write_safe_path(p)
+            self.assertTrue(ok)
+            self.assertEqual(write_scored_candidates_jsonl([self._mk()], p), 1)
+
     # ── Matrix B: write semantics ──
     def test_matrix_b_three_candidates(self):
         with tempfile.TemporaryDirectory() as td:
