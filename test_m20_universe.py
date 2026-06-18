@@ -324,10 +324,19 @@ class M20UABackwardCompat(unittest.TestCase):
     def test_ml_build_dataset_unchanged(self):
         self._unchanged("ml_build_dataset.py")
 
-    def test_paper_unchanged(self):
-        # bot/paper was added in M20.A (head 5cdd083, not yet on main); M20.UA
-        # must not change it relative to that accepted head.
-        self._unchanged("bot/paper", baseline=_M20A_HEAD)
+    def test_paper_only_authorised_routing_diff(self):
+        # bot/paper was frozen at the M20.A head (5cdd083). Later authorised
+        # phases may add to it: M20.B adds routing.py + the __init__ export.
+        # This must still fail if ANY other bot/paper file changes.
+        r = subprocess.run(
+            ["git", "diff", "--name-only", _M20A_HEAD, "HEAD", "--",
+             "bot/paper"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0)
+        changed = set(r.stdout.split())
+        allowed = {"bot/paper/__init__.py", "bot/paper/routing.py"}
+        self.assertTrue(
+            changed <= allowed,
+            f"unauthorised bot/paper change: {sorted(changed - allowed)}")
 
     def test_signal_scoring_unchanged(self):
         self._unchanged("bot/signal_scoring", baseline=_M20A_HEAD)
