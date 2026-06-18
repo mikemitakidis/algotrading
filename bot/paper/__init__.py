@@ -37,6 +37,10 @@ from bot.paper.config import (  # noqa: F401,E402
 )
 from bot.paper import provenance  # noqa: F401,E402
 from bot.paper.routing import decide_paper_routing  # noqa: F401,E402
+from bot.paper.sizing import (  # noqa: F401,E402
+    compute_paper_sizing,
+    PaperSizingPreview,
+)
 
 __all__ = [
     "M20_PHASE",
@@ -70,4 +74,7 @@ __all__ = [
     "provenance",
     # routing (M20.B)
     "decide_paper_routing",
+    # sizing (M20.C)
+    "compute_paper_sizing",
+    "PaperSizingPreview",
 ]

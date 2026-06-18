@@ -333,7 +333,10 @@ class M20AStorage(unittest.TestCase):
         self.assertFalse((_PKG_DIR / "io.py").exists())
 
     def test_no_engine_or_sizing_modules(self):
-        for name in ("engine.py", "simulator.py", "risk_sim.py", "sizing.py"):
+        # sizing.py was correctly forbidden during M20.A, but M20.C now
+        # legitimately adds bot/paper/sizing.py. engine/simulator/risk_sim
+        # remain forbidden.
+        for name in ("engine.py", "simulator.py", "risk_sim.py"):
             self.assertFalse((_PKG_DIR / name).exists(),
                              f"{name} must not exist in M20.A")
 
