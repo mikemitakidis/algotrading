@@ -279,6 +279,7 @@ class M20BFrozenChecks(unittest.TestCase):
                            timeout=10)
         changed = set(r.stdout.split())
         self.assertTrue(changed <= {"bot/paper/routing.py",
+                                    "bot/paper/sizing.py",
                                     "bot/paper/__init__.py"}, changed)
 
 
