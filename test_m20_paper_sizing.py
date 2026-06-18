@@ -273,6 +273,8 @@ class M20CFrozenChecks(unittest.TestCase):
         self.assertTrue(changed <= {"bot/paper/sizing.py",
                                     "bot/paper/orders.py",
                                     "bot/paper/fills.py",
+                                    "bot/paper/positions.py",
+                                    "bot/paper/pnl.py",
                                     "bot/paper/__init__.py"}, changed)
 
 

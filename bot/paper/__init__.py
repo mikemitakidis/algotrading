@@ -49,6 +49,14 @@ from bot.paper.fills import (  # noqa: F401,E402
     simulate_paper_fill,
     PaperFillResult,
 )
+from bot.paper.positions import (  # noqa: F401,E402
+    build_paper_position,
+    PaperPositionResult,
+)
+from bot.paper.pnl import (  # noqa: F401,E402
+    mark_paper_position,
+    PaperPnLResult,
+)
 
 __all__ = [
     "M20_PHASE",
@@ -90,4 +98,9 @@ __all__ = [
     "PaperOrderResult",
     "simulate_paper_fill",
     "PaperFillResult",
+    # positions + pnl (M20.E)
+    "build_paper_position",
+    "PaperPositionResult",
+    "mark_paper_position",
+    "PaperPnLResult",
 ]
