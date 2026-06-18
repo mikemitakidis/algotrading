@@ -36,6 +36,7 @@ from bot.paper.config import (  # noqa: F401,E402
     default_paper_config,
 )
 from bot.paper import provenance  # noqa: F401,E402
+from bot.paper.routing import decide_paper_routing  # noqa: F401,E402
 
 __all__ = [
     "M20_PHASE",
@@ -67,4 +68,6 @@ __all__ = [
     "assert_m19_candidate_contract",
     # provenance module
     "provenance",
+    # routing (M20.B)
+    "decide_paper_routing",
 ]
