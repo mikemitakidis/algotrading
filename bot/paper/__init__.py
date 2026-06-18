@@ -57,6 +57,10 @@ from bot.paper.pnl import (  # noqa: F401,E402
     mark_paper_position,
     PaperPnLResult,
 )
+from bot.paper.closing import (  # noqa: F401,E402
+    close_paper_position,
+    PaperCloseResult,
+)
 
 __all__ = [
     "M20_PHASE",
@@ -103,4 +107,7 @@ __all__ = [
     "PaperPositionResult",
     "mark_paper_position",
     "PaperPnLResult",
+    # closing + realised pnl (M20.F)
+    "close_paper_position",
+    "PaperCloseResult",
 ]
