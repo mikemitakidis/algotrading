@@ -4166,7 +4166,8 @@ class G10_Hygiene(unittest.TestCase):
         # Build the allowed set
         allowed_prefixes = ("bot/backtesting/", "configs/backtests/",
                             "bot/signal_scoring/", "configs/signal_scoring/",
-                            "bot/paper/", "configs/paper/")
+                            "bot/paper/", "configs/paper/",
+                            "bot/universe/", "configs/universe/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4210,6 +4211,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m19_signal_scoring.py",
             # M20.A: paper-trading firewall contracts proof tests.
             "test_m20_paper.py",
+            # M20.UA: universe registry proof tests.
+            "test_m20_universe.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
