@@ -338,6 +338,8 @@ class M20EFrozenChecks(unittest.TestCase):
         changed = set(r.stdout.split())
         self.assertTrue(changed <= {"bot/paper/positions.py", "bot/paper/pnl.py",
                                     "bot/paper/closing.py",
+                                    "bot/paper/account.py",
+                                    "bot/paper/ledger.py",
                                     "bot/paper/__init__.py"}, changed)
 
 

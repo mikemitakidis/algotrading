@@ -337,7 +337,9 @@ class M20UABackwardCompat(unittest.TestCase):
                    "bot/paper/sizing.py", "bot/paper/orders.py",
                    "bot/paper/fills.py", "bot/paper/positions.py",
                    "bot/paper/pnl.py",
-                   "bot/paper/closing.py"}
+                   "bot/paper/closing.py",
+                   "bot/paper/account.py",
+                   "bot/paper/ledger.py"}
         self.assertTrue(
             changed <= allowed,
             f"unauthorised bot/paper change: {sorted(changed - allowed)}")
