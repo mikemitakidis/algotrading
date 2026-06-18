@@ -41,6 +41,14 @@ from bot.paper.sizing import (  # noqa: F401,E402
     compute_paper_sizing,
     PaperSizingPreview,
 )
+from bot.paper.orders import (  # noqa: F401,E402
+    build_paper_order,
+    PaperOrderResult,
+)
+from bot.paper.fills import (  # noqa: F401,E402
+    simulate_paper_fill,
+    PaperFillResult,
+)
 
 __all__ = [
     "M20_PHASE",
@@ -77,4 +85,9 @@ __all__ = [
     # sizing (M20.C)
     "compute_paper_sizing",
     "PaperSizingPreview",
+    # orders + fills (M20.D)
+    "build_paper_order",
+    "PaperOrderResult",
+    "simulate_paper_fill",
+    "PaperFillResult",
 ]

@@ -4217,6 +4217,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20_paper_routing.py",
             # M20.C: paper sizing preview proof tests.
             "test_m20_paper_sizing.py",
+            # M20.D: paper order + fill proof tests.
+            "test_m20_paper_orders_fills.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
