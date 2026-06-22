@@ -49,3 +49,4 @@ data/.historical_refresh.lock.*
 recovery_inputs/
 recovery_extracted/
 data/ml/
+data/paper/

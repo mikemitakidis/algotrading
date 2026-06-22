@@ -292,6 +292,7 @@ class M20FFrozenChecks(unittest.TestCase):
         self.assertTrue(changed <= {"bot/paper/closing.py",
                                     "bot/paper/account.py",
                                     "bot/paper/ledger.py",
+                                    "bot/paper/storage.py",
                                     "bot/paper/__init__.py"}, changed)
 
 

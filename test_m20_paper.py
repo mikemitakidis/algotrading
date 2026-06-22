@@ -263,10 +263,19 @@ class M20ASafetyGuards(unittest.TestCase):
         tokens = ("sqlite3", "signals.db", ".connect(", "socket.socket",
                   "requests.get", "requests.post", "urlopen", "open(",
                   "mkstemp(", ".to_csv(", ".to_parquet(")
+        # storage.py (M20.H) is the sanctioned explicit-call-only JSONL file-IO
+        # module; its own guards (test_m20_paper_storage) enforce no sqlite/
+        # network and tempfile-only tests. Exclude it from the package-wide
+        # file-token scan. Network/db tokens remain forbidden there via its
+        # dedicated AST import guard.
+        net_db_tokens = ("sqlite3", "signals.db", ".connect(", "socket.socket",
+                         "requests.get", "requests.post", "urlopen",
+                         ".to_csv(", ".to_parquet(")
         offenders = []
         for path in self._iter():
             src = path.read_text()
-            for t in tokens:
+            check = net_db_tokens if path.name == "storage.py" else tokens
+            for t in check:
                 if t in src:
                     offenders.append(f"{path.name}:{t}")
         self.assertEqual(offenders, [], f"forbidden tokens: {offenders}")

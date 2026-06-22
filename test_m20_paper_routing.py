@@ -287,6 +287,7 @@ class M20BFrozenChecks(unittest.TestCase):
                                     "bot/paper/closing.py",
                                     "bot/paper/account.py",
                                     "bot/paper/ledger.py",
+                                    "bot/paper/storage.py",
                                     "bot/paper/__init__.py"}, changed)
 
 

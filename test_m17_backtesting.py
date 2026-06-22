@@ -4225,6 +4225,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20_paper_closing.py",
             # M20.G: paper account + ledger proof tests.
             "test_m20_paper_account_ledger.py",
+            # M20.H: paper storage proof tests.
+            "test_m20_paper_storage.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

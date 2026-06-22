@@ -73,6 +73,16 @@ from bot.paper.account import (  # noqa: F401,E402
     mark_account,
     close_position_in_account,
 )
+from bot.paper.storage import (  # noqa: F401,E402
+    PaperStorageResult,
+    append_events,
+    load_events,
+    append_snapshots,
+    load_snapshots,
+    append_account_states,
+    load_account_states,
+    replay_events_summary,
+)
 
 __all__ = [
     "M20_PHASE",
@@ -131,4 +141,13 @@ __all__ = [
     "close_position_in_account",
     "build_account_event",
     "PaperLedgerResult",
+    # storage (M20.H)
+    "PaperStorageResult",
+    "append_events",
+    "load_events",
+    "append_snapshots",
+    "load_snapshots",
+    "append_account_states",
+    "load_account_states",
+    "replay_events_summary",
 ]
