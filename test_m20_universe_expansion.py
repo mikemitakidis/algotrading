@@ -23,7 +23,7 @@ _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
 
 
 def _load(path):
-    return json.load(open(path))["symbols"]
+    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))["symbols"]
 
 
 class M20UBExpandedRecords(unittest.TestCase):

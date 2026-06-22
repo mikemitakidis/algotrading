@@ -316,7 +316,11 @@ class M20DFrozenChecks(unittest.TestCase):
         self._unchanged(_BASELINE, "bot/signal_scoring")
 
     def test_m20ua_frozen(self):
-        self._unchanged(_M20UA_HEAD, "bot/universe", "configs/universe")
+        # M20.UA universe CODE stays frozen; M20.UB authorises universe
+        # data/docs changes (us_seed/us_expanded/UNIVERSE_STATUS.md), so guard
+        # the code modules rather than the whole tree.
+        self._unchanged(_M20UA_HEAD, "bot/universe/schema.py",
+                        "bot/universe/registry.py", "bot/universe/suffixes.py")
 
     def test_protected_runtime_unchanged(self):
         self._unchanged(_BASELINE, "main.py", "bot/scanner.py", "bot/risk.py",
