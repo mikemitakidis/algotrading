@@ -1,0 +1,13 @@
+{
+  "schema_version": "m20_quality_collector_config_v1",
+  "lookback_days": 400,
+  "batch_size": 100,
+  "throttle_seconds": 0.0,
+  "max_retries": 3,
+  "tolerances": {
+    "latest_close_pct": 2.0,
+    "avg_volume_20d_pct": 25.0,
+    "avg_dollar_volume_20d_pct": 25.0
+  },
+  "notes": "M20.UC1 collector config. Read-only admin/offline quality collection. Tolerances are used by validate mode's source-agreement summary; UC2 applies the actual gates and scan_ready decisions."
+}
