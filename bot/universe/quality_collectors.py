@@ -55,8 +55,8 @@ def _load_config() -> Dict[str, Any]:
     defaults = {
         "lookback_days": 400,          # ~252 trading days + buffer
         "alpaca_feed": "iex",          # free-plan feed; SIP requires subscription
-        "batch_size": 100,
-        "throttle_seconds": 0.0,
+        "batch_size": 50,
+        "throttle_seconds": 0.4,
         "max_retries": 3,
         "tolerances": {
             "latest_close_pct": 2.0,
@@ -132,12 +132,66 @@ def _classify_provider_error(msg: str, *, source: str) -> str:
     return f"{source}_fetch_error"
 
 
+def _is_rate_limit(rec: Dict[str, Any]) -> bool:
+    return (rec.get("status") == "rate_limit"
+            or str(rec.get("reason", "")).endswith("_rate_limited"))
+
+
+def _fetch_with_policy(
+    symbols: List[str],
+    fetch_one: Callable[[str], Dict[str, Any]],
+    *,
+    throttle_seconds: float = 0.0,
+    max_retries: int = 3,
+    batch_size: int = 100,
+    sleep: Callable[[float], None] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Apply batching + throttling + exponential backoff on rate limits to a
+    per-symbol fetch. `sleep` is injectable so tests pass a mock (no real wait).
+
+    - throttle_seconds: pause between individual symbol fetches.
+    - batch_size: pause (a longer throttle) between batches of this size.
+    - max_retries: on a rate-limit result, retry up to this many times with
+      exponential backoff (throttle_seconds * 2**attempt), then record the
+      rate-limit result.
+    Never raises; always returns a per-symbol result dict.
+    """
+    if sleep is None:
+        import time as _time
+        sleep = _time.sleep
+    throttle = max(0.0, float(throttle_seconds))
+    retries = max(0, int(max_retries))
+    bsize = max(1, int(batch_size))
+    out: Dict[str, Dict[str, Any]] = {}
+    for i, sym in enumerate(symbols):
+        rec = fetch_one(sym)
+        attempt = 0
+        while _is_rate_limit(rec) and attempt < retries:
+            backoff = (throttle * (2 ** attempt)) if throttle > 0 else float(
+                2 ** attempt)
+            sleep(backoff)
+            attempt += 1
+            rec = fetch_one(sym)
+        out[sym] = rec
+        # throttle between symbols, and a longer pause between batches
+        if throttle > 0 and i + 1 < len(symbols):
+            if (i + 1) % bsize == 0:
+                sleep(throttle * 2)
+            else:
+                sleep(throttle)
+    return out
+
+
 def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
-                          feed: str = "iex") -> Dict[str, Dict[str, Any]]:
+                          feed: str = "iex", throttle_seconds: float = 0.0,
+                          max_retries: int = 3, batch_size: int = 100,
+                          sleep: Callable[[float], None] = None
+                          ) -> Dict[str, Dict[str, Any]]:
     """Collector-owned read-only Alpaca daily-bar fetch that explicitly
     requests the configured feed (default IEX). Builds its own StockBarsRequest
     via the lazy alpaca-py import so bot/providers/alpaca_provider.py is reused
-    for client/creds but NOT modified. Never raises; records reasons."""
+    for client/creds but NOT modified. Honours throttle/batch/backoff. Never
+    raises; records reasons."""
     from datetime import date as _date, timedelta as _td  # local
     from alpaca.data.requests import StockBarsRequest       # lazy
     from alpaca.data.timeframe import TimeFrame             # lazy
@@ -151,8 +205,8 @@ def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
     prov = AlpacaProvider()
     end = _date.today()
     start = end - _td(days=lookback_days)
-    out: Dict[str, Dict[str, Any]] = {}
-    for sym in symbols:
+
+    def _one(sym: str) -> Dict[str, Any]:
         try:
             client = prov._client()
             kwargs = dict(symbol_or_symbols=sym, timeframe=TimeFrame.Day,
@@ -162,24 +216,28 @@ def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
                 kwargs["feed"] = feed_enum
             df = client.get_stock_bars(StockBarsRequest(**kwargs)).df
             if df is None or len(df) == 0:
-                out[sym] = {"status": "no_data",
-                            "reason": "source_unreachable"}
-            else:
-                out[sym] = _metrics_from_df(df)
+                return {"status": "no_data", "reason": "source_unreachable"}
+            return _metrics_from_df(df)
         except Exception as e:  # noqa: BLE001 — record, never fatal
-            msg = str(e)[:160]
-            reason = _classify_provider_error(msg, source="alpaca")
+            reason = _classify_provider_error(str(e)[:160], source="alpaca")
             status = ("rate_limit" if reason == "alpaca_rate_limited"
                       else "error")
-            out[sym] = {"status": status, "reason": reason}
-    return out
+            return {"status": status, "reason": reason}
+
+    return _fetch_with_policy(symbols, _one, throttle_seconds=throttle_seconds,
+                              max_retries=max_retries, batch_size=batch_size,
+                              sleep=sleep)
 
 
-def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int
+def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int,
+                         throttle_seconds: float = 0.0, max_retries: int = 3,
+                         batch_size: int = 100,
+                         sleep: Callable[[float], None] = None
                          ) -> Dict[str, Dict[str, Any]]:
     """Collector-owned read-only Yahoo daily-bar fetch using the REAL
     YFinanceProvider.fetch_bars(symbol, timeframe, start_utc, end_utc)
-    signature and its FetchResult(outcome, df, ...) return. Never raises."""
+    signature and its FetchResult(outcome, df, ...) return. Honours
+    throttle/batch/backoff. Never raises."""
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     from bot.historical.providers_yfinance import YFinanceProvider  # lazy reuse
     from bot.historical.providers import (
@@ -187,28 +245,27 @@ def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int
     prov = YFinanceProvider()
     end_utc = _dt.now(_tz.utc)
     start_utc = end_utc - _td(days=lookback_days)
-    out: Dict[str, Dict[str, Any]] = {}
-    for sym in symbols:
+
+    def _one(sym: str) -> Dict[str, Any]:
         try:
             res = prov.fetch_bars(sym, "1D", start_utc, end_utc)
             outcome = getattr(res, "outcome", None)
             if outcome == FETCH_OK and getattr(res, "df", None) is not None:
-                out[sym] = _metrics_from_df(res.df)
-            elif outcome == FETCH_RATE_LIMITED:
-                out[sym] = {"status": "rate_limit",
-                            "reason": "yahoo_rate_limited"}
-            elif outcome == FETCH_NO_DATA:
-                out[sym] = {"status": "no_data",
-                            "reason": "source_unreachable"}
-            else:  # FETCH_PROVIDER_ERROR or unknown
-                out[sym] = {"status": "error",
-                            "reason": "yahoo_fetch_error"}
+                return _metrics_from_df(res.df)
+            if outcome == FETCH_RATE_LIMITED:
+                return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+            if outcome == FETCH_NO_DATA:
+                return {"status": "no_data", "reason": "source_unreachable"}
+            return {"status": "error", "reason": "yahoo_fetch_error"}
         except Exception as e:  # noqa: BLE001 — record, never fatal
             reason = _classify_provider_error(str(e)[:160], source="yahoo")
             status = ("rate_limit" if reason == "yahoo_rate_limited"
                       else "error")
-            out[sym] = {"status": status, "reason": reason}
-    return out
+            return {"status": status, "reason": reason}
+
+    return _fetch_with_policy(symbols, _one, throttle_seconds=throttle_seconds,
+                              max_retries=max_retries, batch_size=batch_size,
+                              sleep=sleep)
 
 
 def _probe(fetch: Callable, *, lookback_days: int, **kwargs
@@ -330,13 +387,21 @@ def universe_quality_collect(
     errors: List[str] = []
     rate_limit_count = 0
     feed = cfg.get("alpaca_feed", "iex")
+    policy = dict(throttle_seconds=cfg.get("throttle_seconds", 0.0),
+                  max_retries=cfg.get("max_retries", 3),
+                  batch_size=cfg.get("batch_size", 100))
     alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
+    yahoo_injected = yahoo_fetch is not _default_yahoo_fetch
     if "alpaca" in sources and to_fetch:
-        a_kwargs = {} if alpaca_injected else {"feed": feed}
-        alpaca_data = alpaca_fetch(to_fetch, lookback_days=cfg["lookback_days"],
-                                   **a_kwargs)
+        a_kwargs = dict(lookback_days=cfg["lookback_days"])
+        if not alpaca_injected:
+            a_kwargs.update(feed=feed, **policy)
+        alpaca_data = alpaca_fetch(to_fetch, **a_kwargs)
     if "yahoo" in sources and to_fetch:
-        yahoo_data = yahoo_fetch(to_fetch, lookback_days=cfg["lookback_days"])
+        y_kwargs = dict(lookback_days=cfg["lookback_days"])
+        if not yahoo_injected:
+            y_kwargs.update(**policy)
+        yahoo_data = yahoo_fetch(to_fetch, **y_kwargs)
 
     symbols_out: Dict[str, Any] = dict(existing)
     a_ok = y_ok = both_ok = miss_a = miss_y = 0

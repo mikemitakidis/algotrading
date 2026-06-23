@@ -354,6 +354,14 @@ class M20UC1SafetyGuards(unittest.TestCase):
                           "quality_collector_config.json").read_text())
         self.assertEqual(cfg.get("alpaca_feed"), "iex")
 
+    def test_config_exposes_throttle_batch_retry(self):
+        cfg = json.loads((_REPO / "configs" / "universe" /
+                          "quality_collector_config.json").read_text())
+        self.assertIn("throttle_seconds", cfg)
+        self.assertIn("batch_size", cfg)
+        self.assertIn("max_retries", cfg)
+        self.assertGreater(cfg["throttle_seconds"], 0.0)  # polite, not a burst
+
     def test_yahoo_fetch_calls_real_4arg_signature(self):
         # the real default yahoo fetch must call fetch_bars(symbol, timeframe,
         # start_utc, end_utc) and read FetchResult.df — never the old 2-arg
@@ -412,6 +420,79 @@ class M20UC1FrozenChecks(unittest.TestCase):
         self._unchanged(_BASELINE, "main.py", "bot/scanner.py", "bot/risk.py",
                         "bot/strategy.py", "dashboard/app.py", "bot/brokers",
                         "bot/flywheel.py", "bot/signal_scoring")
+
+
+class M20UC1ThrottlePolicy(unittest.TestCase):
+    """Throttle / batch / exponential-backoff policy — mock sleep, no real wait."""
+
+    def test_throttle_between_symbols_and_batch_pause(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        slept = []
+        calls = []
+        def ok(sym):
+            calls.append(sym)
+            return {"status": "ok"}
+        out = _fetch_with_policy([f"S{i}" for i in range(5)], ok,
+                                 throttle_seconds=0.4, batch_size=2,
+                                 sleep=slept.append)
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(all(v["status"] == "ok" for v in out.values()))
+        # 4 inter-symbol gaps; every 2nd is a longer batch pause (0.8)
+        self.assertEqual(slept, [0.4, 0.8, 0.4, 0.8])
+
+    def test_no_real_sleep_used(self):
+        # the policy must accept an injected sleep; tests never call time.sleep
+        from bot.universe.quality_collectors import _fetch_with_policy
+        marker = []
+        _fetch_with_policy(["A", "B"], lambda s: {"status": "ok"},
+                           throttle_seconds=99999.0, sleep=lambda s: marker.append(s))
+        self.assertTrue(marker)  # injected sleep received the (large) value
+        # if real time.sleep had been used with 99999s the test would hang;
+        # reaching here proves the injected sleep was used instead.
+
+    def test_backoff_retries_then_recovers(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        slept = []
+        state = {"n": 0}
+        def flaky(sym):
+            state["n"] += 1
+            if state["n"] < 3:
+                return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+            return {"status": "ok"}
+        out = _fetch_with_policy(["X"], flaky, throttle_seconds=0.5,
+                                 max_retries=3, sleep=slept.append)
+        self.assertEqual(out["X"]["status"], "ok")
+        self.assertEqual(slept, [0.5, 1.0])  # exponential backoff
+
+    def test_backoff_exhausts_and_records_rate_limit(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        slept = []
+        out = _fetch_with_policy(
+            ["Y"], lambda s: {"status": "rate_limit",
+                              "reason": "yahoo_rate_limited"},
+            throttle_seconds=0.5, max_retries=2, sleep=slept.append)
+        self.assertEqual(out["Y"]["status"], "rate_limit")
+        self.assertEqual(slept, [0.5, 1.0])
+
+    def test_collect_passes_policy_to_default_fetchers(self):
+        # injected fetchers must still receive lookback_days and tolerate the
+        # policy kwargs path (collect only forwards policy to DEFAULT fetchers).
+        import bot.universe.quality_collectors as mod
+        seen = {}
+        def fake_alpaca(symbols, **kwargs):
+            seen["alpaca_kwargs"] = set(kwargs.keys())
+            return {s: _metrics_from_df(_df(200.0, 1_000_000)) for s in symbols}
+        def fake_yahoo(symbols, **kwargs):
+            seen["yahoo_kwargs"] = set(kwargs.keys())
+            return {s: _metrics_from_df(_df(200.4, 1_010_000)) for s in symbols}
+        with tempfile.TemporaryDirectory() as d:
+            mod.universe_quality_collect(
+                asof="2026-06-22", sources=["alpaca", "yahoo"],
+                out_path=os.path.join(d, "s.json"), resume=False,
+                alpaca_fetch=fake_alpaca, yahoo_fetch=fake_yahoo)
+        # injected fetchers get lookback_days but NOT the policy kwargs
+        self.assertIn("lookback_days", seen["alpaca_kwargs"])
+        self.assertNotIn("throttle_seconds", seen["alpaca_kwargs"])
 
 
 if __name__ == "__main__":
