@@ -86,11 +86,22 @@ class M20UC1DryRun(unittest.TestCase):
         self.assertEqual((_EXPANDED.read_bytes(), _SEED.read_bytes()), before)
 
     def test_dry_run_no_creds_real_path_fails_safely(self):
-        # default (real) alpaca fetch + no creds -> failed, no crash, no secret
-        r = universe_quality_check(sources=["alpaca"])
-        self.assertIn(r.status, ("failed", "partial"))
-        self.assertFalse(r.alpaca_creds_present)
-        self.assertIn("alpaca_creds_missing", r.errors)
+        # Deterministic regardless of host env: clear Alpaca creds for this
+        # test's scope so the no-creds branch is exercised on sandbox AND VPS.
+        # yahoo is mocked-missing so no real network is touched.
+        saved_key = os.environ.pop("ALPACA_KEY", None)
+        saved_secret = os.environ.pop("ALPACA_SECRET", None)
+        try:
+            r = universe_quality_check(sources=["alpaca"],
+                                       yahoo_fetch=_mock_missing())
+            self.assertEqual(r.status, "failed")
+            self.assertFalse(r.alpaca_creds_present)
+            self.assertIn("alpaca_creds_missing", r.errors)
+        finally:
+            if saved_key is not None:
+                os.environ["ALPACA_KEY"] = saved_key
+            if saved_secret is not None:
+                os.environ["ALPACA_SECRET"] = saved_secret
 
     def test_failed_never_has_empty_errors(self):
         # SIP-denied on alpaca + a failing yahoo -> failed WITH reasons
