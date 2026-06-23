@@ -23,6 +23,7 @@ class SourceSummary:
     missing_count: int = 0
     error_count: int = 0
     rate_limit_count: int = 0
+    reason: Optional[str] = None   # non-secret failure reason when unreachable
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

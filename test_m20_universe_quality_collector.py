@@ -92,6 +92,35 @@ class M20UC1DryRun(unittest.TestCase):
         self.assertFalse(r.alpaca_creds_present)
         self.assertIn("alpaca_creds_missing", r.errors)
 
+    def test_failed_never_has_empty_errors(self):
+        # SIP-denied on alpaca + a failing yahoo -> failed WITH reasons
+        def sip(symbols, **k):
+            return {s: {"status": "error",
+                        "reason": "alpaca_subscription_not_permitted"}
+                    for s in symbols}
+        def yfail(symbols, **k):
+            return {s: {"status": "error", "reason": "yahoo_fetch_error"}
+                    for s in symbols}
+        r = universe_quality_check(sources=["alpaca", "yahoo"],
+                                   alpaca_fetch=sip, yahoo_fetch=yfail)
+        self.assertEqual(r.status, "failed")
+        self.assertTrue(r.errors, "failed status must carry reasons")
+        self.assertIn("alpaca_subscription_not_permitted", r.errors)
+
+    def test_sip_denied_reason_surfaced_in_summary(self):
+        def sip(symbols, **k):
+            return {s: {"status": "error",
+                        "reason": "alpaca_subscription_not_permitted"}
+                    for s in symbols}
+        r = universe_quality_check(sources=["alpaca", "yahoo"],
+                                   alpaca_fetch=sip,
+                                   yahoo_fetch=_mock_yahoo())
+        a = [s for s in r.source_summaries if s.source == "alpaca"][0]
+        self.assertEqual(a.reason, "alpaca_subscription_not_permitted")
+        self.assertFalse(a.reachable)
+        # one source up -> partial, not failed
+        self.assertEqual(r.status, "partial")
+
 
 class M20UC1Collect(unittest.TestCase):
 
@@ -308,6 +337,40 @@ class M20UC1SafetyGuards(unittest.TestCase):
                     'data_quality_status="verified"',
                     "data_quality_status = "):
             self.assertNotIn(tok, src, tok)
+
+    def test_config_exposes_alpaca_feed_iex_default(self):
+        cfg = json.loads((_REPO / "configs" / "universe" /
+                          "quality_collector_config.json").read_text())
+        self.assertEqual(cfg.get("alpaca_feed"), "iex")
+
+    def test_yahoo_fetch_calls_real_4arg_signature(self):
+        # the real default yahoo fetch must call fetch_bars(symbol, timeframe,
+        # start_utc, end_utc) and read FetchResult.df — never the old 2-arg
+        # call that raised TypeError.
+        import bot.universe.quality_collectors as mod
+        calls = {}
+
+        class _FakeRes:
+            outcome = "ok"
+            df = _df(100.0, 1_000_000)
+
+        class _FakeProv:
+            def fetch_bars(self, symbol, timeframe, start_utc, end_utc):
+                calls["args"] = (symbol, timeframe, type(start_utc).__name__,
+                                 type(end_utc).__name__)
+                return _FakeRes()
+
+        import bot.historical.providers_yfinance as yfmod
+        orig = yfmod.YFinanceProvider
+        yfmod.YFinanceProvider = _FakeProv
+        try:
+            out = mod._default_yahoo_fetch(["AAPL"], lookback_days=400)
+        finally:
+            yfmod.YFinanceProvider = orig
+        self.assertEqual(out["AAPL"]["status"], "ok")
+        self.assertEqual(calls["args"][1], "1D")
+        self.assertEqual(calls["args"][2], "datetime")
+        self.assertEqual(calls["args"][3], "datetime")
 
 
 class M20UC1FrozenChecks(unittest.TestCase):

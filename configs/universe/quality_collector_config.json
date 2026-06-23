@@ -1,6 +1,7 @@
 {
   "schema_version": "m20_quality_collector_config_v1",
   "lookback_days": 400,
+  "alpaca_feed": "iex",
   "batch_size": 100,
   "throttle_seconds": 0.0,
   "max_retries": 3,

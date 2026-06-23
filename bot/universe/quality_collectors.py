@@ -54,6 +54,7 @@ def _now_utc() -> str:
 def _load_config() -> Dict[str, Any]:
     defaults = {
         "lookback_days": 400,          # ~252 trading days + buffer
+        "alpaca_feed": "iex",          # free-plan feed; SIP requires subscription
         "batch_size": 100,
         "throttle_seconds": 0.0,
         "max_retries": 3,
@@ -119,49 +120,109 @@ def _metrics_from_df(df) -> Dict[str, Any]:
     }
 
 
-def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int
-                          ) -> Dict[str, Dict[str, Any]]:
-    from bot.providers.alpaca_provider import AlpacaProvider  # lazy
+def _classify_provider_error(msg: str, *, source: str) -> str:
+    """Map a provider error message to a stable, non-secret reason code."""
+    low = (msg or "").lower()
+    if "sip" in low or "subscription does not permit" in low:
+        return "alpaca_subscription_not_permitted"
+    if "rate" in low or "429" in low or "too many" in low:
+        return f"{source}_rate_limited"
+    if not low:
+        return "source_unreachable"
+    return f"{source}_fetch_error"
+
+
+def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
+                          feed: str = "iex") -> Dict[str, Dict[str, Any]]:
+    """Collector-owned read-only Alpaca daily-bar fetch that explicitly
+    requests the configured feed (default IEX). Builds its own StockBarsRequest
+    via the lazy alpaca-py import so bot/providers/alpaca_provider.py is reused
+    for client/creds but NOT modified. Never raises; records reasons."""
+    from datetime import date as _date, timedelta as _td  # local
+    from alpaca.data.requests import StockBarsRequest       # lazy
+    from alpaca.data.timeframe import TimeFrame             # lazy
+    try:
+        from alpaca.data.enums import DataFeed               # lazy
+        feed_enum = {"iex": DataFeed.IEX, "sip": DataFeed.SIP}.get(
+            (feed or "iex").lower(), DataFeed.IEX)
+    except Exception:  # noqa: BLE001 — older alpaca-py
+        feed_enum = None
+    from bot.providers.alpaca_provider import AlpacaProvider  # lazy, unmodified
     prov = AlpacaProvider()
-    end = date.today()
-    start = end - timedelta(days=lookback_days)
+    end = _date.today()
+    start = end - _td(days=lookback_days)
     out: Dict[str, Dict[str, Any]] = {}
     for sym in symbols:
         try:
-            df, status = prov.fetch_bars_range(sym, "1d", start, end)
-            out[sym] = (_metrics_from_df(df) if status == "ok" or df is not None
-                        else {"status": status or "error"})
+            client = prov._client()
+            kwargs = dict(symbol_or_symbols=sym, timeframe=TimeFrame.Day,
+                          start=start.isoformat(),
+                          end=(end + _td(days=1)).isoformat())
+            if feed_enum is not None:
+                kwargs["feed"] = feed_enum
+            df = client.get_stock_bars(StockBarsRequest(**kwargs)).df
+            if df is None or len(df) == 0:
+                out[sym] = {"status": "no_data",
+                            "reason": "source_unreachable"}
+            else:
+                out[sym] = _metrics_from_df(df)
         except Exception as e:  # noqa: BLE001 — record, never fatal
-            msg = str(e)[:120]
-            out[sym] = {"status": "rate_limit" if "rate" in msg.lower()
-                        else "error", "error": msg}
+            msg = str(e)[:160]
+            reason = _classify_provider_error(msg, source="alpaca")
+            status = ("rate_limit" if reason == "alpaca_rate_limited"
+                      else "error")
+            out[sym] = {"status": status, "reason": reason}
     return out
 
 
 def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int
                          ) -> Dict[str, Dict[str, Any]]:
+    """Collector-owned read-only Yahoo daily-bar fetch using the REAL
+    YFinanceProvider.fetch_bars(symbol, timeframe, start_utc, end_utc)
+    signature and its FetchResult(outcome, df, ...) return. Never raises."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     from bot.historical.providers_yfinance import YFinanceProvider  # lazy reuse
+    from bot.historical.providers import (
+        FETCH_OK, FETCH_RATE_LIMITED, FETCH_PROVIDER_ERROR, FETCH_NO_DATA)
     prov = YFinanceProvider()
+    end_utc = _dt.now(_tz.utc)
+    start_utc = end_utc - _td(days=lookback_days)
     out: Dict[str, Dict[str, Any]] = {}
     for sym in symbols:
         try:
-            res = prov.fetch_bars(sym, "1d")
-            df = getattr(res, "bars", res)
-            out[sym] = _metrics_from_df(df)
-        except Exception as e:  # noqa: BLE001
-            msg = str(e)[:120]
-            out[sym] = {"status": "rate_limit" if "rate" in msg.lower()
-                        else "error", "error": msg}
+            res = prov.fetch_bars(sym, "1D", start_utc, end_utc)
+            outcome = getattr(res, "outcome", None)
+            if outcome == FETCH_OK and getattr(res, "df", None) is not None:
+                out[sym] = _metrics_from_df(res.df)
+            elif outcome == FETCH_RATE_LIMITED:
+                out[sym] = {"status": "rate_limit",
+                            "reason": "yahoo_rate_limited"}
+            elif outcome == FETCH_NO_DATA:
+                out[sym] = {"status": "no_data",
+                            "reason": "source_unreachable"}
+            else:  # FETCH_PROVIDER_ERROR or unknown
+                out[sym] = {"status": "error",
+                            "reason": "yahoo_fetch_error"}
+        except Exception as e:  # noqa: BLE001 — record, never fatal
+            reason = _classify_provider_error(str(e)[:160], source="yahoo")
+            status = ("rate_limit" if reason == "yahoo_rate_limited"
+                      else "error")
+            out[sym] = {"status": status, "reason": reason}
     return out
 
 
-def _probe(fetch: Callable, *, lookback_days: int) -> bool:
-    """Single tiny read-only reachability probe (one symbol)."""
+def _probe(fetch: Callable, *, lookback_days: int, **kwargs
+           ) -> Tuple[bool, Optional[str]]:
+    """Single tiny read-only reachability probe (one symbol). Returns
+    (reachable, reason) — reason is a non-secret code when unreachable."""
     try:
-        r = fetch(["AAPL"], lookback_days=lookback_days)
-        return bool(r) and r.get("AAPL", {}).get("status") == "ok"
-    except Exception:  # noqa: BLE001
-        return False
+        r = fetch(["AAPL"], lookback_days=lookback_days, **kwargs)
+        rec = (r or {}).get("AAPL", {})
+        if rec.get("status") == "ok":
+            return True, None
+        return False, rec.get("reason") or "source_unreachable"
+    except Exception as e:  # noqa: BLE001 — never crash a probe
+        return False, _classify_provider_error(str(e)[:160], source="source")
 
 
 # ── backend: dry-run ──
@@ -181,6 +242,7 @@ def universe_quality_check(
     yahoo_fetch = yahoo_fetch or _default_yahoo_fetch
 
     creds = _creds_present()
+    feed = cfg.get("alpaca_feed", "iex")
     alpaca_reachable = False
     yahoo_reachable = False
     errors: List[str] = []
@@ -190,17 +252,29 @@ def universe_quality_check(
     alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
 
     if "alpaca" in sources:
-        can_probe_alpaca = creds or alpaca_injected
-        alpaca_reachable = can_probe_alpaca and _probe(
-            alpaca_fetch, lookback_days=cfg["lookback_days"])
-        summaries.append(SourceSummary(source="alpaca", creds_present=creds,
-                                       reachable=alpaca_reachable))
+        a_reason: Optional[str] = None
         if not creds and not alpaca_injected:
-            errors.append("alpaca_creds_missing")
+            a_reason = "alpaca_creds_missing"
+        else:
+            probe_kwargs = {} if alpaca_injected else {"feed": feed}
+            alpaca_reachable, a_reason = _probe(
+                alpaca_fetch, lookback_days=cfg["lookback_days"],
+                **probe_kwargs)
+        summaries.append(SourceSummary(source="alpaca", creds_present=creds,
+                                       reachable=alpaca_reachable,
+                                       reason=None if alpaca_reachable
+                                       else a_reason))
+        if not alpaca_reachable and a_reason:
+            errors.append(a_reason)
     if "yahoo" in sources:
-        yahoo_reachable = _probe(yahoo_fetch,
-                                 lookback_days=cfg["lookback_days"])
-        summaries.append(SourceSummary(source="yahoo", reachable=yahoo_reachable))
+        yahoo_reachable, y_reason = _probe(
+            yahoo_fetch, lookback_days=cfg["lookback_days"])
+        summaries.append(SourceSummary(source="yahoo",
+                                       reachable=yahoo_reachable,
+                                       reason=None if yahoo_reachable
+                                       else y_reason))
+        if not yahoo_reachable and y_reason:
+            errors.append(y_reason)
 
     ok = ((("alpaca" not in sources) or alpaca_reachable)
           and (("yahoo" not in sources) or yahoo_reachable))
@@ -255,28 +329,40 @@ def universe_quality_collect(
     yahoo_data: Dict[str, Dict[str, Any]] = {}
     errors: List[str] = []
     rate_limit_count = 0
+    feed = cfg.get("alpaca_feed", "iex")
+    alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
     if "alpaca" in sources and to_fetch:
-        alpaca_data = alpaca_fetch(to_fetch, lookback_days=cfg["lookback_days"])
+        a_kwargs = {} if alpaca_injected else {"feed": feed}
+        alpaca_data = alpaca_fetch(to_fetch, lookback_days=cfg["lookback_days"],
+                                   **a_kwargs)
     if "yahoo" in sources and to_fetch:
         yahoo_data = yahoo_fetch(to_fetch, lookback_days=cfg["lookback_days"])
 
     symbols_out: Dict[str, Any] = dict(existing)
     a_ok = y_ok = both_ok = miss_a = miss_y = 0
+    reason_set: set = set()
     for (internal, yf) in universe:
         if not yf or internal in symbols_out:
             continue
-        a = alpaca_data.get(yf, {"status": "missing"})
-        y = yahoo_data.get(yf, {"status": "missing"})
+        a = alpaca_data.get(yf, {"status": "missing",
+                                 "reason": "missing_alpaca"})
+        y = yahoo_data.get(yf, {"status": "missing",
+                                "reason": "missing_yahoo"})
         if a.get("status") == "rate_limit" or y.get("status") == "rate_limit":
             rate_limit_count += 1
         a_good = a.get("status") == "ok"
         y_good = y.get("status") == "ok"
+        if not a_good and a.get("reason"):
+            reason_set.add(a["reason"])
+        if not y_good and y.get("reason"):
+            reason_set.add(y["reason"])
         a_ok += int(a_good)
         y_ok += int(y_good)
         both_ok += int(a_good and y_good)
         miss_a += int(not a_good)
         miss_y += int(not y_good)
         symbols_out[internal] = {"provider_symbol": yf, "alpaca": a, "yahoo": y}
+    errors.extend(sorted(reason_set))
 
     doc = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -291,8 +377,12 @@ def universe_quality_collect(
         json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
 
     checked = len([1 for v in symbols_out.values()])
-    status = "success" if (a_ok and y_ok and rate_limit_count == 0
-                           and not errors) else "partial"
+    if a_ok == 0 and y_ok == 0:
+        status = "failed"
+    elif (a_ok and y_ok and rate_limit_count == 0 and not errors):
+        status = "success"
+    else:
+        status = "partial"
     return QualityCollectionReport(
         status=status, mode="collect", asof=asof, sources=list(sources),
         symbols_total=len(universe), symbols_checked=checked,
@@ -413,8 +503,25 @@ def _main(argv: Optional[List[str]] = None) -> int:
               f"yahoo_ok={d['yahoo_success_count']} "
               f"both={d['both_sources_success_count']} "
               f"rate_limited={d['rate_limit_count']} "
+              f"reasons={','.join(d['errors']) or '-'} "
               f"snapshot={d['snapshot_path']}")
-    return 0 if report.status in ("success", "partial") else 1
+    # Exit-code design:
+    #   0 = success/partial (>=1 source reachable, no implementation crash)
+    #   2 = expected provider/config failure where all sources failed
+    #       (creds missing, subscription denied, endpoint blocked, rate-limited)
+    #   1 = unexpected/implementation error
+    if report.status in ("success", "partial"):
+        return 0
+    _EXPECTED = {"alpaca_creds_missing", "alpaca_subscription_not_permitted",
+                 "alpaca_rate_limited", "alpaca_fetch_error",
+                 "yahoo_rate_limited", "yahoo_fetch_error", "source_unreachable",
+                 "missing_alpaca", "missing_yahoo", "snapshot_not_found",
+                 "schema_version_mismatch"}
+    if report.errors and all(
+            e in _EXPECTED or e.startswith("corrupt_snapshot")
+            for e in report.errors):
+        return 2
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover
