@@ -495,5 +495,119 @@ class M20UC1ThrottlePolicy(unittest.TestCase):
         self.assertNotIn("throttle_seconds", seen["alpaca_kwargs"])
 
 
+class M20UC1PerSourceResume(unittest.TestCase):
+    """Per-source resume, slicing, overrides, reachable-in-collect-mode."""
+
+    def test_alpaca_then_yahoo_topup_same_file(self):
+        # Alpaca-only first, then Yahoo-only must top up the SAME file without
+        # skipping symbols that have Alpaca but no Yahoo.
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            r1 = universe_quality_collect(
+                asof="2026-06-22", sources=["alpaca"], out_path=out,
+                alpaca_fetch=_mock_alpaca(), yahoo_fetch=_mock_yahoo())
+            self.assertGreater(r1.alpaca_success_count, 0)
+            self.assertEqual(r1.yahoo_success_count, 0)
+            self.assertTrue(r1.alpaca_reachable)        # reachable fix
+            self.assertFalse(r1.yahoo_reachable)
+            snap1 = json.loads(pathlib.Path(out).read_text())["symbols"]
+            rec1 = next(iter(snap1.values()))
+            self.assertEqual(rec1["alpaca"]["status"], "ok")
+            self.assertNotEqual(rec1["yahoo"].get("status"), "ok")
+            # Yahoo top-up into the same file
+            r2 = universe_quality_collect(
+                asof="2026-06-22", sources=["yahoo"], out_path=out,
+                alpaca_fetch=_mock_alpaca(), yahoo_fetch=_mock_yahoo())
+            self.assertGreater(r2.yahoo_success_count, 0)
+            self.assertGreater(r2.both_sources_success_count, 0)
+            self.assertTrue(r2.yahoo_reachable)
+            snap2 = json.loads(pathlib.Path(out).read_text())["symbols"]
+            rec2 = next(iter(snap2.values()))
+            self.assertEqual(rec2["alpaca"]["status"], "ok")  # not dropped
+            self.assertEqual(rec2["yahoo"]["status"], "ok")   # merged in
+
+    def test_per_source_resume_skips_only_usable_source(self):
+        # after both sources ok, a 2nd yahoo run fetches nothing
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca", "yahoo"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=_mock_yahoo())
+            fetched = []
+            def y_count(symbols, **k):
+                fetched.extend(symbols)
+                return {s: _metrics_from_df(_df(200.4, 1_010_000)) for s in symbols}
+            universe_quality_collect(asof="2026-06-22", sources=["yahoo"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=y_count)
+            self.assertEqual(fetched, [])  # nothing to fetch; all usable
+
+    def test_yahoo_run_fetches_alpaca_only_symbols(self):
+        # symbols with alpaca-ok but yahoo-missing MUST be fetched on yahoo run
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=_mock_yahoo())
+            fetched = []
+            def y_count(symbols, **k):
+                fetched.extend(symbols)
+                return {s: _metrics_from_df(_df(200.4, 1_010_000)) for s in symbols}
+            universe_quality_collect(asof="2026-06-22", sources=["yahoo"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=y_count)
+            self.assertGreater(len(fetched), 0)  # alpaca-only symbols fetched
+
+    def test_limit_offset_slicing(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            r = universe_quality_collect(
+                asof="2026-06-22", sources=["alpaca"], out_path=out,
+                limit=10, offset=0, alpaca_fetch=_mock_alpaca(),
+                yahoo_fetch=_mock_yahoo())
+            self.assertEqual(r.symbols_checked, 10)
+
+    def test_offset_slices_different_symbols(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca"],
+                                     out_path=out, limit=5, offset=0,
+                                     alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=_mock_yahoo())
+            first5 = set(json.loads(pathlib.Path(out).read_text())["symbols"])
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca"],
+                                     out_path=out, limit=5, offset=5,
+                                     alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=_mock_yahoo())
+            after = set(json.loads(pathlib.Path(out).read_text())["symbols"])
+            self.assertEqual(len(after), 10)  # 5 + 5 distinct merged
+
+    def test_cli_overrides_parsed(self):
+        # --throttle-seconds/--batch-size/--max-retries/--limit/--offset parse
+        import bot.universe.quality_collectors as mod
+        seen = {}
+        orig = mod.universe_quality_collect
+        def spy(**kwargs):
+            seen.update(kwargs)
+            return orig(asof=kwargs["asof"], sources=kwargs["sources"],
+                        out_path=kwargs.get("out_path"), resume=kwargs.get("resume", True),
+                        limit=kwargs.get("limit"), offset=kwargs.get("offset", 0),
+                        alpaca_fetch=_mock_alpaca(), yahoo_fetch=_mock_yahoo())
+        mod.universe_quality_collect = spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                mod._main(["--mode", "collect", "--asof", "2026-06-22",
+                           "--sources", "alpaca", "--out", os.path.join(d, "s.json"),
+                           "--throttle-seconds", "1.5", "--batch-size", "25",
+                           "--max-retries", "4", "--limit", "10", "--offset", "5"])
+        finally:
+            mod.universe_quality_collect = orig
+        self.assertEqual(seen.get("throttle_seconds"), 1.5)
+        self.assertEqual(seen.get("batch_size"), 25)
+        self.assertEqual(seen.get("max_retries"), 4)
+        self.assertEqual(seen.get("limit"), 10)
+        self.assertEqual(seen.get("offset"), 5)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -353,11 +353,27 @@ def universe_quality_collect(
     sources: Sequence[str] = _VALID_SOURCES,
     out_path: Optional[str] = None,
     resume: bool = True,
+    throttle_seconds: Optional[float] = None,
+    batch_size: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
     alpaca_fetch: Optional[Callable] = None,
     yahoo_fetch: Optional[Callable] = None,
 ) -> QualityCollectionReport:
     """Fetch bars from the requested sources and write a quality snapshot.
-    Writes ONLY the snapshot file — never universe records, never scan_ready."""
+    Writes ONLY the snapshot file — never universe records, never scan_ready.
+
+    Per-source resume: a symbol is fetched for a given source only if it does
+    not already have usable (status==ok) data for THAT source in the snapshot.
+    A symbol that has Alpaca data but no Yahoo data is still fetched on a Yahoo
+    run, and the Yahoo result is merged into the same symbol record.
+
+    CLI/explicit overrides (None => use config default):
+      throttle_seconds / batch_size / max_retries — fetch policy.
+      limit / offset — slice the universe symbol list (stable sorted order) for
+      chunked collection; each chunk merges into the same snapshot.
+    """
     started = _now_utc()
     cfg = _load_config()
     sources = [s for s in sources if s in _VALID_SOURCES]
@@ -365,54 +381,90 @@ def universe_quality_collect(
     yahoo_fetch = yahoo_fetch or _default_yahoo_fetch
 
     universe = _load_universe_symbols()
-    yf_syms = [yf for (_internal, yf) in universe if yf]
     target = (str(out_path) if out_path
               else str(_DEFAULT_OUT_DIR / f"us_quality_{asof.replace('-', '')}.json"))
 
-    # resume: load any existing snapshot symbols to skip re-fetch
+    # load any existing snapshot (per-source resume reads usable data from it)
     existing: Dict[str, Any] = {}
-    if resume and Path(target).exists():
+    if Path(target).exists():
         try:
             existing = json.loads(
                 Path(target).read_text(encoding="utf-8")).get("symbols", {})
         except (ValueError, KeyError):
             existing = {}
 
+    # stable order, then apply offset/limit slice for chunked collection
+    universe_sorted = sorted((u for u in universe if u[1]),
+                             key=lambda t: t[0])
+    off = max(0, int(offset))
+    sliced = universe_sorted[off:]
+    if limit is not None:
+        sliced = sliced[:max(0, int(limit))]
+
     by_yf = {yf: internal for (internal, yf) in universe if yf}
-    to_fetch = [yf for yf in yf_syms
-                if by_yf[yf] not in existing] if resume else yf_syms
+
+    def _has_usable(internal: str, src: str) -> bool:
+        rec = existing.get(internal) or {}
+        return (rec.get(src) or {}).get("status") == "ok"
+
+    # per-source resume: fetch only symbols lacking usable data for that source
+    def _needed(src: str) -> List[str]:
+        if not resume:
+            return [yf for (internal, yf) in sliced]
+        return [yf for (internal, yf) in sliced
+                if not _has_usable(internal, src)]
+
+    feed = cfg.get("alpaca_feed", "iex")
+    policy = dict(
+        throttle_seconds=(cfg.get("throttle_seconds", 0.0)
+                          if throttle_seconds is None else throttle_seconds),
+        max_retries=(cfg.get("max_retries", 3)
+                     if max_retries is None else max_retries),
+        batch_size=(cfg.get("batch_size", 100)
+                    if batch_size is None else batch_size))
+    alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
+    yahoo_injected = yahoo_fetch is not _default_yahoo_fetch
 
     alpaca_data: Dict[str, Dict[str, Any]] = {}
     yahoo_data: Dict[str, Dict[str, Any]] = {}
-    errors: List[str] = []
-    rate_limit_count = 0
-    feed = cfg.get("alpaca_feed", "iex")
-    policy = dict(throttle_seconds=cfg.get("throttle_seconds", 0.0),
-                  max_retries=cfg.get("max_retries", 3),
-                  batch_size=cfg.get("batch_size", 100))
-    alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
-    yahoo_injected = yahoo_fetch is not _default_yahoo_fetch
-    if "alpaca" in sources and to_fetch:
-        a_kwargs = dict(lookback_days=cfg["lookback_days"])
-        if not alpaca_injected:
-            a_kwargs.update(feed=feed, **policy)
-        alpaca_data = alpaca_fetch(to_fetch, **a_kwargs)
-    if "yahoo" in sources and to_fetch:
-        y_kwargs = dict(lookback_days=cfg["lookback_days"])
-        if not yahoo_injected:
-            y_kwargs.update(**policy)
-        yahoo_data = yahoo_fetch(to_fetch, **y_kwargs)
+    if "alpaca" in sources:
+        need = _needed("alpaca")
+        if need:
+            a_kwargs = dict(lookback_days=cfg["lookback_days"])
+            if not alpaca_injected:
+                a_kwargs.update(feed=feed, **policy)
+            alpaca_data = alpaca_fetch(need, **a_kwargs)
+    if "yahoo" in sources:
+        need = _needed("yahoo")
+        if need:
+            y_kwargs = dict(lookback_days=cfg["lookback_days"])
+            if not yahoo_injected:
+                y_kwargs.update(**policy)
+            yahoo_data = yahoo_fetch(need, **y_kwargs)
 
+    # merge per-source into existing records (never drop the other source)
     symbols_out: Dict[str, Any] = dict(existing)
-    a_ok = y_ok = both_ok = miss_a = miss_y = 0
+    for (internal, yf) in sliced:
+        rec = dict(symbols_out.get(internal)
+                   or {"provider_symbol": yf})
+        rec["provider_symbol"] = yf
+        if "alpaca" in sources and yf in alpaca_data:
+            rec["alpaca"] = alpaca_data[yf]
+        if "yahoo" in sources and yf in yahoo_data:
+            rec["yahoo"] = yahoo_data[yf]
+        # ensure both keys exist (missing placeholder if never fetched)
+        rec.setdefault("alpaca", {"status": "missing",
+                                  "reason": "missing_alpaca"})
+        rec.setdefault("yahoo", {"status": "missing",
+                                 "reason": "missing_yahoo"})
+        symbols_out[internal] = rec
+
+    # recompute counts across the WHOLE snapshot (not just this run's slice)
+    a_ok = y_ok = both_ok = miss_a = miss_y = rate_limit_count = 0
     reason_set: set = set()
-    for (internal, yf) in universe:
-        if not yf or internal in symbols_out:
-            continue
-        a = alpaca_data.get(yf, {"status": "missing",
-                                 "reason": "missing_alpaca"})
-        y = yahoo_data.get(yf, {"status": "missing",
-                                "reason": "missing_yahoo"})
+    for rec in symbols_out.values():
+        a = rec.get("alpaca") or {}
+        y = rec.get("yahoo") or {}
         if a.get("status") == "rate_limit" or y.get("status") == "rate_limit":
             rate_limit_count += 1
         a_good = a.get("status") == "ok"
@@ -426,8 +478,7 @@ def universe_quality_collect(
         both_ok += int(a_good and y_good)
         miss_a += int(not a_good)
         miss_y += int(not y_good)
-        symbols_out[internal] = {"provider_symbol": yf, "alpaca": a, "yahoo": y}
-    errors.extend(sorted(reason_set))
+    errors = sorted(reason_set)
 
     doc = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -441,20 +492,29 @@ def universe_quality_collect(
     Path(target).write_text(
         json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
 
-    checked = len([1 for v in symbols_out.values()])
+    checked = len(symbols_out)
     if a_ok == 0 and y_ok == 0:
         status = "failed"
     elif (a_ok and y_ok and rate_limit_count == 0 and not errors):
         status = "success"
     else:
         status = "partial"
+    summaries = [
+        SourceSummary(source="alpaca", creds_present=_creds_present(),
+                      reachable=a_ok > 0, success_count=a_ok,
+                      missing_count=miss_a, rate_limit_count=rate_limit_count),
+        SourceSummary(source="yahoo", reachable=y_ok > 0,
+                      success_count=y_ok, missing_count=miss_y),
+    ]
     return QualityCollectionReport(
         status=status, mode="collect", asof=asof, sources=list(sources),
         symbols_total=len(universe), symbols_checked=checked,
         alpaca_success_count=a_ok, yahoo_success_count=y_ok,
         both_sources_success_count=both_ok, missing_alpaca_count=miss_a,
         missing_yahoo_count=miss_y, rate_limit_count=rate_limit_count,
-        alpaca_creds_present=_creds_present(), errors=errors,
+        alpaca_creds_present=_creds_present(),
+        alpaca_reachable=a_ok > 0, yahoo_reachable=y_ok > 0,
+        source_summaries=summaries, errors=errors,
         snapshot_path=target, started_at_utc=started,
         finished_at_utc=_now_utc())
 
@@ -540,6 +600,16 @@ def _main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--out", default=None)
     ap.add_argument("--snapshot", default=None)
     ap.add_argument("--no-resume", action="store_true")
+    ap.add_argument("--throttle-seconds", type=float, default=None,
+                    help="override config throttle_seconds for this run")
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="override config batch_size for this run")
+    ap.add_argument("--max-retries", type=int, default=None,
+                    help="override config max_retries for this run")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="collect at most N symbols (chunked collection)")
+    ap.add_argument("--offset", type=int, default=0,
+                    help="skip the first N symbols (chunked collection)")
     ap.add_argument("--json", action="store_true",
                     help="print structured report as JSON")
     args = ap.parse_args(argv)
@@ -552,7 +622,11 @@ def _main(argv: Optional[List[str]] = None) -> int:
             ap.error("--asof is required for collect")
         report = universe_quality_collect(asof=args.asof, sources=sources,
                                           out_path=args.out,
-                                          resume=not args.no_resume)
+                                          resume=not args.no_resume,
+                                          throttle_seconds=args.throttle_seconds,
+                                          batch_size=args.batch_size,
+                                          max_retries=args.max_retries,
+                                          limit=args.limit, offset=args.offset)
     else:
         if not args.snapshot:
             ap.error("--snapshot is required for validate")
