@@ -50,6 +50,12 @@ class QualityCollectionReport:
     missing_yahoo_count: int = 0
     source_disagreement_count: int = 0
     rate_limit_count: int = 0
+    run_sources: List[str] = field(default_factory=list)
+    run_symbols_attempted: int = 0
+    run_alpaca_ok: int = 0
+    run_yahoo_ok: int = 0
+    run_rate_limit_count: int = 0
+    run_circuit_open: bool = False
     alpaca_creds_present: bool = False
     alpaca_reachable: bool = False
     yahoo_reachable: bool = False

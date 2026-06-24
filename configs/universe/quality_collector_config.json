@@ -5,6 +5,7 @@
   "batch_size": 50,
   "throttle_seconds": 0.4,
   "max_retries": 3,
+  "circuit_breaker": 5,
   "tolerances": {
     "latest_close_pct": 2.0,
     "avg_volume_20d_pct": 25.0,

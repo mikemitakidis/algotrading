@@ -58,6 +58,7 @@ def _load_config() -> Dict[str, Any]:
         "batch_size": 50,
         "throttle_seconds": 0.4,
         "max_retries": 3,
+        "circuit_breaker": 5,
         "tolerances": {
             "latest_close_pct": 2.0,
             "avg_volume_20d_pct": 25.0,
@@ -144,6 +145,7 @@ def _fetch_with_policy(
     throttle_seconds: float = 0.0,
     max_retries: int = 3,
     batch_size: int = 100,
+    circuit_breaker: int = 0,
     sleep: Callable[[float], None] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Apply batching + throttling + exponential backoff on rate limits to a
@@ -154,7 +156,12 @@ def _fetch_with_policy(
     - max_retries: on a rate-limit result, retry up to this many times with
       exponential backoff (throttle_seconds * 2**attempt), then record the
       rate-limit result.
-    Never raises; always returns a per-symbol result dict.
+    - circuit_breaker: if > 0 and this many CONSECUTIVE symbols come back
+      rate-limited (after their retries), stop early; remaining symbols are
+      recorded as {"status": "skipped", "reason": "skipped_circuit_open"} so the
+      run fails fast and stops hammering the provider. Returns the per-symbol
+      dict; the second return value is True iff the circuit opened.
+    Never raises.
     """
     if sleep is None:
         import time as _time
@@ -162,8 +169,14 @@ def _fetch_with_policy(
     throttle = max(0.0, float(throttle_seconds))
     retries = max(0, int(max_retries))
     bsize = max(1, int(batch_size))
+    breaker = max(0, int(circuit_breaker))
     out: Dict[str, Dict[str, Any]] = {}
+    consecutive_rl = 0
+    circuit_open = False
     for i, sym in enumerate(symbols):
+        if circuit_open:
+            out[sym] = {"status": "skipped", "reason": "skipped_circuit_open"}
+            continue
         rec = fetch_one(sym)
         attempt = 0
         while _is_rate_limit(rec) and attempt < retries:
@@ -173,18 +186,26 @@ def _fetch_with_policy(
             attempt += 1
             rec = fetch_one(sym)
         out[sym] = rec
+        if _is_rate_limit(rec):
+            consecutive_rl += 1
+            if breaker and consecutive_rl >= breaker:
+                circuit_open = True
+                continue
+        else:
+            consecutive_rl = 0
         # throttle between symbols, and a longer pause between batches
         if throttle > 0 and i + 1 < len(symbols):
             if (i + 1) % bsize == 0:
                 sleep(throttle * 2)
             else:
                 sleep(throttle)
-    return out
+    return out, circuit_open
 
 
 def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
                           feed: str = "iex", throttle_seconds: float = 0.0,
                           max_retries: int = 3, batch_size: int = 100,
+                          circuit_breaker: int = 0,
                           sleep: Callable[[float], None] = None
                           ) -> Dict[str, Dict[str, Any]]:
     """Collector-owned read-only Alpaca daily-bar fetch that explicitly
@@ -224,14 +245,16 @@ def _default_alpaca_fetch(symbols: List[str], *, lookback_days: int,
                       else "error")
             return {"status": status, "reason": reason}
 
-    return _fetch_with_policy(symbols, _one, throttle_seconds=throttle_seconds,
-                              max_retries=max_retries, batch_size=batch_size,
-                              sleep=sleep)
+    out, _circuit = _fetch_with_policy(
+        symbols, _one, throttle_seconds=throttle_seconds,
+        max_retries=max_retries, batch_size=batch_size,
+        circuit_breaker=circuit_breaker, sleep=sleep)
+    return out
 
 
 def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int,
                          throttle_seconds: float = 0.0, max_retries: int = 3,
-                         batch_size: int = 100,
+                         batch_size: int = 100, circuit_breaker: int = 0,
                          sleep: Callable[[float], None] = None
                          ) -> Dict[str, Dict[str, Any]]:
     """Collector-owned read-only Yahoo daily-bar fetch using the REAL
@@ -263,9 +286,11 @@ def _default_yahoo_fetch(symbols: List[str], *, lookback_days: int,
                       else "error")
             return {"status": status, "reason": reason}
 
-    return _fetch_with_policy(symbols, _one, throttle_seconds=throttle_seconds,
-                              max_retries=max_retries, batch_size=batch_size,
-                              sleep=sleep)
+    out, _circuit = _fetch_with_policy(
+        symbols, _one, throttle_seconds=throttle_seconds,
+        max_retries=max_retries, batch_size=batch_size,
+        circuit_breaker=circuit_breaker, sleep=sleep)
+    return out
 
 
 def _probe(fetch: Callable, *, lookback_days: int, **kwargs
@@ -356,6 +381,7 @@ def universe_quality_collect(
     throttle_seconds: Optional[float] = None,
     batch_size: Optional[int] = None,
     max_retries: Optional[int] = None,
+    circuit_breaker: Optional[int] = None,
     limit: Optional[int] = None,
     offset: int = 0,
     alpaca_fetch: Optional[Callable] = None,
@@ -421,7 +447,9 @@ def universe_quality_collect(
         max_retries=(cfg.get("max_retries", 3)
                      if max_retries is None else max_retries),
         batch_size=(cfg.get("batch_size", 100)
-                    if batch_size is None else batch_size))
+                    if batch_size is None else batch_size),
+        circuit_breaker=(cfg.get("circuit_breaker", 0)
+                         if circuit_breaker is None else circuit_breaker))
     alpaca_injected = alpaca_fetch is not _default_alpaca_fetch
     yahoo_injected = yahoo_fetch is not _default_yahoo_fetch
 
@@ -442,6 +470,19 @@ def universe_quality_collect(
                 y_kwargs.update(**policy)
             yahoo_data = yahoo_fetch(need, **y_kwargs)
 
+    # run-scope tracking: what THIS run attempted/achieved (vs whole snapshot)
+    run_symbols_attempted = len(sliced)
+    run_alpaca_ok = sum(1 for v in alpaca_data.values()
+                        if v.get("status") == "ok")
+    run_yahoo_ok = sum(1 for v in yahoo_data.values()
+                       if v.get("status") == "ok")
+    run_rate_limit_count = sum(
+        1 for v in list(alpaca_data.values()) + list(yahoo_data.values())
+        if v.get("status") == "rate_limit")
+    run_circuit_open = any(
+        v.get("reason") == "skipped_circuit_open"
+        for v in list(alpaca_data.values()) + list(yahoo_data.values()))
+
     # merge per-source into existing records (never drop the other source)
     symbols_out: Dict[str, Any] = dict(existing)
     for (internal, yf) in sliced:
@@ -459,14 +500,18 @@ def universe_quality_collect(
                                  "reason": "missing_yahoo"})
         symbols_out[internal] = rec
 
-    # recompute counts across the WHOLE snapshot (not just this run's slice)
-    a_ok = y_ok = both_ok = miss_a = miss_y = rate_limit_count = 0
+    # recompute counts across the WHOLE snapshot (not just this run's slice).
+    # rate-limit counts are tracked PER SOURCE so each summary shows only its own.
+    a_ok = y_ok = both_ok = miss_a = miss_y = 0
+    alpaca_rl = yahoo_rl = 0
     reason_set: set = set()
     for rec in symbols_out.values():
         a = rec.get("alpaca") or {}
         y = rec.get("yahoo") or {}
-        if a.get("status") == "rate_limit" or y.get("status") == "rate_limit":
-            rate_limit_count += 1
+        if a.get("status") == "rate_limit":
+            alpaca_rl += 1
+        if y.get("status") == "rate_limit":
+            yahoo_rl += 1
         a_good = a.get("status") == "ok"
         y_good = y.get("status") == "ok"
         if not a_good and a.get("reason"):
@@ -478,6 +523,7 @@ def universe_quality_collect(
         both_ok += int(a_good and y_good)
         miss_a += int(not a_good)
         miss_y += int(not y_good)
+    rate_limit_count = alpaca_rl + yahoo_rl
     errors = sorted(reason_set)
 
     doc = {
@@ -502,9 +548,10 @@ def universe_quality_collect(
     summaries = [
         SourceSummary(source="alpaca", creds_present=_creds_present(),
                       reachable=a_ok > 0, success_count=a_ok,
-                      missing_count=miss_a, rate_limit_count=rate_limit_count),
+                      missing_count=miss_a, rate_limit_count=alpaca_rl),
         SourceSummary(source="yahoo", reachable=y_ok > 0,
-                      success_count=y_ok, missing_count=miss_y),
+                      success_count=y_ok, missing_count=miss_y,
+                      rate_limit_count=yahoo_rl),
     ]
     return QualityCollectionReport(
         status=status, mode="collect", asof=asof, sources=list(sources),
@@ -512,6 +559,11 @@ def universe_quality_collect(
         alpaca_success_count=a_ok, yahoo_success_count=y_ok,
         both_sources_success_count=both_ok, missing_alpaca_count=miss_a,
         missing_yahoo_count=miss_y, rate_limit_count=rate_limit_count,
+        run_sources=list(sources),
+        run_symbols_attempted=run_symbols_attempted,
+        run_alpaca_ok=run_alpaca_ok, run_yahoo_ok=run_yahoo_ok,
+        run_rate_limit_count=run_rate_limit_count,
+        run_circuit_open=run_circuit_open,
         alpaca_creds_present=_creds_present(),
         alpaca_reachable=a_ok > 0, yahoo_reachable=y_ok > 0,
         source_summaries=summaries, errors=errors,
@@ -606,6 +658,9 @@ def _main(argv: Optional[List[str]] = None) -> int:
                     help="override config batch_size for this run")
     ap.add_argument("--max-retries", type=int, default=None,
                     help="override config max_retries for this run")
+    ap.add_argument("--circuit-breaker", type=int, default=None,
+                    help="stop early after N consecutive rate-limits "
+                         "(override config; 0 disables)")
     ap.add_argument("--limit", type=int, default=None,
                     help="collect at most N symbols (chunked collection)")
     ap.add_argument("--offset", type=int, default=0,
@@ -626,6 +681,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
                                           throttle_seconds=args.throttle_seconds,
                                           batch_size=args.batch_size,
                                           max_retries=args.max_retries,
+                                          circuit_breaker=args.circuit_breaker,
                                           limit=args.limit, offset=args.offset)
     else:
         if not args.snapshot:

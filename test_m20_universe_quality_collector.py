@@ -360,6 +360,8 @@ class M20UC1SafetyGuards(unittest.TestCase):
         self.assertIn("throttle_seconds", cfg)
         self.assertIn("batch_size", cfg)
         self.assertIn("max_retries", cfg)
+        self.assertIn("circuit_breaker", cfg)
+        self.assertGreater(cfg["circuit_breaker"], 0)  # fail-fast on by default
         self.assertGreater(cfg["throttle_seconds"], 0.0)  # polite, not a burst
 
     def test_yahoo_fetch_calls_real_4arg_signature(self):
@@ -432,9 +434,9 @@ class M20UC1ThrottlePolicy(unittest.TestCase):
         def ok(sym):
             calls.append(sym)
             return {"status": "ok"}
-        out = _fetch_with_policy([f"S{i}" for i in range(5)], ok,
-                                 throttle_seconds=0.4, batch_size=2,
-                                 sleep=slept.append)
+        out, _ = _fetch_with_policy([f"S{i}" for i in range(5)], ok,
+                                    throttle_seconds=0.4, batch_size=2,
+                                    sleep=slept.append)
         self.assertEqual(len(calls), 5)
         self.assertTrue(all(v["status"] == "ok" for v in out.values()))
         # 4 inter-symbol gaps; every 2nd is a longer batch pause (0.8)
@@ -459,15 +461,15 @@ class M20UC1ThrottlePolicy(unittest.TestCase):
             if state["n"] < 3:
                 return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
             return {"status": "ok"}
-        out = _fetch_with_policy(["X"], flaky, throttle_seconds=0.5,
-                                 max_retries=3, sleep=slept.append)
+        out, _ = _fetch_with_policy(["X"], flaky, throttle_seconds=0.5,
+                                    max_retries=3, sleep=slept.append)
         self.assertEqual(out["X"]["status"], "ok")
         self.assertEqual(slept, [0.5, 1.0])  # exponential backoff
 
     def test_backoff_exhausts_and_records_rate_limit(self):
         from bot.universe.quality_collectors import _fetch_with_policy
         slept = []
-        out = _fetch_with_policy(
+        out, _ = _fetch_with_policy(
             ["Y"], lambda s: {"status": "rate_limit",
                               "reason": "yahoo_rate_limited"},
             throttle_seconds=0.5, max_retries=2, sleep=slept.append)
@@ -599,14 +601,98 @@ class M20UC1PerSourceResume(unittest.TestCase):
                 mod._main(["--mode", "collect", "--asof", "2026-06-22",
                            "--sources", "alpaca", "--out", os.path.join(d, "s.json"),
                            "--throttle-seconds", "1.5", "--batch-size", "25",
-                           "--max-retries", "4", "--limit", "10", "--offset", "5"])
+                           "--max-retries", "4", "--limit", "10", "--offset", "5",
+                           "--circuit-breaker", "7"])
         finally:
             mod.universe_quality_collect = orig
         self.assertEqual(seen.get("throttle_seconds"), 1.5)
         self.assertEqual(seen.get("batch_size"), 25)
         self.assertEqual(seen.get("max_retries"), 4)
+        self.assertEqual(seen.get("circuit_breaker"), 7)
         self.assertEqual(seen.get("limit"), 10)
         self.assertEqual(seen.get("offset"), 5)
+
+
+class M20UC1PatchReportingAndCircuit(unittest.TestCase):
+    """Per-source rate-limit attribution, run-scope fields, circuit breaker."""
+
+    def test_per_source_rate_limit_attribution(self):
+        # yahoo-only run with yahoo rate-limited: rate-limit shows on YAHOO
+        # summary, NOT alpaca summary.
+        def y_rl(symbols, **k):
+            return {s: {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+                    for s in symbols}
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=y_rl)
+            r = universe_quality_collect(asof="2026-06-22", sources=["yahoo"],
+                                         out_path=out, limit=5,
+                                         alpaca_fetch=_mock_alpaca(),
+                                         yahoo_fetch=y_rl).to_dict()
+            asum = [s for s in r["source_summaries"] if s["source"] == "alpaca"][0]
+            ysum = [s for s in r["source_summaries"] if s["source"] == "yahoo"][0]
+            self.assertEqual(asum["rate_limit_count"], 0)  # not alpaca's fault
+            self.assertGreater(ysum["rate_limit_count"], 0)  # yahoo's own
+
+    def test_run_scope_fields(self):
+        def y_rl(symbols, **k):
+            return {s: {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+                    for s in symbols}
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "snap.json")
+            universe_quality_collect(asof="2026-06-22", sources=["alpaca"],
+                                     out_path=out, alpaca_fetch=_mock_alpaca(),
+                                     yahoo_fetch=y_rl)
+            r = universe_quality_collect(asof="2026-06-22", sources=["yahoo"],
+                                         out_path=out, limit=5,
+                                         alpaca_fetch=_mock_alpaca(),
+                                         yahoo_fetch=y_rl).to_dict()
+            self.assertEqual(r["run_sources"], ["yahoo"])
+            self.assertEqual(r["run_symbols_attempted"], 5)   # the slice
+            self.assertEqual(r["run_yahoo_ok"], 0)
+            self.assertEqual(r["run_rate_limit_count"], 5)
+            # whole-snapshot fields remain total coverage
+            self.assertEqual(r["symbols_checked"], 573)
+            self.assertGreater(r["alpaca_success_count"], 0)  # alpaca preserved
+
+    def test_circuit_breaker_opens_and_skips_rest(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        def always_rl(sym):
+            return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+        out, circuit_open = _fetch_with_policy(
+            [f"S{i}" for i in range(10)], always_rl, throttle_seconds=0.0,
+            max_retries=0, circuit_breaker=3, sleep=lambda s: None)
+        self.assertTrue(circuit_open)
+        statuses = [out[f"S{i}"]["status"] for i in range(10)]
+        self.assertEqual(statuses.count("rate_limit"), 3)  # tripped after 3
+        skipped = [k for k, v in out.items()
+                   if v.get("reason") == "skipped_circuit_open"]
+        self.assertEqual(len(skipped), 7)  # rest skipped, not hammered
+
+    def test_circuit_breaker_resets_on_success(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        state = {"n": 0}
+        def alt(sym):
+            state["n"] += 1
+            if state["n"] % 2 == 0:
+                return {"status": "ok"}
+            return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+        out, circuit_open = _fetch_with_policy(
+            [f"S{i}" for i in range(10)], alt, throttle_seconds=0.0,
+            max_retries=0, circuit_breaker=3, sleep=lambda s: None)
+        self.assertFalse(circuit_open)  # successes reset the consecutive count
+
+    def test_circuit_breaker_zero_disables(self):
+        from bot.universe.quality_collectors import _fetch_with_policy
+        def always_rl(sym):
+            return {"status": "rate_limit", "reason": "yahoo_rate_limited"}
+        out, circuit_open = _fetch_with_policy(
+            [f"S{i}" for i in range(6)], always_rl, throttle_seconds=0.0,
+            max_retries=0, circuit_breaker=0, sleep=lambda s: None)
+        self.assertFalse(circuit_open)
+        self.assertTrue(all(v["status"] == "rate_limit" for v in out.values()))
 
 
 if __name__ == "__main__":
