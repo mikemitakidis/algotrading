@@ -49,6 +49,9 @@ class QualityCollectionReport:
     missing_alpaca_count: int = 0
     missing_yahoo_count: int = 0
     source_disagreement_count: int = 0
+    price_disagreement_count: int = 0
+    volume_semantics_divergence_count: int = 0
+    bar_date_mismatch_count: int = 0
     rate_limit_count: int = 0
     run_sources: List[str] = field(default_factory=list)
     run_symbols_attempted: int = 0

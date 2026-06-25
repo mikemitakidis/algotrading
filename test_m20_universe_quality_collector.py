@@ -695,5 +695,89 @@ class M20UC1PatchReportingAndCircuit(unittest.TestCase):
         self.assertTrue(all(v["status"] == "rate_limit" for v in out.values()))
 
 
+class M20UC1LastBarDateAndDisagreement(unittest.TestCase):
+    """last_bar_date extraction (MultiIndex bug) + split price/volume reporting."""
+
+    def test_last_bar_date_from_multiindex(self):
+        import pandas as pd
+        from bot.universe.quality_collectors import _extract_last_bar_date
+        idx = pd.MultiIndex.from_tuples(
+            [("AAPL", pd.Timestamp("2026-06-23", tz="UTC")),
+             ("AAPL", pd.Timestamp("2026-06-24", tz="UTC"))],
+            names=["symbol", "timestamp"])
+        df = pd.DataFrame({"close": [1.0, 2.0], "volume": [1e6, 1e6]}, index=idx)
+        self.assertEqual(_extract_last_bar_date(df), "2026-06-24")
+
+    def test_last_bar_date_from_datetimeindex(self):
+        import pandas as pd
+        from bot.universe.quality_collectors import _extract_last_bar_date
+        df = pd.DataFrame(
+            {"close": [1.0, 2.0], "volume": [1e6, 1e6]},
+            index=pd.date_range(end="2026-06-24", periods=2, freq="D", tz="UTC"))
+        self.assertEqual(_extract_last_bar_date(df), "2026-06-24")
+
+    def test_metrics_last_bar_date_not_tuple_repr(self):
+        # regression: must never emit the "('AAPL', T" tuple-repr garbage
+        import pandas as pd
+        idx = pd.MultiIndex.from_tuples(
+            [("AAPL", pd.Timestamp("2026-06-24", tz="UTC"))],
+            names=["symbol", "timestamp"])
+        df = pd.DataFrame({"close": [200.0], "volume": [1e6]}, index=idx)
+        d = _metrics_from_df(df)
+        self.assertEqual(d["last_bar_date"], "2026-06-24")
+        self.assertNotIn("(", d["last_bar_date"])
+
+    def test_price_disagrees_only_on_close(self):
+        from bot.universe.quality_collectors import _price_disagrees
+        tol = {"latest_close_pct": 2.0}
+        # prices agree (IVV-like): not a disagreement despite huge volume gap
+        self.assertFalse(_price_disagrees(
+            {"latest_close": 735.30}, {"latest_close": 736.66}, tol))
+        # prices genuinely differ
+        self.assertTrue(_price_disagrees(
+            {"latest_close": 100.0}, {"latest_close": 110.0}, tol))
+
+    def test_volume_diverges_reported_separately(self):
+        from bot.universe.quality_collectors import _volume_diverges
+        tol = {"avg_volume_20d_pct": 25.0, "avg_dollar_volume_20d_pct": 25.0}
+        # IEX vs consolidated volume: diverges (report-only, not a failure)
+        self.assertTrue(_volume_diverges(
+            {"avg_volume_20d": 68230.0, "avg_dollar_volume_20d": 5.1e7},
+            {"avg_volume_20d": 13122994.0, "avg_dollar_volume_20d": 9.8e9}, tol))
+
+    def test_validate_splits_price_and_volume(self):
+        # build a tiny snapshot: prices agree, volume diverges -> price
+        # disagreement 0, volume divergence 1, source_disagreement 0.
+        import json, tempfile
+        from bot.universe.quality_collectors import (
+            universe_quality_validate, SNAPSHOT_SCHEMA_VERSION)
+        snap = {
+            "schema_version": SNAPSHOT_SCHEMA_VERSION, "asof": "2026-06-24",
+            "sources": ["alpaca", "yahoo"],
+            "symbols": {
+                "NASDAQ:AAA": {
+                    "provider_symbol": "AAA",
+                    "alpaca": {"status": "ok", "latest_close": 100.0,
+                               "avg_volume_20d": 50000.0,
+                               "avg_dollar_volume_20d": 5e6,
+                               "last_bar_date": "2026-06-24"},
+                    "yahoo": {"status": "ok", "latest_close": 100.5,
+                              "avg_volume_20d": 9000000.0,
+                              "avg_dollar_volume_20d": 9e8,
+                              "last_bar_date": "2026-06-24"},
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.json")
+            pathlib.Path(p).write_text(json.dumps(snap))
+            r = universe_quality_validate(snapshot_path=p).to_dict()
+        self.assertEqual(r["both_sources_success_count"], 1)
+        self.assertEqual(r["price_disagreement_count"], 0)       # prices agree
+        self.assertEqual(r["source_disagreement_count"], 0)      # price-only now
+        self.assertEqual(r["volume_semantics_divergence_count"], 1)  # reported
+        self.assertEqual(r["bar_date_mismatch_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

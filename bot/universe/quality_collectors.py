@@ -106,10 +106,7 @@ def _metrics_from_df(df) -> Dict[str, Any]:
     vols = df["volume"] if "volume" in df else df.iloc[:, 4]
     last20_v = vols.tail(20)
     last20_dollar = (closes.tail(20) * vols.tail(20))
-    idx = df.index
-    last_bar = idx[-1]
-    last_bar_date = (last_bar.date().isoformat()
-                     if hasattr(last_bar, "date") else str(last_bar)[:10])
+    last_bar_date = _extract_last_bar_date(df)
     return {
         "status": "ok",
         "last_bar_date": last_bar_date,
@@ -119,6 +116,45 @@ def _metrics_from_df(df) -> Dict[str, Any]:
         "avg_dollar_volume_20d": float(last20_dollar.mean()),
         "median_spread_bps": None,   # not available from daily bars; UC2 skips
     }
+
+
+def _extract_last_bar_date(df) -> Optional[str]:
+    """Return the ISO date (YYYY-MM-DD) of the last bar, robust to:
+    - a plain DatetimeIndex,
+    - an Alpaca-style MultiIndex (symbol, timestamp) where the datetime is the
+      last level (idx[-1] would otherwise be a (symbol, Timestamp) tuple),
+    - a 'timestamp'/'date' column instead of an index.
+    Never raises; returns None if no usable date is found.
+    """
+    import pandas as pd  # local
+    # 1) timestamp/date column takes precedence if present
+    for col in ("timestamp", "date", "Date", "Datetime"):
+        if col in getattr(df, "columns", []):
+            try:
+                ts = pd.to_datetime(df[col].iloc[-1])
+                return ts.date().isoformat()
+            except Exception:  # noqa: BLE001
+                pass
+    idx = df.index
+    last = idx[-1]
+    # 2) MultiIndex: find the datetime-like element (usually the last level)
+    if isinstance(last, tuple):
+        for part in reversed(last):
+            try:
+                ts = pd.to_datetime(part)
+                if not pd.isna(ts):
+                    return ts.date().isoformat()
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+    # 3) plain index value
+    try:
+        ts = pd.to_datetime(last)
+        return ts.date().isoformat()
+    except Exception:  # noqa: BLE001
+        if hasattr(last, "date"):
+            return last.date().isoformat()
+        return str(last)[:10]
 
 
 def _classify_provider_error(msg: str, *, source: str) -> str:
@@ -597,7 +633,8 @@ def universe_quality_validate(*, snapshot_path: str) -> QualityCollectionReport:
     symbols = doc.get("symbols", {})
     cfg = _load_config()
     tol = cfg["tolerances"]
-    a_ok = y_ok = both = miss_a = miss_y = disagree = 0
+    a_ok = y_ok = both = miss_a = miss_y = 0
+    price_disagree = vol_divergence = bar_mismatch = 0
     for internal, rec in symbols.items():
         a = rec.get("alpaca", {})
         y = rec.get("yahoo", {})
@@ -609,15 +646,26 @@ def universe_quality_validate(*, snapshot_path: str) -> QualityCollectionReport:
         miss_y += int(not yg)
         if ag and yg:
             both += 1
-            if _disagrees(a, y, tol):
-                disagree += 1
+            # price is the meaningful cross-check; volume is NOT comparable
+            # across sources (Alpaca IEX single-venue vs Yahoo consolidated),
+            # so it is reported separately and never treated as "disagreement".
+            if _price_disagrees(a, y, tol):
+                price_disagree += 1
+            if _volume_diverges(a, y, tol):
+                vol_divergence += 1
+            if a.get("last_bar_date") != y.get("last_bar_date"):
+                bar_mismatch += 1
     return QualityCollectionReport(
         status="success" if not errors else "failed", mode="validate",
         asof=doc.get("asof"), sources=doc.get("sources", []),
         symbols_total=len(symbols), symbols_checked=len(symbols),
         alpaca_success_count=a_ok, yahoo_success_count=y_ok,
         both_sources_success_count=both, missing_alpaca_count=miss_a,
-        missing_yahoo_count=miss_y, source_disagreement_count=disagree,
+        missing_yahoo_count=miss_y,
+        source_disagreement_count=price_disagree,   # price-only now
+        price_disagreement_count=price_disagree,
+        volume_semantics_divergence_count=vol_divergence,
+        bar_date_mismatch_count=bar_mismatch,
         errors=errors, snapshot_path=snapshot_path, started_at_utc=started,
         finished_at_utc=_now_utc())
 
@@ -627,10 +675,23 @@ def _pct_diff(x: float, y: float) -> float:
     return abs(x - y) / base * 100.0
 
 
-def _disagrees(a: Dict[str, Any], y: Dict[str, Any], tol: Dict[str, Any]
-               ) -> bool:
-    for key, tkey in (("latest_close", "latest_close_pct"),
-                      ("avg_volume_20d", "avg_volume_20d_pct"),
+def _price_disagrees(a: Dict[str, Any], y: Dict[str, Any],
+                     tol: Dict[str, Any]) -> bool:
+    """Cross-source PRICE check only (the meaningful agreement test).
+    Volume is intentionally excluded — see _volume_diverges."""
+    av, yv = a.get("latest_close"), y.get("latest_close")
+    if isinstance(av, (int, float)) and isinstance(yv, (int, float)):
+        return _pct_diff(av, yv) > float(tol["latest_close_pct"])
+    return False
+
+
+def _volume_diverges(a: Dict[str, Any], y: Dict[str, Any],
+                     tol: Dict[str, Any]) -> bool:
+    """Report-only: whether avg_volume/dollar-volume differ beyond tolerance.
+    This is EXPECTED between Alpaca IEX (single-venue) and Yahoo (consolidated)
+    and must NOT be treated as a quality failure. Surfaced separately so the
+    summary does not imply every both-ok symbol is bad."""
+    for key, tkey in (("avg_volume_20d", "avg_volume_20d_pct"),
                       ("avg_dollar_volume_20d", "avg_dollar_volume_20d_pct")):
         av, yv = a.get(key), y.get(key)
         if isinstance(av, (int, float)) and isinstance(yv, (int, float)):
