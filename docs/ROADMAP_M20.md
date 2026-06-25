@@ -29,6 +29,10 @@
 - UC1 canonical quality snapshot: `63b16ba0ea8418a4e9069dd536618adc9dd67766`
 - UC2 engine/config/tests: `52ee00d093976b32a54769aa0a2cfb1fbc5b4611`
 - UC2 universe write-back: `501487ffb715e62bb4172c1bca55a173a3e492b1`
+- M20 roadmap doc: `3ec5d89766563a0347939a3572e653c31d2d65c9`
+- M20.UE registry runtime selector: `d077260d189a8fe6927b7c994f45872800df243a`
+- Test-refresh / full regression green: `6109650904b320b49806b21ce2ce7f6e3dca05c3`
+- M20.I runtime paper loop: `8421a2fae4cadfa003f0985e8a3fba93b5e4c838`
 
 ### Current universe state (after UC2 write-back)
 - Total symbols: 573
@@ -48,19 +52,15 @@
 
 ## Remaining M20
 
-### M20.UE — runtime migration to registry  (NEXT, plan first)
-Migrate runtime symbol selection from hardcoded `FOCUS_SYMBOLS` toward the
-registry / `scan_ready=true` universe.
-- Backward-compatible; must not remove `FOCUS_SYMBOLS` abruptly.
-- Must not break existing imports.
-- Must not start live trading or call brokers.
-- May touch protected runtime files → plan + explicit approval required first.
+### M20.UE — runtime migration to registry  (DONE — d077260)
+Migrated runtime symbol selection from hardcoded `FOCUS_SYMBOLS` toward the
+registry / `scan_ready=true` universe, flag-gated (USE_REGISTRY_UNIVERSE,
+default off). FOCUS_SYMBOLS retained; default behaviour unchanged.
 
-### M20.I — runtime paper loop
-Connect scanner / M19 output into the paper engine using only `scan_ready=true`
-symbols.
-- Simulation only; no live orders; no broker calls.
-- No `execution_eligible` misuse; paper routing uses `paper_routing_eligible`.
+### M20.I — runtime paper loop  (DONE — 8421a2f)
+Scanner signal dict -> M19 scoring -> paper routing -> paper engine, in
+`bot/runtime/paper_loop.py`, flag-gated (PAPER_LOOP_ENABLED, default off).
+Simulation only; no live orders; no broker calls; uses `paper_routing_eligible`.
 
 ### M20.J — dashboard / admin visibility
 Surface universe quality + paper status: total symbols, scan-ready count,
@@ -69,9 +69,24 @@ failed/unverified counts, latest quality snapshot, paper trades, PnL, ledger.
   `tests_passed`, `tests_failed`, `exit_code`, `summary`, `log_path`
   (not terminal-only).
 
-### M20.UD — global inactive candidates  (DEFERRED)
-Add UK/EU/Japan/HK/global candidates as inactive / not scan-ready.
-Do NOT activate global scanning. Do NOT start now.
+### M20.UD — UK/EU/Japan/HK/China/ADRs/global candidates — REQUIRED (next after M20 close / main merge)
+This is the next required roadmap item once M20 is closed and merged to main.
+It is NOT dropped and NOT optional.
+- Adds global candidates: UK, EU, Japan, Hong Kong, China, ADRs, and other
+  non-US lines.
+- These are added as **inactive registry candidates first**:
+  - `active = false`
+  - `scan_ready = false`
+  - NOT used by runtime / scanner / paper loop yet.
+- Registry-only additions; no global scanning, no trading on them.
+- Later, quality-gating + global activation will make the bot able to check
+  1000+ stocks safely (only after the inactive candidates land and prove out).
+- Global activation requirements — FX, exchange sessions, trading calendars /
+  holidays, and currency-aware paper PnL — remain a **later** milestone
+  (M20.UF or beyond), NOT part of M20.UD.
+
+Sequence: M20 close -> main merge -> **M20.UD (inactive global candidates)** ->
+later global activation (FX/session/calendar/currency-aware PnL).
 
 ### M20.UF (or later) — global activation  (DEFERRED)
 Requires FX, timezone/session handling, exchange calendars, holiday logic,
@@ -82,9 +97,10 @@ currency-aware paper PnL. Not in the immediate M20 finish path unless approved.
 2. Add this roadmap doc. (this file)
 3. M20.UE — plan only, then approval, then implement.
 4. M20.I — paper loop.
-5. M20.J — dashboard/admin (only as needed to close M20).
-6. Defer M20.UD and M20.UF/global.
-7. No merge to main without final three-party approval.
+5. M20.J — minimal read-only status reporter (bot/runtime/m20_status.py).
+6. Final M20 regression/protected verification, then merge to main.
+7. M20.UD (inactive global candidates) is the REQUIRED next item after merge.
+8. No merge to main without final three-party approval.
 
 ## Guardrails (always)
 - Never modify outside the approved milestone's file set.
