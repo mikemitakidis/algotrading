@@ -128,11 +128,12 @@ def _extract_last_bar_date(df) -> Optional[str]:
     """
     import pandas as pd  # local
     # 1) timestamp/date column takes precedence if present
-    for col in ("timestamp", "date", "Date", "Datetime"):
+    for col in ("ts_utc", "timestamp", "date", "Date", "Datetime", "datetime"):
         if col in getattr(df, "columns", []):
             try:
-                ts = pd.to_datetime(df[col].iloc[-1])
-                return ts.date().isoformat()
+                ts = pd.to_datetime(df[col].iloc[-1], utc=True)
+                if not pd.isna(ts):
+                    return ts.date().isoformat()
             except Exception:  # noqa: BLE001
                 pass
     idx = df.index
@@ -147,14 +148,21 @@ def _extract_last_bar_date(df) -> Optional[str]:
             except Exception:  # noqa: BLE001
                 continue
         return None
-    # 3) plain index value
+    # 3) a plain integer index (e.g. RangeIndex 0,1,2,...) is NOT a date —
+    # never coerce it (pd.to_datetime(573) would wrongly yield 1970-01-01).
+    import numbers
+    if isinstance(last, numbers.Integral) and not hasattr(last, "date"):
+        return None
+    # 4) plain datetime-like index value
     try:
         ts = pd.to_datetime(last)
-        return ts.date().isoformat()
+        if not pd.isna(ts):
+            return ts.date().isoformat()
     except Exception:  # noqa: BLE001
-        if hasattr(last, "date"):
-            return last.date().isoformat()
-        return str(last)[:10]
+        pass
+    if hasattr(last, "date"):
+        return last.date().isoformat()
+    return None
 
 
 def _classify_provider_error(msg: str, *, source: str) -> str:

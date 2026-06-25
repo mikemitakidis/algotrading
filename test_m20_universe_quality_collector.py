@@ -779,5 +779,37 @@ class M20UC1LastBarDateAndDisagreement(unittest.TestCase):
         self.assertEqual(r["bar_date_mismatch_count"], 0)
 
 
+    def test_last_bar_date_from_yfinance_ts_utc_column(self):
+        # YFinanceProvider returns RangeIndex + a ts_utc column; date must come
+        # from ts_utc, NOT the integer index (which would yield 1970-01-01).
+        import pandas as pd
+        from bot.universe.quality_collectors import _extract_last_bar_date
+        df = pd.DataFrame({
+            "ts_utc": pd.date_range(end="2026-06-24", periods=3, freq="D",
+                                    tz="UTC"),
+            "close": [1.0, 2.0, 3.0], "volume": [1, 1, 1],
+        }).reset_index(drop=True)
+        self.assertEqual(_extract_last_bar_date(df), "2026-06-24")
+
+    def test_last_bar_date_integer_index_not_epoch(self):
+        # a bare integer/RangeIndex with no date column must return None,
+        # never coerce the int to 1970-01-01.
+        import pandas as pd
+        from bot.universe.quality_collectors import _extract_last_bar_date
+        df = pd.DataFrame({"close": [1.0, 2.0], "volume": [1, 1]})  # RangeIndex
+        self.assertIsNone(_extract_last_bar_date(df))
+
+    def test_yfinance_metrics_have_real_date(self):
+        import pandas as pd
+        df = pd.DataFrame({
+            "ts_utc": pd.date_range(end="2026-06-24", periods=2, freq="D",
+                                    tz="UTC"),
+            "close": [200.0, 201.0], "volume": [1e6, 1e6],
+        }).reset_index(drop=True)
+        d = _metrics_from_df(df)
+        self.assertEqual(d["last_bar_date"], "2026-06-24")
+        self.assertNotIn("1970", str(d["last_bar_date"]))
+
+
 if __name__ == "__main__":
     unittest.main()
