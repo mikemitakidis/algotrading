@@ -3632,7 +3632,11 @@ _PROTECTED_PATHS = (
 _PROTECTED_APPROVED_SHA256 = {
     # ISSUE-012: removed no-op .replace("h","h") in the flywheel tfs_passing
     # list comprehension (behaviour-preserving).
-    "main.py": "b5a56433f7450dcb5bb3b358e00da17e6b364a47cf99715628c288ed6ebc9a19",
+    # M20.UE (operator-approved): flag-gated symbol-selection seam in main.py.
+    # Default behaviour unchanged (USE_REGISTRY_UNIVERSE off -> FOCUS_SYMBOLS);
+    # when on, sources scan_ready bare tickers from the universe registry. Only
+    # the symbol-selection block + one import changed; re-pinned here.
+    "main.py": "a5e0fc0d194bbc42a75427a4177402ea0507e47bd0a674bfabecc355953ef3f4",
     # ISSUE-015: parameterised _load_open_intents() NOT IN clause (bound
     # params; identical result set, no risk-behaviour change).
     "bot/risk.py": "1118fd2e6677c6d34112bd1a7b68884699df72fa42aea0a981b90c8f1c13812e",
@@ -4234,6 +4238,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20_universe_quality.py",
             # M20 roadmap doc (documentation-only, operator-approved).
             "docs/ROADMAP_M20.md",
+            # M20.UE: registry-based active selection proof tests.
+            "test_m20ue_active_selection.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

@@ -33,6 +33,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
+from bot.universe.active_selection import get_scan_ready_symbols  # M20.UE (flag-gated)
 from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
 from bot.flywheel  import (init_flywheel_tables, log_candidate, log_intent, recent_intents,
                             update_intent_status, get_daily_state, get_persistent_state,
@@ -158,7 +159,30 @@ def main():
     else:
         log.info('[GW-WATCHDOG] not started (broker=%s, IBKR-only)', broker.name)
 
-    focus = FOCUS_SYMBOLS[:config['focus_size']]
+    # ── M20.UE: symbol-selection seam (flag-gated, default OFF) ──
+    # Default behaviour is unchanged: the curated FOCUS_SYMBOLS list. When
+    # USE_REGISTRY_UNIVERSE is truthy, source bare tickers from the universe
+    # registry's scan_ready=true records instead. Falls back to FOCUS_SYMBOLS
+    # if the registry yields nothing (never scan an empty universe).
+    _use_registry = os.getenv('USE_REGISTRY_UNIVERSE', '').strip().lower() \
+        in ('1', 'true', 'yes', 'on')
+    if _use_registry:
+        try:
+            _registry_syms = get_scan_ready_symbols()
+        except Exception as _e:  # noqa: BLE001 — never let selection abort startup
+            _registry_syms = []
+            log.warning('[STARTUP] registry universe selection failed (%s); '
+                        'falling back to FOCUS_SYMBOLS', _e)
+        if _registry_syms:
+            focus = _registry_syms[:config['focus_size']]
+            log.info('[STARTUP] Universe source: registry scan_ready '
+                     '(%d symbols available)', len(_registry_syms))
+        else:
+            focus = FOCUS_SYMBOLS[:config['focus_size']]
+            log.info('[STARTUP] Universe source: FOCUS_SYMBOLS '
+                     '(registry empty/unavailable)')
+    else:
+        focus = FOCUS_SYMBOLS[:config['focus_size']]
     log.info('[STARTUP] Focus: %d curated large-cap symbols (no Tier A ranking in V1)', len(focus))
     log.info('[STARTUP] Data: Yahoo Finance | 1 symbol/request | 8-12s delay | browser session | disk cache')
     log.info('[STARTUP] First cycle uses disk cache where available. Fresh fetches: 8-12s each.')
