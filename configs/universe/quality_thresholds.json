@@ -1,0 +1,28 @@
+{
+  "schema_version": "m20_quality_thresholds_v1",
+  "min_history_days": 252,
+  "max_stale_trading_days": 5,
+  "min_latest_close": 5.0,
+  "min_avg_volume_20d": 500000,
+  "min_avg_dollar_volume_20d": 20000000,
+  "max_median_spread_bps": 50,
+  "liquidity_source": "yahoo",
+  "cross_check": {
+    "latest_close_pct": 2.0,
+    "require_both_sources": true,
+    "require_date_aligned": true
+  },
+  "liquidity_tiers": {
+    "tier_1": 100000000,
+    "tier_2": 50000000,
+    "tier_3": 20000000
+  },
+  "max_scan_ready_per_run": 600,
+  "etf_deny": {
+    "tickers": ["VXX", "VIXY", "UVXY", "SVXY", "SVIX", "UVIX"],
+    "name_keywords": ["2x", "3x", "ultra", "ultrashort", "inverse", "-1x",
+                      "leveraged", "vix", "volatility", "bull ", "bear ",
+                      "daily short", "double", "triple"]
+  },
+  "notes": "M20.UC2 quality gates. Pure offline. Cross-check is PRICE+DATE only; Alpaca IEX vs Yahoo volume is NOT comparable (single-venue vs consolidated) so volume divergence is never a failure. Liquidity gates use the consolidated source (yahoo). max_scan_ready_per_run is a configurable safety ceiling; UC2 supports report-only mode (no write-back) for pre-review."
+}

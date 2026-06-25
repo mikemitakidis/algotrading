@@ -10486,6 +10486,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20_universe_expansion.py",
             # M20.UC1: universe quality collector proof tests.
             "test_m20_universe_quality_collector.py",
+            "test_m20_universe_quality.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
