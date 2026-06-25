@@ -20,6 +20,8 @@ from bot.paper import (
 _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "paper"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
+# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
+_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
 _M20UA_HEAD = "97f02326e12d9e381d94544555524c2d87b2cf27"
 _M20C_HEAD = "408fc0f8152a56c0117cc6abbed60d8551dbcfdb"
 _TS = "2026-06-18T10:00:00+00:00"
@@ -323,7 +325,8 @@ class M20DFrozenChecks(unittest.TestCase):
                         "bot/universe/registry.py", "bot/universe/suffixes.py")
 
     def test_protected_runtime_unchanged(self):
-        self._unchanged(_BASELINE, "main.py", "bot/scanner.py", "bot/risk.py",
+        self._unchanged(_M20UE_HEAD, "main.py")
+        self._unchanged(_BASELINE, "bot/scanner.py", "bot/risk.py",
                         "bot/strategy.py", "dashboard/app.py", "bot/brokers",
                         "bot/flywheel.py")
 

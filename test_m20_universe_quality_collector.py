@@ -29,9 +29,14 @@ from bot.universe.quality_report import (
 _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "universe"
 _REPO = pathlib.Path(__file__).resolve().parent
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
+# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
+_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
 _M20UA_HEAD = "97f02326e12d9e381d94544555524c2d87b2cf27"
 _M20H_HEAD = "146759e4d454d0d851345eaf33bbd9f4dedcc50b"
 _M20UB_HEAD = "df92d115dcfb101c5e1808e17d2d6e246b227507"
+# UC2 write-back (501487f) intentionally rewrote the universe quality/scan_ready
+# fields. Post-UC2, the universe data must be frozen vs THIS commit, not UB.
+_M20UC2_WRITEBACK = "501487ffb715e62bb4172c1bca55a173a3e492b1"
 _SECRET = "SUPERSECRET_TEST_KEY_123"
 
 
@@ -410,16 +415,36 @@ class M20UC1FrozenChecks(unittest.TestCase):
         self._unchanged(_M20UA_HEAD, "bot/universe/schema.py",
                         "bot/universe/registry.py", "bot/universe/suffixes.py")
 
-    def test_universe_data_frozen_vs_m20ub(self):
-        # UC1 must NOT modify the universe records
-        self._unchanged(_M20UB_HEAD, "configs/universe/us_expanded.json",
+    def test_universe_data_frozen_vs_uc2_writeback(self):
+        # UC2 write-back (501487f) is the intentional last edit to the universe
+        # data. Nothing after it (roadmap doc, UE seam) may touch the universe
+        # JSON. Also assert the post-UC2 state: 573 total / 536 verified /
+        # 18 failed / 19 unverified / 536 scan_ready.
+        self._unchanged(_M20UC2_WRITEBACK, "configs/universe/us_expanded.json",
                         "configs/universe/us_seed.json")
+        import json
+        cnt = {"verified": 0, "failed": 0, "unverified": 0}
+        scan_ready = 0
+        total = 0
+        for p in ("configs/universe/us_seed.json",
+                  "configs/universe/us_expanded.json"):
+            for r in json.load(open(p))["symbols"]:
+                total += 1
+                cnt[r["data_quality_status"]] = \
+                    cnt.get(r["data_quality_status"], 0) + 1
+                scan_ready += 1 if r["scan_ready"] else 0
+        self.assertEqual(total, 573)
+        self.assertEqual(cnt["verified"], 536)
+        self.assertEqual(cnt["failed"], 18)
+        self.assertEqual(cnt["unverified"], 19)
+        self.assertEqual(scan_ready, 536)
 
     def test_alpaca_provider_unchanged(self):
         self._unchanged(_BASELINE, "bot/providers/alpaca_provider.py")
 
     def test_protected_runtime_unchanged(self):
-        self._unchanged(_BASELINE, "main.py", "bot/scanner.py", "bot/risk.py",
+        self._unchanged(_M20UE_HEAD, "main.py")
+        self._unchanged(_BASELINE, "bot/scanner.py", "bot/risk.py",
                         "bot/strategy.py", "dashboard/app.py", "bot/brokers",
                         "bot/flywheel.py", "bot/signal_scoring")
 

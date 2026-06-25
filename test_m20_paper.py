@@ -27,6 +27,8 @@ _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "paper"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _TS = "2026-06-17T10:15:00Z"
 _M20_BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
+# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
+_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
 
 
 def _order(**over):
@@ -325,14 +327,24 @@ class M20ASafetyGuards(unittest.TestCase):
 
     def test_protected_runtime_files_unchanged(self):
         import subprocess
+        # main.py carries the approved M20.UE seam (sha256-pinned in the M17
+        # protected-content guard); freeze it vs the UE commit. All other
+        # protected runtime files stay byte-frozen vs the M19 baseline.
         r = subprocess.run(
             ["git", "diff", "--name-only", _M20_BASELINE, "HEAD", "--",
-             "main.py", "bot/scanner.py", "bot/risk.py", "bot/strategy.py",
+             "bot/scanner.py", "bot/risk.py", "bot/strategy.py",
              "dashboard/app.py", "bot/brokers", "bot/flywheel.py"],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "",
                          "protected runtime files changed")
+        rm = subprocess.run(
+            ["git", "diff", "--name-only", _M20UE_HEAD, "HEAD", "--",
+             "main.py"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(rm.returncode, 0)
+        self.assertEqual(rm.stdout.strip(), "",
+                         "main.py changed beyond approved M20.UE seam")
 
 
 class M20AStorage(unittest.TestCase):

@@ -20,6 +20,8 @@ _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "universe"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _SEED = _REPO_ROOT / "configs" / "universe" / "us_seed.json"
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
+# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
+_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
 _M20A_HEAD = "5cdd0839204a71436579f9ed9a8c4a7d69681e87"
 _TS = "2026-06-18T00:00:00+00:00"
 _DATE = "2026-06-18"
@@ -218,22 +220,37 @@ class M20UASeed(unittest.TestCase):
         for sym in FOCUS_SYMBOLS:
             self.assertIn(sym, internal_tickers, f"{sym} missing from seed")
 
-    def test_seed_all_active_none_scan_ready(self):
+    def test_seed_all_active_post_uc2_scan_ready(self):
+        # Post-UC2 write-back: seed records remain active; scan_ready now
+        # reflects UC2 gate decisions (no longer uniformly 0). Assert the
+        # invariant: every scan_ready record is verified, and scan_ready is a
+        # subset of active.
         self.assertEqual(len(self.reg.active_symbols()), 89)
-        self.assertEqual(len(self.reg.scan_ready_symbols()), 0)
+        for r in self.reg.scan_ready_symbols():
+            self.assertTrue(r.active)
+            self.assertEqual(r.data_quality_status,
+                             DataQualityStatus.VERIFIED)
 
     def test_seed_all_us_and_legacy_tagged(self):
         for r in self.reg.all_symbols():
             self.assertEqual(r.country, "US")
             self.assertIn("legacy_focus", r.universe_tags)
 
-    def test_seed_liquidity_null(self):
+    def test_seed_liquidity_consistent_with_status(self):
+        # Post-UC2: verified records carry Yahoo liquidity; non-verified
+        # (failed/unverified) keep null liquidity. data_quality_status is a
+        # valid enum for every record.
         for r in self.reg.all_symbols():
-            self.assertIsNone(r.avg_dollar_volume_20d)
-            self.assertIsNone(r.avg_volume_20d)
-            self.assertIsNone(r.median_spread_bps)
-            self.assertEqual(r.data_quality_status,
-                             DataQualityStatus.UNVERIFIED)
+            self.assertIn(r.data_quality_status, (
+                DataQualityStatus.VERIFIED, DataQualityStatus.FAILED,
+                DataQualityStatus.UNVERIFIED))
+            if r.data_quality_status == DataQualityStatus.VERIFIED:
+                self.assertIsNotNone(r.avg_volume_20d)
+                self.assertIsNotNone(r.avg_dollar_volume_20d)
+                self.assertIsNotNone(r.min_liquidity_tier)
+            else:
+                self.assertIsNone(r.avg_volume_20d)
+                self.assertIsNone(r.avg_dollar_volume_20d)
 
     def test_seed_etfs_present(self):
         etfs = self.reg.symbols_by_tag("etf")
@@ -319,7 +336,11 @@ class M20UABackwardCompat(unittest.TestCase):
         self._unchanged("bot/focus.py")
 
     def test_main_unchanged(self):
-        self._unchanged("main.py")
+        # M20.UE added an approved, sha256-pinned flag-gated selection seam to
+        # main.py (governed by test_m17_backtesting protected-content guard).
+        # Freeze main.py vs the UE commit so new unapproved drift is still
+        # caught, while accepting the approved seam.
+        self._unchanged("main.py", baseline=_M20UE_HEAD)
 
     def test_ml_build_dataset_unchanged(self):
         self._unchanged("ml_build_dataset.py")

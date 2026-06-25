@@ -20,6 +20,8 @@ _EXPANDED = _REPO / "configs" / "universe" / "us_expanded.json"
 _M20H_HEAD = "146759e4d454d0d851345eaf33bbd9f4dedcc50b"
 _M20UA_HEAD = "97f02326e12d9e381d94544555524c2d87b2cf27"
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
+# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
+_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
 
 
 def _load(path):
@@ -57,12 +59,22 @@ class M20UBExpandedRecords(unittest.TestCase):
         self.assertTrue(550 <= len(self.all) <= 650,
                         f"total universe {len(self.all)} outside 550-650")
 
-    def test_all_expanded_scan_ready_false(self):
-        self.assertTrue(all(r["scan_ready"] is False for r in self.exp))
+    def test_expanded_scan_ready_consistent_post_uc2(self):
+        # Post-UC2: scan_ready is no longer uniformly false. Invariant: every
+        # scan_ready record is verified; non-verified are never scan_ready.
+        for r in self.exp:
+            self.assertIsInstance(r["scan_ready"], bool)
+            if r["scan_ready"]:
+                self.assertEqual(r["data_quality_status"], "verified")
+            if r["data_quality_status"] in ("failed", "unverified"):
+                self.assertFalse(r["scan_ready"])
 
-    def test_all_expanded_unverified(self):
-        self.assertTrue(all(r["data_quality_status"] == "unverified"
-                            for r in self.exp))
+    def test_all_expanded_status_valid_enum(self):
+        # Post-UC2: status is one of the three valid states (no longer all
+        # 'unverified').
+        for r in self.exp:
+            self.assertIn(r["data_quality_status"],
+                          ("verified", "failed", "unverified"))
 
     def test_all_expanded_active_true(self):
         self.assertTrue(all(r["active"] is True for r in self.exp))
@@ -77,12 +89,17 @@ class M20UBExpandedRecords(unittest.TestCase):
         for r in self.exp:
             self.assertIn(r["exchange"], ("NASDAQ", "NYSE", "ARCA"))
 
-    def test_liquidity_fields_null(self):
+    def test_liquidity_fields_consistent_with_status(self):
+        # Post-UC2: verified records carry liquidity; non-verified keep null.
         for r in self.exp:
-            self.assertIsNone(r["avg_volume_20d"])
-            self.assertIsNone(r["avg_dollar_volume_20d"])
-            self.assertIsNone(r["median_spread_bps"])
-            self.assertIsNone(r["min_liquidity_tier"])
+            if r["data_quality_status"] == "verified":
+                self.assertIsNotNone(r["avg_volume_20d"])
+                self.assertIsNotNone(r["avg_dollar_volume_20d"])
+                self.assertIsNotNone(r["min_liquidity_tier"])
+            else:
+                self.assertIsNone(r["avg_volume_20d"])
+                self.assertIsNone(r["avg_dollar_volume_20d"])
+                self.assertIsNone(r["min_liquidity_tier"])
 
     def test_etfs_are_etf_class(self):
         etfs = [r for r in self.exp if "us_etf" in r["universe_tags"]]
@@ -150,9 +167,13 @@ class M20UBFrozenChecks(unittest.TestCase):
                         "bot/universe/registry.py", "bot/universe/suffixes.py")
 
     def test_protected_runtime_unchanged(self):
-        self._unchanged(_BASELINE, "main.py", "bot/scanner.py", "bot/risk.py",
+        # main.py carries the approved M20.UE seam (sha256-pinned in the M17
+        # protected-content guard); freeze it vs the UE commit. All other
+        # protected runtime files stay byte-frozen vs the M19 baseline.
+        self._unchanged(_BASELINE, "bot/scanner.py", "bot/risk.py",
                         "bot/strategy.py", "dashboard/app.py", "bot/brokers",
                         "bot/flywheel.py", "bot/signal_scoring")
+        self._unchanged(_M20UE_HEAD, "main.py")
 
     def test_no_authoring_scripts_committed(self):
         r = subprocess.run(["git", "ls-files", "_authoring*"],
