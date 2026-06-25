@@ -26,8 +26,9 @@ from bot.universe.schema import SymbolRecord
 _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "paper"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
-# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
-_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
+# main.py is authoritatively protected by the sha256 pin in
+# test_m17_backtesting; assert it matches the approved M20.I value here too.
+_MAIN_APPROVED_SHA256 = "26a999f222bdd258721e0ce54d3067f78b5ad95fac35e7490503fef85973f495"
 _M20UA_HEAD = "97f02326e12d9e381d94544555524c2d87b2cf27"
 _TS = "2026-06-18T10:00:00+00:00"
 
@@ -273,7 +274,12 @@ class M20BFrozenChecks(unittest.TestCase):
                         "bot/universe/registry.py", "bot/universe/suffixes.py")
 
     def test_protected_runtime_unchanged(self):
-        self._unchanged(_M20UE_HEAD, "main.py")
+        import hashlib, pathlib
+        _mp = pathlib.Path(__file__).resolve().parent / "main.py"
+        self.assertEqual(
+            hashlib.sha256(_mp.read_bytes()).hexdigest(),
+            _MAIN_APPROVED_SHA256,
+            "main.py changed beyond approved M20.I seam")
         self._unchanged(_BASELINE, "bot/scanner.py", "bot/risk.py",
                         "bot/strategy.py", "dashboard/app.py", "bot/brokers",
                         "bot/flywheel.py")

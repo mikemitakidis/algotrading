@@ -27,8 +27,9 @@ _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "paper"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _TS = "2026-06-17T10:15:00Z"
 _M20_BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
-# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
-_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
+# main.py is authoritatively protected by the sha256 pin in
+# test_m17_backtesting; assert it matches the approved M20.I value here too.
+_MAIN_APPROVED_SHA256 = "26a999f222bdd258721e0ce54d3067f78b5ad95fac35e7490503fef85973f495"
 
 
 def _order(**over):
@@ -327,9 +328,10 @@ class M20ASafetyGuards(unittest.TestCase):
 
     def test_protected_runtime_files_unchanged(self):
         import subprocess
-        # main.py carries the approved M20.UE seam (sha256-pinned in the M17
-        # protected-content guard); freeze it vs the UE commit. All other
-        # protected runtime files stay byte-frozen vs the M19 baseline.
+        # All other protected runtime files stay byte-frozen vs the M19
+        # baseline. main.py carries the approved M20.UE + M20.I seams and is
+        # authoritatively protected by the sha256 pin in test_m17_backtesting;
+        # assert it matches the approved M20.I value here too.
         r = subprocess.run(
             ["git", "diff", "--name-only", _M20_BASELINE, "HEAD", "--",
              "bot/scanner.py", "bot/risk.py", "bot/strategy.py",
@@ -338,13 +340,12 @@ class M20ASafetyGuards(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "",
                          "protected runtime files changed")
-        rm = subprocess.run(
-            ["git", "diff", "--name-only", _M20UE_HEAD, "HEAD", "--",
-             "main.py"],
-            capture_output=True, text=True, timeout=10)
-        self.assertEqual(rm.returncode, 0)
-        self.assertEqual(rm.stdout.strip(), "",
-                         "main.py changed beyond approved M20.UE seam")
+        import hashlib, pathlib
+        _mp = pathlib.Path(__file__).resolve().parent / "main.py"
+        self.assertEqual(
+            hashlib.sha256(_mp.read_bytes()).hexdigest(),
+            _MAIN_APPROVED_SHA256,
+            "main.py changed beyond approved M20.I seam")
 
 
 class M20AStorage(unittest.TestCase):

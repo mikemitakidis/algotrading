@@ -20,8 +20,9 @@ _PKG_DIR = pathlib.Path(__file__).resolve().parent / "bot" / "universe"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 _SEED = _REPO_ROOT / "configs" / "universe" / "us_seed.json"
 _BASELINE = "e823fe6779deaccc7b8ff7859c17b4dab564b868"
-# M20.UE flag-gated selection seam commit (approved; main.py sha256-pinned).
-_M20UE_HEAD = "d077260d189a8fe6927b7c994f45872800df243a"
+# main.py is authoritatively protected by the sha256 pin in
+# test_m17_backtesting; assert it matches the approved M20.I value here too.
+_MAIN_APPROVED_SHA256 = "26a999f222bdd258721e0ce54d3067f78b5ad95fac35e7490503fef85973f495"
 _M20A_HEAD = "5cdd0839204a71436579f9ed9a8c4a7d69681e87"
 _TS = "2026-06-18T00:00:00+00:00"
 _DATE = "2026-06-18"
@@ -340,7 +341,12 @@ class M20UABackwardCompat(unittest.TestCase):
         # main.py (governed by test_m17_backtesting protected-content guard).
         # Freeze main.py vs the UE commit so new unapproved drift is still
         # caught, while accepting the approved seam.
-        self._unchanged("main.py", baseline=_M20UE_HEAD)
+        import hashlib, pathlib
+        _mp = pathlib.Path(__file__).resolve().parent / "main.py"
+        self.assertEqual(
+            hashlib.sha256(_mp.read_bytes()).hexdigest(),
+            _MAIN_APPROVED_SHA256,
+            "main.py changed beyond approved M20.I seam")
 
     def test_ml_build_dataset_unchanged(self):
         self._unchanged("ml_build_dataset.py")

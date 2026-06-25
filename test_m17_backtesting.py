@@ -3633,10 +3633,11 @@ _PROTECTED_APPROVED_SHA256 = {
     # ISSUE-012: removed no-op .replace("h","h") in the flywheel tfs_passing
     # list comprehension (behaviour-preserving).
     # M20.UE (operator-approved): flag-gated symbol-selection seam in main.py.
-    # Default behaviour unchanged (USE_REGISTRY_UNIVERSE off -> FOCUS_SYMBOLS);
-    # when on, sources scan_ready bare tickers from the universe registry. Only
-    # the symbol-selection block + one import changed; re-pinned here.
-    "main.py": "a5e0fc0d194bbc42a75427a4177402ea0507e47bd0a674bfabecc355953ef3f4",
+    # M20.I (operator-approved): flag-gated, simulation-only paper-loop seam
+    # (PAPER_LOOP_ENABLED, default off) feeding scanner signals through M19
+    # scoring + the paper engine. No live trading / broker / execution_intents.
+    # Re-pinned to the post-M20.I main.py.
+    "main.py": "26a999f222bdd258721e0ce54d3067f78b5ad95fac35e7490503fef85973f495",
     # ISSUE-015: parameterised _load_open_intents() NOT IN clause (bound
     # params; identical result set, no risk-behaviour change).
     "bot/risk.py": "1118fd2e6677c6d34112bd1a7b68884699df72fa42aea0a981b90c8f1c13812e",
@@ -4171,6 +4172,7 @@ class G10_Hygiene(unittest.TestCase):
         allowed_prefixes = ("bot/backtesting/", "configs/backtests/",
                             "bot/signal_scoring/", "configs/signal_scoring/",
                             "bot/paper/", "configs/paper/",
+                            "bot/runtime/",
                             "bot/universe/", "configs/universe/")
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -4240,6 +4242,8 @@ class G10_Hygiene(unittest.TestCase):
             "docs/ROADMAP_M20.md",
             # M20.UE: registry-based active selection proof tests.
             "test_m20ue_active_selection.py",
+            # M20.I: runtime paper loop proof tests.
+            "test_m20i_paper_loop.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

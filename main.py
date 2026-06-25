@@ -34,6 +34,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 from bot.config   import load
 from bot.focus    import FOCUS_SYMBOLS
 from bot.universe.active_selection import get_scan_ready_symbols  # M20.UE (flag-gated)
+from bot.runtime.paper_loop import run_paper_loop  # M20.I (flag-gated, simulation-only)
 from bot.database import init_db, insert_signal, init_features_table, insert_signal_features
 from bot.flywheel  import (init_flywheel_tables, log_candidate, log_intent, recent_intents,
                             update_intent_status, get_daily_state, get_persistent_state,
@@ -194,6 +195,29 @@ def main():
 
     alert_startup(config)
 
+    # ── M20.I: runtime paper loop (flag-gated, default OFF, simulation-only) ──
+    # When PAPER_LOOP_ENABLED is truthy, each cycle's scanner signals are also
+    # run through the simulation-only paper loop (M19 scoring -> paper routing
+    # -> paper engine). No live trading, no broker calls, no execution_intents.
+    _paper_loop_enabled = os.getenv('PAPER_LOOP_ENABLED', '').strip().lower() \
+        in ('1', 'true', 'yes', 'on')
+    _paper_account = None
+    if _paper_loop_enabled:
+        try:
+            from bot.paper import new_account as _new_paper_account
+            _pa_equity = float(os.getenv('PAPER_START_EQUITY', '100000'))
+            _pa_res = _new_paper_account(
+                starting_equity=_pa_equity,
+                as_of_utc=datetime.now(timezone.utc).isoformat())
+            _paper_account = _pa_res.account_state if _pa_res.ok else None
+            log.info('[STARTUP] Paper loop: ENABLED (sim-only, equity=%.0f)',
+                     _pa_equity)
+        except Exception as _pe:  # noqa: BLE001
+            _paper_account = None
+            log.warning('[STARTUP] Paper loop init failed (%s); disabled', _pe)
+    else:
+        log.info('[STARTUP] Paper loop: disabled')
+
     uptime_started = datetime.now(timezone.utc).isoformat()
     scan_interval  = config['scan_interval_secs']
 
@@ -250,6 +274,22 @@ def main():
             cycle_start = time.monotonic()
             signals, meta = scan_cycle(focus, config, conn=conn, cycle_id=cycle)
             cycle_duration = round(time.monotonic() - cycle_start)
+
+            # ── M20.I: feed this cycle's signals through the paper loop ──
+            # Simulation-only; advances the in-memory paper account. Guarded so
+            # a paper-loop error can never disrupt the scan/insert path.
+            if _paper_loop_enabled and _paper_account is not None and signals:
+                try:
+                    _pl = run_paper_loop(
+                        signals, _paper_account,
+                        evaluated_at_utc=datetime.now(timezone.utc).isoformat())
+                    _paper_account = _pl.account
+                    log.info('[PAPER-LOOP] cycle %d: %d in, %d routed, %d opened, '
+                             '%d skipped', cycle, _pl.signals_in,
+                             _pl.routed_count, _pl.opened_count,
+                             _pl.skipped_ineligible)
+                except Exception as _ple:  # noqa: BLE001
+                    log.warning('[PAPER-LOOP] cycle %d failed (%s)', cycle, _ple)
 
             inserted = 0
             for signal in signals:

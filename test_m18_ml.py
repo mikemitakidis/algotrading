@@ -10414,6 +10414,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/ml/",          "configs/ml/",          # M18
             "bot/signal_scoring/", "configs/signal_scoring/",  # M19
             "bot/paper/",        "configs/paper/",          # M20
+            "bot/runtime/",                                 # M20.I
             "bot/universe/",     "configs/universe/",       # M20.U
         )
         allowed_exact = {
@@ -10491,6 +10492,8 @@ class G10_Hygiene(unittest.TestCase):
             "docs/ROADMAP_M20.md",
             # M20.UE: registry-based active selection proof tests.
             "test_m20ue_active_selection.py",
+            # M20.I: runtime paper loop proof tests.
+            "test_m20i_paper_loop.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",
