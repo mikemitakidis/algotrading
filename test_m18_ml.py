@@ -10496,6 +10496,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20i_paper_loop.py",
             # M20.J: read-only status reporter proof tests.
             "test_m20j_status.py",
+            # M21.U0: source-ingestion / raw-vault tool.
+            "test_m21u0_source_ingest.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

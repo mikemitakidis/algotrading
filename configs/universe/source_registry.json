@@ -1,0 +1,5 @@
+{
+  "schema_version": "m21u0_source_registry_v1",
+  "description": "Provenance + SHA-256 index of vaulted global source files. Raw files are gitignored; this ledger is the committed evidence.",
+  "sources": []
+}

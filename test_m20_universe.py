@@ -295,10 +295,13 @@ class M20UASafetyGuards(unittest.TestCase):
                 self.assertNotIn(tok, src, f"{path.name}:{tok}")
 
     def test_file_open_only_in_registry(self):
-        # registry.py legitimately reads JSON; no other module opens files.
+        # registry.py legitimately reads JSON; source_ingest.py (M21.U0) is the
+        # raw-vault tool and legitimately writes vault files + the provenance
+        # ledger. No other universe module opens files.
+        _allowed_open = {"registry.py", "source_ingest.py"}
         for path in self._iter():
             src = path.read_text()
-            if path.name != "registry.py":
+            if path.name not in _allowed_open:
                 self.assertNotIn("open(", src, f"{path.name} opens files")
 
     def test_no_data_path_tokens(self):
