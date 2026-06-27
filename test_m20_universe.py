@@ -296,9 +296,10 @@ class M20UASafetyGuards(unittest.TestCase):
 
     def test_file_open_only_in_registry(self):
         # registry.py legitimately reads JSON; source_ingest.py (M21.U0) is the
-        # raw-vault tool and legitimately writes vault files + the provenance
-        # ledger. No other universe module opens files.
-        _allowed_open = {"registry.py", "source_ingest.py"}
+        # raw-vault tool; global_expansion.py (M21.U1) reads curated CSVs + the
+        # US JSON and writes global_expanded.json. All legitimately do file I/O.
+        _allowed_open = {"registry.py", "source_ingest.py",
+                         "global_expansion.py"}
         for path in self._iter():
             src = path.read_text()
             if path.name not in _allowed_open:

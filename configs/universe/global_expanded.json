@@ -1,0 +1,5 @@
+{
+  "description": "Global INACTIVE universe candidates (M21.U). All records active=false, scan_ready=false, data_quality_status=unverified; liquidity null. NOT added to active_selection._DEFAULT_PATHS; runtime/scanner/paper ignore these. Built by bot.universe.global_expansion from verified, dated, vaulted sources.",
+  "schema_version": "m21u_global_candidates_v1",
+  "symbols": []
+}
