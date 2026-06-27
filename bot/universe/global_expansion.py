@@ -56,6 +56,21 @@ _VERIFIED = "VERIFIED"
 _SKIP_STATUSES = ("NEEDS_REVIEW", "EXCLUDE")
 _FORMULA_PREFIXES = ("=", "+", "-", "@")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Supported (region, index_source, exchange_prefix) adapters for the M21.U1
+# first cut. A curated row's (region, index_source, exchange_prefix) triple must
+# be one of these exactly; mismatches (e.g. UK,DAX,XETRA) are rejected. China,
+# Italy, and ADRs are intentionally absent.
+_SUPPORTED_ADAPTERS = frozenset({
+    ("UK", "FTSE100", "LSE"),
+    ("HK", "HSI", "HKEX"),
+    ("JP", "NIKKEI225", "TSE"),
+    ("EU", "DAX", "XETRA"),
+    ("EU", "CAC", "EPA"),
+    ("EU", "AEX", "AEX"),
+    ("EU", "IBEX", "BME"),
+    ("EU", "SMI", "SIX"),
+})
 # fields that must never contain separators/whitespace/traversal
 _TOKEN_FIELDS = ("local_ticker", "yfinance_symbol", "exchange_prefix")
 
@@ -112,7 +127,21 @@ def to_record_dict(row: Dict[str, str]) -> Dict[str, Any]:
     exchange = row["exchange_prefix"]
     if exchange not in _suffixes.EXCHANGES:
         raise NormaliserError(f"unsupported exchange prefix: {exchange!r}")
+    region_in = row.get("region", "")
+    index_in = row.get("index_source", "")
+    # fix 1: the curated (region, index_source, exchange_prefix) triple must be
+    # an approved adapter; rejects mismatches like UK,DAX,XETRA.
+    if (region_in, index_in, exchange) not in _SUPPORTED_ADAPTERS:
+        raise NormaliserError(
+            f"unsupported (region, index_source, exchange_prefix) adapter: "
+            f"({region_in!r}, {index_in!r}, {exchange!r})")
     local = row["local_ticker"]
+    # fix 2: HK curated source must preserve zero-padding — local_ticker must be
+    # exactly 4 digits (e.g. 0700 accepted, 5 rejected).
+    if exchange == "HKEX" and not re.fullmatch(r"\d{4}", local):
+        raise NormaliserError(
+            f"HKEX local_ticker must be exactly 4 digits (zero-padded), "
+            f"got {local!r}")
     internal = f"{exchange}:{local}"
     # canonical yfinance symbol from the static suffix table; the curated value
     # must match exactly (catches a wrong suffix in the source).
@@ -153,8 +182,13 @@ def to_record_dict(row: Dict[str, str]) -> Dict[str, Any]:
         # UTC); no wall-clock, preserving byte-determinism.
         "first_seen_utc": f"{row['source_asof']}T00:00:00+00:00",
         "sector": (row.get("sector") or None),
+        "industry": None,
         "data_quality_status": _schema.DataQualityStatus.UNVERIFIED.value,
-        # liquidity fields intentionally omitted -> schema defaults to null
+        # fix 4: liquidity fields explicitly null (keys present, value None).
+        "avg_volume_20d": None,
+        "avg_dollar_volume_20d": None,
+        "median_spread_bps": None,
+        "min_liquidity_tier": None,
         "notes": (row.get("notes") or None),
     }
     return rec

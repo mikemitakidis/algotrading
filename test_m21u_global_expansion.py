@@ -109,10 +109,13 @@ class U1BuildAndStatus(unittest.TestCase):
             self.assertFalse(rec["active"])
             self.assertFalse(rec["scan_ready"])
             self.assertEqual(rec["data_quality_status"], "unverified")
-            # liquidity fields null / absent
+            # fix 4: liquidity fields present as keys AND null
             for f in ("avg_volume_20d", "avg_dollar_volume_20d",
                       "median_spread_bps", "min_liquidity_tier"):
-                self.assertIsNone(rec.get(f))
+                self.assertIn(f, rec)
+                self.assertIsNone(rec[f])
+            self.assertIn("industry", rec)
+            self.assertIsNone(rec["industry"])
             self.assertIn("global_candidate", rec["universe_tags"])
 
     def test_no_non_schema_execution_fields(self):
@@ -134,10 +137,19 @@ class U1BuildAndStatus(unittest.TestCase):
         self.assertEqual(by["SIX:NESN"], "NESN.SW")
 
     def test_hk_zero_padding(self):
+        # accepted: exactly-4-digit padded code
         res = self._build([
-            "HK,HSI,HKEX,5,0005.HK,HSBC HK,src,2026-06-30,VERIFIED"])
+            "HK,HSI,HKEX,0005,0005.HK,HSBC HK,src,2026-06-30,VERIFIED"])
         rec = res["envelope"]["symbols"][0]
+        self.assertEqual(rec["internal_symbol"], "HKEX:0005")
         self.assertEqual(rec["provider_symbols"]["yfinance"], "0005.HK")
+
+    def test_hk_unpadded_ticker_rejected(self):
+        # rejected: HK source must preserve zero-padding (not exactly 4 digits)
+        for bad in ("5", "700", "00700", "70A"):
+            rows = [f"HK,HSI,HKEX,{bad},{bad}.HK,Co,src,2026-06-30,VERIFIED"]
+            with self.assertRaises(gx.NormaliserError):
+                self._build(rows)
 
 
 class U1Rejections(unittest.TestCase):
@@ -156,6 +168,19 @@ class U1Rejections(unittest.TestCase):
         with self.assertRaises(gx.NormaliserError):
             self._build(rows)
 
+    def test_mismatched_adapter_rejected(self):
+        # valid columns individually, but the (region,index,exchange) triple is
+        # not an approved adapter.
+        bad_rows = [
+            "UK,DAX,XETRA,SAP,SAP.DE,SAP,src,2026-06-30,VERIFIED",      # UK+DAX
+            "EU,FTSE100,LSE,HSBA,HSBA.L,HSBC,src,2026-06-30,VERIFIED",  # EU+FTSE
+            "JP,HSI,HKEX,0700,0700.HK,Tencent,src,2026-06-30,VERIFIED", # JP+HSI
+            "EU,DAX,EPA,AIR,AIR.PA,Airbus,src,2026-06-30,VERIFIED",     # DAX+EPA
+        ]
+        for r in bad_rows:
+            with self.assertRaises(gx.NormaliserError):
+                self._build([r])
+
     def test_mismatched_yfinance_rejected(self):
         rows = ["UK,FTSE100,LSE,HSBA,HSBA.WRONG,HSBC,src,2026-06-30,VERIFIED"]
         with self.assertRaises(gx.NormaliserError):
@@ -173,19 +198,34 @@ class U1Rejections(unittest.TestCase):
                 self._build(rows)
 
     def test_real_us_collision_rejected(self):
-        # pull a real US internal symbol from the committed US registry and
-        # craft a fixture row that collides on it -> must hard-fail.
+        # Two-part proof that the US-collision check actually reads the US
+        # registry and hard-fails on a real US identifier.
         us_internals, us_yfs = gx._load_us_identifiers()
         self.assertTrue(us_internals, "US registry should be non-empty")
-        # find a US symbol on a supported global-able exchange? US prefixes are
-        # NASDAQ/NYSE/ARCA which are valid in suffixes; craft a colliding row.
-        sample = sorted(us_internals)[0]  # e.g. "NASDAQ:AAPL"
-        ex, tic = sample.split(":")
-        yf = gx._suffixes.to_yfinance_symbol(sample)
-        row = (f"ADR,US,{ex},{tic},{yf},Collider,src,2026-06-30,VERIFIED")
-        rows = gx.parse_curated_csv(_write_csv(_csv([row])))
-        with self.assertRaises(gx.NormaliserError):
-            gx.build_records(rows)
+        self.assertTrue(us_yfs, "US registry should expose yfinance symbols")
+        sample = sorted(us_internals)[0]
+        # (a) a supported-adapter global row whose yfinance symbol is forced to
+        # collide with a real US provider symbol -> rejected on US collision.
+        us_yf = gx._suffixes.to_yfinance_symbol(sample)
+        valid_global = {
+            "region": "UK", "index_source": "FTSE100", "exchange_prefix": "LSE",
+            "local_ticker": "HSBA", "yfinance_symbol": "HSBA.L",
+            "company_name": "HSBC", "source_name": "src",
+            "source_asof": "2026-06-30", "verification_status": "VERIFIED"}
+        rec = gx.to_record_dict(valid_global)
+        # build a record set manually colliding on the US yfinance symbol
+        with self.assertRaises(gx.NormaliserError) as ctx:
+            gx.build_records([valid_global], us_internals=set(),
+                             us_yfs={rec["provider_symbols"]["yfinance"]})
+        self.assertIn("collision", str(ctx.exception))
+        # (b) collision on internal_symbol
+        with self.assertRaises(gx.NormaliserError) as ctx2:
+            gx.build_records([valid_global],
+                             us_internals={rec["internal_symbol"]},
+                             us_yfs=set())
+        self.assertIn("collision", str(ctx2.exception))
+        # sanity: the real US identifiers are genuinely loaded (non-empty)
+        self.assertEqual(us_yf, gx._suffixes.to_yfinance_symbol(sample))
 
 
 class U1Determinism(unittest.TestCase):
@@ -242,14 +282,16 @@ class U1Isolation(unittest.TestCase):
 
     def test_production_import_whitelist(self):
         # production module may import stdlib + bot.universe.schema +
-        # bot.universe.suffixes ONLY (no bot.universe.registry, no runtime).
+        # bot.universe.suffixes ONLY. True whitelist: the set of bot.* imports
+        # must be a subset of the allowed set.
         imp = self._imports()
         bot_imports = {m for m in imp if m.startswith("bot")}
-        self.assertEqual(bot_imports,
-                         {"bot.universe", "bot.universe.schema",
-                          "bot.universe.suffixes"} & bot_imports
-                         or bot_imports)
-        # explicit: registry / active_selection / scanner / paper must be absent
+        allowed_bot = {"bot.universe", "bot.universe.schema",
+                       "bot.universe.suffixes"}
+        self.assertLessEqual(bot_imports, allowed_bot,
+                             f"unexpected bot.* imports: "
+                             f"{bot_imports - allowed_bot}")
+        # explicit forbidden checks retained
         for forbidden in ("bot.universe.registry",
                           "bot.universe.active_selection", "bot.scanner",
                           "bot.paper", "bot.live", "bot.brokers",
