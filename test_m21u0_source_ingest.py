@@ -53,8 +53,12 @@ class U0VaultIngest(unittest.TestCase):
         self.assertEqual(e["region"], "UK")
         self.assertEqual(len(e["sha256"]), 64)
         self.assertEqual(e["ingest_method"], "upload")
-        self.assertTrue((si._VAULT_DIR.parent.parent.parent
-                         / e["vault_path"].split("data/")[-1]) or True)
+        # the vaulted file must actually exist on disk
+        vaulted = si._vault_root() / e["vault_path"]
+        self.assertTrue(vaulted.is_file(), f"vaulted file missing: {vaulted}")
+        # and its SHA-256 must equal the ledger digest and the source digest
+        self.assertEqual(si._sha256_file(vaulted), e["sha256"])
+        self.assertEqual(si._sha256_file(self._src), e["sha256"])
 
     def test_idempotent_identical_bytes(self):
         self._ingest()
@@ -94,6 +98,68 @@ class U0VaultIngest(unittest.TestCase):
         res = self._ingest(region="CN")  # out of scope in M21.U0
         self.assertFalse(res["ok"])
         self.assertIn("bad_region", res["reason"])
+
+    # ── M21.U0.H input hardening ──
+    def test_bad_source_asof_format_rejected(self):
+        for bad in ("2026/06/30", "20260630", "2026-6-30", "2026-06-30 ",
+                    " 2026-06-30", "2026-06-30T00:00:00", ""):
+            res = self._ingest(source_asof=bad)
+            self.assertFalse(res["ok"], f"{bad!r} should be rejected")
+            self.assertIn("validation", res["reason"])
+
+    def test_invalid_calendar_date_rejected(self):
+        for bad in ("2026-02-31", "2026-13-01", "2026-00-10", "2026-06-00"):
+            res = self._ingest(source_asof=bad)
+            self.assertFalse(res["ok"], f"{bad!r} should be rejected")
+            self.assertIn("validation", res["reason"])
+
+    def test_source_asof_traversal_rejected(self):
+        for bad in ("../etc", "2026-06-../", "..-..-..", "2026-06-30/.."):
+            res = self._ingest(source_asof=bad)
+            self.assertFalse(res["ok"])
+            self.assertIn("validation", res["reason"])
+
+    def test_bad_index_source_rejected(self):
+        for bad in ("FTSE/100", "FTSE 100", "ftse100..", "../x", "FT\\SE",
+                    "", "FTSE;100"):
+            res = self._ingest(index_source=bad)
+            self.assertFalse(res["ok"], f"{bad!r} should be rejected")
+            self.assertIn("validation", res["reason"])
+
+    def test_path_traversal_does_not_escape_vault(self):
+        # even a crafted index_source must never produce a path outside the
+        # vault dir (validation rejects it before any path is built).
+        res = self._ingest(index_source="../../../../etc/passwd")
+        self.assertFalse(res["ok"])
+        self.assertIn("validation", res["reason"])
+        # nothing was vaulted
+        self.assertEqual(len(list(si._VAULT_DIR.rglob("*"))), 0)
+
+    def test_valid_ingest_still_works_after_hardening(self):
+        res = self._ingest(index_source="FTSE100", source_asof="2026-06-30")
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["noop"])
+        e = json.loads(si._LEDGER.read_text())["sources"][0]
+        self.assertEqual(si._sha256_file(si._vault_root() / e["vault_path"]),
+                         e["sha256"])
+
+    def test_ledger_schema_version_validated(self):
+        # a tampered ledger schema_version must be rejected on load.
+        self._ingest()  # create a valid ledger first
+        doc = json.loads(si._LEDGER.read_text())
+        doc["schema_version"] = "bogus_v999"
+        si._LEDGER.write_text(json.dumps(doc), encoding="utf-8")
+        with self.assertRaises(si.IngestValidationError):
+            si._load_ledger()
+
+    def test_filename_stamp_is_utc_z(self):
+        res = self._ingest()
+        e = json.loads(si._LEDGER.read_text())["sources"][0]
+        fname = pathlib.Path(e["vault_path"]).name
+        # stamp segment looks like YYYYMMDDThhmmssZ
+        import re as _re
+        self.assertTrue(_re.search(r"\d{8}T\d{6}Z", fname),
+                        f"no UTC-Z stamp in {fname}")
 
     def test_no_deletion_path(self):
         # the module must expose no delete/remove/unlink behaviour
@@ -139,6 +205,11 @@ class U0Isolation(unittest.TestCase):
         nonstd = {m for m in imported if m.startswith("bot")}
         self.assertEqual(nonstd, set(),
                          f"unexpected bot.* imports: {nonstd}")
+
+    def test_scan_ready_unchanged(self):
+        # the vault tool must not perturb the runtime universe selector.
+        from bot.universe.active_selection import get_scan_ready_symbols
+        self.assertEqual(len(get_scan_ready_symbols()), 536)
 
 
 if __name__ == "__main__":

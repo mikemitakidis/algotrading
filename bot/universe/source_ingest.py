@@ -25,8 +25,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -38,6 +39,55 @@ LEDGER_SCHEMA_VERSION = "m21u0_source_registry_v1"
 _REGIONS = ("UK", "EU", "JP", "HK", "ADR")
 _SOURCE_TYPES = ("official_index", "etf_holdings", "exchange_listing")
 
+# Safe-token pattern for any free-text input that becomes part of a source_id
+# or a file path. Strict uppercase alnum plus _ . - ; no slashes, spaces, or
+# traversal sequences. (A leading dot or a ".." run is additionally rejected.)
+_SAFE_TOKEN_RE = re.compile(r"^[A-Z0-9_.-]+$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+class IngestValidationError(ValueError):
+    """Raised when an ingest input fails validation."""
+
+
+def _validate_source_asof(value: str) -> None:
+    # strict YYYY-MM-DD, real calendar date, no slashes/spaces/traversal.
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        raise IngestValidationError(
+            f"source_asof must be strict YYYY-MM-DD, got {value!r}")
+    y, m, d = (int(p) for p in value.split("-"))
+    try:
+        parsed = date(y, m, d)
+    except ValueError:
+        raise IngestValidationError(
+            f"source_asof is not a valid calendar date: {value!r}")
+    # round-trip guard (rejects e.g. zero-padded oddities that re-format)
+    if parsed.isoformat() != value:
+        raise IngestValidationError(
+            f"source_asof not canonical YYYY-MM-DD: {value!r}")
+
+
+def _validate_safe_token(name: str, value: str) -> None:
+    if not isinstance(value, str) or value == "":
+        raise IngestValidationError(f"{name} must be a non-empty string")
+    if any(bad in value for bad in ("/", "\\", "..")):
+        raise IngestValidationError(
+            f"{name} must not contain '/', '\\\\', or '..': {value!r}")
+    if not _SAFE_TOKEN_RE.match(value):
+        raise IngestValidationError(
+            f"{name} must match {_SAFE_TOKEN_RE.pattern}: {value!r}")
+
+
+def _validate_path_safe(name: str, value: str) -> None:
+    # for any string used in a path/source_id beyond the token rule: no
+    # separators, no traversal, non-empty.
+    if not isinstance(value, str) or value == "":
+        raise IngestValidationError(f"{name} must be a non-empty string")
+    if any(bad in value for bad in ("/", "\\", "..")):
+        raise IngestValidationError(
+            f"{name} must not contain '/', '\\\\', or '..': {value!r}")
+
+
 
 # ── ledger I/O (the only writable targets are the vault + this ledger) ──
 def _load_ledger() -> Dict[str, Any]:
@@ -47,7 +97,15 @@ def _load_ledger() -> Dict[str, Any]:
                                "source files. Raw files are gitignored; this "
                                "ledger is the committed evidence.",
                 "sources": []}
-    return json.loads(_LEDGER.read_text(encoding="utf-8"))
+    doc = json.loads(_LEDGER.read_text(encoding="utf-8"))
+    sv = doc.get("schema_version")
+    if sv != LEDGER_SCHEMA_VERSION:
+        raise IngestValidationError(
+            f"source_registry schema_version {sv!r} != expected "
+            f"{LEDGER_SCHEMA_VERSION!r}")
+    if not isinstance(doc.get("sources"), list):
+        raise IngestValidationError("source_registry 'sources' must be a list")
+    return doc
 
 
 def _write_ledger(doc: Dict[str, Any]) -> None:
@@ -98,6 +156,15 @@ def ingest(*, file: str, region: str, index_source: str, source_name: str,
         return {"ok": False, "reason": f"bad_region:{region}"}
     if source_type not in _SOURCE_TYPES:
         return {"ok": False, "reason": f"bad_source_type:{source_type}"}
+    # input hardening: anything that becomes part of source_id or a vault path
+    # must be a safe token / canonical date with no separators or traversal.
+    try:
+        _validate_source_asof(source_asof)
+        _validate_safe_token("index_source", index_source)
+        # region is already constrained to the enum; re-assert path-safety.
+        _validate_path_safe("region", region)
+    except IngestValidationError as e:
+        return {"ok": False, "reason": f"validation:{e}"}
 
     digest = _sha256_file(src)
     doc = _load_ledger()
@@ -117,9 +184,12 @@ def ingest(*, file: str, region: str, index_source: str, source_name: str,
         and s.get("source_asof") == source_asof and s.get("sha256") != digest
         for s in sources)
 
-    downloaded_at = datetime.now(timezone.utc).isoformat()
-    stamp = downloaded_at.replace(":", "").replace("-", "").replace("+0000", "Z")
-    stamp = stamp.split(".")[0]
+    now_utc = datetime.now(timezone.utc)
+    downloaded_at = now_utc.isoformat()
+    # filename stamp: compact UTC with an explicit trailing Z, e.g.
+    # 20260627T111650Z (second resolution; digest fragment guarantees
+    # uniqueness within the same second).
+    stamp = now_utc.strftime("%Y%m%dT%H%M%SZ")
     ext = src.suffix.lstrip(".") or "dat"
     dest_dir = _VAULT_DIR / source_asof
     dest_dir.mkdir(parents=True, exist_ok=True)
