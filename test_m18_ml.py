@@ -10502,6 +10502,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21u_global_expansion.py",
             # M21.U2: UK FTSE 100 inactive candidates.
             "test_m21u2_uk_ftse100.py",
+            # M21.U3.HK: Hang Seng inactive candidates.
+            "test_m21u3_hk_hsi.py",
             # pre-M19 docs cleanup (ISSUE-004/005): README refresh +
             # historical-V1 banners (operator-approved bump).
             "README.md",

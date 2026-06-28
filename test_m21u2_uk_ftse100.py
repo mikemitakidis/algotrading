@@ -39,9 +39,13 @@ class U2Counts(unittest.TestCase):
     def test_exactly_100_uk_records(self):
         self.assertEqual(len(_uk_records()), 100)
 
-    def test_global_total_is_100(self):
-        # M21.U2 is the first data batch; global file holds only the UK 100.
-        self.assertEqual(len(_load_global()["symbols"]), 100)
+    def test_global_total_at_least_uk(self):
+        # global_expanded.json grows as data batches land (UK=100, +HK=93 ...).
+        # The UK contribution stays exactly 100; the total is >= 100 and, in the
+        # current committed UK+HK state, exactly 193.
+        total = len(_load_global()["symbols"])
+        self.assertGreaterEqual(total, 100)
+        self.assertEqual(total, 193)
 
 
 class U2RecordShape(unittest.TestCase):
