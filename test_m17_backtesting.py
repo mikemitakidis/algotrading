@@ -4269,6 +4269,9 @@ class G10_Hygiene(unittest.TestCase):
             # no universe data or runtime changes.
             ".github/workflows/m21u4_europe_source_audit.yml",
             "reports/m21u4_europe_source_audit.md",
+            # M21.U4 Europe source-repair: report + test (read-only).
+            "reports/m21u4_europe_source_repair.md",
+            "test_m21u4_europe_source_repair.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
