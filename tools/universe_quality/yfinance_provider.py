@@ -1,15 +1,27 @@
 """M21.UQ yfinance provider adapter (read-only, lazy import).
 
-Implements ProviderProtocol via yfinance. yfinance is imported LAZILY inside
-fetch_ohlcv so this module imports cleanly even where yfinance is not installed
+Implements ProviderProtocol via yfinance. yfinance is imported LAZILY inside the
+fetch path so this module imports cleanly even where yfinance is not installed
 (e.g. the unit-test sandbox); unit tests inject a fake fetch and never hit the
-network. The adapter is read-only: it fetches OHLCV bars and returns them as a
-list[dict]; it NEVER writes configs, never mutates candidates, never sets
-scan_ready.
+network. The adapter is read-only: it fetches OHLCV bars; it NEVER writes
+configs, never mutates candidates, never sets scan_ready.
 
-On any failure (symbol unknown, network error, empty frame) it returns None or
-[] so the existing evaluators map it to ohlcv_empty — provider failure is
-report-only and never a reason to mutate records.
+Provider outcomes are classified honestly via fetch_ohlcv_result(), which
+returns a structured FetchResult so a rate-limit is never mislabelled as empty
+data:
+  - rate-limit exception (YFRateLimitError / "Too Many Requests" / "Rate
+    limited" / "429") -> FetchResult(error_kind="rate_limited")
+  - any other provider exception (network, malformed frame, yfinance import
+    failure) -> FetchResult(error_kind="fetch_error")
+  - true empty dataframe with no exception -> FetchResult(bars=[])
+  - success -> FetchResult(bars=[...])
+The evaluator and report use fetch_ohlcv_result() so rate-limited / errored
+symbols are reported as provider_rate_limited / provider_fetch_error, NOT as
+ohlcv_empty / volume_missing_or_zero. fetch_ohlcv() is retained only for
+back-compat with the plain ProviderProtocol and DISCARDS the classification
+(returns bars or None/[]); new code should prefer fetch_ohlcv_result().
+
+Provider failure is always report-only and never a reason to mutate records.
 """
 from typing import Callable, List, Optional
 
