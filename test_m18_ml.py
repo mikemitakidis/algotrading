@@ -10541,6 +10541,10 @@ class G10_Hygiene(unittest.TestCase):
             "reports/m21uq_quality_collectors_plan_or_dryrun.md",
             "reports/m21uq_quality_collectors_dryrun.json",
             "test_m21uq_quality_collectors.py",
+            # M21.UQ provider-backed dry-run (read-only).
+            "test_m21uq_provider_backed.py",
+            "reports/m21uq_provider_backed_dryrun.md",
+            "reports/m21uq_provider_backed_dryrun.json",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")

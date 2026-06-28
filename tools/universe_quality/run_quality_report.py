@@ -43,7 +43,30 @@ def evaluate_all(records, provider=None, cfg=None, as_of=None):
     return results
 
 
-def render(records, results):
+def select_records(records, region=None, symbols=None, limit=None):
+    """Read-only selection/filtering of candidates for a provider run.
+
+    region: 'UK'/'HK' (case-insensitive) -> filter by record region.
+    symbols: iterable of internal_symbols or provider symbols to include.
+    limit: cap the number returned (after region/symbol filtering).
+    Returns a NEW list; never mutates the input records.
+    """
+    out = list(records)
+    if region:
+        rg = region.upper()
+        out = [r for r in out if str(r.get("region", "")).upper() == rg]
+    if symbols:
+        want = set(symbols)
+        out = [r for r in out
+               if r.get("internal_symbol") in want
+               or (r.get("provider_symbols") or {}).get("yfinance") in want]
+    if limit is not None:
+        out = out[:limit]
+    return out
+
+
+def render(records, results, provider_mode="none / structural-only",
+           attempted=None):
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     failed = total - passed
@@ -54,14 +77,20 @@ def render(records, results):
             code_counts[c] += 1
         for w in r.warnings:
             code_counts[w] += 1
+    network = "disabled" if provider_mode.startswith("none") else "enabled"
     L = []
     L.append("# M21.UQ — Global Quality Collectors / Gates — Dry-Run Report")
     L.append("")
-    L.append("- report_type: **offline structural dry-run**")
+    rtype = ("offline structural dry-run"
+             if provider_mode.startswith("none")
+             else "provider-backed dry-run")
+    L.append("- report_type: **%s**" % rtype)
     L.append("- source_file: `configs/universe/global_expanded.json`")
     L.append("- scope: **existing global candidates only**")
-    L.append("- network: **disabled**")
-    L.append("- provider_mode: **none / structural-only**")
+    L.append("- network: **%s**" % network)
+    L.append("- provider_mode: **%s**" % provider_mode)
+    L.append("- attempted: **%d**" % (total if attempted is None
+                                      else attempted))
     L.append("")
     L.append("> Read-only quality dry-run over EXISTING global candidates. No "
              "writes to global_expanded.json / source_registry.json, no "
@@ -117,6 +146,22 @@ def render(records, results):
     else:
         L.append("(none)")
     L.append("")
+    L.append("## OHLCV breakdown (provider-backed runs)")
+    L.append("")
+    ohlcv_codes = ("ohlcv_empty", "ohlcv_too_few_bars", "ohlcv_stale",
+                   "ohlcv_non_finite", "volume_missing_or_zero")
+    any_ohlcv = False
+    for code in ohlcv_codes:
+        hit = [r.internal_symbol for r in results if code in r.reason_codes]
+        if hit:
+            any_ohlcv = True
+            shown = ", ".join("`%s`" % s for s in hit[:25])
+            more = "" if len(hit) <= 25 else " (+%d more)" % (len(hit) - 25)
+            L.append("- `%s`: %d — %s%s" % (code, len(hit), shown, more))
+    if not any_ohlcv:
+        L.append("(no OHLCV codes — structural-only run, or all OHLCV checks "
+                 "passed)")
+    L.append("")
     L.append("## Safety confirmation")
     L.append("")
     L.append("- read-only: no global_expanded.json / source_registry.json "
@@ -129,6 +174,17 @@ def render(records, results):
     return "\n".join(L)
 
 
+def build_provider(name, timeout=20, pace_seconds=0.0):
+    """Construct a provider by name. 'none' -> None (offline). 'yfinance' ->
+    YFinanceProvider. Unknown -> ValueError."""
+    if name == "none":
+        return None
+    if name == "yfinance":
+        from tools.universe_quality.yfinance_provider import YFinanceProvider
+        return YFinanceProvider(timeout=timeout, pace_seconds=pace_seconds)
+    raise ValueError("unknown provider: %s" % name)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--global", dest="global_path",
@@ -137,12 +193,49 @@ def main():
                     default="reports/m21uq_quality_collectors_plan_or_dryrun"
                             ".md")
     ap.add_argument("--json-out", default="")
+    ap.add_argument("--provider", choices=("none", "yfinance"),
+                    default="none",
+                    help="none = offline structural (default); yfinance = "
+                         "provider-backed OHLCV (explicit, read-only, reports "
+                         "only)")
+    ap.add_argument("--region", default="", help="filter UK/HK")
+    ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--symbols", default="",
+                    help="comma-separated internal or provider symbols")
+    ap.add_argument("--timeout", type=int, default=20)
+    ap.add_argument("--pace-seconds", type=float, default=0.0)
     args = ap.parse_args()
-    records = json.loads(Path(args.global_path).read_text())["symbols"]
-    results = evaluate_all(records)  # offline structural run
+
+    all_records = json.loads(Path(args.global_path).read_text())["symbols"]
+    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()] \
+        or None
+    records = select_records(all_records, region=args.region or None,
+                             symbols=symbols, limit=args.limit)
+    provider = build_provider(args.provider, timeout=args.timeout,
+                              pace_seconds=args.pace_seconds)
+    provider_mode = ("none / structural-only" if provider is None
+                     else "yfinance")
+
+    # duplicate detection is global (over the FULL set), so a filtered run
+    # still flags a provider symbol duplicated elsewhere in the universe.
+    results = evaluate_all(records, provider=provider)
+    if provider is not None:
+        # re-inject duplicates computed over the full universe
+        from tools.universe_quality.evaluators import (
+            find_duplicate_provider_symbols)
+        from tools.universe_quality.quality_model import (
+            PROVIDER_SYMBOL_DUPLICATE)
+        dups = find_duplicate_provider_symbols(all_records)
+        for r in results:
+            if (r.provider_symbol in dups
+                    and PROVIDER_SYMBOL_DUPLICATE not in r.reason_codes):
+                r.reason_codes.append(PROVIDER_SYMBOL_DUPLICATE)
+                r.passed = False
+
     rp = Path(args.report)
     rp.parent.mkdir(parents=True, exist_ok=True)
-    rp.write_text(render(records, results), encoding="utf-8")
+    rp.write_text(render(records, results, provider_mode=provider_mode,
+                         attempted=len(records)), encoding="utf-8")
     print("wrote %s" % rp)
     if args.json_out:
         Path(args.json_out).write_text(
@@ -150,7 +243,8 @@ def main():
         print("wrote %s" % args.json_out)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
-    print("evaluated=%d passed=%d failed=%d" % (total, passed, total - passed))
+    print("provider=%s attempted=%d passed=%d failed=%d"
+          % (provider_mode, total, passed, total - passed))
 
 
 if __name__ == "__main__":
