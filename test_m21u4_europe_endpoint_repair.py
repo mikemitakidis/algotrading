@@ -105,7 +105,7 @@ class RepairReportGeneration(unittest.TestCase):
         }]
         p = Path(tempfile.mkdtemp()) / "audit.json"
         p.write_text(json.dumps(data))
-        sel = G._load_audit(str(p))
+        sel, _aud = G._load_audit(str(p))
         self.assertIn("smi", sel)
         self.assertEqual(sel["smi"]["url"], "http://exact-20")
         md = G.render(audit_path=str(p))
@@ -136,7 +136,7 @@ class RepairReportGeneration(unittest.TestCase):
         }]
         p = Path(tempfile.mkdtemp()) / "audit.json"
         p.write_text(json.dumps(data))
-        sel = G._load_audit(str(p))
+        sel, _aud = G._load_audit(str(p))
         self.assertEqual(sel["aex"]["url"], "http://exact-25")
 
     def test_exact_count_with_dups_is_not_exact(self):
@@ -178,12 +178,81 @@ class RepairReportGeneration(unittest.TestCase):
         }]
         p = Path(tempfile.mkdtemp()) / "audit.json"
         p.write_text(json.dumps(data))
-        sel = G._load_audit(str(p))
+        sel, aud = G._load_audit(str(p))
         self.assertNotIn("cac", sel)
+        self.assertIn("cac", aud)  # audited, just no usable fallback
         md = G.render(audit_path=str(p))
         cac_line = [ln for ln in md.splitlines()
                     if ln.startswith("| CAC ")][0]
         self.assertIn("BLOCKED_NEEDS_MANUAL_SOURCE", cac_line)
+
+    def test_venue_missing_from_audit_json_is_not_audited_not_blocked(self):
+        # audit json contains ONLY smi (exact). AEX/CAC/IBEX absent ->
+        # must be NOT_AUDITED, never BLOCKED_NEEDS_MANUAL_SOURCE.
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{
+            "venue": "smi",
+            "attempts": [{
+                "role": "reputable_etf_fallback", "url": "http://smi-20",
+                "inspection": {"included": [("X%d" % i, "n")
+                                            for i in range(20)],
+                               "duplicate_tickers": []}},
+            ],
+        }]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        md = G.render(audit_path=str(p))
+        smi_line = [ln for ln in md.splitlines()
+                    if ln.startswith("| SMI ")][0]
+        self.assertIn("ACCEPT_FALLBACK_EXACT", smi_line)
+        for venue in ("AEX", "CAC", "IBEX"):
+            line = [ln for ln in md.splitlines()
+                    if ln.startswith("| %s " % venue)][0]
+            self.assertIn("NOT_AUDITED", line,
+                          "%s should be NOT_AUDITED" % venue)
+            self.assertNotIn("BLOCKED_NEEDS_MANUAL_SOURCE", line,
+                             "%s must NOT be silently blocked" % venue)
+        self.assertIn("COVERAGE WARNING", md)
+
+    def test_coverage_report_flags_incomplete_audit(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{"venue": "smi", "attempts": [
+            {"role": "reputable_etf_fallback", "url": "u",
+             "inspection": {"included": [("X%d" % i, "n") for i in range(20)],
+                            "duplicate_tickers": []}}]}]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        ok, missing = G.coverage_report(str(p))
+        self.assertFalse(ok)
+        self.assertEqual(set(missing), {"aex", "cac", "ibex"})
+
+    def test_coverage_report_ok_when_all_present(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        def rec(v, n):
+            return {"venue": v, "attempts": [
+                {"role": "reputable_etf_fallback", "url": "u",
+                 "inspection": {"included": [("X%d" % i, "n")
+                                             for i in range(n)],
+                                "duplicate_tickers": []}}]}
+        data = [rec("smi", 20), rec("aex", 25), rec("cac", 40),
+                rec("ibex", 35)]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        ok, missing = G.coverage_report(str(p))
+        self.assertTrue(ok)
+        self.assertEqual(missing, [])
+
+    def test_coverage_report_no_json_is_incomplete(self):
+        ok, missing = G.coverage_report("")
+        self.assertFalse(ok)
+        self.assertEqual(set(missing), {"smi", "aex", "cac", "ibex"})
 
 
 if __name__ == "__main__":
