@@ -40,13 +40,66 @@ _VALID_ROWS = [
 ]
 
 
-class U1EmptyCommittedFile(unittest.TestCase):
-    def test_committed_global_expanded_is_empty(self):
-        doc = json.loads(_GLOBAL.read_text())
-        self.assertEqual(doc["schema_version"], "m21u_global_candidates_v1")
-        self.assertEqual(doc["symbols"], [])
+class U1CommittedFileSafety(unittest.TestCase):
+    """Committed global_expanded.json safety. From M21.U2 the file is populated
+    with real inactive candidates, so we no longer assert it is empty; instead
+    we assert it stays structurally safe and inactive-only, with no
+    fixture/test rows."""
+
+    # fixture rows in this test module carry a telltale source marker ending in
+    # " fixture" (e.g. "FTSE fixture", "HSI fixture"). Real committed records
+    # carry a provenance source id (e.g. "UK__FTSE100__2026-06-27__002"). We key
+    # off the source marker, NOT internal_symbol: a real candidate may
+    # legitimately share an internal_symbol with a U1 fixture (e.g. LSE:HSBA,
+    # HKEX:0700) once that market's real batch lands.
+    _FIXTURE_SOURCE_MARKERS = (
+        "FTSE fixture", "HSI fixture", "Nikkei fixture", "DAX fixture",
+        "CAC fixture", "AEX fixture", "IBEX fixture", "SMI fixture",
+    )
+
+    def setUp(self):
+        self.doc = json.loads(_GLOBAL.read_text())
+        self.symbols = self.doc["symbols"]
+
+    def test_schema_version_correct(self):
+        self.assertEqual(self.doc["schema_version"],
+                         "m21u_global_candidates_v1")
+
+    def test_symbols_list_exists(self):
+        self.assertIsInstance(self.symbols, list)
+
+    def test_no_fixture_source_rows(self):
+        # committed records must not carry a fixture source marker. Real records
+        # have a provenance source id; sharing an internal_symbol with a fixture
+        # is fine.
+        leaked = sorted(
+            r["internal_symbol"] for r in self.symbols
+            if any(m in (r.get("source") or "")
+                   for m in self._FIXTURE_SOURCE_MARKERS)
+            or (r.get("source") or "").strip().endswith("fixture"))
+        self.assertEqual(leaked, [],
+                         "records with fixture source markers leaked into "
+                         "committed data: %s" % leaked)
+
+    def test_all_records_inactive(self):
+        for r in self.symbols:
+            self.assertFalse(r["active"])
+
+    def test_all_records_scan_ready_false(self):
+        for r in self.symbols:
+            self.assertFalse(r["scan_ready"])
+
+    def test_all_records_unverified(self):
+        for r in self.symbols:
+            self.assertEqual(r["data_quality_status"], "unverified")
+
+    def test_no_execution_or_paper_keys(self):
+        for r in self.symbols:
+            self.assertNotIn("execution_eligible", r)
+            self.assertNotIn("paper_routing_eligible", r)
 
     def test_empty_envelope_helper(self):
+        # the helper itself still yields an empty envelope (framework contract).
         env = gx.empty_envelope()
         self.assertEqual(env["symbols"], [])
 
