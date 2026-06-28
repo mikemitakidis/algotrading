@@ -51,6 +51,22 @@ ENDPOINTS = {
          "https://www.amundietf.de/privatkunden/product/download/holdings"
          "?isin=LU0274211480"),
     ],
+    "smi": [
+        # iShares SMI (CH) UCITS ETF holdings CSV (reputable ETF fallback)
+        ("reputable_etf_fallback",
+         "https://www.ishares.com/ch/individual/en/products/270048/"
+         "ishares-smi-ch/1495092304805.ajax"
+         "?fileType=csv&fileName=CSSMI_holdings&dataType=fund"),
+        # iShares SMI (DE locale) holdings CSV
+        ("reputable_etf_fallback",
+         "https://www.ishares.com/de/privatanleger/de/produkte/270048/"
+         "ishares-smi-ch/1495092304805.ajax"
+         "?fileType=csv&fileName=CSSMI_holdings&dataType=fund"),
+        # UBS ETF SMI holdings (reputable ETF fallback)
+        ("reputable_etf_fallback",
+         "https://www.ubs.com/etf/en/products/etf-search/etf-product-detail."
+         "isin.CH0017142719.html?download=holdings"),
+    ],
 }
 
 
