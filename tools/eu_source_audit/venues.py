@@ -49,11 +49,23 @@ VENUES = {
              "https://www.six-group.com/en/products-services/the-swiss-stock-"
              "exchange/market-data/indices/equity-indices/smi.html",
              "SIX SMI index page (dynamic; not a file)"),
+            # UBS ETF (CH) SMI - issuer holdings CSV (full replication -> 20)
             ("reputable_etf_fallback",
-             "https://www.ishares.com/ch/individual/en/products/291893/"
-             "ishares-smi-ch-chf-acc/1495092304805.ajax"
+             "https://www.ubs.com/etf-tools/api/etf/holdings/csv?isin="
+             "CH0017142719",
+             "UBS ETF (CH) SMI CHF A-dis holdings CSV (candidate id)"),
+            # iShares SMI (CH) - product 270048, retry default AjaxData no.
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/ch/individual/en/products/270048/"
+             "fund/1495092304805.ajax"
              "?fileType=csv&fileName=CSSMI_holdings&dataType=fund",
-             "iShares SMI (CH) holdings CSV (corrected product id)"),
+             "iShares SMI (CH) holdings CSV (product 270048 retry)"),
+            # iShares Core SPI / SMI alt locale (DE retail)
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/de/privatanleger/de/produkte/270048/"
+             "fund/1478358465952.ajax"
+             "?fileType=csv&fileName=CSSMI_holdings&dataType=fund",
+             "iShares SMI (DE locale) holdings CSV (candidate)"),
         ],
     },
     "aex": {
@@ -68,11 +80,18 @@ VENUES = {
             ("official_index",
              "https://live.euronext.com/en/product/indices/NL0000000107-XAMS",
              "Euronext AEX composition page (dynamic; not a file)"),
+            # iShares AEX UCITS ETF - product 251779; correct AjaxData number
+            # is the per-fund one, try the DAX-style working pattern + NL.
             ("reputable_etf_fallback",
              "https://www.ishares.com/nl/particuliere-belegger/nl/producten/"
-             "251779/ishares-aex-ucits-etf/1478358465952.ajax"
+             "251779/fund/1478358465952.ajax"
              "?fileType=csv&fileName=IAEX_holdings&dataType=fund",
-             "iShares AEX UCITS ETF holdings CSV"),
+             "iShares AEX UCITS ETF holdings CSV (product 251779, NL)"),
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/uk/individual/en/products/251779/"
+             "fund/1478358465952.ajax"
+             "?fileType=csv&fileName=IAEX_holdings&dataType=fund",
+             "iShares AEX UCITS ETF holdings CSV (UK locale candidate)"),
         ],
     },
     "cac": {
@@ -87,10 +106,18 @@ VENUES = {
             ("official_index",
              "https://live.euronext.com/en/product/indices/FR0003500008-XPAR",
              "Euronext CAC 40 composition page (dynamic; not a file)"),
+            # iShares CAC 40 UCITS ETF - product 251786 (FR/Amundi-Lyxor also
+            # candidates). Try iShares product-page CSV first.
             ("reputable_etf_fallback",
-             "https://www.amundietf.fr/fr/particuliers/products/equity/"
-             "amundi-cac-40-ucits-etf-dist/fr0007052782?download=holdings",
-             "Amundi CAC 40 UCITS ETF holdings"),
+             "https://www.ishares.com/fr/particuliers/fr/produits/251786/"
+             "fund/1478358465952.ajax"
+             "?fileType=csv&fileName=CAC_holdings&dataType=fund",
+             "iShares CAC 40 UCITS ETF holdings CSV (product 251786, FR)"),
+            # Amundi CAC 40 ETF holdings (issuer download API candidate)
+            ("reputable_etf_fallback",
+             "https://www.amundietf.fr/fr/professionnels/api/funds/holdings/"
+             "FR0007052782/csv",
+             "Amundi CAC 40 UCITS ETF holdings CSV (candidate id)"),
         ],
     },
     "ibex": {
@@ -106,11 +133,17 @@ VENUES = {
              "https://www.bolsasymercados.es/bme-exchange/en/Indices/Ibex/"
              "Ibex-35",
              "BME IBEX 35 composition page (dynamic; not a file)"),
+            # iShares IBEX 35 UCITS ETF - product 251773; ES retail locale
             ("reputable_etf_fallback",
              "https://www.ishares.com/es/inversor-particular/es/productos/"
-             "251773/ishares-ibex-35-ucits-etf/1478358465952.ajax"
+             "251773/fund/1478358465952.ajax"
              "?fileType=csv&fileName=IBEX_holdings&dataType=fund",
-             "iShares IBEX 35 UCITS ETF holdings CSV"),
+             "iShares IBEX 35 UCITS ETF holdings CSV (product 251773, ES)"),
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/uk/individual/en/products/251773/"
+             "fund/1478358465952.ajax"
+             "?fileType=csv&fileName=IBEX_holdings&dataType=fund",
+             "iShares IBEX 35 UCITS ETF holdings CSV (UK locale candidate)"),
         ],
     },
 }

@@ -48,9 +48,15 @@ def render():
     L.append("Generated: %s" % now)
     L.append("")
     L.append("- run_environment: **%s**" % _run_env())
-    L.append("- git_branch: `%s`" % branch)
-    L.append("- git_head: `%s`" % head)
-    L.append("- git_status: **%s**" % ("dirty" if dirty else "clean"))
+    L.append("- generated_at_git_branch: `%s`" % branch)
+    L.append("- generated_at_git_head: `%s`" % head)
+    L.append("- generated_at_git_status: **%s**" % ("dirty" if dirty
+                                                    else "clean"))
+    L.append("")
+    L.append("> The `generated_at_git_*` fields above are the git state when "
+             "this report was generated (typically before the commit that "
+             "includes it), NOT the final commit state of this file. They are "
+             "run provenance, not a claim about the committed tree.")
     L.append("")
     L.append("Read-only analysis. No curation; no `global_expanded.json` / "
              "`source_registry.json` / runtime / scan_ready changes. The "

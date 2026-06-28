@@ -1,11 +1,13 @@
 # M21.U4 Europe — Source Repair Report
 
-Generated: 2026-06-28 15:28:22Z
+Generated: 2026-06-28 15:36:17Z
 
 - run_environment: **local**
-- git_branch: `m21-u4-europe-source-repair`
-- git_head: `f602de3bf0f6e7f750e8daaddf255e6f9115d930`
-- git_status: **dirty**
+- generated_at_git_branch: `m21-u4-europe-endpoint-repair`
+- generated_at_git_head: `f5090678e1a4a62390aa6b7011488515c167dc56`
+- generated_at_git_status: **dirty**
+
+> The `generated_at_git_*` fields above are the git state when this report was generated (typically before the commit that includes it), NOT the final commit state of this file. They are run provenance, not a claim about the committed tree.
 
 Read-only analysis. No curation; no `global_expanded.json` / `source_registry.json` / runtime / scan_ready changes. The findings derive from the merged audit tool's VPS run plus documented endpoint behaviour; no new live probing was done to author this report. Endpoint re-verification must go through the audit Action/VPS.
 

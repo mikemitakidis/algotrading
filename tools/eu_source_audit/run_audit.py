@@ -63,9 +63,12 @@ def render(results):
     L.append("Generated: %s" % now)
     L.append("")
     L.append("- run_environment: **%s**" % env)
-    L.append("- git_branch: `%s`" % branch)
-    L.append("- git_head: `%s`" % head)
-    L.append("- git_status: **%s**" % clean)
+    L.append("- generated_at_git_branch: `%s`" % branch)
+    L.append("- generated_at_git_head: `%s`" % head)
+    L.append("- generated_at_git_status: **%s**" % clean)
+    L.append("")
+    L.append("> `generated_at_git_*` reflect git state at report-generation "
+             "time (often pre-commit), not the final committed tree.")
     L.append("")
     L.append("Read-only audit. No curation, no `global_expanded.json` or "
              "`source_registry.json` changes, no runtime activation.")
