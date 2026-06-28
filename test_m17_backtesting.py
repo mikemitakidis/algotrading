@@ -4290,6 +4290,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21uq_quality_collectors.py",
             # M21.UQ provider-backed dry-run (read-only).
             "test_m21uq_provider_backed.py",
+            # M21.UQ closeout/status (read-only).
+            "reports/m21uq_quality_collectors_closeout.md",
+            "test_m21uq_closeout_status.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
