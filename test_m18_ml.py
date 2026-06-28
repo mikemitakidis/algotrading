@@ -10416,6 +10416,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/paper/",        "configs/paper/",          # M20
             "bot/runtime/",                                 # M20.I
             "bot/universe/",     "configs/universe/",       # M20.U
+            "tools/eu_source_audit/",                       # M21.U4 audit
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10516,6 +10517,11 @@ class G10_Hygiene(unittest.TestCase):
             # still reports it (by design) — only this file-presence guard
             # is told the change is expected.
             "requirements.txt",
+            # M21.U4 Europe: read-only source-audit infrastructure
+            # (audit tool + CI workflow + generated report). No curation,
+            # no universe data or runtime changes.
+            ".github/workflows/m21u4_europe_source_audit.yml",
+            "reports/m21u4_europe_source_audit.md",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")

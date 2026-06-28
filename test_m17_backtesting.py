@@ -4173,7 +4173,8 @@ class G10_Hygiene(unittest.TestCase):
                             "bot/signal_scoring/", "configs/signal_scoring/",
                             "bot/paper/", "configs/paper/",
                             "bot/runtime/",
-                            "bot/universe/", "configs/universe/")
+                            "bot/universe/", "configs/universe/",
+                            "tools/eu_source_audit/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4263,6 +4264,11 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group A (ISSUE-006): operator-approved scikit-learn /
             # joblib version pin (deliberate post-M18 dependency change).
             "requirements.txt",
+            # M21.U4 Europe: read-only source-audit infrastructure
+            # (audit tool + CI workflow + generated report). No curation,
+            # no universe data or runtime changes.
+            ".github/workflows/m21u4_europe_source_audit.yml",
+            "reports/m21u4_europe_source_audit.md",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
