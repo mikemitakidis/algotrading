@@ -4299,6 +4299,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.UR UK pilot activation (controlled config-based).
             "reports/m21ur_uk_pilot_activation.md",
             "test_m21ur_uk_pilot.py",
+            # M21.UR UK pilot dry-run (read-only, explicit opt-in).
+            "reports/m21ur_uk_pilot_dryrun.md",
+            "test_m21ur_uk_pilot_dryrun.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
