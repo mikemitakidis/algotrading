@@ -40,13 +40,56 @@ _VALID_ROWS = [
 ]
 
 
-class U1EmptyCommittedFile(unittest.TestCase):
-    def test_committed_global_expanded_is_empty(self):
-        doc = json.loads(_GLOBAL.read_text())
-        self.assertEqual(doc["schema_version"], "m21u_global_candidates_v1")
-        self.assertEqual(doc["symbols"], [])
+class U1CommittedFileSafety(unittest.TestCase):
+    """Committed global_expanded.json safety. From M21.U2 the file is populated
+    with real inactive candidates, so we no longer assert it is empty; instead
+    we assert it stays structurally safe and inactive-only, with no
+    fixture/test rows."""
+
+    # fixture tickers used only inside this test module; they must never appear
+    # in the committed registry data.
+    _FIXTURE_INTERNALS = {
+        "LSE:HSBA", "HKEX:0700", "TSE:7203", "XETRA:SAP", "EPA:AIR",
+        "AEX:ASML", "BME:SAN", "SIX:NESN", "HKEX:0005",
+    }
+
+    def setUp(self):
+        self.doc = json.loads(_GLOBAL.read_text())
+        self.symbols = self.doc["symbols"]
+
+    def test_schema_version_correct(self):
+        self.assertEqual(self.doc["schema_version"],
+                         "m21u_global_candidates_v1")
+
+    def test_symbols_list_exists(self):
+        self.assertIsInstance(self.symbols, list)
+
+    def test_no_fixture_or_test_rows(self):
+        internals = {r["internal_symbol"] for r in self.symbols}
+        leaked = internals & self._FIXTURE_INTERNALS
+        self.assertEqual(leaked, set(),
+                         "fixture/test rows leaked into committed data: %s"
+                         % leaked)
+
+    def test_all_records_inactive(self):
+        for r in self.symbols:
+            self.assertFalse(r["active"])
+
+    def test_all_records_scan_ready_false(self):
+        for r in self.symbols:
+            self.assertFalse(r["scan_ready"])
+
+    def test_all_records_unverified(self):
+        for r in self.symbols:
+            self.assertEqual(r["data_quality_status"], "unverified")
+
+    def test_no_execution_or_paper_keys(self):
+        for r in self.symbols:
+            self.assertNotIn("execution_eligible", r)
+            self.assertNotIn("paper_routing_eligible", r)
 
     def test_empty_envelope_helper(self):
+        # the helper itself still yields an empty envelope (framework contract).
         env = gx.empty_envelope()
         self.assertEqual(env["symbols"], [])
 
