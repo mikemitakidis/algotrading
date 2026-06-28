@@ -65,8 +65,22 @@ def select_records(records, region=None, symbols=None, limit=None):
     return out
 
 
-def render(records, results, provider_mode="none / structural-only",
-           attempted=None):
+_VALID_DATA_SOURCES = ("structural_only", "live_yfinance", "simulated_fixture")
+
+
+def render(records, results, data_source="structural_only", attempted=None):
+    """Render the dry-run report.
+
+    data_source is the single source of truth for provenance:
+      - structural_only  : no OHLCV, offline; network disabled
+      - live_yfinance    : real yfinance fetch; network enabled
+      - simulated_fixture: mocked/injected fetch (tests/samples); network
+                           disabled; explicitly NOT live yfinance
+    network and provider_mode are DERIVED from data_source, never from a
+    provider name alone, so a simulated run can never claim live provenance.
+    """
+    if data_source not in _VALID_DATA_SOURCES:
+        raise ValueError("invalid data_source: %s" % data_source)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     failed = total - passed
@@ -77,18 +91,30 @@ def render(records, results, provider_mode="none / structural-only",
             code_counts[c] += 1
         for w in r.warnings:
             code_counts[w] += 1
-    network = "disabled" if provider_mode.startswith("none") else "enabled"
+
+    network = "enabled" if data_source == "live_yfinance" else "disabled"
+    provider_mode = {
+        "structural_only": "none / structural-only",
+        "live_yfinance": "yfinance",
+        "simulated_fixture": "fixture / simulated",
+    }[data_source]
+    rtype = {
+        "structural_only": "offline structural dry-run",
+        "live_yfinance": "provider-backed dry-run (live yfinance)",
+        "simulated_fixture": "provider-backed dry-run (simulated fixture)",
+    }[data_source]
+    not_live = "false" if data_source == "live_yfinance" else "true"
+
     L = []
     L.append("# M21.UQ — Global Quality Collectors / Gates — Dry-Run Report")
     L.append("")
-    rtype = ("offline structural dry-run"
-             if provider_mode.startswith("none")
-             else "provider-backed dry-run")
     L.append("- report_type: **%s**" % rtype)
     L.append("- source_file: `configs/universe/global_expanded.json`")
     L.append("- scope: **existing global candidates only**")
+    L.append("- data_source: **%s**" % data_source)
     L.append("- network: **%s**" % network)
     L.append("- provider_mode: **%s**" % provider_mode)
+    L.append("- not_live_yfinance: **%s**" % not_live)
     L.append("- attempted: **%d**" % (total if attempted is None
                                       else attempted))
     L.append("")
@@ -213,8 +239,10 @@ def main():
                              symbols=symbols, limit=args.limit)
     provider = build_provider(args.provider, timeout=args.timeout,
                               pace_seconds=args.pace_seconds)
-    provider_mode = ("none / structural-only" if provider is None
-                     else "yfinance")
+    # The CLI builds a REAL provider (no injected fetch), so yfinance here means
+    # genuine live fetch. Simulated-fixture provenance is only ever produced
+    # programmatically/in tests via an injected _fetch_fn + explicit data_source.
+    data_source = "structural_only" if provider is None else "live_yfinance"
 
     # duplicate detection is global (over the FULL set), so a filtered run
     # still flags a provider symbol duplicated elsewhere in the universe.
@@ -234,7 +262,7 @@ def main():
 
     rp = Path(args.report)
     rp.parent.mkdir(parents=True, exist_ok=True)
-    rp.write_text(render(records, results, provider_mode=provider_mode,
+    rp.write_text(render(records, results, data_source=data_source,
                          attempted=len(records)), encoding="utf-8")
     print("wrote %s" % rp)
     if args.json_out:
@@ -243,8 +271,8 @@ def main():
         print("wrote %s" % args.json_out)
     total = len(results)
     passed = sum(1 for r in results if r.passed)
-    print("provider=%s attempted=%d passed=%d failed=%d"
-          % (provider_mode, total, passed, total - passed))
+    print("data_source=%s attempted=%d passed=%d failed=%d"
+          % (data_source, total, passed, total - passed))
 
 
 if __name__ == "__main__":

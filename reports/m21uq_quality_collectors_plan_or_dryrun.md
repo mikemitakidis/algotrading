@@ -3,8 +3,10 @@
 - report_type: **offline structural dry-run**
 - source_file: `configs/universe/global_expanded.json`
 - scope: **existing global candidates only**
+- data_source: **structural_only**
 - network: **disabled**
 - provider_mode: **none / structural-only**
+- not_live_yfinance: **true**
 - attempted: **193**
 
 > Read-only quality dry-run over EXISTING global candidates. No writes to global_expanded.json / source_registry.json, no scan_ready change, no runtime activation. Default run is offline (structural checks: provider-symbol, suffix, duplicate, liquidity); OHLCV checks run only when a provider is injected.

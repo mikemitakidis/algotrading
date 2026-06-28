@@ -178,28 +178,61 @@ class ProviderBackedEvaluation(unittest.TestCase):
                                  cfg=OHLCVConfig())
         self.assertTrue(results[0].passed)
 
-    def test_render_provider_mode_and_attempted(self):
+    def test_render_simulated_fixture_provenance(self):
         prov = YFinanceProvider(_fetch_fn=lambda s: _bars(25))
         recs = [self._rec()]
         results = R.evaluate_all(recs, provider=prov, as_of=_AS_OF)
-        md = R.render(recs, results, provider_mode="yfinance",
+        md = R.render(recs, results, data_source="simulated_fixture",
                       attempted=len(recs))
-        self.assertIn("provider_mode: **yfinance**", md)
+        # simulated MUST NOT claim live provenance
+        self.assertIn("data_source: **simulated_fixture**", md)
+        self.assertIn("provider_mode: **fixture / simulated**", md)
+        self.assertIn("network: **disabled**", md)
+        self.assertIn("not_live_yfinance: **true**", md)
         self.assertIn("attempted: **1**", md)
-        self.assertIn("network: **enabled**", md)
+        self.assertNotIn("network: **enabled**", md)
+        self.assertNotIn("data_source: **live_yfinance**", md)
 
-    def test_default_render_is_offline(self):
+    def test_render_live_yfinance_provenance(self):
+        recs = [self._rec()]
+        results = R.evaluate_all(recs)
+        md = R.render(recs, results, data_source="live_yfinance",
+                      attempted=len(recs))
+        self.assertIn("data_source: **live_yfinance**", md)
+        self.assertIn("provider_mode: **yfinance**", md)
+        self.assertIn("network: **enabled**", md)
+        self.assertIn("not_live_yfinance: **false**", md)
+
+    def test_default_render_is_structural_only(self):
         recs = [self._rec()]
         results = R.evaluate_all(recs)  # no provider
         md = R.render(recs, results)
+        self.assertIn("data_source: **structural_only**", md)
         self.assertIn("provider_mode: **none / structural-only**", md)
         self.assertIn("network: **disabled**", md)
+
+    def test_invalid_data_source_raises(self):
+        recs = [self._rec()]
+        with self.assertRaises(ValueError):
+            R.render(recs, R.evaluate_all(recs), data_source="bogus")
+
+    def test_simulated_report_cannot_claim_live(self):
+        # explicit guard: a simulated fixture render never claims live
+        # provenance. (Check the specific provenance lines, not the bare
+        # substring, since 'not_live_yfinance' legitimately contains it.)
+        prov = YFinanceProvider(_fetch_fn=lambda s: None)
+        recs = [self._rec()]
+        md = R.render(recs, R.evaluate_all(recs, provider=prov, as_of=_AS_OF),
+                      data_source="simulated_fixture", attempted=1)
+        self.assertNotIn("data_source: **live_yfinance**", md)
+        self.assertNotIn("network: **enabled**", md)
+        self.assertNotIn("not_live_yfinance: **false**", md)
 
     def test_provider_report_has_no_unstable_git_metadata(self):
         prov = YFinanceProvider(_fetch_fn=lambda s: _bars(25))
         recs = [self._rec()]
         md = R.render(recs, R.evaluate_all(recs, provider=prov, as_of=_AS_OF),
-                      provider_mode="yfinance", attempted=1)
+                      data_source="simulated_fixture", attempted=1)
         for banned in ("generated_at_git_head", "generated_at_git_status",
                        "dirty", "run_environment"):
             self.assertNotIn(banned, md)
