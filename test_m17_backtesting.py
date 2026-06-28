@@ -4280,6 +4280,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.U4 Europe source-repair closeout (read-only).
             "reports/m21u4_europe_closeout.md",
             "test_m21u4_europe_closeout.py",
+            # M21.U Global Universe Foundation closeout/status (read-only).
+            "reports/m21u_global_universe_foundation_status.md",
+            "test_m21u_foundation_status.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
