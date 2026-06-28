@@ -46,12 +46,16 @@ class U1CommittedFileSafety(unittest.TestCase):
     we assert it stays structurally safe and inactive-only, with no
     fixture/test rows."""
 
-    # fixture tickers used only inside this test module; they must never appear
-    # in the committed registry data.
-    _FIXTURE_INTERNALS = {
-        "LSE:HSBA", "HKEX:0700", "TSE:7203", "XETRA:SAP", "EPA:AIR",
-        "AEX:ASML", "BME:SAN", "SIX:NESN", "HKEX:0005",
-    }
+    # fixture rows in this test module carry a telltale source marker ending in
+    # " fixture" (e.g. "FTSE fixture", "HSI fixture"). Real committed records
+    # carry a provenance source id (e.g. "UK__FTSE100__2026-06-27__002"). We key
+    # off the source marker, NOT internal_symbol: a real candidate may
+    # legitimately share an internal_symbol with a U1 fixture (e.g. LSE:HSBA,
+    # HKEX:0700) once that market's real batch lands.
+    _FIXTURE_SOURCE_MARKERS = (
+        "FTSE fixture", "HSI fixture", "Nikkei fixture", "DAX fixture",
+        "CAC fixture", "AEX fixture", "IBEX fixture", "SMI fixture",
+    )
 
     def setUp(self):
         self.doc = json.loads(_GLOBAL.read_text())
@@ -64,12 +68,18 @@ class U1CommittedFileSafety(unittest.TestCase):
     def test_symbols_list_exists(self):
         self.assertIsInstance(self.symbols, list)
 
-    def test_no_fixture_or_test_rows(self):
-        internals = {r["internal_symbol"] for r in self.symbols}
-        leaked = internals & self._FIXTURE_INTERNALS
-        self.assertEqual(leaked, set(),
-                         "fixture/test rows leaked into committed data: %s"
-                         % leaked)
+    def test_no_fixture_source_rows(self):
+        # committed records must not carry a fixture source marker. Real records
+        # have a provenance source id; sharing an internal_symbol with a fixture
+        # is fine.
+        leaked = sorted(
+            r["internal_symbol"] for r in self.symbols
+            if any(m in (r.get("source") or "")
+                   for m in self._FIXTURE_SOURCE_MARKERS)
+            or (r.get("source") or "").strip().endswith("fixture"))
+        self.assertEqual(leaked, [],
+                         "records with fixture source markers leaked into "
+                         "committed data: %s" % leaked)
 
     def test_all_records_inactive(self):
         for r in self.symbols:
