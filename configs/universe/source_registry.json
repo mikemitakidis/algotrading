@@ -1,5 +1,42 @@
 {
   "schema_version": "m21u0_source_registry_v1",
   "description": "Provenance + SHA-256 index of vaulted global source files. Raw files are gitignored; this ledger is the committed evidence.",
-  "sources": []
+  "sources": [
+    {
+      "source_id": "UK__FTSE100__2026-06-27__001",
+      "region": "UK",
+      "index_source": "FTSE100",
+      "source_name": "HL_FTSE100_MARKET_SUMMARY_SNAPSHOT",
+      "source_type": "exchange_listing",
+      "source_asof": "2026-06-27",
+      "downloaded_at": "2026-06-27T20:30:41.820848+00:00",
+      "source_url": "https://www.hl.co.uk/shares/stock-market-summary/ftse-100",
+      "ingest_method": "upload",
+      "vault_path": "data/universe/raw_sources/2026-06-27/UK__FTSE100__20260627T203041Z__96a199f4353e.html",
+      "sha256": "96a199f4353e8fe448a0e15cb15913ee2b996181dddf210221a5ddc24d6dfb75",
+      "byte_size": 369988,
+      "row_count_raw": null,
+      "licence_note": "HL market-summary HTML snapshot; raw file gitignored; provenance only",
+      "notes": "raw_html_snapshot",
+      "content_changed": false
+    },
+    {
+      "source_id": "UK__FTSE100__2026-06-27__002",
+      "region": "UK",
+      "index_source": "FTSE100",
+      "source_name": "HL_FTSE100_CURATED_CSV",
+      "source_type": "exchange_listing",
+      "source_asof": "2026-06-27",
+      "downloaded_at": "2026-06-27T23:47:49.181774+00:00",
+      "source_url": "https://www.hl.co.uk/shares/stock-market-summary/ftse-100",
+      "ingest_method": "upload",
+      "vault_path": "data/universe/raw_sources/2026-06-27/UK__FTSE100__20260627T234749Z__117853a775bc.csv",
+      "sha256": "117853a775bc9b89cb647339aa3806c240c8816df030e3ee7572d3a02014c483",
+      "byte_size": 10188,
+      "row_count_raw": null,
+      "licence_note": "curated CSV derived from HL snapshot; provenance only",
+      "notes": "curated_from=UK__FTSE100__2026-06-27__001;curation_method=manual_verified_ftse100_csv;curated_schema=m21u2_ftse100_v1",
+      "content_changed": true
+    }
+  ]
 }
