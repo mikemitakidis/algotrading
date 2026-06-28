@@ -10549,6 +10549,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.UR runtime activation readiness (read-only).
             "reports/m21ur_runtime_activation_readiness.md",
             "test_m21ur_runtime_activation_readiness.py",
+            # M21.UR UK pilot activation (controlled config-based).
+            "reports/m21ur_uk_pilot_activation.md",
+            "test_m21ur_uk_pilot.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")

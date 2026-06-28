@@ -4296,6 +4296,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.UR runtime activation readiness (read-only).
             "reports/m21ur_runtime_activation_readiness.md",
             "test_m21ur_runtime_activation_readiness.py",
+            # M21.UR UK pilot activation (controlled config-based).
+            "reports/m21ur_uk_pilot_activation.md",
+            "test_m21ur_uk_pilot.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

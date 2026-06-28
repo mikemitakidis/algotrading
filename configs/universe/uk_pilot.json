@@ -1,0 +1,166 @@
+{
+  "schema_version": "m21ur_uk_pilot_v1",
+  "note": "M21.UR UK-only pilot. scan_ready=true is set HERE ONLY. Not in _DEFAULT_PATHS; load explicitly via bot.universe.uk_pilot.get_uk_pilot_symbols(). US default scanning is unaffected.",
+  "symbols": [
+    {
+      "active": false,
+      "as_of_date": "2026-06-27",
+      "asset_class": "EQUITY",
+      "avg_dollar_volume_20d": null,
+      "avg_volume_20d": null,
+      "country": "GB",
+      "currency": "GBP",
+      "data_quality_status": "unverified",
+      "exchange": "LSE",
+      "first_seen_utc": "2026-06-27T00:00:00+00:00",
+      "industry": null,
+      "internal_symbol": "LSE:AAF",
+      "median_spread_bps": null,
+      "min_liquidity_tier": null,
+      "name": "Airtel Africa plc",
+      "notes": null,
+      "provider_symbols": {
+        "yfinance": "AAF.L"
+      },
+      "region": "UK",
+      "scan_ready": true,
+      "sector": null,
+      "source": "UK__FTSE100__2026-06-27__002",
+      "timezone": "Europe/London",
+      "trading_calendar": "XLON",
+      "universe_tags": [
+        "global_candidate",
+        "region:uk",
+        "uk_pilot"
+      ]
+    },
+    {
+      "active": false,
+      "as_of_date": "2026-06-27",
+      "asset_class": "EQUITY",
+      "avg_dollar_volume_20d": null,
+      "avg_volume_20d": null,
+      "country": "GB",
+      "currency": "GBP",
+      "data_quality_status": "unverified",
+      "exchange": "LSE",
+      "first_seen_utc": "2026-06-27T00:00:00+00:00",
+      "industry": null,
+      "internal_symbol": "LSE:AAL",
+      "median_spread_bps": null,
+      "min_liquidity_tier": null,
+      "name": "Anglo American Plc",
+      "notes": null,
+      "provider_symbols": {
+        "yfinance": "AAL.L"
+      },
+      "region": "UK",
+      "scan_ready": true,
+      "sector": null,
+      "source": "UK__FTSE100__2026-06-27__002",
+      "timezone": "Europe/London",
+      "trading_calendar": "XLON",
+      "universe_tags": [
+        "global_candidate",
+        "region:uk",
+        "uk_pilot"
+      ]
+    },
+    {
+      "active": false,
+      "as_of_date": "2026-06-27",
+      "asset_class": "EQUITY",
+      "avg_dollar_volume_20d": null,
+      "avg_volume_20d": null,
+      "country": "GB",
+      "currency": "GBP",
+      "data_quality_status": "unverified",
+      "exchange": "LSE",
+      "first_seen_utc": "2026-06-27T00:00:00+00:00",
+      "industry": null,
+      "internal_symbol": "LSE:ABDN",
+      "median_spread_bps": null,
+      "min_liquidity_tier": null,
+      "name": "Aberdeen Group Plc",
+      "notes": null,
+      "provider_symbols": {
+        "yfinance": "ABDN.L"
+      },
+      "region": "UK",
+      "scan_ready": true,
+      "sector": null,
+      "source": "UK__FTSE100__2026-06-27__002",
+      "timezone": "Europe/London",
+      "trading_calendar": "XLON",
+      "universe_tags": [
+        "global_candidate",
+        "region:uk",
+        "uk_pilot"
+      ]
+    },
+    {
+      "active": false,
+      "as_of_date": "2026-06-27",
+      "asset_class": "EQUITY",
+      "avg_dollar_volume_20d": null,
+      "avg_volume_20d": null,
+      "country": "GB",
+      "currency": "GBP",
+      "data_quality_status": "unverified",
+      "exchange": "LSE",
+      "first_seen_utc": "2026-06-27T00:00:00+00:00",
+      "industry": null,
+      "internal_symbol": "LSE:ABF",
+      "median_spread_bps": null,
+      "min_liquidity_tier": null,
+      "name": "Associated British Foods plc",
+      "notes": null,
+      "provider_symbols": {
+        "yfinance": "ABF.L"
+      },
+      "region": "UK",
+      "scan_ready": true,
+      "sector": null,
+      "source": "UK__FTSE100__2026-06-27__002",
+      "timezone": "Europe/London",
+      "trading_calendar": "XLON",
+      "universe_tags": [
+        "global_candidate",
+        "region:uk",
+        "uk_pilot"
+      ]
+    },
+    {
+      "active": false,
+      "as_of_date": "2026-06-27",
+      "asset_class": "EQUITY",
+      "avg_dollar_volume_20d": null,
+      "avg_volume_20d": null,
+      "country": "GB",
+      "currency": "GBP",
+      "data_quality_status": "unverified",
+      "exchange": "LSE",
+      "first_seen_utc": "2026-06-27T00:00:00+00:00",
+      "industry": null,
+      "internal_symbol": "LSE:ADM",
+      "median_spread_bps": null,
+      "min_liquidity_tier": null,
+      "name": "Admiral Group",
+      "notes": null,
+      "provider_symbols": {
+        "yfinance": "ADM.L"
+      },
+      "region": "UK",
+      "scan_ready": true,
+      "sector": null,
+      "source": "UK__FTSE100__2026-06-27__002",
+      "timezone": "Europe/London",
+      "trading_calendar": "XLON",
+      "universe_tags": [
+        "global_candidate",
+        "region:uk",
+        "uk_pilot"
+      ]
+    }
+  ]
+}
