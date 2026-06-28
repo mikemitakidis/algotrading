@@ -10546,6 +10546,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.UQ closeout/status (read-only).
             "reports/m21uq_quality_collectors_closeout.md",
             "test_m21uq_closeout_status.py",
+            # M21.UR runtime activation readiness (read-only).
+            "reports/m21ur_runtime_activation_readiness.md",
+            "test_m21ur_runtime_activation_readiness.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")

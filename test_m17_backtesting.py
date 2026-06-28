@@ -4293,6 +4293,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.UQ closeout/status (read-only).
             "reports/m21uq_quality_collectors_closeout.md",
             "test_m21uq_closeout_status.py",
+            # M21.UR runtime activation readiness (read-only).
+            "reports/m21ur_runtime_activation_readiness.md",
+            "test_m21ur_runtime_activation_readiness.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
