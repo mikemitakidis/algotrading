@@ -4277,6 +4277,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21u4_europe_endpoint_repair.py",
             # M21.U4 Europe link-extraction (read-only).
             "test_m21u4_europe_link_extraction.py",
+            # M21.U4 Europe source-repair closeout (read-only).
+            "reports/m21u4_europe_closeout.md",
+            "test_m21u4_europe_closeout.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

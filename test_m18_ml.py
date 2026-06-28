@@ -10530,6 +10530,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21u4_europe_endpoint_repair.py",
             # M21.U4 Europe link-extraction (read-only).
             "test_m21u4_europe_link_extraction.py",
+            # M21.U4 Europe source-repair closeout (read-only).
+            "reports/m21u4_europe_closeout.md",
+            "test_m21u4_europe_closeout.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
