@@ -1,11 +1,10 @@
 # M21.UQ — Global Quality Collectors / Gates — Dry-Run Report
 
-Generated: 2026-06-28 19:24:49Z
-
-- run_environment: **local**
-- generated_at_git_branch: `m21-uq-quality-collectors-gates`
-- generated_at_git_head: `8523a6710474bd268937707a2a638f4fc95ded70`
-- generated_at_git_status: **dirty**
+- report_type: **offline structural dry-run**
+- source_file: `configs/universe/global_expanded.json`
+- scope: **existing global candidates only**
+- network: **disabled**
+- provider_mode: **none / structural-only**
 
 > Read-only quality dry-run over EXISTING global candidates. No writes to global_expanded.json / source_registry.json, no scan_ready change, no runtime activation. Default run is offline (structural checks: provider-symbol, suffix, duplicate, liquidity); OHLCV checks run only when a provider is injected.
 

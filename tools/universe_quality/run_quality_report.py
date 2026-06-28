@@ -15,10 +15,7 @@ Usage:
     [--json-out reports/m21uq_quality_collectors_dryrun.json]
 """
 import argparse
-import datetime
 import json
-import os
-import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -29,23 +26,6 @@ from tools.universe_quality.quality_model import (
 
 _REPO = Path(__file__).resolve().parents[2]
 _DEFAULT_GLOBAL = _REPO / "configs" / "universe" / "global_expanded.json"
-
-
-def _git(*a):
-    try:
-        p = subprocess.run(["git", "-C", str(_REPO), *a],
-                           capture_output=True, text=True)
-        return p.stdout.strip() if p.returncode == 0 else "(unknown)"
-    except Exception:  # noqa: BLE001
-        return "(unknown)"
-
-
-def _run_env():
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        return "GitHub Actions"
-    if Path("/opt/algo-trader").exists():
-        return "VPS"
-    return "local"
 
 
 def evaluate_all(records, provider=None, cfg=None, as_of=None):
@@ -64,8 +44,6 @@ def evaluate_all(records, provider=None, cfg=None, as_of=None):
 
 
 def render(records, results):
-    now = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%SZ")
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     failed = total - passed
@@ -79,14 +57,11 @@ def render(records, results):
     L = []
     L.append("# M21.UQ — Global Quality Collectors / Gates — Dry-Run Report")
     L.append("")
-    L.append("Generated: %s" % now)
-    L.append("")
-    L.append("- run_environment: **%s**" % _run_env())
-    L.append("- generated_at_git_branch: `%s`"
-             % _git("rev-parse", "--abbrev-ref", "HEAD"))
-    L.append("- generated_at_git_head: `%s`" % _git("rev-parse", "HEAD"))
-    L.append("- generated_at_git_status: **%s**"
-             % ("dirty" if _git("status", "--porcelain") else "clean"))
+    L.append("- report_type: **offline structural dry-run**")
+    L.append("- source_file: `configs/universe/global_expanded.json`")
+    L.append("- scope: **existing global candidates only**")
+    L.append("- network: **disabled**")
+    L.append("- provider_mode: **none / structural-only**")
     L.append("")
     L.append("> Read-only quality dry-run over EXISTING global candidates. No "
              "writes to global_expanded.json / source_registry.json, no "

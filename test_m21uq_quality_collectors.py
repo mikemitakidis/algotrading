@@ -230,5 +230,49 @@ class RealGlobalFileEvaluation(unittest.TestCase):
         self.assertEqual(_GLOBAL.read_bytes(), before)
 
 
+class ReportStableMetadata(unittest.TestCase):
+    """The committed dry-run report must NOT carry unstable per-commit git
+    metadata, and must carry the stable wording instead."""
+
+    def setUp(self):
+        from tools.universe_quality.run_quality_report import (
+            evaluate_all, render)
+        if not _GLOBAL.is_file():
+            self.skipTest("global_expanded.json not present")
+        records = json.loads(_GLOBAL.read_text())["symbols"]
+        self.md = render(records, evaluate_all(records))
+
+    def test_no_unstable_git_metadata(self):
+        for banned in ("generated_at_git_branch", "generated_at_git_head",
+                       "generated_at_git_status", "dirty",
+                       "8523a67", "run_environment", "Generated:"):
+            self.assertNotIn(banned, self.md,
+                             "report must not contain %r" % banned)
+
+    def test_has_stable_wording(self):
+        for token in ("report_type", "offline structural dry-run",
+                      "source_file", "configs/universe/global_expanded.json",
+                      "scope", "existing global candidates only",
+                      "network", "disabled",
+                      "provider_mode", "none / structural-only"):
+            self.assertIn(token, self.md, "report missing %r" % token)
+
+    def test_honest_counts_present(self):
+        for token in ("total_candidates: **193**", "HK=93", "UK=100",
+                      "passed (no fatal codes): **193**",
+                      "failed (>=1 fatal code): **0**"):
+            self.assertIn(token, self.md)
+        self.assertIn("`liquidity_unknown` | 193", self.md)
+
+    def test_committed_report_file_has_no_stale_metadata(self):
+        rp = _REPO / "reports" / "m21uq_quality_collectors_plan_or_dryrun.md"
+        if not rp.is_file():
+            self.skipTest("committed report not present")
+        text = rp.read_text()
+        for banned in ("generated_at_git_status", "dirty",
+                       "generated_at_git_head"):
+            self.assertNotIn(banned, text)
+
+
 if __name__ == "__main__":
     unittest.main()
