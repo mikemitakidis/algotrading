@@ -15,10 +15,35 @@ Usage:
 import argparse
 import datetime
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from tools.eu_source_audit.venues import VENUES
 from tools.eu_source_audit.audit import audit_venue
+
+
+def _git(*args):
+    try:
+        p = subprocess.run(["git", *args], capture_output=True, text=True)
+        return p.stdout.strip() if p.returncode == 0 else "(unknown)"
+    except Exception:  # noqa: BLE001
+        return "(unknown)"
+
+
+def _git_meta():
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    head = _git("rev-parse", "HEAD")
+    dirty = _git("status", "--porcelain")
+    return branch, head, ("dirty" if dirty else "clean")
+
+
+def _run_env():
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return "GitHub Actions"
+    if Path("/opt/algo-trader").exists():
+        return "VPS"
+    return "local"
 
 
 def _fmt_excluded(summary):
@@ -30,40 +55,50 @@ def _fmt_excluded(summary):
 def render(results):
     now = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%SZ")
+    branch, head, clean = _git_meta()
+    env = _run_env()
     L = []
     L.append("# M21.U4 Europe — Source Audit Report")
     L.append("")
     L.append("Generated: %s" % now)
     L.append("")
+    L.append("- run_environment: **%s**" % env)
+    L.append("- git_branch: `%s`" % branch)
+    L.append("- git_head: `%s`" % head)
+    L.append("- git_status: **%s**" % clean)
+    L.append("")
     L.append("Read-only audit. No curation, no `global_expanded.json` or "
              "`source_registry.json` changes, no runtime activation.")
     L.append("")
-    L.append("Source-role policy: `official_index` / `official_exchange` are "
-             "preferred. `reputable_etf_fallback` (large physically-"
-             "replicating ETF holdings) is acceptable ONLY when explicitly "
-             "labelled — ETF holdings sample the index and need not equal "
-             "official membership.")
+    L.append("Verdicts: `ACCEPT_OFFICIAL` (official index/exchange source, "
+             "exact count) · `ACCEPT_FALLBACK` (reputable ETF holdings, exact "
+             "count, membership unverified) · `REVIEW_NEEDED` · `BLOCKED`. ETF "
+             "holdings sample the index and need not equal official "
+             "membership, hence never `ACCEPT_OFFICIAL`.")
     L.append("")
     # summary table
     L.append("## Summary")
     L.append("")
-    L.append("| Venue | Index | Exch | Suffix | Expected | Best result | "
-             "Verdict |")
-    L.append("|---|---|---|---|---|---|---|")
+    L.append("| Venue | Index | Exch | Suffix | Expected | Best source_role | "
+             "Best result | Verdict |")
+    L.append("|---|---|---|---|---|---|---|---|")
     for r in results:
         m = r["meta"]
         best = "—"
+        best_role = "—"
         for a in r["attempts"]:
-            if a["recommendation"] and (a["recommendation"].startswith(
-                    "ACCEPT") or "REVIEW_NEEDED" in a["recommendation"]):
+            rc = a["recommendation"] or ""
+            if rc.startswith("ACCEPT_") or "REVIEW_NEEDED" in rc:
                 inc = (len(a["inspection"]["included"])
                        if a["inspection"] else "—")
-                best = "%s rows (%s)" % (inc, a["role"])
-                if a["recommendation"].startswith("ACCEPT"):
+                best = "%s rows" % inc
+                best_role = a["role"]
+                if rc.startswith("ACCEPT_"):
                     break
-        L.append("| %s | %s | %s | %s | %d | %s | **%s** |"
+        L.append("| %s | %s | %s | %s | %d | %s | %s | **%s** |"
                  % (r["venue"].upper(), m["index"], m["exchange"],
-                    m["suffix"], m["expected"], best, r["verdict"]))
+                    m["suffix"], m["expected"], best_role, best,
+                    r["verdict"]))
     L.append("")
     # per-venue detail
     for r in results:
@@ -104,23 +139,25 @@ def render(results):
             L.append("")
     L.append("## Conclusion")
     L.append("")
-    accepted = [r["venue"].upper() for r in results
-                if r["verdict"] == "ACCEPT"]
-    blocked = [r["venue"].upper() for r in results
-               if r["verdict"] != "ACCEPT"]
-    L.append("- ACCEPT (clean automated source): %s"
-             % (", ".join(accepted) if accepted else "none"))
-    L.append("- BLOCKED / REVIEW_NEEDED: %s"
-             % (", ".join(blocked) if blocked else "none"))
+    acc_off = [r["venue"].upper() for r in results
+               if r["verdict"] == "ACCEPT_OFFICIAL"]
+    acc_fb = [r["venue"].upper() for r in results
+              if r["verdict"] == "ACCEPT_FALLBACK"]
+    other = [r["venue"].upper() for r in results
+             if r["verdict"] in ("REVIEW_NEEDED", "BLOCKED")]
+    L.append("- ACCEPT_OFFICIAL: %s" % (", ".join(acc_off) or "none"))
+    L.append("- ACCEPT_FALLBACK (reputable ETF, membership unverified): %s"
+             % (", ".join(acc_fb) or "none"))
+    L.append("- REVIEW_NEEDED / BLOCKED: %s" % (", ".join(other) or "none"))
     L.append("")
-    L.append("Venues marked BLOCKED have no machine-downloadable source that "
-             "yields the exact official constituent count. For those, the "
-             "authoritative `official_index` file must be supplied once "
-             "(it is dynamic / not server-fetchable), OR a "
-             "`reputable_etf_fallback` set may be accepted as a labelled, "
+    L.append("Venues with only `ACCEPT_FALLBACK` or `BLOCKED` have no machine-"
+             "downloadable official source yielding the exact constituent "
+             "count. For those, either supply the authoritative "
+             "`official_index` file once (dynamic / not server-fetchable), or "
+             "explicitly accept a `reputable_etf_fallback` set as a labelled, "
              "unverified inactive-candidate batch pending a later membership "
-             "cross-check (same posture as the HK TraHK→HSIL flow). No "
-             "curation proceeds until a source is explicitly accepted.")
+             "cross-check (the HK TraHK→HSIL posture). No curation proceeds "
+             "until a source is explicitly accepted.")
     L.append("")
     return "\n".join(L)
 

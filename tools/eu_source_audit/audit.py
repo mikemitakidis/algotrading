@@ -168,9 +168,15 @@ def audit_venue(venue, vmeta, outdir):
         rec["inspection"] = ins
         n = len(ins["included"])
         exp = vmeta["expected"]
+        is_official = role in ("official_index", "official_exchange")
         if n == exp and not ins["duplicate_tickers"]:
-            rec["recommendation"] = ("ACCEPT (exact %d; role=%s)"
-                                     % (exp, role))
+            if is_official:
+                rec["recommendation"] = ("ACCEPT_OFFICIAL (exact %d; role=%s)"
+                                         % (exp, role))
+            else:
+                rec["recommendation"] = ("ACCEPT_FALLBACK (exact %d; role=%s; "
+                                         "ETF holdings, membership unverified)"
+                                         % (exp, role))
         else:
             rec["recommendation"] = (
                 "REVIEW_NEEDED (%d != %d%s)"
@@ -183,10 +189,15 @@ def audit_venue(venue, vmeta, outdir):
     # venue-level verdict
     verdict = "BLOCKED"
     for rec in attempts:
-        if rec["recommendation"] and rec["recommendation"].startswith(
-                "ACCEPT"):
-            verdict = "ACCEPT"
+        r = rec["recommendation"] or ""
+        if r.startswith("ACCEPT_OFFICIAL"):
+            verdict = "ACCEPT_OFFICIAL"
             break
+    if verdict == "BLOCKED":
+        for rec in attempts:
+            if (rec["recommendation"] or "").startswith("ACCEPT_FALLBACK"):
+                verdict = "ACCEPT_FALLBACK"
+                break
     if verdict == "BLOCKED":
         if any(r["saved"] and r["inspection"] for r in attempts):
             verdict = "REVIEW_NEEDED"

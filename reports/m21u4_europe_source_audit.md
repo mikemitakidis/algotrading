@@ -40,7 +40,11 @@ to review in GitHub/VS Code. It performs no curation and does not touch
 - as-of date, detected constituent rows, included tickers
 - excluded-rows summary (cash / derivatives / FX / wrong-exchange / wrong-ccy)
 - exact expected-count pass/fail, and a per-source recommendation
-- a venue verdict: **ACCEPT** / **REVIEW_NEEDED** / **BLOCKED**
+- a venue verdict: **ACCEPT_OFFICIAL** / **ACCEPT_FALLBACK** / **REVIEW_NEEDED**
+  / **BLOCKED**
+- run metadata: run_environment (GitHub Actions / VPS / local), git branch,
+  git HEAD, git clean/dirty
+- source_role shown in the summary table
 
 ## Known expectations (from prior manual probes)
 

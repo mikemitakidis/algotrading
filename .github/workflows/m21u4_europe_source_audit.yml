@@ -1,0 +1,52 @@
+name: M21.U4 Europe Source Audit
+
+# Manual-dispatch only. Read-only audit: attempts source downloads, inspects
+# them, and uploads the generated markdown report as an artifact. Does NOT
+# modify universe data, does NOT curate, does NOT change runtime. It does not
+# commit anything back to the repo.
+
+on:
+  workflow_dispatch:
+    inputs:
+      venues:
+        description: "Comma-separated venues to audit"
+        required: false
+        default: "dax,smi,aex,cac,ibex"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run source audit (read-only)
+        run: |
+          set +e
+          python3 -m tools.eu_source_audit.run_audit \
+            --venues "${{ github.event.inputs.venues }}" \
+            --outdir "${RUNNER_TEMP}/m21u4_sources" \
+            --report "reports/m21u4_europe_source_audit.md" \
+            --json-out "reports/m21u4_europe_source_audit.json"
+          echo "exit=$?"
+          true
+
+      - name: Show report in log
+        run: cat reports/m21u4_europe_source_audit.md || true
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m21u4-europe-source-audit
+          path: |
+            reports/m21u4_europe_source_audit.md
+            reports/m21u4_europe_source_audit.json
+          if-no-files-found: warn
