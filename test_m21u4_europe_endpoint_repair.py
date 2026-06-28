@@ -73,8 +73,10 @@ class RepairReportGeneration(unittest.TestCase):
             "venue": "smi",
             "attempts": [{
                 "role": "reputable_etf_fallback",
+                "url": "http://smi-exact",
                 "inspection": {"included": [("X%d" % i, "n") for i in
-                                            range(20)]},
+                                            range(20)],
+                               "duplicate_tickers": []},
             }],
         }]
         p = Path(tempfile.mkdtemp()) / "audit.json"
@@ -82,6 +84,106 @@ class RepairReportGeneration(unittest.TestCase):
         md = G.render(audit_path=str(p))
         self.assertIn("ACCEPT_FALLBACK_EXACT", md)
         self.assertIn("LIVE audit results merged", md)
+
+    def test_first_fallback_exact_not_overwritten_by_later_inexact(self):
+        # SMI: attempt 1 exact (20), attempt 2 inexact (18). Must pick exact.
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{
+            "venue": "smi",
+            "attempts": [
+                {"role": "reputable_etf_fallback", "url": "http://exact-20",
+                 "inspection": {"included": [("X%d" % i, "n")
+                                             for i in range(20)],
+                                "duplicate_tickers": []}},
+                {"role": "reputable_etf_fallback", "url": "http://inexact-18",
+                 "inspection": {"included": [("Y%d" % i, "n")
+                                             for i in range(18)],
+                                "duplicate_tickers": []}},
+            ],
+        }]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        sel = G._load_audit(str(p))
+        self.assertIn("smi", sel)
+        self.assertEqual(sel["smi"]["url"], "http://exact-20")
+        md = G.render(audit_path=str(p))
+        # the SMI row must be exact + show the exact endpoint
+        smi_line = [ln for ln in md.splitlines()
+                    if ln.startswith("| SMI ")][0]
+        self.assertIn("ACCEPT_FALLBACK_EXACT", smi_line)
+        self.assertIn("exact-20", smi_line)
+        self.assertNotIn("FALLBACK_INCOMPLETE", smi_line)
+
+    def test_exact_after_inexact_order_also_picks_exact(self):
+        # reverse order: inexact first, exact second -> still exact
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{
+            "venue": "aex",
+            "attempts": [
+                {"role": "reputable_etf_fallback", "url": "http://inexact-22",
+                 "inspection": {"included": [("Y%d" % i, "n")
+                                             for i in range(22)],
+                                "duplicate_tickers": []}},
+                {"role": "reputable_etf_fallback", "url": "http://exact-25",
+                 "inspection": {"included": [("X%d" % i, "n")
+                                             for i in range(25)],
+                                "duplicate_tickers": []}},
+            ],
+        }]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        sel = G._load_audit(str(p))
+        self.assertEqual(sel["aex"]["url"], "http://exact-25")
+
+    def test_exact_count_with_dups_is_not_exact(self):
+        # 35 rows but a duplicate ticker -> not ACCEPT_FALLBACK_EXACT
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{
+            "venue": "ibex",
+            "attempts": [
+                {"role": "reputable_etf_fallback", "url": "http://dup-35",
+                 "inspection": {"included": [("X%d" % i, "n")
+                                             for i in range(35)],
+                                "duplicate_tickers": ["X1"]}},
+            ],
+        }]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        md = G.render(audit_path=str(p))
+        ibex_line = [ln for ln in md.splitlines()
+                     if ln.startswith("| IBEX ")][0]
+        self.assertIn("FALLBACK_INCOMPLETE", ibex_line)
+        self.assertNotIn("ACCEPT_FALLBACK_EXACT", ibex_line)
+
+    def test_no_inspected_fallback_is_blocked(self):
+        # CAC: attempts present but none have inspection -> venue omitted ->
+        # report shows BLOCKED_NEEDS_MANUAL_SOURCE for CAC.
+        import json
+        import tempfile
+        from pathlib import Path
+        data = [{
+            "venue": "cac",
+            "attempts": [
+                {"role": "official_index", "url": "http://dyn",
+                 "inspection": None},
+                {"role": "reputable_etf_fallback", "url": "http://404",
+                 "inspection": None},
+            ],
+        }]
+        p = Path(tempfile.mkdtemp()) / "audit.json"
+        p.write_text(json.dumps(data))
+        sel = G._load_audit(str(p))
+        self.assertNotIn("cac", sel)
+        md = G.render(audit_path=str(p))
+        cac_line = [ln for ln in md.splitlines()
+                    if ln.startswith("| CAC ")][0]
+        self.assertIn("BLOCKED_NEEDS_MANUAL_SOURCE", cac_line)
 
 
 if __name__ == "__main__":

@@ -68,20 +68,49 @@ def _run_env():
     return "local"
 
 
+def _inspected_fallbacks(record):
+    """All fallback attempts that have an inspection, for one venue record."""
+    return [a for a in record.get("attempts", [])
+            if a.get("role", "").endswith("fallback") and a.get("inspection")]
+
+
+def _score(attempt, expected):
+    """Selection score for a fallback attempt.
+
+    Higher is better. An exact-count, no-dup attempt always outranks any
+    inexact one; among inexact, prefer the highest included row count.
+    """
+    ins = attempt["inspection"]
+    n = len(ins.get("included", []))
+    dups = ins.get("duplicate_tickers") or []
+    exact = (n == expected and not dups)
+    # exact attempts get a large bonus so they always win; tie-break by count
+    return (1 if exact else 0, n if not dups else -1)
+
+
 def _load_audit(path):
-    """Return {venue: best_fallback_record} from an audit json, if provided."""
+    """Return {venue: best_fallback_record} from an audit json, if provided.
+
+    Selection per venue:
+      1. Prefer a fallback whose inspected row count == venue expected AND has
+         no duplicate tickers (exact).
+      2. Else choose the best inspected fallback (highest included row count,
+         dup-laden attempts deprioritised).
+      3. If no fallback was inspected, the venue is omitted -> report treats it
+         as BLOCKED_NEEDS_MANUAL_SOURCE.
+    """
     if not path or not Path(path).is_file():
         return {}
     data = json.loads(Path(path).read_text())
     out = {}
     for r in data:
         v = r.get("venue")
-        best = None
-        for a in r.get("attempts", []):
-            if a.get("role", "").endswith("fallback") and a.get("inspection"):
-                best = a
-        if best:
-            out[v] = best
+        expected = VENUES[v]["expected"] if v in VENUES else None
+        candidates = _inspected_fallbacks(r)
+        if not candidates or expected is None:
+            continue  # no inspected fallback -> BLOCKED_NEEDS_MANUAL_SOURCE
+        best = max(candidates, key=lambda a: _score(a, expected))
+        out[v] = best
     return out
 
 
@@ -89,6 +118,7 @@ def render(audit_path=""):
     now = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%SZ")
     audit = _load_audit(audit_path)
+    audit_supplied = bool(audit_path and Path(audit_path).is_file())
     L = []
     L.append("# M21.U4 Europe — Endpoint Repair Report")
     L.append("")
@@ -111,16 +141,17 @@ def render(audit_path=""):
              "against the updated `venues.py`** — this generator does not probe "
              "the network.")
     L.append("")
-    live = "with LIVE audit results merged" if audit else \
+    live = "with LIVE audit results merged" if audit_supplied else \
            "PLAN ONLY (no live audit json supplied — run the audit to fill " \
            "fetched/exact/verdict)"
     L.append("Mode: **%s**" % live)
     L.append("")
     L.append("## Per-venue endpoint repair")
     L.append("")
-    L.append("| Venue | Expected | Old endpoint (failed) | New endpoint(s) | "
-             "source_role | Fetched? | Exact? | Verdict |")
-    L.append("|---|---|---|---|---|---|---|---|")
+    L.append("| Venue | Expected | Old endpoint (failed) | New candidate "
+             "endpoint(s) | Selected endpoint | Included | Dups? | Fetched? | "
+             "Exact? | Verdict |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|")
     for v in _REPAIR_VENUES:
         meta = VENUES[v]
         exp = meta["expected"]
@@ -130,19 +161,45 @@ def render(audit_path=""):
         new = "<br>".join("`%s`" % u for u in new_fb)
         if v in audit:
             rec = audit[v]
-            n = len(rec["inspection"]["included"])
+            ins = rec["inspection"]
+            n = len(ins.get("included", []))
+            dups = ins.get("duplicate_tickers") or []
+            sel = rec.get("url") or rec.get("file") or "(selected fallback)"
             fetched = "yes"
-            exact = "yes" if n == exp else "no (%d/%d)" % (n, exp)
-            verdict = ("ACCEPT_FALLBACK_EXACT" if n == exp
+            has_dups = "yes (%s)" % ",".join(dups) if dups else "no"
+            is_exact = (n == exp and not dups)
+            exact = "yes" if is_exact else "no (%d/%d)" % (n, exp)
+            verdict = ("ACCEPT_FALLBACK_EXACT" if is_exact
                        else "FALLBACK_INCOMPLETE")
+            sel_cell = "`%s`" % sel
+            inc_cell = str(n)
         else:
-            fetched = "(run audit)"
-            exact = "(run audit)"
-            verdict = "PENDING_AUDIT"
-        L.append("| %s | %d | %s | %s | reputable_etf_fallback | %s | %s | "
-                 "**%s** |" % (v.upper(), exp, old, new, fetched, exact,
-                               verdict))
+            if audit_supplied:
+                # audit ran but this venue had no inspected fallback
+                sel_cell = "(none usable)"
+                inc_cell = "0"
+                has_dups = "n/a"
+                fetched = "no"
+                exact = "no"
+                verdict = "BLOCKED_NEEDS_MANUAL_SOURCE"
+            else:
+                sel_cell = "(run audit)"
+                inc_cell = "(run audit)"
+                has_dups = "(run audit)"
+                fetched = "(run audit)"
+                exact = "(run audit)"
+                verdict = "PENDING_AUDIT"
+        L.append("| %s | %d | %s | %s | %s | %s | %s | %s | %s | **%s** |"
+                 % (v.upper(), exp, old, new, sel_cell, inc_cell, has_dups,
+                    fetched, exact, verdict))
     L.append("")
+    L.append("> Verdict per venue: **ACCEPT_FALLBACK_EXACT** if the selected "
+             "fallback's included count equals Expected with no duplicate "
+             "tickers; **FALLBACK_INCOMPLETE** if a fallback was inspected but "
+             "is not exact; **BLOCKED_NEEDS_MANUAL_SOURCE** if no fallback was "
+             "inspected at all (venue absent from the audit json). The selected "
+             "endpoint is the best fallback per venue (exact preferred, else "
+             "highest included count), not merely the last attempt.")
     L.append("## How to fill verdicts (one command)")
     L.append("")
     L.append("Run the audit against the updated `venues.py`, then regenerate "

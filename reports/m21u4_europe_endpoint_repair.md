@@ -1,10 +1,10 @@
 # M21.U4 Europe — Endpoint Repair Report
 
-Generated: 2026-06-28 15:36:09Z
+Generated: 2026-06-28 15:41:57Z
 
 - run_environment: **local**
 - generated_at_git_branch: `m21-u4-europe-endpoint-repair`
-- generated_at_git_head: `f5090678e1a4a62390aa6b7011488515c167dc56`
+- generated_at_git_head: `a2cd6842f2ba989abbf05973210abdbf92ce3d83`
 - generated_at_git_status: **dirty**
 
 > `generated_at_git_*` are report-generation provenance, not the final committed-tree state.
@@ -15,13 +15,14 @@ Mode: **PLAN ONLY (no live audit json supplied — run the audit to fill fetched
 
 ## Per-venue endpoint repair
 
-| Venue | Expected | Old endpoint (failed) | New endpoint(s) | source_role | Fetched? | Exact? | Verdict |
-|---|---|---|---|---|---|---|---|
-| SMI | 20 | ishares.com/ch/.../291893/ishares-smi-ch-chf-acc/1495092304805.ajax (returned global multi-asset fund / unreachable) | `https://www.ubs.com/etf-tools/api/etf/holdings/csv?isin=CH0017142719`<br>`https://www.ishares.com/ch/individual/en/products/270048/fund/1495092304805.ajax?fileType=csv&fileName=CSSMI_holdings&dataType=fund`<br>`https://www.ishares.com/de/privatanleger/de/produkte/270048/fund/1478358465952.ajax?fileType=csv&fileName=CSSMI_holdings&dataType=fund` | reputable_etf_fallback | (run audit) | (run audit) | **PENDING_AUDIT** |
-| AEX | 25 | ishares.com/nl/.../251779/ishares-aex-ucits-etf/1478358465952.ajax (unreachable in audit run) | `https://www.ishares.com/nl/particuliere-belegger/nl/producten/251779/fund/1478358465952.ajax?fileType=csv&fileName=IAEX_holdings&dataType=fund`<br>`https://www.ishares.com/uk/individual/en/products/251779/fund/1478358465952.ajax?fileType=csv&fileName=IAEX_holdings&dataType=fund` | reputable_etf_fallback | (run audit) | (run audit) | **PENDING_AUDIT** |
-| CAC | 40 | amundietf.fr/.../amundi-cac-40-ucits-etf-dist/fr0007052782?download=holdings (unreachable in audit run) | `https://www.ishares.com/fr/particuliers/fr/produits/251786/fund/1478358465952.ajax?fileType=csv&fileName=CAC_holdings&dataType=fund`<br>`https://www.amundietf.fr/fr/professionnels/api/funds/holdings/FR0007052782/csv` | reputable_etf_fallback | (run audit) | (run audit) | **PENDING_AUDIT** |
-| IBEX | 35 | ishares.com/es/.../251773/ishares-ibex-35-ucits-etf/1478358465952.ajax (unreachable in audit run) | `https://www.ishares.com/es/inversor-particular/es/productos/251773/fund/1478358465952.ajax?fileType=csv&fileName=IBEX_holdings&dataType=fund`<br>`https://www.ishares.com/uk/individual/en/products/251773/fund/1478358465952.ajax?fileType=csv&fileName=IBEX_holdings&dataType=fund` | reputable_etf_fallback | (run audit) | (run audit) | **PENDING_AUDIT** |
+| Venue | Expected | Old endpoint (failed) | New candidate endpoint(s) | Selected endpoint | Included | Dups? | Fetched? | Exact? | Verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| SMI | 20 | ishares.com/ch/.../291893/ishares-smi-ch-chf-acc/1495092304805.ajax (returned global multi-asset fund / unreachable) | `https://www.ubs.com/etf-tools/api/etf/holdings/csv?isin=CH0017142719`<br>`https://www.ishares.com/ch/individual/en/products/270048/fund/1495092304805.ajax?fileType=csv&fileName=CSSMI_holdings&dataType=fund`<br>`https://www.ishares.com/de/privatanleger/de/produkte/270048/fund/1478358465952.ajax?fileType=csv&fileName=CSSMI_holdings&dataType=fund` | (run audit) | (run audit) | (run audit) | (run audit) | (run audit) | **PENDING_AUDIT** |
+| AEX | 25 | ishares.com/nl/.../251779/ishares-aex-ucits-etf/1478358465952.ajax (unreachable in audit run) | `https://www.ishares.com/nl/particuliere-belegger/nl/producten/251779/fund/1478358465952.ajax?fileType=csv&fileName=IAEX_holdings&dataType=fund`<br>`https://www.ishares.com/uk/individual/en/products/251779/fund/1478358465952.ajax?fileType=csv&fileName=IAEX_holdings&dataType=fund` | (run audit) | (run audit) | (run audit) | (run audit) | (run audit) | **PENDING_AUDIT** |
+| CAC | 40 | amundietf.fr/.../amundi-cac-40-ucits-etf-dist/fr0007052782?download=holdings (unreachable in audit run) | `https://www.ishares.com/fr/particuliers/fr/produits/251786/fund/1478358465952.ajax?fileType=csv&fileName=CAC_holdings&dataType=fund`<br>`https://www.amundietf.fr/fr/professionnels/api/funds/holdings/FR0007052782/csv` | (run audit) | (run audit) | (run audit) | (run audit) | (run audit) | **PENDING_AUDIT** |
+| IBEX | 35 | ishares.com/es/.../251773/ishares-ibex-35-ucits-etf/1478358465952.ajax (unreachable in audit run) | `https://www.ishares.com/es/inversor-particular/es/productos/251773/fund/1478358465952.ajax?fileType=csv&fileName=IBEX_holdings&dataType=fund`<br>`https://www.ishares.com/uk/individual/en/products/251773/fund/1478358465952.ajax?fileType=csv&fileName=IBEX_holdings&dataType=fund` | (run audit) | (run audit) | (run audit) | (run audit) | (run audit) | **PENDING_AUDIT** |
 
+> Verdict per venue: **ACCEPT_FALLBACK_EXACT** if the selected fallback's included count equals Expected with no duplicate tickers; **FALLBACK_INCOMPLETE** if a fallback was inspected but is not exact; **BLOCKED_NEEDS_MANUAL_SOURCE** if no fallback was inspected at all (venue absent from the audit json). The selected endpoint is the best fallback per venue (exact preferred, else highest included count), not merely the last attempt.
 ## How to fill verdicts (one command)
 
 Run the audit against the updated `venues.py`, then regenerate this report merging the live json:
