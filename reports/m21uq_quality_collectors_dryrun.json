@@ -1,0 +1,2318 @@
+[
+  {
+    "internal_symbol": "HKEX:0001",
+    "provider_symbol": "0001.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0002",
+    "provider_symbol": "0002.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0003",
+    "provider_symbol": "0003.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0005",
+    "provider_symbol": "0005.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0006",
+    "provider_symbol": "0006.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0012",
+    "provider_symbol": "0012.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0016",
+    "provider_symbol": "0016.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0027",
+    "provider_symbol": "0027.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0066",
+    "provider_symbol": "0066.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0101",
+    "provider_symbol": "0101.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0175",
+    "provider_symbol": "0175.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0241",
+    "provider_symbol": "0241.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0267",
+    "provider_symbol": "0267.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0285",
+    "provider_symbol": "0285.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0288",
+    "provider_symbol": "0288.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0291",
+    "provider_symbol": "0291.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0300",
+    "provider_symbol": "0300.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0316",
+    "provider_symbol": "0316.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0322",
+    "provider_symbol": "0322.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0386",
+    "provider_symbol": "0386.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0388",
+    "provider_symbol": "0388.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0669",
+    "provider_symbol": "0669.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0688",
+    "provider_symbol": "0688.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0700",
+    "provider_symbol": "0700.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0728",
+    "provider_symbol": "0728.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0762",
+    "provider_symbol": "0762.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0823",
+    "provider_symbol": "0823.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0836",
+    "provider_symbol": "0836.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0857",
+    "provider_symbol": "0857.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0868",
+    "provider_symbol": "0868.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0883",
+    "provider_symbol": "0883.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0939",
+    "provider_symbol": "0939.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0941",
+    "provider_symbol": "0941.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0960",
+    "provider_symbol": "0960.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0968",
+    "provider_symbol": "0968.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0981",
+    "provider_symbol": "0981.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:0992",
+    "provider_symbol": "0992.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1024",
+    "provider_symbol": "1024.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1038",
+    "provider_symbol": "1038.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1044",
+    "provider_symbol": "1044.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1088",
+    "provider_symbol": "1088.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1093",
+    "provider_symbol": "1093.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1099",
+    "provider_symbol": "1099.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1109",
+    "provider_symbol": "1109.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1113",
+    "provider_symbol": "1113.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1177",
+    "provider_symbol": "1177.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1209",
+    "provider_symbol": "1209.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1211",
+    "provider_symbol": "1211.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1299",
+    "provider_symbol": "1299.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1378",
+    "provider_symbol": "1378.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1398",
+    "provider_symbol": "1398.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1519",
+    "provider_symbol": "1519.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1801",
+    "provider_symbol": "1801.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1810",
+    "provider_symbol": "1810.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1876",
+    "provider_symbol": "1876.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1928",
+    "provider_symbol": "1928.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1929",
+    "provider_symbol": "1929.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:1997",
+    "provider_symbol": "1997.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2015",
+    "provider_symbol": "2015.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2020",
+    "provider_symbol": "2020.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2057",
+    "provider_symbol": "2057.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2269",
+    "provider_symbol": "2269.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2313",
+    "provider_symbol": "2313.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2318",
+    "provider_symbol": "2318.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2319",
+    "provider_symbol": "2319.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2331",
+    "provider_symbol": "2331.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2359",
+    "provider_symbol": "2359.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2382",
+    "provider_symbol": "2382.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2388",
+    "provider_symbol": "2388.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2600",
+    "provider_symbol": "2600.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2618",
+    "provider_symbol": "2618.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2628",
+    "provider_symbol": "2628.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2688",
+    "provider_symbol": "2688.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:2899",
+    "provider_symbol": "2899.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3690",
+    "provider_symbol": "3690.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3692",
+    "provider_symbol": "3692.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3750",
+    "provider_symbol": "3750.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3968",
+    "provider_symbol": "3968.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3988",
+    "provider_symbol": "3988.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:3993",
+    "provider_symbol": "3993.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:6160",
+    "provider_symbol": "6160.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:6181",
+    "provider_symbol": "6181.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:6618",
+    "provider_symbol": "6618.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:6690",
+    "provider_symbol": "6690.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:6862",
+    "provider_symbol": "6862.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9618",
+    "provider_symbol": "9618.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9633",
+    "provider_symbol": "9633.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9888",
+    "provider_symbol": "9888.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9901",
+    "provider_symbol": "9901.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9961",
+    "provider_symbol": "9961.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9988",
+    "provider_symbol": "9988.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9992",
+    "provider_symbol": "9992.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "HKEX:9999",
+    "provider_symbol": "9999.HK",
+    "region": "HK",
+    "exchange": "HKEX",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:AAF",
+    "provider_symbol": "AAF.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:AAL",
+    "provider_symbol": "AAL.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ABDN",
+    "provider_symbol": "ABDN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ABF",
+    "provider_symbol": "ABF.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ADM",
+    "provider_symbol": "ADM.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ALW",
+    "provider_symbol": "ALW.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ANTO",
+    "provider_symbol": "ANTO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:AUTO",
+    "provider_symbol": "AUTO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:AV",
+    "provider_symbol": "AV.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:AZN",
+    "provider_symbol": "AZN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BA",
+    "provider_symbol": "BA.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BAB",
+    "provider_symbol": "BAB.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BARC",
+    "provider_symbol": "BARC.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BATS",
+    "provider_symbol": "BATS.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BBOX",
+    "provider_symbol": "BBOX.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BEZ",
+    "provider_symbol": "BEZ.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BGEO",
+    "provider_symbol": "BGEO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BLND",
+    "provider_symbol": "BLND.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BNZL",
+    "provider_symbol": "BNZL.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BP",
+    "provider_symbol": "BP.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BRBY",
+    "provider_symbol": "BRBY.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BT-A",
+    "provider_symbol": "BT-A.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:BTRW",
+    "provider_symbol": "BTRW.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CCC",
+    "provider_symbol": "CCC.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CCEP",
+    "provider_symbol": "CCEP.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CCH",
+    "provider_symbol": "CCH.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CNA",
+    "provider_symbol": "CNA.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CPG",
+    "provider_symbol": "CPG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CRDA",
+    "provider_symbol": "CRDA.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:CTEC",
+    "provider_symbol": "CTEC.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:DCC",
+    "provider_symbol": "DCC.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:DGE",
+    "provider_symbol": "DGE.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:DPLM",
+    "provider_symbol": "DPLM.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:EDV",
+    "provider_symbol": "EDV.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ENT",
+    "provider_symbol": "ENT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:EXPN",
+    "provider_symbol": "EXPN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:FCIT",
+    "provider_symbol": "FCIT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:FRES",
+    "provider_symbol": "FRES.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:GAW",
+    "provider_symbol": "GAW.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:GLEN",
+    "provider_symbol": "GLEN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:GSK",
+    "provider_symbol": "GSK.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:HLMA",
+    "provider_symbol": "HLMA.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:HLN",
+    "provider_symbol": "HLN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:HSBA",
+    "provider_symbol": "HSBA.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:HSX",
+    "provider_symbol": "HSX.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:HWDN",
+    "provider_symbol": "HWDN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:IAG",
+    "provider_symbol": "IAG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ICG",
+    "provider_symbol": "ICG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:IGG",
+    "provider_symbol": "IGG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:IHG",
+    "provider_symbol": "IHG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:III",
+    "provider_symbol": "III.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:IMB",
+    "provider_symbol": "IMB.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:IMI",
+    "provider_symbol": "IMI.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:INF",
+    "provider_symbol": "INF.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:INVP",
+    "provider_symbol": "INVP.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ITRK",
+    "provider_symbol": "ITRK.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:JD",
+    "provider_symbol": "JD.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:KGF",
+    "provider_symbol": "KGF.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:LAND",
+    "provider_symbol": "LAND.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:LGEN",
+    "provider_symbol": "LGEN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:LLOY",
+    "provider_symbol": "LLOY.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:LMP",
+    "provider_symbol": "LMP.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:LSEG",
+    "provider_symbol": "LSEG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:MKS",
+    "provider_symbol": "MKS.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:MNG",
+    "provider_symbol": "MNG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:MRO",
+    "provider_symbol": "MRO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:MTLN",
+    "provider_symbol": "MTLN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:NG",
+    "provider_symbol": "NG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:NWG",
+    "provider_symbol": "NWG.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:NXT",
+    "provider_symbol": "NXT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:PCT",
+    "provider_symbol": "PCT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:PRU",
+    "provider_symbol": "PRU.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:PSH",
+    "provider_symbol": "PSH.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:PSN",
+    "provider_symbol": "PSN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:PSON",
+    "provider_symbol": "PSON.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:REL",
+    "provider_symbol": "REL.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:RIO",
+    "provider_symbol": "RIO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:RKT",
+    "provider_symbol": "RKT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:RR",
+    "provider_symbol": "RR.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:RTO",
+    "provider_symbol": "RTO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SBRY",
+    "provider_symbol": "SBRY.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SDLF",
+    "provider_symbol": "SDLF.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SDR",
+    "provider_symbol": "SDR.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SGE",
+    "provider_symbol": "SGE.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SGRO",
+    "provider_symbol": "SGRO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SHEL",
+    "provider_symbol": "SHEL.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SMIN",
+    "provider_symbol": "SMIN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SMT",
+    "provider_symbol": "SMT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SN",
+    "provider_symbol": "SN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SPX",
+    "provider_symbol": "SPX.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SSE",
+    "provider_symbol": "SSE.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:STAN",
+    "provider_symbol": "STAN.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:STJ",
+    "provider_symbol": "STJ.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:SVT",
+    "provider_symbol": "SVT.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:TSCO",
+    "provider_symbol": "TSCO.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:ULVR",
+    "provider_symbol": "ULVR.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:UU",
+    "provider_symbol": "UU.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:VOD",
+    "provider_symbol": "VOD.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:WEIR",
+    "provider_symbol": "WEIR.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  },
+  {
+    "internal_symbol": "LSE:WTB",
+    "provider_symbol": "WTB.L",
+    "region": "UK",
+    "exchange": "LSE",
+    "passed": true,
+    "reason_codes": [],
+    "warnings": [
+      "liquidity_unknown"
+    ],
+    "details": {}
+  }
+]

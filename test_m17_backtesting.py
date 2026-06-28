@@ -4174,7 +4174,8 @@ class G10_Hygiene(unittest.TestCase):
                             "bot/paper/", "configs/paper/",
                             "bot/runtime/",
                             "bot/universe/", "configs/universe/",
-                            "tools/eu_source_audit/")
+                            "tools/eu_source_audit/",
+                            "tools/universe_quality/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4283,6 +4284,10 @@ class G10_Hygiene(unittest.TestCase):
             # M21.U Global Universe Foundation closeout/status (read-only).
             "reports/m21u_global_universe_foundation_status.md",
             "test_m21u_foundation_status.py",
+            # M21.UQ Global Quality Collectors / Gates (read-only).
+            "reports/m21uq_quality_collectors_plan_or_dryrun.md",
+            "reports/m21uq_quality_collectors_dryrun.json",
+            "test_m21uq_quality_collectors.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

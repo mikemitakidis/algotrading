@@ -10417,6 +10417,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/runtime/",                                 # M20.I
             "bot/universe/",     "configs/universe/",       # M20.U
             "tools/eu_source_audit/",                       # M21.U4 audit
+            "tools/universe_quality/",                      # M21.UQ quality
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10536,6 +10537,10 @@ class G10_Hygiene(unittest.TestCase):
             # M21.U Global Universe Foundation closeout/status (read-only).
             "reports/m21u_global_universe_foundation_status.md",
             "test_m21u_foundation_status.py",
+            # M21.UQ Global Quality Collectors / Gates (read-only).
+            "reports/m21uq_quality_collectors_plan_or_dryrun.md",
+            "reports/m21uq_quality_collectors_dryrun.json",
+            "test_m21uq_quality_collectors.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
