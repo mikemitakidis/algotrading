@@ -157,16 +157,23 @@ def render(audit_path=""):
     L.append("## Per-venue endpoint repair")
     L.append("")
     L.append("| Venue | Expected | Old endpoint (failed) | New candidate "
-             "endpoint(s) | Selected endpoint | Included | Dups? | Fetched? | "
+             "source(s) | Selected endpoint | Included | Dups? | Fetched? | "
              "Exact? | Verdict |")
     L.append("|---|---|---|---|---|---|---|---|---|---|")
     for v in _REPAIR_VENUES:
         meta = VENUES[v]
         exp = meta["expected"]
-        new_fb = [u for (role, u, note) in meta["endpoints"]
+        direct = [u for (role, u, note) in meta.get("endpoints", [])
                   if role == "reputable_etf_fallback"]
+        pages = [u for (role, u, note) in meta.get("product_pages", [])
+                 if role == "reputable_etf_fallback"]
         old = "; ".join(OLD_ENDPOINTS.get(v, ["(see venues.py history)"]))
-        new = "<br>".join("`%s`" % u for u in new_fb)
+        new_parts = []
+        for u in pages:
+            new_parts.append("PAGE (extract link): `%s`" % u)
+        for u in direct:
+            new_parts.append("DIRECT CSV: `%s`" % u)
+        new = "<br>".join(new_parts) if new_parts else "(none)"
         if v in audit:
             rec = audit[v]
             ins = rec["inspection"]

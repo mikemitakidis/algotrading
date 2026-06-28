@@ -118,6 +118,18 @@ def render(results):
             L.append("- note: %s" % a.get("note", ""))
             L.append("- url: `%s`" % a["url"])
             L.append("- http_status: `%s`" % a["http_status"])
+            if a.get("via") == "product_page_extraction":
+                L.append("- via: **product_page_extraction**")
+                L.append("- product_page_url: `%s`"
+                         % a.get("product_page_url", ""))
+                L.append("- page_http_status: `%s`"
+                         % a.get("page_http_status"))
+                L.append("- extracted_holdings_url: `%s`"
+                         % a.get("extracted_holdings_url"))
+                L.append("- holdings_http_status: `%s`"
+                         % a.get("holdings_http_status"))
+                L.append("- extract_status: **%s**"
+                         % a.get("extract_status"))
             L.append("- saved: %s" % ("yes" if a["saved"] else "no"))
             if a["saved"]:
                 L.append("- file: `%s`" % a.get("file", ""))

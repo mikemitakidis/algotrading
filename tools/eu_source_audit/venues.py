@@ -75,10 +75,6 @@ VENUES = {
              "https://www.ishares.com/ch/individual/en/products/251882/"
              "ishares-smi-ch",
              "iShares SMI(R) (CH) product page (SMI 20)"),
-            ("reputable_etf_fallback",
-             "https://www.ubs.com/ch/en/assetmanagement/etf/products/"
-             "fundview/ubs-etf-ch-smi-chf-a-dis/CH0017142719.html",
-             "UBS ETF (CH) SMI product page"),
         ],
     },
     "aex": {
