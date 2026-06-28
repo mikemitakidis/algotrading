@@ -10,7 +10,8 @@ from tools.universe_quality.providers import (
     bars_all_finite, normalize_bars)
 from tools.universe_quality.quality_model import (
     FATAL_CODES, LIQUIDITY_UNKNOWN, OHLCV_EMPTY, OHLCV_NON_FINITE,
-    OHLCV_STALE, OHLCV_TOO_FEW_BARS, OHLCVConfig, PROVIDER_SUFFIX_INVALID,
+    OHLCV_STALE, OHLCV_TOO_FEW_BARS, OHLCVConfig, PROVIDER_FETCH_ERROR,
+    PROVIDER_RATE_LIMITED, PROVIDER_SUFFIX_INVALID,
     PROVIDER_SYMBOL_MISSING, ProviderBar, QualityResult,
     VOLUME_MISSING_OR_ZERO, WARNING_CODES)
 
@@ -133,11 +134,32 @@ def evaluate_candidate(record: dict, provider=None,
     reasons += check_suffix(record)
 
     if provider is not None and yf:
-        raw = provider.fetch_ohlcv(yf)
-        bars = normalize_bars(raw)
-        details["bar_count"] = 0 if not bars else len(bars)
-        reasons += check_ohlcv(bars, as_of, cfg)
-        reasons += check_volume(bars)
+        # Prefer the structured result so a provider exception (rate-limit /
+        # fetch error) is classified honestly rather than swallowed into
+        # ohlcv_empty / volume_missing_or_zero.
+        if hasattr(provider, "fetch_ohlcv_result"):
+            fr = provider.fetch_ohlcv_result(yf)
+            error_kind = fr.error_kind
+            raw = fr.bars
+            if fr.error_text:
+                details["provider_error_text"] = fr.error_text
+        else:
+            error_kind = None
+            raw = provider.fetch_ohlcv(yf)
+
+        if error_kind == "rate_limited":
+            # could not evaluate due to provider rate limit; do NOT run OHLCV/
+            # volume checks (they'd mislabel it ohlcv_empty / volume_missing).
+            reasons.append(PROVIDER_RATE_LIMITED)
+            details["bar_count"] = None
+        elif error_kind == "fetch_error":
+            reasons.append(PROVIDER_FETCH_ERROR)
+            details["bar_count"] = None
+        else:
+            bars = normalize_bars(raw)
+            details["bar_count"] = 0 if not bars else len(bars)
+            reasons += check_ohlcv(bars, as_of, cfg)
+            reasons += check_volume(bars)
 
     for code in check_liquidity(record):
         warnings.append(code)

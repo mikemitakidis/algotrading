@@ -13,6 +13,26 @@ report-only and never a reason to mutate records.
 """
 from typing import Callable, List, Optional
 
+from tools.universe_quality.quality_model import FetchResult
+
+# Substrings (case-insensitive) that identify a rate-limit condition in an
+# exception type name or message. yfinance raises YFRateLimitError with text
+# like "Too Many Requests. Rate limited. Try after a while."
+_RATE_LIMIT_MARKERS = (
+    "ratelimit", "rate limit", "rate limited", "too many requests", "429",
+)
+
+
+def classify_exception(exc) -> str:
+    """Classify a provider exception as 'rate_limited' or 'fetch_error'."""
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    blob = name + " " + msg
+    for marker in _RATE_LIMIT_MARKERS:
+        if marker in blob:
+            return "rate_limited"
+    return "fetch_error"
+
 
 class YFinanceProvider:
     """ProviderProtocol implementation backed by yfinance.
@@ -44,18 +64,34 @@ class YFinanceProvider:
         self._fetch_fn = _fetch_fn
 
     def fetch_ohlcv(self, provider_symbol: str) -> Optional[List[dict]]:
+        """Back-compat: return bars (or None/[]); discards error classification.
+        Prefer fetch_ohlcv_result() for honest error reporting."""
+        return self.fetch_ohlcv_result(provider_symbol).bars
+
+    def fetch_ohlcv_result(self, provider_symbol: str) -> FetchResult:
+        """Structured fetch: returns FetchResult(bars, error_kind, error_text).
+
+        error_kind is None on success/true-empty; 'rate_limited' or
+        'fetch_error' on a classified provider exception. An injected _fetch_fn
+        may itself raise (to simulate provider errors) or return bars/None/[].
+        """
         if self._fetch_fn is not None:
-            return self._fetch_fn(provider_symbol)
+            try:
+                return FetchResult(bars=self._fetch_fn(provider_symbol))
+            except Exception as exc:  # noqa: BLE001
+                kind = classify_exception(exc)
+                return FetchResult(bars=None, error_kind=kind,
+                                   error_text=str(exc))
         return self._fetch_via_yfinance(provider_symbol)
 
-    def _fetch_via_yfinance(self,
-                            provider_symbol: str) -> Optional[List[dict]]:
+    def _fetch_via_yfinance(self, provider_symbol: str) -> FetchResult:
         # Lazy import: only when actually fetching live, so the module is
         # importable without yfinance installed.
         try:
             import yfinance  # noqa: WPS433 (intentional lazy import)
-        except Exception:  # noqa: BLE001
-            return None
+        except Exception as exc:  # noqa: BLE001
+            return FetchResult(bars=None, error_kind="fetch_error",
+                               error_text="yfinance import failed: %s" % exc)
         if self.pace_seconds:
             import time
             time.sleep(self.pace_seconds)
@@ -63,10 +99,12 @@ class YFinanceProvider:
             t = yfinance.Ticker(provider_symbol)
             df = t.history(period=self.period, interval=self.interval,
                            timeout=self.timeout, auto_adjust=False)
-        except Exception:  # noqa: BLE001
-            return None
+        except Exception as exc:  # noqa: BLE001
+            kind = classify_exception(exc)
+            return FetchResult(bars=None, error_kind=kind,
+                               error_text=str(exc))
         if df is None or len(df) == 0:
-            return []
+            return FetchResult(bars=[])  # true empty, no error
         out: List[dict] = []
         try:
             for idx, row in df.iterrows():
@@ -79,7 +117,8 @@ class YFinanceProvider:
                     "close": float(row.get("Close")),
                     "volume": float(row.get("Volume")),
                 })
-        except Exception:  # noqa: BLE001
-            # malformed frame -> treat as empty (report-only), never raise
-            return []
-        return out
+        except Exception as exc:  # noqa: BLE001
+            # malformed frame -> classify as fetch_error (not empty), never raise
+            return FetchResult(bars=None, error_kind="fetch_error",
+                               error_text="malformed frame: %s" % exc)
+        return FetchResult(bars=out)

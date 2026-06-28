@@ -15,6 +15,9 @@ OHLCV_NON_FINITE = "ohlcv_non_finite"
 # Liquidity
 VOLUME_MISSING_OR_ZERO = "volume_missing_or_zero"
 LIQUIDITY_UNKNOWN = "liquidity_unknown"
+# Provider availability (distinct from data-quality problems)
+PROVIDER_RATE_LIMITED = "provider_rate_limited"
+PROVIDER_FETCH_ERROR = "provider_fetch_error"
 # Aggregate
 QUALITY_PASS = "quality_pass"
 QUALITY_FAIL = "quality_fail"
@@ -22,18 +25,29 @@ QUALITY_FAIL = "quality_fail"
 ALL_REASON_CODES = frozenset({
     PROVIDER_SYMBOL_MISSING, PROVIDER_SYMBOL_DUPLICATE, PROVIDER_SUFFIX_INVALID,
     OHLCV_EMPTY, OHLCV_TOO_FEW_BARS, OHLCV_STALE, OHLCV_NON_FINITE,
-    VOLUME_MISSING_OR_ZERO, LIQUIDITY_UNKNOWN, QUALITY_PASS, QUALITY_FAIL,
+    VOLUME_MISSING_OR_ZERO, LIQUIDITY_UNKNOWN, PROVIDER_RATE_LIMITED,
+    PROVIDER_FETCH_ERROR, QUALITY_PASS, QUALITY_FAIL,
 })
 
 # Codes that, if present, make a candidate FAIL the gate. LIQUIDITY_UNKNOWN is a
 # WARNING for inactive candidates (their liquidity fields are intentionally null
 # at this stage), so it is non-fatal by default.
+# Provider availability codes (rate-limit / fetch-error) are FATAL for a
+# provider-backed live check (the candidate did not pass a live check) but are
+# explicitly NOT data-quality verdicts — they say "could not evaluate", not
+# "bad data". They are surfaced distinctly so a rate-limited symbol is never
+# mislabelled ohlcv_empty / volume_missing_or_zero.
 FATAL_CODES = frozenset({
     PROVIDER_SYMBOL_MISSING, PROVIDER_SYMBOL_DUPLICATE, PROVIDER_SUFFIX_INVALID,
     OHLCV_EMPTY, OHLCV_TOO_FEW_BARS, OHLCV_STALE, OHLCV_NON_FINITE,
-    VOLUME_MISSING_OR_ZERO,
+    VOLUME_MISSING_OR_ZERO, PROVIDER_RATE_LIMITED, PROVIDER_FETCH_ERROR,
 })
 WARNING_CODES = frozenset({LIQUIDITY_UNKNOWN})
+# Provider-availability codes: a live check could not be completed (NOT a
+# statement about data quality).
+PROVIDER_AVAILABILITY_CODES = frozenset({
+    PROVIDER_RATE_LIMITED, PROVIDER_FETCH_ERROR,
+})
 
 
 @dataclass
@@ -78,3 +92,18 @@ class ProviderBar:
     low: float
     close: float
     volume: float
+
+
+@dataclass
+class FetchResult:
+    """Structured provider fetch outcome.
+
+    error_kind is None on success. On failure it is one of:
+      'rate_limited' -> maps to PROVIDER_RATE_LIMITED
+      'fetch_error'  -> maps to PROVIDER_FETCH_ERROR
+    bars is the raw payload (list[dict]) on success, [] for a true empty
+    dataframe (no exception), or None when unfetchable with no specific error.
+    """
+    bars: Optional[List[dict]] = None
+    error_kind: Optional[str] = None
+    error_text: str = ""

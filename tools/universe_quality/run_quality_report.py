@@ -188,6 +188,28 @@ def render(records, results, data_source="structural_only", attempted=None):
         L.append("(no OHLCV codes — structural-only run, or all OHLCV checks "
                  "passed)")
     L.append("")
+    L.append("## Provider availability breakdown (provider-backed runs)")
+    L.append("")
+    avail_codes = ("provider_rate_limited", "provider_fetch_error")
+    any_avail = False
+    for code in avail_codes:
+        hit = [r.internal_symbol for r in results if code in r.reason_codes]
+        if hit:
+            any_avail = True
+            shown = ", ".join("`%s`" % s for s in hit[:25])
+            more = "" if len(hit) <= 25 else " (+%d more)" % (len(hit) - 25)
+            L.append("- `%s`: %d — %s%s" % (code, len(hit), shown, more))
+    if not any_avail:
+        L.append("(no provider availability errors — structural-only run, or "
+                 "all live fetches succeeded)")
+    L.append("")
+    L.append("> Provider-availability codes (`provider_rate_limited`, "
+             "`provider_fetch_error`) mean a live check could NOT be completed "
+             "for that symbol. They are NOT data-quality verdicts: a "
+             "rate-limited symbol is reported as rate-limited, never as "
+             "`ohlcv_empty` or `volume_missing_or_zero`. Re-run later / pace "
+             "requests to evaluate these symbols.")
+    L.append("")
     L.append("## Safety confirmation")
     L.append("")
     L.append("- read-only: no global_expanded.json / source_registry.json "

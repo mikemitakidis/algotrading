@@ -250,5 +250,119 @@ class NoMutation(unittest.TestCase):
         self.assertEqual(_GLOBAL.read_bytes(), before)
 
 
+class ProviderErrorClassification(unittest.TestCase):
+    """Rate-limit / fetch-error must be classified distinctly, never reported
+    as ohlcv_empty / volume_missing_or_zero. Deterministic, offline."""
+
+    def _rec(self, internal="HKEX:0001", yf="0001.HK", exch="HKEX",
+             region="HK"):
+        return {"internal_symbol": internal,
+                "provider_symbols": {"yfinance": yf}, "exchange": exch,
+                "region": region, "avg_volume_20d": None,
+                "avg_dollar_volume_20d": None, "median_spread_bps": None,
+                "min_liquidity_tier": None}
+
+    def test_classify_rate_limit_by_type_name(self):
+        from tools.universe_quality.yfinance_provider import classify_exception
+
+        class YFRateLimitError(Exception):
+            pass
+        self.assertEqual(
+            classify_exception(YFRateLimitError("Too Many Requests. Rate "
+                                                "limited. Try after a while.")),
+            "rate_limited")
+
+    def test_classify_rate_limit_by_message_only(self):
+        from tools.universe_quality.yfinance_provider import classify_exception
+        self.assertEqual(classify_exception(Exception("429 too many requests")),
+                         "rate_limited")
+
+    def test_classify_generic_is_fetch_error(self):
+        from tools.universe_quality.yfinance_provider import classify_exception
+        self.assertEqual(classify_exception(ValueError("connection reset")),
+                         "fetch_error")
+
+    def test_injected_fetch_raising_rate_limit_maps_to_code(self):
+        class YFRateLimitError(Exception):
+            pass
+
+        def boom(sym):
+            raise YFRateLimitError("Too Many Requests. Rate limited.")
+        prov = YFinanceProvider(_fetch_fn=boom)
+        results = R.evaluate_all([self._rec()], provider=prov, as_of=_AS_OF)
+        codes = results[0].reason_codes
+        self.assertIn("provider_rate_limited", codes)
+        self.assertNotIn(OHLCV_EMPTY, codes)
+        self.assertNotIn("volume_missing_or_zero", codes)
+        self.assertFalse(results[0].passed)
+
+    def test_injected_fetch_raising_generic_maps_to_fetch_error(self):
+        def boom(sym):
+            raise RuntimeError("dns failure")
+        prov = YFinanceProvider(_fetch_fn=boom)
+        results = R.evaluate_all([self._rec()], provider=prov, as_of=_AS_OF)
+        codes = results[0].reason_codes
+        self.assertIn("provider_fetch_error", codes)
+        self.assertNotIn(OHLCV_EMPTY, codes)
+        self.assertFalse(results[0].passed)
+
+    def test_true_empty_still_ohlcv_empty(self):
+        prov = YFinanceProvider(_fetch_fn=lambda s: [])  # empty, no exception
+        results = R.evaluate_all([self._rec()], provider=prov, as_of=_AS_OF)
+        codes = results[0].reason_codes
+        self.assertIn(OHLCV_EMPTY, codes)
+        self.assertNotIn("provider_rate_limited", codes)
+        self.assertNotIn("provider_fetch_error", codes)
+
+    def test_success_still_passes(self):
+        prov = YFinanceProvider(_fetch_fn=lambda s: _bars(25))
+        results = R.evaluate_all([self._rec()], provider=prov, as_of=_AS_OF,
+                                 cfg=OHLCVConfig())
+        self.assertTrue(results[0].passed)
+        self.assertNotIn("provider_rate_limited", results[0].reason_codes)
+
+    def test_fake_yfinance_module_rate_limit(self):
+        # exercise the live path with a fake yfinance whose history() raises a
+        # rate-limit error -> structured result error_kind == rate_limited
+        saved = sys.modules.get("yfinance")
+
+        class YFRateLimitError(Exception):
+            pass
+
+        class _Ticker:
+            def __init__(self, sym):
+                pass
+
+            def history(self, **kw):
+                raise YFRateLimitError("Too Many Requests. Rate limited.")
+
+        fake = types.ModuleType("yfinance")
+        fake.Ticker = _Ticker
+        sys.modules["yfinance"] = fake
+        try:
+            prov = YFinanceProvider()
+            fr = prov.fetch_ohlcv_result("0001.HK")
+            self.assertEqual(fr.error_kind, "rate_limited")
+            self.assertIsNone(fr.bars)
+        finally:
+            if saved is not None:
+                sys.modules["yfinance"] = saved
+            else:
+                sys.modules.pop("yfinance", None)
+
+    def test_report_provider_availability_section(self):
+        class YFRateLimitError(Exception):
+            pass
+
+        def boom(sym):
+            raise YFRateLimitError("Rate limited")
+        prov = YFinanceProvider(_fetch_fn=boom)
+        recs = [self._rec()]
+        md = R.render(recs, R.evaluate_all(recs, provider=prov, as_of=_AS_OF),
+                      data_source="simulated_fixture", attempted=1)
+        self.assertIn("Provider availability breakdown", md)
+        self.assertIn("provider_rate_limited", md)
+
+
 if __name__ == "__main__":
     unittest.main()

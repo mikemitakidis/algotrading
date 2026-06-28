@@ -37,6 +37,12 @@
 
 (no OHLCV codes — structural-only run, or all OHLCV checks passed)
 
+## Provider availability breakdown (provider-backed runs)
+
+(no provider availability errors — structural-only run, or all live fetches succeeded)
+
+> Provider-availability codes (`provider_rate_limited`, `provider_fetch_error`) mean a live check could NOT be completed for that symbol. They are NOT data-quality verdicts: a rate-limited symbol is reported as rate-limited, never as `ohlcv_empty` or `volume_missing_or_zero`. Re-run later / pace requests to evaluate these symbols.
+
 ## Safety confirmation
 
 - read-only: no global_expanded.json / source_registry.json write
