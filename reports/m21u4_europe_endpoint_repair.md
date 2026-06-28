@@ -1,10 +1,10 @@
 # M21.U4 Europe — Endpoint Repair Report
 
-Generated: 2026-06-28 15:48:12Z
+Generated: 2026-06-28 16:09:41Z
 
 - run_environment: **local**
 - generated_at_git_branch: `m21-u4-europe-endpoint-repair`
-- generated_at_git_head: `4e4443f5ace59eebe79d9efc492abc714021f32e`
+- generated_at_git_head: `a39c5a7fedde9c02dfca5cdf79614285953977f7`
 - generated_at_git_status: **dirty**
 
 > `generated_at_git_*` are report-generation provenance, not the final committed-tree state.

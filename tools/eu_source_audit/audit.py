@@ -11,6 +11,8 @@ import re
 import urllib.request
 from pathlib import Path
 
+from tools.eu_source_audit.holdings_link_extractor import extract_and_download
+
 _ISIN_RE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")
 
 
@@ -183,6 +185,58 @@ def audit_venue(venue, vmeta, outdir):
                 % (n, exp, "; dup tickers" if ins["duplicate_tickers"]
                    else "; ETF samples index" if role.endswith("fallback")
                    else ""))
+        attempts.append(rec)
+        if best is None or (n == exp and not ins["duplicate_tickers"]):
+            best = rec
+    # --- product-page link extraction (preferred over guessed endpoints) ---
+    for idx, (role, page_url, note) in enumerate(
+            vmeta.get("product_pages", [])):
+        ex = extract_and_download(page_url, outdir, venue, idx=idx)
+        rec = {"role": role, "url": ex.get("extracted_holdings_url") or
+               page_url, "note": "via product page: %s" % note,
+               "via": "product_page_extraction",
+               "product_page_url": page_url,
+               "page_http_status": ex.get("page_http_status"),
+               "extracted_holdings_url": ex.get("extracted_holdings_url"),
+               "holdings_http_status": ex.get("holdings_http_status"),
+               "extract_status": ex.get("status"),
+               "http_status": ex.get("holdings_http_status"),
+               "saved": False, "sha256": ex.get("sha256"),
+               "bytes": ex.get("bytes", 0), "kind": None,
+               "inspection": None, "recommendation": None}
+        if ex.get("status") != "OK" or not ex.get("saved_file"):
+            # map the distinct extractor status to a recommendation
+            rec["recommendation"] = {
+                "PAGE_UNREACHABLE": "PAGE_UNREACHABLE",
+                "NO_HOLDINGS_LINK": "NO_HOLDINGS_LINK",
+                "HOLDINGS_LINK_UNREACHABLE": "HOLDINGS_LINK_UNREACHABLE",
+                "HOLDINGS_NOT_A_FILE": "HOLDINGS_NOT_A_FILE",
+            }.get(ex.get("status"), "EXTRACT_FAILED")
+            attempts.append(rec)
+            continue
+        fpath = ex["saved_file"]
+        data = Path(fpath).read_bytes()
+        kind = "pdf" if fpath.endswith(".pdf") else "csv"
+        rec["saved"] = True
+        rec["file"] = fpath
+        rec["kind"] = kind
+        if kind == "pdf":
+            rec["recommendation"] = "MANUAL_REVIEW (pdf not auto-parsed)"
+            attempts.append(rec)
+            continue
+        ins = inspect_rows(_read_rows(data, kind), vmeta)
+        rec["inspection"] = ins
+        n = len(ins["included"])
+        exp = vmeta["expected"]
+        if n == exp and not ins["duplicate_tickers"]:
+            rec["recommendation"] = ("ACCEPT_FALLBACK (exact %d; role=%s; ETF "
+                                     "holdings via product page, membership "
+                                     "unverified)" % (exp, role))
+        else:
+            rec["recommendation"] = (
+                "REVIEW_NEEDED (%d != %d%s)"
+                % (n, exp, "; dup tickers" if ins["duplicate_tickers"]
+                   else "; ETF samples index"))
         attempts.append(rec)
         if best is None or (n == exp and not ins["duplicate_tickers"]):
             best = rec

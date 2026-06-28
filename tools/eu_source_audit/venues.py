@@ -67,6 +67,19 @@ VENUES = {
              "?fileType=csv&fileName=CSSMI_holdings&dataType=fund",
              "iShares SMI (DE locale) holdings CSV (candidate)"),
         ],
+        # Product LANDING pages for link-extraction (the extractor scrapes the
+        # real holdings-CSV ajax link from the page HTML, no guessed numbers).
+        # SMI target = the SMI 20 blue-chip index, NOT SPI / broad Swiss market.
+        "product_pages": [
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/ch/individual/en/products/251882/"
+             "ishares-smi-ch",
+             "iShares SMI(R) (CH) product page (SMI 20)"),
+            ("reputable_etf_fallback",
+             "https://www.ubs.com/ch/en/assetmanagement/etf/products/"
+             "fundview/ubs-etf-ch-smi-chf-a-dis/CH0017142719.html",
+             "UBS ETF (CH) SMI product page"),
+        ],
     },
     "aex": {
         "index": "AEX", "exchange": "AEX", "suffix": ".AS",
@@ -92,6 +105,16 @@ VENUES = {
              "fund/1478358465952.ajax"
              "?fileType=csv&fileName=IAEX_holdings&dataType=fund",
              "iShares AEX UCITS ETF holdings CSV (UK locale candidate)"),
+        ],
+        "product_pages": [
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/nl/particuliere-belegger/nl/producten/"
+             "251779/ishares-aex-ucits-etf",
+             "iShares AEX UCITS ETF product page (NL)"),
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/uk/individual/en/products/251779/"
+             "ishares-aex-ucits-etf",
+             "iShares AEX UCITS ETF product page (UK)"),
         ],
     },
     "cac": {
@@ -119,6 +142,16 @@ VENUES = {
              "FR0007052782/csv",
              "Amundi CAC 40 UCITS ETF holdings CSV (candidate id)"),
         ],
+        "product_pages": [
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/fr/particuliers/fr/produits/251786/"
+             "ishares-cac-40-ucits-etf",
+             "iShares CAC 40 UCITS ETF product page (FR)"),
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/uk/individual/en/products/251786/"
+             "ishares-cac-40-ucits-etf",
+             "iShares CAC 40 UCITS ETF product page (UK)"),
+        ],
     },
     "ibex": {
         "index": "IBEX", "exchange": "BME", "suffix": ".MC",
@@ -144,6 +177,16 @@ VENUES = {
              "fund/1478358465952.ajax"
              "?fileType=csv&fileName=IBEX_holdings&dataType=fund",
              "iShares IBEX 35 UCITS ETF holdings CSV (UK locale candidate)"),
+        ],
+        "product_pages": [
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/es/inversor-particular/es/productos/"
+             "251773/ishares-ibex-35-ucits-etf",
+             "iShares IBEX 35 UCITS ETF product page (ES)"),
+            ("reputable_etf_fallback",
+             "https://www.ishares.com/uk/individual/en/products/251773/"
+             "ishares-ibex-35-ucits-etf",
+             "iShares IBEX 35 UCITS ETF product page (UK)"),
         ],
     },
 }
