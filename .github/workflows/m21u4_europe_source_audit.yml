@@ -30,14 +30,11 @@ jobs:
 
       - name: Run source audit (read-only)
         run: |
-          set +e
           python3 -m tools.eu_source_audit.run_audit \
             --venues "${{ github.event.inputs.venues }}" \
             --outdir "${RUNNER_TEMP}/m21u4_sources" \
             --report "reports/m21u4_europe_source_audit.md" \
             --json-out "reports/m21u4_europe_source_audit.json"
-          echo "exit=$?"
-          true
 
       - name: Show report in log
         run: cat reports/m21u4_europe_source_audit.md || true
