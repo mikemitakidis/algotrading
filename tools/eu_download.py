@@ -37,10 +37,19 @@ ENDPOINTS = {
          "https://www.ishares.com/de/privatanleger/de/produkte/251464/"
          "ishares-dax-ucits-etf-de-fund/1478358465952.ajax"
          "?fileType=csv&fileName=DAXEX_holdings&dataType=fund"),
+        # iShares Core DAX UCITS ETF (UK/EN locale variant)
+        ("reputable_etf_fallback",
+         "https://www.ishares.com/uk/individual/en/products/251464/"
+         "ishares-dax-ucits-etf-de-fund/1478358465952.ajax"
+         "?fileType=csv&fileName=DAXEX_holdings&dataType=fund"),
         # Xtrackers DAX UCITS ETF holdings (reputable ETF fallback)
         ("reputable_etf_fallback",
          "https://etf.dws.com/en-gb/IE00BXXSC512-xtrackers-dax-ucits-etf-1c/"
          "?download=constituents"),
+        # Amundi/Lyxor DAX UCITS ETF holdings (reputable ETF fallback)
+        ("reputable_etf_fallback",
+         "https://www.amundietf.de/privatkunden/product/download/holdings"
+         "?isin=LU0274211480"),
     ],
 }
 
@@ -76,7 +85,8 @@ def main():
     OUTDIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ")
-    for role, url in ENDPOINTS[venue]:
+    saved = []
+    for idx, (role, url) in enumerate(ENDPOINTS[venue]):
         print("=== trying [%s]: %s" % (role, url))
         status, data = _try(url)
         print("http_status=%s bytes=%d" % (status, len(data)))
@@ -87,19 +97,20 @@ def main():
         if not kind:
             print("  not_usable (html/js/unknown)")
             continue
-        out = OUTDIR / ("%s_official_%s.%s" % (venue, ts, kind))
+        out = OUTDIR / ("%s_src%d_%s.%s" % (venue, idx, ts, kind))
         out.write_bytes(data)
         out.with_suffix(out.suffix + ".url").write_text(url, encoding="utf-8")
-        print("SAVED")
-        print("source_role=%s" % role)
-        print("download_url=%s" % url)
-        print("file=%s" % out)
-        print("bytes=%d" % len(data))
-        print("sha256=%s" % hashlib.sha256(data).hexdigest())
-        return
-    print("DIRECT_DOWNLOAD_FAILED: no usable file from documented endpoints "
-          "for %s. Likely VPS egress allow-list blocks the host, or endpoints "
-          "are dynamic. Manual upload is the last-resort fallback." % venue)
+        print("SAVED file=%s role=%s bytes=%d sha256=%s"
+              % (out, role, len(data), hashlib.sha256(data).hexdigest()))
+        saved.append(str(out))
+    if saved:
+        print("--- saved files (inspect each) ---")
+        for s in saved:
+            print(s)
+    else:
+        print("DIRECT_DOWNLOAD_FAILED: no usable file from documented "
+              "endpoints for %s. Likely VPS egress allow-list blocks the host, "
+              "or endpoints are dynamic. Manual upload is last-resort." % venue)
 
 
 if __name__ == "__main__":
