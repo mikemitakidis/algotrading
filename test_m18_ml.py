@@ -10558,6 +10558,9 @@ class G10_Hygiene(unittest.TestCase):
             # Runtime registry scanner shadow-run (read-only, fixture).
             "reports/runtime_registry_scanner_shadow_run.md",
             "test_runtime_registry_scanner_shadow_run.py",
+            # Runtime registry FOCUS_SIZE shadow-run (read-only, fixture).
+            "reports/runtime_registry_focus_cap_shadow_run.md",
+            "test_runtime_registry_focus_cap_shadow_run.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")

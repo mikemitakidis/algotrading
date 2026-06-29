@@ -4305,6 +4305,9 @@ class G10_Hygiene(unittest.TestCase):
             # Runtime registry scanner shadow-run (read-only, fixture).
             "reports/runtime_registry_scanner_shadow_run.md",
             "test_runtime_registry_scanner_shadow_run.py",
+            # Runtime registry FOCUS_SIZE shadow-run (read-only, fixture).
+            "reports/runtime_registry_focus_cap_shadow_run.md",
+            "test_runtime_registry_focus_cap_shadow_run.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
