@@ -185,9 +185,18 @@ def evaluate_hard_gates(candidate_input: SignalCandidateInput,
             elif gate == "model_readiness":
                 if have("ml_context", K.ML_MODEL_READINESS_PASSED):
                     if K.as_bool(ml[K.ML_MODEL_READINESS_PASSED]) is not True:
-                        failures.append(_block(
-                            gate, "model_readiness_failed",
-                            "model_readiness_passed is not True"))
+                        # STRICT (live) hard-blocks: a not-ready model must never
+                        # reach execution. RESEARCH downgrades to MANUAL_REVIEW so
+                        # research-grade ranking is possible while ML is not yet
+                        # trained — this never grants execution_eligible.
+                        if profile == ScoringProfile.STRICT:
+                            failures.append(_block(
+                                gate, "model_readiness_failed",
+                                "model_readiness_passed is not True (strict)"))
+                        else:
+                            failures.append(_review(
+                                gate, "model_readiness_failed",
+                                "model_readiness_passed is not True (research)"))
 
             elif gate == "production_thinness_blocked":
                 if have("ml_context", K.ML_PRODUCTION_THINNESS_STATUS):

@@ -4175,7 +4175,8 @@ class G10_Hygiene(unittest.TestCase):
                             "bot/runtime/",
                             "bot/universe/", "configs/universe/",
                             "tools/eu_source_audit/",
-                            "tools/universe_quality/")
+                            "tools/universe_quality/",
+                            "tools/signal_scoring/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4308,6 +4309,9 @@ class G10_Hygiene(unittest.TestCase):
             # Runtime registry FOCUS_SIZE shadow-run (read-only, fixture).
             "reports/runtime_registry_focus_cap_shadow_run.md",
             "test_runtime_registry_focus_cap_shadow_run.py",
+            # M21.1 scoring bridge (read-only, research-grade ranking).
+            "reports/m21_1_scoring_bridge_readonly.md",
+            "test_m21_1_scoring_bridge.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

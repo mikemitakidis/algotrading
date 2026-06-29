@@ -10418,6 +10418,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/universe/",     "configs/universe/",       # M20.U
             "tools/eu_source_audit/",                       # M21.U4 audit
             "tools/universe_quality/",                      # M21.UQ quality
+            "tools/signal_scoring/",                        # M21.1 scoring bridge
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10561,6 +10562,9 @@ class G10_Hygiene(unittest.TestCase):
             # Runtime registry FOCUS_SIZE shadow-run (read-only, fixture).
             "reports/runtime_registry_focus_cap_shadow_run.md",
             "test_runtime_registry_focus_cap_shadow_run.py",
+            # M21.1 scoring bridge (read-only, research-grade ranking).
+            "reports/m21_1_scoring_bridge_readonly.md",
+            "test_m21_1_scoring_bridge.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
