@@ -17,11 +17,12 @@ Plus:
   - ranking spread: stronger signals outrank weaker ones.
 """
 import ast
+import os
+import subprocess
+import sys
 import unittest
 
-from bot.signal_scoring import (
-    ScoringProfile, default_config, score_candidate,
-)
+from bot.signal_scoring import ScoringProfile
 from bot.signal_scoring import keys as K
 from tools.signal_scoring.scanner_bridge import enrich_signal, score_signal
 from tools.signal_scoring import score_rank_harness as H
@@ -145,6 +146,68 @@ class TestImportSafety(unittest.TestCase):
             for bad in ("broker", "etoro", "telegram", "live", "paper",
                         "execution_intents"):
                 self.assertNotIn(bad, m, "forbidden import %r in harness" % m)
+
+
+class TestRealScannerShapedSignal(unittest.TestCase):
+    """A real scan_cycle signal does NOT carry avg_volume_20d/avg_volume, so the
+    bridge cannot derive liquidity from the signal alone. These tests prove we
+    handle that honestly: without liquidity it is gate-incomplete (not faked);
+    with liquidity supplied (as the live path does from real bars) it scores."""
+
+    def _scanner_shaped(self, symbol="REAL"):
+        # mirrors bot/scanner.py signal keys: no avg_volume / avg_volume_20d
+        return dict(timestamp=_TS, symbol=symbol, direction="long",
+                    route="ibkr", tf_15m=1, tf_1h=1, tf_4h=1, tf_1d=1,
+                    valid_count=4, available_tfs=4, entry_price=100.0,
+                    stop_loss=95.0, target_price=115.0, strategy_version="v1",
+                    rsi=62.0, macd_hist=0.9, ema20=101.0, ema50=99.0,
+                    vwap_dev=0.005, vol_ratio=1.4, atr=2.0, price=100.0)
+
+    def test_bridge_does_not_invent_liquidity_when_absent(self):
+        # No avg_volume in a scanner-shaped signal, and none supplied:
+        # avg_dollar_volume_20d must be ABSENT (not a fabricated number).
+        ci = enrich_signal(self._scanner_shaped())
+        self.assertNotIn("avg_dollar_volume_20d", ci.liquidity_context or {})
+
+    def test_scanner_signal_without_liquidity_is_gate_incomplete(self):
+        # Honest consequence: M19 flags missing liquidity context rather than
+        # passing on a faked value. It must NOT score as a clean pass.
+        sc = score_signal(self._scanner_shaped(), profile=ScoringProfile.RESEARCH)
+        self.assertFalse(sc.hard_gate_passed)
+        self.assertFalse(sc.execution_eligible)
+
+    def test_supplying_real_derived_liquidity_lets_it_score(self):
+        # The live path derives avg_dollar_volume_20d from real bars and passes
+        # it in. Simulate that here with an explicit value (price * avg vol).
+        sc = score_signal(self._scanner_shaped(),
+                          profile=ScoringProfile.RESEARCH,
+                          avg_dollar_volume=100.0 * 500000)
+        self.assertNotIn("model_readiness_failed", sc.hard_gate_failures)
+        self.assertGreater(sc.final_score_100, 0.0)
+        self.assertFalse(sc.execution_eligible)
+
+
+class TestLiveOutputPathSafety(unittest.TestCase):
+    """Issue 2: live mode must only ever write under /tmp."""
+
+    def test_live_mode_refuses_reports_dir(self):
+        env = {**os.environ, "PYTHONPATH": os.getcwd()}
+        r = subprocess.run(
+            [sys.executable, "-m", "tools.signal_scoring.score_rank_harness",
+             "--mode", "live",
+             "--report", "reports/m21_1_scoring_bridge_readonly.md"],
+            capture_output=True, text=True, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("/tmp/", (r.stderr + r.stdout))
+
+    def test_live_mode_refuses_non_tmp_path(self):
+        env = {**os.environ, "PYTHONPATH": os.getcwd()}
+        r = subprocess.run(
+            [sys.executable, "-m", "tools.signal_scoring.score_rank_harness",
+             "--mode", "live", "--report", "somewhere/live.md"],
+            capture_output=True, text=True, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("/tmp/", (r.stderr + r.stdout))
 
 
 if __name__ == "__main__":

@@ -33,6 +33,20 @@ def _bucket(b):
     return getattr(b, "value", b)
 
 
+def _row_from_scored(sc):
+    return {
+        "symbol": sc.symbol,
+        "side": _bucket(sc.side),
+        "final_score_100": float(sc.final_score_100),
+        "decision_bucket": _bucket(sc.decision_bucket),
+        "confidence_bucket": _bucket(sc.confidence_bucket),
+        "hard_gate_passed": bool(sc.hard_gate_passed),
+        "execution_eligible": bool(sc.execution_eligible),
+        "reason_codes": list(sc.reason_codes),
+        "components": {k: float(v) for k, v in sc.component_scores.items()},
+    }
+
+
 def score_rows(signals, profile=ScoringProfile.RESEARCH):
     rows = []
     for sig in signals:
@@ -41,17 +55,7 @@ def score_rows(signals, profile=ScoringProfile.RESEARCH):
             raise AssertionError(
                 "execution_eligible must be False (got %r for %s)"
                 % (sc.execution_eligible, sc.symbol))
-        rows.append({
-            "symbol": sc.symbol,
-            "side": _bucket(sc.side),
-            "final_score_100": float(sc.final_score_100),
-            "decision_bucket": _bucket(sc.decision_bucket),
-            "confidence_bucket": _bucket(sc.confidence_bucket),
-            "hard_gate_passed": bool(sc.hard_gate_passed),
-            "execution_eligible": bool(sc.execution_eligible),
-            "reason_codes": list(sc.reason_codes),
-            "components": {k: float(v) for k, v in sc.component_scores.items()},
-        })
+        rows.append(_row_from_scored(sc))
     return rows
 
 
@@ -180,16 +184,68 @@ def fixture_signals():
     ]
 
 
+def _live_liquidity_map(symbols, period="6mo", interval="1d"):
+    """Honestly derive avg_dollar_volume_20d per symbol from REAL daily bars,
+    using the same read-only fetch the scanner uses. Returns {sym: adv or None}.
+
+    avg_dollar_volume_20d = last_close * mean(volume[-20:]). No constants, no
+    fabrication: a symbol with insufficient/absent bars maps to None, and the
+    bridge then marks its liquidity unavailable rather than inventing a value.
+    This reads bars only; it places no orders and writes nothing.
+    """
+    from bot.data import fetch_bars
+    out = {}
+    bars_by_sym = fetch_bars(list(symbols), period, interval) or {}
+    for sym in symbols:
+        df = bars_by_sym.get(sym)
+        try:
+            if df is None or len(df) < 20:
+                out[sym] = None
+                continue
+            vol = df["volume"].astype(float)
+            close = df["close"].astype(float)
+            adv_vol = float(vol.iloc[-20:].mean())
+            last_close = float(close.iloc[-1])
+            out[sym] = last_close * adv_vol if adv_vol > 0 else None
+        except (KeyError, ValueError, TypeError, IndexError):
+            out[sym] = None
+    return out
+
+
 def run_live(focus_size=150):
     """Score+rank the REAL scan_cycle output (e.g. DATA_PROVIDER=alpaca set by
-    the caller). conn=None, no side effects. For VPS /tmp use only."""
+    the caller). conn=None, no side effects. For VPS /tmp use only.
+
+    Real scan_cycle signals do NOT carry avg_volume; liquidity is derived here
+    from real daily bars (see _live_liquidity_map) and passed per-signal into
+    the bridge. A symbol whose bars are missing is honestly left without
+    liquidity (the M19 gate then treats it as missing, not faked-present)."""
     from bot.scanner import scan_cycle
     from bot.universe.active_selection import get_scan_ready_symbols
     focus = get_scan_ready_symbols()[:focus_size]
     config = {"strategy": "default",
               "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2, "min_valid_tfs": 1}}
     signals, _meta = scan_cycle(focus, config, conn=None, cycle_id=0)
-    return build_result(signals)
+    liq = _live_liquidity_map(sorted({s["symbol"] for s in signals}))
+    rows = []
+    for sig in signals:
+        adv = liq.get(sig["symbol"])
+        sc = score_signal(sig, profile=ScoringProfile.RESEARCH,
+                          avg_dollar_volume=adv)
+        if sc.execution_eligible is not False:
+            raise AssertionError(
+                "execution_eligible must be False (got %r for %s)"
+                % (sc.execution_eligible, sc.symbol))
+        rows.append(_row_from_scored(sc))
+    rows = rank_rows(rows)
+    pair = explain_pair(rows[0], rows[-1]) if len(rows) >= 2 else None
+    return {
+        "profile": _bucket(ScoringProfile.RESEARCH),
+        "n_signals": len(signals), "n_scored": len(rows),
+        "execution_eligible_any": any(r["execution_eligible"] for r in rows),
+        "any_hard_gate_passed": any(r["hard_gate_passed"] for r in rows),
+        "ranked": rows, "why_top_over_bottom": pair,
+    }
 
 
 def main():
@@ -200,12 +256,25 @@ def main():
     ap.add_argument("--json-out", default="")
     args = ap.parse_args()
     if args.mode == "live":
+        # Live output is NEVER committed: enforce /tmp-only so a live run can
+        # never overwrite the committed simulated report or land under reports/.
+        rp = Path(args.report)
+        jp = Path(args.json_out) if args.json_out else None
+        if rp.resolve() == Path("reports/m21_1_scoring_bridge_readonly.md").resolve() \
+                or not str(rp.resolve()).startswith("/tmp/"):
+            raise SystemExit(
+                "live mode must write the report under /tmp/ "
+                "(got %r); pass e.g. --report /tmp/m21_1_live.md" % str(rp))
+        if jp is not None and not str(jp.resolve()).startswith("/tmp/"):
+            raise SystemExit(
+                "live mode must write --json-out under /tmp/ (got %r)"
+                % str(jp))
         result = run_live(focus_size=args.focus_size)
         data_source = "live_alpaca_scan_cycle"
     else:
         result = build_result(fixture_signals())
         data_source = "simulated_fixture"
-    rp = Path(args.report)
+        rp = Path(args.report)
     rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(render(result, data_source=data_source), encoding="utf-8")
     print("wrote %s" % rp)
