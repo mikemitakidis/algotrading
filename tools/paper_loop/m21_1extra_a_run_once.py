@@ -316,8 +316,10 @@ def run_live(focus_size=150):
                           "min_valid_tfs": 1}}
     signals, _meta = scan_cycle(focus, config, conn=None, cycle_id=0)
     liq = _live_liquidity_map(sorted({s["symbol"] for s in signals}))
-    # live mode: no synthetic exit plan; default TP path documents the wiring.
-    return run_once(signals, liquidity_by_symbol=liq, kill_switch_active=False)
+    # Kill switch is NOT forced here: run_once reads the real
+    # is_kill_switch_active() when kill_switch_active is None, so an active
+    # kill switch blocks even the simulation-only live run-once path.
+    return run_once(signals, liquidity_by_symbol=liq)
 
 
 def main():

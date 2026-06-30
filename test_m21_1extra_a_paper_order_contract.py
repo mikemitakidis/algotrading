@@ -215,5 +215,35 @@ class TestImportSafety(unittest.TestCase):
         self.assertNotIn("4001", src)
 
 
+class TestLiveKillSwitchDelegation(unittest.TestCase):
+    """run_live must NOT force kill_switch_active=False; it must delegate to the
+    real kill-switch state via run_once(kill_switch_active=None)."""
+
+    def test_run_live_does_not_force_kill_switch_false(self):
+        # Static proof: the run_live body must not pass kill_switch_active=False
+        # (or any hardcoded value) into run_once.
+        import inspect
+        src = inspect.getsource(A.run_once.__globals__["run_live"])
+        self.assertNotIn("kill_switch_active=False", src)
+        self.assertNotIn("kill_switch_active=True", src)
+        # and it must call run_once
+        self.assertIn("run_once(", src)
+
+    def test_run_once_default_reads_real_kill_switch(self):
+        # When kill_switch_active is None, run_once consults the real
+        # is_kill_switch_active(). Patch it active -> nothing opens.
+        import bot.kill_switch as ks
+        original = ks.is_kill_switch_active
+        try:
+            ks.is_kill_switch_active = lambda: True
+            summary = A.run_once(A.fixture_signals(),
+                                exit_plan=A._fixture_exit_plan())
+            self.assertEqual(summary.opened_positions, 0)
+            self.assertTrue(any(o.rejection_reason == "kill_switch_active"
+                                for o in summary.outcomes))
+        finally:
+            ks.is_kill_switch_active = original
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
