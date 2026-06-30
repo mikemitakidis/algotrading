@@ -10569,6 +10569,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
             "test_m21_1extra_a_paper_order_contract.py",
+            # M21.1extra-B1 IBKR paper contract dry-run (no submit/connect).
+            "reports/m21_1extra_b1_ibkr_paper_contract_dryrun.md",
+            "test_m21_1extra_b1_ibkr_paper_contract_dryrun.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
