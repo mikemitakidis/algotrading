@@ -7,7 +7,7 @@
 - paper_port_expected: **4002**
 - paper_account_expected: **DUP623346**
 
-> **B1 is dry-run only. No real IBKR paper order was submitted. No IB Gateway connection was attempted. No broker_order_id exists. This proves contract construction only, not real submission.**
+> **B1 is dry-run only. No real IBKR paper order was submitted. No IB Gateway connection was attempted. No IBKR gateway/network/submission path was used (the live scan does use the Alpaca market-data path). No broker_order_id exists. This proves contract construction only, not real submission.**
 >
 > B2 remains required for single real IBKR paper submission. B2 must include an explicit cleanup/cancel/flatten plan before approval.
 

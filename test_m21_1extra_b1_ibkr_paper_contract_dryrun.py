@@ -116,6 +116,38 @@ class TestLiveModeRefused(unittest.TestCase):
             else:
                 os.environ["IBKR_PORT"] = prev_port
 
+    def test_expected_paper_account_accepted(self):
+        prev = os.environ.get("IBKR_ACCOUNT")
+        os.environ["IBKR_ACCOUNT"] = "DUP623346"
+        try:
+            host, port, account = B1._assert_paper_mode()
+            self.assertEqual(account, "DUP623346")
+            self.assertEqual(port, 4002)
+        finally:
+            if prev is None:
+                os.environ.pop("IBKR_ACCOUNT", None)
+            else:
+                os.environ["IBKR_ACCOUNT"] = prev
+
+    def test_wrong_paper_account_refused(self):
+        prev = os.environ.get("IBKR_ACCOUNT")
+        os.environ["IBKR_ACCOUNT"] = "SOME_OTHER_ACCOUNT"
+        try:
+            with self.assertRaises(B1.LiveModeRefused):
+                B1._assert_paper_mode()
+        finally:
+            if prev is None:
+                os.environ.pop("IBKR_ACCOUNT", None)
+            else:
+                os.environ["IBKR_ACCOUNT"] = prev
+
+    def test_contract_account_cannot_diverge_from_expected(self):
+        # Because _assert_paper_mode enforces the exact account, a built
+        # contract's account always equals paper_account_expected.
+        s = B1.fixture_summary().to_dict()
+        for c in s["contracts"]:
+            self.assertEqual(c["account"], s["paper_account_expected"])
+
 
 class TestKillSwitchAndIdempotency(unittest.TestCase):
     def test_11_kill_switch_blocks_submit_readiness(self):
@@ -167,6 +199,31 @@ class TestOutputPathAndDeterminism(unittest.TestCase):
         # drop nothing: the dry-run is pure, so dict equality must hold
         self.assertEqual(json.dumps(a, sort_keys=True),
                          json.dumps(b, sort_keys=True))
+
+    def test_fixture_cli_self_loads_env_before_building(self):
+        # The operator CLI must load .env for BOTH modes, before building
+        # contracts. Track ordering: env loader fires, then fixture_summary.
+        order = []
+        orig_loader = B1._load_env_for_live
+        orig_fixture = B1.fixture_summary
+        argv = sys.argv
+        try:
+            B1._load_env_for_live = lambda: order.append("env")
+            def _tracked_fixture():
+                order.append("build")
+                return orig_fixture()
+            B1.fixture_summary = _tracked_fixture
+            sys.argv = ["prog", "--mode", "fixture",
+                        "--report", "/tmp/b1_cli_env_test.md",
+                        "--json-out", "/tmp/b1_cli_env_test.json"]
+            B1.main()
+        finally:
+            B1._load_env_for_live = orig_loader
+            B1.fixture_summary = orig_fixture
+            sys.argv = argv
+        self.assertEqual(order[0], "env")
+        self.assertIn("build", order)
+        self.assertLess(order.index("env"), order.index("build"))
 
 
 class TestSourceGuard(unittest.TestCase):

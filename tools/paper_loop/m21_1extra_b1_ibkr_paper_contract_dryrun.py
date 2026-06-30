@@ -110,6 +110,10 @@ def _assert_paper_mode():
     if int(port) != int(PAPER_PORT):
         raise LiveModeRefused(
             "B1 expects paper port %s, got %s." % (PAPER_PORT, port))
+    if str(account).strip() != _EXPECTED_PAPER_ACCOUNT:
+        raise LiveModeRefused(
+            "B1 expects paper account %s, got %r."
+            % (_EXPECTED_PAPER_ACCOUNT, account))
     return host, port, account
 
 
@@ -251,9 +255,10 @@ def _render(d: Dict[str, Any], data_source: str) -> str:
     L.append("- paper_account_expected: **%s**" % d["paper_account_expected"])
     L.append("")
     L.append("> **B1 is dry-run only. No real IBKR paper order was submitted. "
-             "No IB Gateway connection was attempted. No broker_order_id "
-             "exists. This proves contract construction only, not real "
-             "submission.**")
+             "No IB Gateway connection was attempted. No IBKR "
+             "gateway/network/submission path was used (the live scan does use "
+             "the Alpaca market-data path). No broker_order_id exists. This "
+             "proves contract construction only, not real submission.**")
     L.append(">")
     L.append("> B2 remains required for single real IBKR paper submission. "
              "B2 must include an explicit cleanup/cancel/flatten plan before "
@@ -295,6 +300,12 @@ def main():
     ap.add_argument("--json-out",
                     default="/tmp/m21_1extra_b1_dryrun.json")
     args = ap.parse_args()
+
+    # Operator CLI runs self-load repo .env for BOTH modes, BEFORE any
+    # paper-mode check, so .env values (BROKER, IBKR_ACCOUNT, IBKR_PORT) are
+    # honoured without the operator exporting anything. Direct unit functions
+    # do not call this, so they stay deterministic.
+    _load_env_for_live()
 
     # Operator runs write ONLY under /tmp (never the repo).
     for p in (args.report, args.json_out):
