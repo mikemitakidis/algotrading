@@ -304,9 +304,40 @@ def _fixture_exit_plan():
     return {"WINNER": "TP", "LOSER": "SL"}
 
 
+def _load_env_for_live():
+    """Load <repo>/.env for live mode, matching the project convention used by
+    bot/config.py and tools/ingest_risk_state.py. Existing environment values
+    are NOT overridden (override=False), so an operator's already-exported keys
+    win. Never prints secret values. No-op (with a stderr note) if python-dotenv
+    or the .env file is absent — the live run will then fail loudly at the
+    provider, which is the honest behaviour.
+
+    This runs only on the live path; fixture/test paths never call it, so they
+    stay pure and deterministic.
+    """
+    import sys
+    repo_root = Path(__file__).resolve().parents[2]
+    env_path = repo_root / ".env"
+    if not env_path.exists():
+        print("[m21_1extra_a] no .env at %s -- using current environment only"
+              % env_path, file=sys.stderr)
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path, override=False)
+        print("[m21_1extra_a] loaded .env from %s" % env_path, file=sys.stderr)
+    except Exception as e:  # pragma: no cover - dotenv missing is environmental
+        print("[m21_1extra_a] could not load .env: %s" % e, file=sys.stderr)
+
+
 def run_live(focus_size=150):
     """Real Alpaca scan + M21.1 score + simulated paper loop. /tmp use only.
-    Derives liquidity from real bars (same as the M21.1 harness)."""
+    Derives liquidity from real bars (same as the M21.1 harness).
+
+    Loads <repo>/.env first (project convention) so the live data provider has
+    its credentials without any shell/session env management by the operator.
+    """
+    _load_env_for_live()
     from bot.scanner import scan_cycle
     from bot.universe.active_selection import get_scan_ready_symbols
     from tools.signal_scoring.score_rank_harness import _live_liquidity_map

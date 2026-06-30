@@ -286,5 +286,68 @@ class TestLiveEmptyScanIsSafeNoOp(unittest.TestCase):
         self.assertEqual(d["losses"], 0)
 
 
+class TestLiveEnvLoader(unittest.TestCase):
+    """Live mode must self-load <repo>/.env (project convention) so no operator
+    shell/session env management is needed. Fixture/test paths must not."""
+
+    def test_run_live_invokes_env_loader(self):
+        # Patch scan to empty so run_live short-circuits to a no-op, and prove
+        # the env loader ran exactly once on the live path.
+        import bot.scanner as scanner
+        import bot.universe.active_selection as sel
+        calls = {"env": 0}
+        orig_loader = A._load_env_for_live
+        orig_scan = scanner.scan_cycle
+        orig_sel = sel.get_scan_ready_symbols
+        try:
+            A._load_env_for_live = lambda: calls.__setitem__("env", calls["env"] + 1)
+            scanner.scan_cycle = lambda *a, **k: ([], {})
+            sel.get_scan_ready_symbols = lambda: ["AAA"]
+            A.run_live(focus_size=1)
+        finally:
+            A._load_env_for_live = orig_loader
+            scanner.scan_cycle = orig_scan
+            sel.get_scan_ready_symbols = orig_sel
+        self.assertEqual(calls["env"], 1)
+
+    def test_env_loader_does_not_override_existing(self):
+        # An already-set variable must win (override=False).
+        import os
+        key = "ALGO_TEST_ENV_LOADER_SENTINEL"
+        os.environ[key] = "preset"
+        try:
+            A._load_env_for_live()  # repo .env won't contain this key
+            self.assertEqual(os.environ.get(key), "preset")
+        finally:
+            os.environ.pop(key, None)
+
+    def test_env_loader_does_not_print_secret_values(self):
+        # Capture stdout+stderr; loader may log the PATH but never a value.
+        import io
+        import os
+        import contextlib
+        os.environ["ALPACA_SECRET"] = "shhh-should-not-be-printed"
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                A._load_env_for_live()
+        finally:
+            os.environ.pop("ALPACA_SECRET", None)
+        combined = out.getvalue() + err.getvalue()
+        self.assertNotIn("shhh-should-not-be-printed", combined)
+
+    def test_fixture_mode_does_not_load_env(self):
+        # run_once (fixture path) must never call the live env loader.
+        calls = {"env": 0}
+        orig = A._load_env_for_live
+        try:
+            A._load_env_for_live = lambda: calls.__setitem__("env", calls["env"] + 1)
+            A.run_once(A.fixture_signals(), exit_plan=A._fixture_exit_plan(),
+                      kill_switch_active=False)
+        finally:
+            A._load_env_for_live = orig
+        self.assertEqual(calls["env"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
