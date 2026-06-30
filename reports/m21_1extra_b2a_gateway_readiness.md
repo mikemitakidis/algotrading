@@ -1,9 +1,15 @@
 # M21.1extra-B2a — IBKR PAPER gateway readiness
 
+- data_source: **mock_broker_structural_proof**
+- real_ibkr_gateway_connected: **false**
+- vps_gateway_proof_required: **true**
 - mode: **readiness**
 - paper_mode_asserted: **true**
 - connected: **true**
 - account_verified: **true**
+- connection_status_checked: **true**
+- reconcile_succeeded: **true**
+- positions_read_succeeded: **true**
 - account: **DUP623346**
 - port: **4002**
 - kill_switch_active: **false**

@@ -66,6 +66,9 @@ class ReadinessReport:
     positions: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     kill_switch_active: bool = False
+    connection_status_checked: bool = False
+    reconcile_succeeded: bool = False
+    positions_read_succeeded: bool = False
     cancel_requested: bool = False
     cancel_attempted: bool = False
     cancel_confirmed: Optional[bool] = None
@@ -101,15 +104,20 @@ def _assert_paper_mode():
 
 
 def probe_flatten_capability(broker) -> str:
-    """Probe (never assume) whether a safe paper-only flatten/close-position
-    primitive exists on the adapter. cancel() cancels open ORDERS only and does
-    NOT count as flatten. Returns the honest capability string."""
+    """Probe (never assume, never overclaim) whether a paper-only flatten/
+    close-position primitive EXISTS on the adapter. cancel() cancels open ORDERS
+    only and does NOT count as flatten.
+
+    B2a does not EXERCISE any flatten primitive (it never opens a position), so
+    it can never honestly say a primitive is *proven*. Semantics:
+      * a method exists but is not exercised here -> "available_but_not_proven"
+      * no such method exists                     -> "not_available_in_current_adapter"
+    "available_and_proven" is reserved for a future branch that actually flattens
+    a real paper position and verifies it; B2a must never claim it.
+    """
     for name in _FLATTEN_PRIMITIVE_NAMES:
         if hasattr(broker, name) and callable(getattr(broker, name)):
-            # A real primitive exists; B2a does not EXERCISE it (no positions to
-            # flatten here), so it is present-but-not-proven. We still report it
-            # conservatively as available; proving it is later work.
-            return "available_and_proven"
+            return "available_but_not_proven"
     return "not_available_in_current_adapter"
 
 
@@ -155,23 +163,55 @@ def run_readiness(*, cancel_manual_order_id: Optional[str] = None,
     # capability probe (no mutation, no order)
     report.flatten_capability = probe_flatten_capability(broker)
 
+    # 3a) REAL connection + account proof via connection_status().
+    #     reconcile()/get_positions() swallow exceptions and return empty
+    #     containers, so they are NOT reliable connection/account signals.
+    #     connection_status() returns connected=False (+error) on failure.
+    report.connection_status_checked = True
     try:
-        recon = broker.reconcile()
-        report.connected = True
-        report.open_orders = list(recon.get("open_orders", []))
-        report.positions = list(recon.get("positions", []))
-        report.warnings.extend(list(recon.get("warnings", [])))
-    except Exception as e:  # pragma: no cover - exercised on VPS
-        report.connected = False
-        report.warnings.append("reconcile failed: %s" % e)
-        return report
+        status = broker.connection_status()
+    except Exception as e:  # pragma: no cover - defensive; adapter catches
+        status = {"connected": False, "error": str(e)[:120]}
+    report.connected = bool(status.get("connected", False))
+    if status.get("account") is not None:
+        report.account = status.get("account")
+    if status.get("port") is not None:
+        report.port = int(status.get("port"))
+    report.account_verified = bool(status.get("account_verified", False))
+    if not report.connected:
+        report.warnings.append(
+            "connection_status: not connected (%s)"
+            % status.get("error", "no error detail"))
+        return report          # do not claim readiness, do not run cancel
+    if not report.account_verified:
+        report.warnings.append(
+            "connection_status: account not verified (%s)"
+            % status.get("account_msg", "no detail"))
+        return report          # do not run cancel on an unverified account
 
-    # account verification via a read-only position read round-trip
+    # 3b) paper open orders + positions via reconcile() (connection_status
+    #     skips reconcile in paper mode). reconcile() never raises; it reports
+    #     failure as a 'reconcile failed: ...' warning, which we interpret
+    #     truthfully rather than treating an empty dict as success.
+    recon = broker.reconcile()
+    recon_warnings = list(recon.get("warnings", []))
+    reconcile_failed = any(
+        str(w).startswith("reconcile failed:") for w in recon_warnings)
+    report.reconcile_succeeded = not reconcile_failed
+    report.open_orders = list(recon.get("open_orders", []))
+    report.positions = list(recon.get("positions", []))
+    report.warnings.extend(recon_warnings)
+    if reconcile_failed:
+        report.warnings.append(
+            "readiness incomplete: reconcile did not succeed")
+        return report          # do not run cancel if we could not reconcile
+
+    # positions read as an explicit, separate signal (also non-raising)
     try:
         _ = broker.get_positions()
-        report.account_verified = True
+        report.positions_read_succeeded = True
     except Exception as e:  # pragma: no cover
-        report.account_verified = False
+        report.positions_read_succeeded = False
         report.warnings.append("get_positions failed: %s" % e)
 
     # 4) OPTIONAL exact-id manual cancel (never cancel-all)
@@ -208,12 +248,23 @@ def run_readiness(*, cancel_manual_order_id: Optional[str] = None,
     return report
 
 
-def _render(d: Dict[str, Any]) -> str:
+def _render(d: Dict[str, Any], data_source: str = "real_ibkr_paper_gateway") -> str:
+    is_mock = data_source == "mock_broker_structural_proof"
     L = ["# M21.1extra-B2a — IBKR PAPER gateway readiness", ""]
+    L.append("- data_source: **%s**" % data_source)
+    L.append("- real_ibkr_gateway_connected: **%s**"
+             % str(bool(d["connected"]) and not is_mock).lower())
+    L.append("- vps_gateway_proof_required: **%s**" % str(is_mock).lower())
     L.append("- mode: **%s**" % d["mode"])
     L.append("- paper_mode_asserted: **%s**" % str(d["paper_mode_asserted"]).lower())
     L.append("- connected: **%s**" % str(d["connected"]).lower())
     L.append("- account_verified: **%s**" % str(d["account_verified"]).lower())
+    L.append("- connection_status_checked: **%s**"
+             % str(d["connection_status_checked"]).lower())
+    L.append("- reconcile_succeeded: **%s**"
+             % str(d["reconcile_succeeded"]).lower())
+    L.append("- positions_read_succeeded: **%s**"
+             % str(d["positions_read_succeeded"]).lower())
     L.append("- account: **%s**" % d["account"])
     L.append("- port: **%s**" % d["port"])
     L.append("- kill_switch_active: **%s**" % str(d["kill_switch_active"]).lower())
@@ -285,7 +336,11 @@ def main():
         cancel_manual_order_id=args.cancel_manual_order_id,
         cancel_confirmed_flag=bool(args.cancel_confirmed))
     d = report.to_dict()
-    Path(args.report).write_text(_render(d), encoding="utf-8")
+    d["data_source"] = "real_ibkr_paper_gateway"
+    d["real_ibkr_gateway_connected"] = bool(d["connected"])
+    d["vps_gateway_proof_required"] = False
+    Path(args.report).write_text(
+        _render(d, data_source="real_ibkr_paper_gateway"), encoding="utf-8")
     Path(args.json_out).write_text(json.dumps(d, indent=2), encoding="utf-8")
     print("wrote %s" % args.report)
     print("wrote %s" % args.json_out)

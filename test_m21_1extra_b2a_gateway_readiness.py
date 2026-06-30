@@ -36,18 +36,37 @@ class MockBroker:
     """Stand-in for IBKRBroker exposing only the read-only + cancel methods."""
 
     def __init__(self, *, orders=None, positions=None, cancel_result=True,
-                 has_flatten=False):
+                 has_flatten=False, connected=True, account_verified=True,
+                 reconcile_fails=False):
         self._orders = orders if orders is not None else [
             {"order_id": 42, "symbol": "AAA", "action": "BUY",
              "qty": 1, "status": "PreSubmitted"}]
         self._positions = positions if positions is not None else []
         self._cancel_result = cancel_result
+        self._connected = connected
+        self._account_verified = account_verified
+        self._reconcile_fails = reconcile_fails
         self.cancelled = []
         if has_flatten:
             # simulate an adapter that DID grow a flatten primitive
             self.flatten_position = lambda *a, **k: True
 
+    def connection_status(self):
+        if not self._connected:
+            return {"connected": False, "host": "127.0.0.1", "port": 4002,
+                    "account": "DUP623346", "error": "gateway down",
+                    "is_live": False}
+        return {"connected": True, "host": "127.0.0.1", "port": 4002,
+                "account": "DUP623346",
+                "account_verified": self._account_verified,
+                "account_msg": "ok" if self._account_verified else "mismatch",
+                "server_version": 176, "is_live": False, "mode": "PAPER"}
+
     def reconcile(self):
+        if self._reconcile_fails:
+            # mirrors the real adapter: never raises; reports via warnings
+            return {"open_orders": [], "positions": [],
+                    "warnings": ["reconcile failed: connection lost"]}
         return {"open_orders": list(self._orders),
                 "positions": list(self._positions), "warnings": []}
 
@@ -193,11 +212,57 @@ class TestReadinessTruthfulness(unittest.TestCase):
         self.assertEqual(r.flatten_capability,
                          "not_available_in_current_adapter")
 
-    def test_15_flatten_capability_detected_when_present(self):
-        # If the adapter ever grows a real primitive, the probe reports it.
+    def test_15_flatten_method_present_is_not_proven(self):
+        # If a method merely EXISTS, B2a reports available_but_not_proven —
+        # never available_and_proven (it does not exercise the primitive).
         r = B2A.run_readiness(kill_switch_active=False,
                             broker=MockBroker(has_flatten=True))
-        self.assertEqual(r.flatten_capability, "available_and_proven")
+        self.assertEqual(r.flatten_capability, "available_but_not_proven")
+        self.assertNotEqual(r.flatten_capability, "available_and_proven")
+
+    def test_connection_status_failure_blocks_readiness(self):
+        # gateway down -> connected False, account_verified False, no cancel
+        mb = MockBroker(connected=False)
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb,
+                            cancel_manual_order_id="IB-PERM-1",
+                            cancel_confirmed_flag=True)
+        self.assertTrue(r.connection_status_checked)
+        self.assertFalse(r.connected)
+        self.assertFalse(r.account_verified)
+        self.assertFalse(r.cancel_attempted)     # cancel never runs
+        self.assertEqual(mb.cancelled, [])
+
+    def test_account_not_verified_blocks_readiness(self):
+        mb = MockBroker(account_verified=False)
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb,
+                            cancel_manual_order_id="IB-PERM-1",
+                            cancel_confirmed_flag=True)
+        self.assertTrue(r.connected)
+        self.assertFalse(r.account_verified)
+        self.assertFalse(r.cancel_attempted)
+        self.assertEqual(mb.cancelled, [])
+
+    def test_reconcile_failure_cannot_pass_as_ready(self):
+        # reconcile reports a 'reconcile failed:' warning -> reconcile_succeeded
+        # False, cancel not run, even though connection_status was OK.
+        mb = MockBroker(reconcile_fails=True)
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb,
+                            cancel_manual_order_id="IB-PERM-1",
+                            cancel_confirmed_flag=True)
+        self.assertTrue(r.connected)
+        self.assertFalse(r.reconcile_succeeded)
+        self.assertFalse(r.cancel_attempted)
+        self.assertEqual(mb.cancelled, [])
+        self.assertTrue(any(str(w).startswith("reconcile failed:")
+                            for w in r.warnings))
+
+    def test_get_positions_empty_does_not_alone_prove_account(self):
+        # account_verified comes from connection_status, NOT from get_positions
+        # returning []. With account_verified False at the status level, an
+        # empty positions list must not flip account_verified to True.
+        mb = MockBroker(account_verified=False, positions=[])
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb)
+        self.assertFalse(r.account_verified)
 
     def test_provenance_flags_always_false(self):
         r = B2A.run_readiness(kill_switch_active=False, broker=MockBroker())
@@ -287,6 +352,27 @@ class TestSourceGuard(unittest.TestCase):
                 self.assertNotEqual(name, "placeOrder")
                 self.assertNotEqual(name, "OrderIntent")
                 self.assertNotEqual(name, "OrderResult")
+
+
+class TestReportProvenance(unittest.TestCase):
+    """Fix 3: the committed report must declare it is a mock/structural proof,
+    not a real gateway contact."""
+
+    def test_mock_render_labels_itself_mock(self):
+        r = B2A.run_readiness(kill_switch_active=False, broker=MockBroker())
+        d = r.to_dict()
+        md = B2A._render(d, data_source="mock_broker_structural_proof")
+        self.assertIn("data_source: **mock_broker_structural_proof**", md)
+        self.assertIn("real_ibkr_gateway_connected: **false**", md)
+        self.assertIn("vps_gateway_proof_required: **true**", md)
+
+    def test_committed_report_is_labelled_mock(self):
+        # The committed report on disk must not look like a real gateway proof.
+        with open("reports/m21_1extra_b2a_gateway_readiness.md") as fh:
+            md = fh.read()
+        self.assertIn("mock_broker_structural_proof", md)
+        self.assertIn("real_ibkr_gateway_connected: **false**", md)
+        self.assertIn("vps_gateway_proof_required: **true**", md)
 
 
 if __name__ == "__main__":
