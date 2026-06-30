@@ -4176,7 +4176,8 @@ class G10_Hygiene(unittest.TestCase):
                             "bot/universe/", "configs/universe/",
                             "tools/eu_source_audit/",
                             "tools/universe_quality/",
-                            "tools/signal_scoring/")
+                            "tools/signal_scoring/",
+                            "tools/paper_loop/")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",
@@ -4312,6 +4313,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1 scoring bridge (read-only, research-grade ranking).
             "reports/m21_1_scoring_bridge_readonly.md",
             "test_m21_1_scoring_bridge.py",
+            # M21.1extra-A simulation-only paper loop (read-only proof).
+            "reports/m21_1extra_a_paper_order_contract.md",
+            "test_m21_1extra_a_paper_order_contract.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

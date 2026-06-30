@@ -10419,6 +10419,7 @@ class G10_Hygiene(unittest.TestCase):
             "tools/eu_source_audit/",                       # M21.U4 audit
             "tools/universe_quality/",                      # M21.UQ quality
             "tools/signal_scoring/",                        # M21.1 scoring bridge
+            "tools/paper_loop/",                            # M21.1extra paper loop
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10565,6 +10566,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1 scoring bridge (read-only, research-grade ranking).
             "reports/m21_1_scoring_bridge_readonly.md",
             "test_m21_1_scoring_bridge.py",
+            # M21.1extra-A simulation-only paper loop (read-only proof).
+            "reports/m21_1extra_a_paper_order_contract.md",
+            "test_m21_1extra_a_paper_order_contract.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
