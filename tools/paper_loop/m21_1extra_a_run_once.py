@@ -315,6 +315,13 @@ def run_live(focus_size=150):
               "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2,
                           "min_valid_tfs": 1}}
     signals, _meta = scan_cycle(focus, config, conn=None, cycle_id=0)
+    if not signals:
+        # No scanner setups this cycle. This is a valid no-op simulation
+        # result, NOT an error. Do not call _live_liquidity_map([]), because
+        # the Alpaca provider requires a non-empty symbols list and would
+        # otherwise error. run_once([]) returns a zero-everything summary,
+        # which the live-proof gate still (correctly) treats as "not proven".
+        return run_once([], liquidity_by_symbol={})
     liq = _live_liquidity_map(sorted({s["symbol"] for s in signals}))
     # Kill switch is NOT forced here: run_once reads the real
     # is_kill_switch_active() when kill_switch_active is None, so an active

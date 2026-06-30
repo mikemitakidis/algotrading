@@ -245,5 +245,46 @@ class TestLiveKillSwitchDelegation(unittest.TestCase):
             ks.is_kill_switch_active = original
 
 
+class TestLiveEmptyScanIsSafeNoOp(unittest.TestCase):
+    """When the live scan returns zero signals, run_live must NOT call
+    _live_liquidity_map([]) (Alpaca requires a non-empty symbols list) and must
+    return a clean zero-everything no-op summary."""
+
+    def test_zero_signals_does_not_call_liquidity_map(self):
+        import bot.scanner as scanner
+        import bot.universe.active_selection as sel
+        import tools.signal_scoring.score_rank_harness as harness
+
+        calls = {"liquidity": 0}
+
+        def _boom(*a, **k):
+            calls["liquidity"] += 1
+            raise AssertionError(
+                "_live_liquidity_map must not be called when scan is empty")
+
+        orig_scan = scanner.scan_cycle
+        orig_sel = sel.get_scan_ready_symbols
+        orig_liq = harness._live_liquidity_map
+        try:
+            scanner.scan_cycle = lambda *a, **k: ([], {})
+            sel.get_scan_ready_symbols = lambda: ["AAA", "BBB", "CCC"]
+            harness._live_liquidity_map = _boom
+            summary = A.run_live(focus_size=3)
+        finally:
+            scanner.scan_cycle = orig_scan
+            sel.get_scan_ready_symbols = orig_sel
+            harness._live_liquidity_map = orig_liq
+
+        self.assertEqual(calls["liquidity"], 0)  # never called
+        self.assertEqual(summary.signals_in, 0)
+        self.assertEqual(summary.opened_positions, 0)
+        self.assertEqual(summary.closed_positions, 0)
+        self.assertEqual(summary.scored_count, 0)
+        # safe no-op: no exception raised, summary is well-formed
+        d = summary.to_dict()
+        self.assertEqual(d["wins"], 0)
+        self.assertEqual(d["losses"], 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
