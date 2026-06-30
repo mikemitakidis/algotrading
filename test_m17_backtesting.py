@@ -4319,6 +4319,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1extra-B1 IBKR paper contract dry-run (no submit/connect).
             "reports/m21_1extra_b1_ibkr_paper_contract_dryrun.md",
             "test_m21_1extra_b1_ibkr_paper_contract_dryrun.py",
+            # M21.1extra-B2a IBKR paper gateway readiness (read-only).
+            "reports/m21_1extra_b2a_gateway_readiness.md",
+            "test_m21_1extra_b2a_gateway_readiness.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.
