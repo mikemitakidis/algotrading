@@ -37,7 +37,7 @@ class MockBroker:
 
     def __init__(self, *, orders=None, positions=None, cancel_result=True,
                  has_flatten=False, connected=True, account_verified=True,
-                 reconcile_fails=False):
+                 reconcile_fails=False, reconcile_fails_after_cancel=False):
         self._orders = orders if orders is not None else [
             {"order_id": 42, "symbol": "AAA", "action": "BUY",
              "qty": 1, "status": "PreSubmitted"}]
@@ -46,6 +46,7 @@ class MockBroker:
         self._connected = connected
         self._account_verified = account_verified
         self._reconcile_fails = reconcile_fails
+        self._reconcile_fails_after_cancel = reconcile_fails_after_cancel
         self.cancelled = []
         if has_flatten:
             # simulate an adapter that DID grow a flatten primitive
@@ -63,7 +64,10 @@ class MockBroker:
                 "server_version": 176, "is_live": False, "mode": "PAPER"}
 
     def reconcile(self):
-        if self._reconcile_fails:
+        # fail mode triggered either always, or only after a cancel happened
+        fail = self._reconcile_fails or (
+            self._reconcile_fails_after_cancel and self.cancelled)
+        if fail:
             # mirrors the real adapter: never raises; reports via warnings
             return {"open_orders": [], "positions": [],
                     "warnings": ["reconcile failed: connection lost"]}
@@ -263,6 +267,47 @@ class TestReadinessTruthfulness(unittest.TestCase):
         mb = MockBroker(account_verified=False, positions=[])
         r = B2A.run_readiness(kill_switch_active=False, broker=mb)
         self.assertFalse(r.account_verified)
+
+    def test_positions_field_is_attempt_not_success(self):
+        # The report must not carry a success-looking positions field that could
+        # be a false positive from the non-raising get_positions().
+        r = B2A.run_readiness(kill_switch_active=False, broker=MockBroker())
+        d = r.to_dict()
+        self.assertNotIn("positions_read_succeeded", d)
+        self.assertIn("positions_read_attempted", d)
+        self.assertTrue(d["positions_read_attempted"])
+
+    def test_post_cancel_reconcile_failure_recorded_truthfully(self):
+        # Cancel succeeds, but the post-cancel reconcile fails (swallowed
+        # warning). post_cancel_reconcile_succeeded must be False and the
+        # remaining-state-not-verified warning must be present.
+        mb = MockBroker(cancel_result=True, reconcile_fails_after_cancel=True)
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb,
+                            cancel_manual_order_id="IB-PERM-5",
+                            cancel_confirmed_flag=True)
+        self.assertTrue(r.cancel_attempted)
+        self.assertTrue(r.cancel_confirmed)
+        self.assertFalse(r.post_cancel_reconcile_succeeded)
+        self.assertTrue(any(str(w).startswith("reconcile failed:")
+                            for w in r.warnings))
+        self.assertTrue(any("NOT verified" in str(w) for w in r.warnings))
+
+    def test_post_cancel_reconcile_success_recorded(self):
+        mb = MockBroker(cancel_result=True)
+        r = B2A.run_readiness(kill_switch_active=False, broker=mb,
+                            cancel_manual_order_id="IB-PERM-5",
+                            cancel_confirmed_flag=True)
+        self.assertTrue(r.post_cancel_reconcile_succeeded)
+
+    def test_docstring_does_not_list_available_and_proven_as_output(self):
+        # The module docstring must not present available_and_proven as a B2a
+        # OUTPUT value. It may mention it only as a reserved/future value.
+        import tools.paper_loop.m21_1extra_b2a_gateway_readiness as mod
+        doc = mod.__doc__ or ""
+        # the enum line must not list it among B2a outputs
+        self.assertIn("available_but_not_proven", doc)
+        self.assertNotIn(
+            '"available_and_proven" / "not_available_in_current_adapter"', doc)
 
     def test_provenance_flags_always_false(self):
         r = B2A.run_readiness(kill_switch_active=False, broker=MockBroker())

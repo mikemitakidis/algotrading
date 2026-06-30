@@ -9,7 +9,7 @@
 - account_verified: **true**
 - connection_status_checked: **true**
 - reconcile_succeeded: **true**
-- positions_read_succeeded: **true**
+- positions_read_attempted: **true**
 - account: **DUP623346**
 - port: **4002**
 - kill_switch_active: **false**
@@ -20,6 +20,7 @@
 - cancel_requested: **false**
 - cancel_attempted: **false**
 - cancel_confirmed: **None**
+- post_cancel_reconcile_succeeded: **None**
 
 > **B2a is read-only readiness. Our code originated no order, attempted no broker submission, built no bracket, and created no OrderResult. The only optional mutation is cancelling exactly one operator-supplied order id, behind an explicit confirmation flag.**
 >

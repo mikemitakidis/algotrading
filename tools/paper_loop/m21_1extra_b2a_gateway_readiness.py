@@ -22,9 +22,12 @@ B2a MAY (paper-only, behind explicit gates):
 
 Cleanup-capability honesty: B2a does not assume a flatten primitive exists. It
 probes the adapter and reports flatten_capability as one of
-"available_and_proven" / "not_available_in_current_adapter" / "not_attempted".
-Given the current adapter (cancel() cancels open ORDERS only, no close-position
-primitive), the truthful result is "not_available_in_current_adapter".
+"available_but_not_proven" / "not_available_in_current_adapter" /
+"not_attempted". B2a never outputs "available_and_proven" — that value is
+reserved for a future branch that actually exercises and verifies a flatten
+primitive. Given the current adapter (cancel() cancels open ORDERS only, no
+close-position primitive), the truthful result is
+"not_available_in_current_adapter".
 """
 from __future__ import annotations
 
@@ -68,7 +71,8 @@ class ReadinessReport:
     kill_switch_active: bool = False
     connection_status_checked: bool = False
     reconcile_succeeded: bool = False
-    positions_read_succeeded: bool = False
+    positions_read_attempted: bool = False
+    post_cancel_reconcile_succeeded: Optional[bool] = None
     cancel_requested: bool = False
     cancel_attempted: bool = False
     cancel_confirmed: Optional[bool] = None
@@ -206,13 +210,15 @@ def run_readiness(*, cancel_manual_order_id: Optional[str] = None,
             "readiness incomplete: reconcile did not succeed")
         return report          # do not run cancel if we could not reconcile
 
-    # positions read as an explicit, separate signal (also non-raising)
+    # positions read: get_positions() is non-raising in the adapter (it
+    # swallows errors and returns []), so its RETURN is not a success proof.
+    # We only record that the read was ATTEMPTED; reconcile_succeeded above is
+    # the authoritative readiness signal for open-orders/positions state.
+    report.positions_read_attempted = True
     try:
         _ = broker.get_positions()
-        report.positions_read_succeeded = True
-    except Exception as e:  # pragma: no cover
-        report.positions_read_succeeded = False
-        report.warnings.append("get_positions failed: %s" % e)
+    except Exception as e:  # pragma: no cover - adapter normally swallows
+        report.warnings.append("get_positions raised: %s" % e)
 
     # 4) OPTIONAL exact-id manual cancel (never cancel-all)
     if cancel_manual_order_id:
@@ -232,13 +238,23 @@ def run_readiness(*, cancel_manual_order_id: Optional[str] = None,
             except Exception as e:  # pragma: no cover
                 report.cancel_confirmed = False
                 report.warnings.append("cancel error: %s" % e)
-            # re-reconcile after the cancel to record remaining state
-            try:
-                recon2 = broker.reconcile()
-                report.open_orders = list(recon2.get("open_orders", []))
-                report.positions = list(recon2.get("positions", []))
-            except Exception as e:  # pragma: no cover
-                report.warnings.append("post-cancel reconcile failed: %s" % e)
+            # re-reconcile after the cancel to record remaining state.
+            # reconcile() is non-raising; it reports failure via a
+            # 'reconcile failed: ...' warning, so we must inspect warnings
+            # rather than rely on try/except, and must NOT imply the cancel/
+            # cleanup state is verified if the post-cancel reconcile failed.
+            recon2 = broker.reconcile()
+            recon2_warnings = list(recon2.get("warnings", []))
+            post_failed = any(
+                str(w).startswith("reconcile failed:") for w in recon2_warnings)
+            report.post_cancel_reconcile_succeeded = not post_failed
+            report.open_orders = list(recon2.get("open_orders", []))
+            report.positions = list(recon2.get("positions", []))
+            report.warnings.extend(recon2_warnings)
+            if post_failed:
+                report.warnings.append(
+                    "post-cancel reconcile did not succeed: remaining "
+                    "order/position state is NOT verified")
     elif cancel_confirmed_flag:
         # confirmation but no id: nothing to cancel; record clearly.
         report.warnings.append(
@@ -263,8 +279,8 @@ def _render(d: Dict[str, Any], data_source: str = "real_ibkr_paper_gateway") -> 
              % str(d["connection_status_checked"]).lower())
     L.append("- reconcile_succeeded: **%s**"
              % str(d["reconcile_succeeded"]).lower())
-    L.append("- positions_read_succeeded: **%s**"
-             % str(d["positions_read_succeeded"]).lower())
+    L.append("- positions_read_attempted: **%s**"
+             % str(d["positions_read_attempted"]).lower())
     L.append("- account: **%s**" % d["account"])
     L.append("- port: **%s**" % d["port"])
     L.append("- kill_switch_active: **%s**" % str(d["kill_switch_active"]).lower())
@@ -278,6 +294,8 @@ def _render(d: Dict[str, Any], data_source: str = "real_ibkr_paper_gateway") -> 
     L.append("- cancel_requested: **%s**" % str(d["cancel_requested"]).lower())
     L.append("- cancel_attempted: **%s**" % str(d["cancel_attempted"]).lower())
     L.append("- cancel_confirmed: **%s**" % d["cancel_confirmed"])
+    L.append("- post_cancel_reconcile_succeeded: **%s**"
+             % d["post_cancel_reconcile_succeeded"])
     L.append("")
     L.append("> **B2a is read-only readiness. Our code originated no order, "
              "attempted no broker submission, built no bracket, and created no "
