@@ -73,11 +73,19 @@ class _MockTrade:
         self.order = order
 
 
+class _MockOpenTrade:
+    """ib_insync Trade-like: carries BOTH contract and order (the reliable
+    contract-aware source the flatten primitive uses)."""
+    def __init__(self, symbol, order):
+        self.contract = _MockContract(symbol) if symbol is not None else None
+        self.order = order
+
+
 class _MockIB:
     """Enough of ib_insync.IB for flatten_paper_position."""
 
     def __init__(self, *, open_orders, positions, positions_after=None,
-                 cancel_clears=True):
+                 cancel_clears=True, open_trades=None, ambiguous_trade=False):
         self._open_orders = list(open_orders)
         self._positions = list(positions)
         self._positions_after = (positions_after if positions_after is not None
@@ -87,6 +95,16 @@ class _MockIB:
         self.placed = []
         self._flattened = False
         self.call_order = []          # records sequence of broker ops
+        # Contract-aware open trades. If not supplied, derive from open_orders.
+        if open_trades is not None:
+            self._open_trades = list(open_trades)
+        else:
+            self._open_trades = [
+                _MockOpenTrade(getattr(o.contract, 'symbol', None), o)
+                for o in self._open_orders]
+        if ambiguous_trade:
+            # a trade whose contract/order cannot be resolved
+            self._open_trades.append(_MockOpenTrade(None, None))
 
     def isConnected(self):
         return True
@@ -95,11 +113,17 @@ class _MockIB:
         self.call_order.append("openOrders")
         return list(self._open_orders)
 
+    def openTrades(self):
+        self.call_order.append("openTrades")
+        return list(self._open_trades)
+
     def cancelOrder(self, order):
         self.call_order.append("cancelOrder")
         self.cancelled.append(order)
         if self._cancel_clears:
             self._open_orders = [o for o in self._open_orders if o is not order]
+            self._open_trades = [t for t in self._open_trades
+                                 if getattr(t, 'order', None) is not order]
 
     def positions(self, account=None):
         self.call_order.append("positions")
@@ -121,18 +145,23 @@ class _MockIB:
 
 
 class _FlattenBroker(IBKRBroker):
-    """IBKRBroker with _connect() + reconcile() stubbed, so flatten_paper_
-    position runs against the mock IB without a real gateway. is_live and name
-    are read-only properties on IBKRBroker (env-driven), so we do not set them —
-    in paper test env is_live is already False."""
+    """IBKRBroker with _connect(), reconcile(), and _verify_account() stubbed,
+    so flatten_paper_position runs against the mock IB without a real gateway.
+    is_live and name are read-only properties on IBKRBroker (env-driven), so we
+    do not set them — in paper test env is_live is already False."""
 
-    def __init__(self, mock_ib, recon_after):
+    def __init__(self, mock_ib, recon_after, account_ok=True):
         # deliberately bypass IBKRBroker.__init__ side effects
         self._mock_ib = mock_ib
         self._recon_after = recon_after
+        self._account_ok = account_ok
 
     def _connect(self):
         return self._mock_ib
+
+    def _verify_account(self, ib):
+        return (self._account_ok,
+                "ok" if self._account_ok else "account mismatch")
 
     def reconcile(self):
         return self._recon_after
@@ -192,10 +221,13 @@ class TestAdapterFlattenGates(unittest.TestCase):
     """Direct tests of IBKRBroker.flatten_paper_position via a stub broker."""
 
     def _broker(self, *, open_orders, positions, recon_after,
-                cancel_clears=True):
+                cancel_clears=True, account_ok=True, open_trades=None,
+                ambiguous_trade=False):
         mock_ib = _MockIB(open_orders=open_orders, positions=positions,
-                          cancel_clears=cancel_clears)
-        return _FlattenBroker(mock_ib, recon_after), mock_ib
+                          cancel_clears=cancel_clears, open_trades=open_trades,
+                          ambiguous_trade=ambiguous_trade)
+        return _FlattenBroker(mock_ib, recon_after, account_ok=account_ok), \
+            mock_ib
 
     def test_5_explicit_symbol_required(self):
         b, _ = self._broker(open_orders=[], positions=[],
@@ -274,7 +306,58 @@ class TestAdapterFlattenGates(unittest.TestCase):
         self.assertFalse(d["post_cancel_open_orders_cleared"])
         self.assertFalse(d["flatten_confirmed"])
         self.assertEqual(mock_ib.placed, [])     # no close placed over live legs
-        self.assertTrue(any("refusing to place" in w for w in d["warnings"]))
+        self.assertTrue(any("could not prove" in w or "refusing" in w
+                            for w in d["warnings"]))
+
+    def test_contract_aware_openTrades_used_for_cancel(self):
+        # Target legs are cancelled via openTrades (contract-aware), and BBB is
+        # left alone.
+        aaa = _MockOrder("AAA", order_id=1)
+        bbb = _MockOrder("BBB", order_id=2)
+        trades = [_MockOpenTrade("AAA", aaa), _MockOpenTrade("BBB", bbb)]
+        b, mock_ib = self._broker(
+            open_orders=[aaa, bbb], positions=[_MockPosition("AAA", 4)],
+            recon_after=_clean_recon(), open_trades=trades)
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertEqual([o for o in mock_ib.cancelled], [aaa])  # only AAA
+        self.assertIn("openTrades", mock_ib.call_order)
+        self.assertTrue(d["flatten_confirmed"])
+
+    def test_order_without_contract_does_not_false_clear(self):
+        # An ambiguous open trade (no contract/order) must NOT be read as
+        # "cleared". Primitive fails closed: no close, flatten_confirmed=false.
+        b, mock_ib = self._broker(
+            open_orders=[], positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(), ambiguous_trade=True)
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertFalse(d["post_cancel_open_orders_cleared"])
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertEqual(mock_ib.placed, [])
+        self.assertTrue(any("could not prove" in w for w in d["warnings"]))
+
+    def test_account_verification_failure_refuses(self):
+        # _verify_account fails after connect -> no cancel, no close.
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA")],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(), account_ok=False)
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertFalse(d["account_verified"])
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertEqual(mock_ib.cancelled, [])
+        self.assertEqual(mock_ib.placed, [])
+        self.assertTrue(any("account verification failed" in w
+                            for w in d["warnings"]))
+
+    def test_account_verified_proceeds_normally(self):
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA")],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(), account_ok=True)
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertTrue(d["account_verified"])
+        self.assertTrue(d["flatten_confirmed"])
+        self.assertEqual(len(mock_ib.placed), 1)
 
     def test_8_reconcile_clean_sets_confirmed_true(self):
         b, _ = self._broker(

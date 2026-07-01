@@ -54,7 +54,7 @@ def run_flatten(symbol: str, *, confirm: bool,
                 broker=None) -> Dict[str, Any]:
     """Assert paper mode + kill switch, then delegate to the adapter's
     paper-only flatten primitive. broker injectable for tests."""
-    _assert_paper_mode()
+    port, account = _assert_paper_mode()
 
     if kill_switch_active is None:
         from bot.kill_switch import is_kill_switch_active
@@ -62,7 +62,9 @@ def run_flatten(symbol: str, *, confirm: bool,
     if kill_switch_active:
         return {
             "symbol": symbol, "flatten_confirmed": False,
-            "kill_switch_active": True,
+            "kill_switch_active": True, "account": account, "port": port,
+            "paper_asserted": True, "account_verified": False,
+            "post_cancel_open_orders_cleared": None, "already_flat": False,
             "warnings": ["kill switch active: no broker action taken"],
             "dry_run_only": False, "entry_order_originated": False,
         }
@@ -73,6 +75,8 @@ def run_flatten(symbol: str, *, confirm: bool,
 
     res = broker.flatten_paper_position(symbol, confirm=confirm)
     res.setdefault("entry_order_originated", False)
+    res.setdefault("account", account)
+    res.setdefault("port", port)
     return res
 
 
@@ -80,8 +84,18 @@ def _render(d: Dict[str, Any], data_source: str) -> str:
     L = ["# M21.1extra-B2flat — paper-only flatten proof", ""]
     L.append("- data_source: **%s**" % data_source)
     L.append("- symbol: **%s**" % d.get("symbol"))
+    L.append("- account: **%s**" % d.get("account"))
+    L.append("- port: **%s**" % d.get("port"))
+    L.append("- paper_asserted: **%s**"
+             % str(d.get("paper_asserted", False)).lower())
+    L.append("- account_verified: **%s**"
+             % str(d.get("account_verified", False)).lower())
     L.append("- flatten_confirmed: **%s**"
              % str(d.get("flatten_confirmed")).lower())
+    L.append("- already_flat: **%s**"
+             % str(d.get("already_flat", False)).lower())
+    L.append("- post_cancel_open_orders_cleared: **%s**"
+             % d.get("post_cancel_open_orders_cleared"))
     L.append("- kill_switch_active: **%s**"
              % str(d.get("kill_switch_active", False)).lower())
     L.append("- close_order_placed: **%s**"

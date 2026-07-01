@@ -577,6 +577,7 @@ class IBKRBroker(BrokerAdapter):
             'symbol': symbol,
             'live_mode_refused': False,
             'paper_asserted': False,
+            'account_verified': False,
             'kill_switch_active': False,
             'confirmed_flag': bool(confirm),
             'already_flat': False,
@@ -627,40 +628,69 @@ class IBKRBroker(BrokerAdapter):
             from ib_insync import MarketOrder
             ib = self._connect()
 
-            # 3. cancel the target symbol's OPEN ORDERS first
-            for order in list(ib.openOrders()):
-                contract = getattr(order, 'contract', None)
-                osym = getattr(contract, 'symbol', None)
-                # openOrders() entries may not carry contract; match via
-                # ib.reqAllOpenOrders trades if needed — best-effort by symbol.
-                if osym == symbol:
-                    try:
-                        ib.cancelOrder(order)
-                        result['cancelled_order_ids'].append(
-                            str(getattr(order, 'permId', getattr(
-                                order, 'orderId', '?'))))
-                    except Exception as e:
-                        result['warnings'].append(
-                            'cancel of open order failed: %s' % e)
-            ib.sleep(2)
-
-            # 3b. RE-READ open orders after cancel: confirm the target's orders
-            # actually cleared BEFORE placing any close. If a cancel silently
-            # failed and legs remain, do NOT place a market close on top of live
-            # SL/TP legs (that is the exact race we are preventing) — report
-            # not-confirmed and stop.
-            post_cancel_target_orders = [
-                o for o in list(ib.openOrders())
-                if getattr(getattr(o, 'contract', None), 'symbol', None)
-                == symbol]
-            result['post_cancel_open_orders_cleared'] = (
-                len(post_cancel_target_orders) == 0)
-            if post_cancel_target_orders:
+            # 2b. verify account AFTER connect, BEFORE any cancel/close — mirror
+            # submit()'s connected-account verification. Refuse on failure.
+            acct_ok, acct_msg = self._verify_account(ib)
+            result['account_verified'] = bool(acct_ok)
+            if not acct_ok:
                 result['warnings'].append(
-                    'post-cancel open orders remain for %s: refusing to place '
-                    'a close (flatten not confirmed)' % symbol)
+                    'account verification failed: %s' % acct_msg)
                 result['flatten_confirmed'] = False
                 return result
+
+            # 3. cancel the target symbol's OPEN ORDERS first, using a
+            # contract-aware source. ib.openTrades() yields Trade objects that
+            # reliably carry BOTH trade.contract and trade.order, unlike
+            # ib.openOrders() whose Order entries may lack a contract. We match
+            # on trade.contract.symbol and cancel by trade.order.
+            def _target_open_trades():
+                out = []
+                ambiguous = False
+                for tr in list(ib.openTrades()):
+                    c = getattr(tr, 'contract', None)
+                    o = getattr(tr, 'order', None)
+                    csym = getattr(c, 'symbol', None)
+                    if o is None or csym is None:
+                        # cannot prove which symbol this order belongs to
+                        ambiguous = True
+                        continue
+                    if csym == symbol:
+                        out.append(tr)
+                return out, ambiguous
+
+            target_trades, ambiguous_before = _target_open_trades()
+            if ambiguous_before:
+                # a live order whose target we cannot prove -> fail closed
+                result['post_cancel_open_orders_cleared'] = False
+                result['warnings'].append(
+                    'could not prove target open orders cleared: ambiguous '
+                    'open trade without contract/order; refusing to close')
+                result['flatten_confirmed'] = False
+                return result
+            for tr in target_trades:
+                try:
+                    ib.cancelOrder(tr.order)
+                    result['cancelled_order_ids'].append(
+                        str(getattr(tr.order, 'permId',
+                                    getattr(tr.order, 'orderId', '?'))))
+                except Exception as e:
+                    result['warnings'].append(
+                        'cancel of open order failed: %s' % e)
+            ib.sleep(2)
+
+            # 3b. RE-READ the SAME contract-aware source after cancel and PROVE
+            # the target's orders cleared BEFORE placing any close. If any target
+            # trade remains, or the source is ambiguous, do NOT place a market
+            # close on top of live SL/TP legs — the exact race B2flat removes.
+            post_target_trades, ambiguous_after = _target_open_trades()
+            if ambiguous_after or post_target_trades:
+                result['post_cancel_open_orders_cleared'] = False
+                result['warnings'].append(
+                    'could not prove target open orders cleared: refusing to '
+                    'place a close (flatten not confirmed)')
+                result['flatten_confirmed'] = False
+                return result
+            result['post_cancel_open_orders_cleared'] = True
 
             # 4. re-read the position for the target symbol
             target = None
@@ -669,6 +699,7 @@ class IBKRBroker(BrokerAdapter):
                 if psym == symbol and float(getattr(pos, 'position', 0)) != 0:
                     target = pos
                     break
+
 
             # 5. offsetting close for the ACTUAL remaining qty (one order, no retry)
             if target is not None:

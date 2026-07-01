@@ -2,7 +2,13 @@
 
 - data_source: **mock_broker_structural_proof**
 - symbol: **AAA**
+- account: **DUP623346**
+- port: **4002**
+- paper_asserted: **true**
+- account_verified: **false**
 - flatten_confirmed: **false**
+- already_flat: **false**
+- post_cancel_open_orders_cleared: **None**
 - kill_switch_active: **false**
 - close_order_placed: **false**
 - cancelled_order_ids: **[]**
