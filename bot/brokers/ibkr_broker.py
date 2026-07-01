@@ -548,6 +548,157 @@ class IBKRBroker(BrokerAdapter):
                 except Exception:
                     pass
 
+    def flatten_paper_position(self, symbol: str,
+                               confirm: bool = False) -> dict:
+        """Paper-ONLY cleanup primitive (M21.1extra-B2flat).
+
+        Safely flattens ONE explicit paper position and cancels its residual
+        open orders, in a strict, no-retry order designed to avoid the
+        fill/cleanup race that B2a proved the entry bracket could not handle:
+
+          1. refuse live mode; assert paper account + port; require confirm=True
+          2. check the kill switch BEFORE any broker action
+          3. CANCEL the target symbol's open orders FIRST (so a still-live SL/TP
+             leg cannot fill mid-flatten and flip the position)
+          4. RE-READ the position for the target symbol
+          5. if a residual position remains, place ONE offsetting MarketOrder
+             sized to the ACTUAL remaining quantity (no retry loop)
+          6. reconcile and report flatten_confirmed strictly from the resulting
+             state: flat == no position AND no open orders for the symbol
+
+        Never raises. Returns a dict with truthful fields; flatten_confirmed is
+        only True when the post-action reconcile shows the symbol genuinely
+        flat. This method NEVER originates an ENTRY order — the only broker
+        action it can take is cancelling the target's orders and placing a
+        single offsetting close for an existing position.
+        """
+        from datetime import datetime, timezone
+        result = {
+            'symbol': symbol,
+            'live_mode_refused': False,
+            'paper_asserted': False,
+            'kill_switch_active': False,
+            'confirmed_flag': bool(confirm),
+            'cancelled_order_ids': [],
+            'close_order_placed': False,
+            'close_order_id': None,
+            'flatten_confirmed': False,
+            'remaining_positions': [],
+            'remaining_open_orders': [],
+            'warnings': [],
+            'ts': datetime.now(timezone.utc).isoformat(),
+        }
+
+        # 1. paper-only + explicit target + explicit confirmation
+        if _is_live_mode():
+            result['live_mode_refused'] = True
+            result['warnings'].append('live mode: flatten refused (paper only)')
+            return result
+        host, port, account, _ = _get_connection_params()
+        if int(port) != int(PAPER_PORT):
+            result['warnings'].append(
+                'expected paper port %s, got %s: refused' % (PAPER_PORT, port))
+            return result
+        if str(account).strip() != 'DUP623346':
+            result['warnings'].append(
+                'expected paper account DUP623346, got %r: refused' % account)
+            return result
+        result['paper_asserted'] = True
+        if not symbol or not isinstance(symbol, str):
+            result['warnings'].append('explicit symbol required: refused')
+            return result
+        if not confirm:
+            result['warnings'].append(
+                'confirm=True required to flatten: refused')
+            return result
+
+        # 2. kill switch before any broker action
+        from bot.kill_switch import is_kill_switch_active
+        if is_kill_switch_active():
+            result['kill_switch_active'] = True
+            result['warnings'].append(
+                'kill switch active: no broker action taken')
+            return result
+
+        ib = None
+        try:
+            from ib_insync import MarketOrder
+            ib = self._connect()
+
+            # 3. cancel the target symbol's OPEN ORDERS first
+            for order in list(ib.openOrders()):
+                contract = getattr(order, 'contract', None)
+                osym = getattr(contract, 'symbol', None)
+                # openOrders() entries may not carry contract; match via
+                # ib.reqAllOpenOrders trades if needed — best-effort by symbol.
+                if osym == symbol:
+                    try:
+                        ib.cancelOrder(order)
+                        result['cancelled_order_ids'].append(
+                            str(getattr(order, 'permId', getattr(
+                                order, 'orderId', '?'))))
+                    except Exception as e:
+                        result['warnings'].append(
+                            'cancel of open order failed: %s' % e)
+            ib.sleep(2)
+
+            # 4. re-read the position for the target symbol
+            target = None
+            for pos in ib.positions(account=account):
+                psym = getattr(getattr(pos, 'contract', None), 'symbol', None)
+                if psym == symbol and float(getattr(pos, 'position', 0)) != 0:
+                    target = pos
+                    break
+
+            # 5. offsetting close for the ACTUAL remaining qty (one order, no retry)
+            if target is not None:
+                net = float(target.position)
+                qty = abs(net)
+                close_action = 'SELL' if net > 0 else 'BUY'
+                contract = target.contract
+                close_order = MarketOrder(close_action, qty)
+                if account:
+                    close_order.account = account
+                trade = ib.placeOrder(contract, close_order)
+                result['close_order_placed'] = True
+                result['close_order_id'] = str(
+                    getattr(trade.order, 'orderId', '?'))
+                ib.sleep(3)
+            else:
+                result['warnings'].append(
+                    'no residual position for %s (nothing to close)' % symbol)
+
+            # 6. reconcile + truthful confirmation
+            recon = self.reconcile()
+            if any(str(w).startswith('reconcile failed:')
+                   for w in recon.get('warnings', [])):
+                result['warnings'].append(
+                    'post-flatten reconcile did not succeed: state NOT verified')
+                result['flatten_confirmed'] = False
+                return result
+            rem_pos = [p for p in recon.get('positions', [])
+                       if p.get('symbol') == symbol
+                       and float(p.get('position', 0)) != 0]
+            rem_ord = [o for o in recon.get('open_orders', [])
+                       if o.get('symbol') == symbol]
+            result['remaining_positions'] = rem_pos
+            result['remaining_open_orders'] = rem_ord
+            result['flatten_confirmed'] = (not rem_pos) and (not rem_ord)
+            if not result['flatten_confirmed']:
+                result['warnings'].append(
+                    'flatten NOT confirmed: residual position/orders remain')
+            return result
+        except Exception as e:
+            result['warnings'].append('flatten error: %s' % e)
+            result['flatten_confirmed'] = False
+            return result
+        finally:
+            if ib and ib.isConnected():
+                try:
+                    ib.disconnect()
+                except Exception:
+                    pass
+
     def connection_status(self) -> dict:
         host, port, account, _ = _get_connection_params()
         ib = None

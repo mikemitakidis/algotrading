@@ -10575,6 +10575,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1extra-B2a IBKR paper gateway readiness (read-only).
             "reports/m21_1extra_b2a_gateway_readiness.md",
             "test_m21_1extra_b2a_gateway_readiness.py",
+            # M21.1extra-B2flat paper-only flatten primitive.
+            "reports/m21_1extra_b2flat_flatten.md",
+            "test_m21_1extra_b2flat_flatten.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
