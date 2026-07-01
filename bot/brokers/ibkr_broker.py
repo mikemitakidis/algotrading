@@ -563,14 +563,17 @@ class IBKRBroker(BrokerAdapter):
           4. RE-READ the position for the target symbol
           5. if a residual position remains, place ONE offsetting MarketOrder
              sized to the ACTUAL remaining quantity (no retry loop)
-          6. reconcile and report flatten_confirmed strictly from the resulting
-             state: flat == no position AND no open orders for the symbol
+          6. prove final state on the SAME connection (contract-aware
+             openTrades() + positions()); flatten_confirmed only if no target/
+             ambiguous open trades remain AND no residual target position
 
         Never raises. Returns a dict with truthful fields; flatten_confirmed is
-        only True when the post-action reconcile shows the symbol genuinely
-        flat. This method NEVER originates an ENTRY order — the only broker
-        action it can take is cancelling the target's orders and placing a
-        single offsetting close for an existing position.
+        only True when the same-connection final proof shows the symbol
+        genuinely flat. This method NEVER originates an ENTRY order — the only
+        broker action it can take is cancelling the target's orders and placing
+        a single offsetting close for an existing position. It does NOT call
+        self.reconcile() (which would open a second IB connection with the same
+        client id and collide with this method's open connection).
         """
         from datetime import datetime, timezone
         result = {
@@ -723,12 +726,13 @@ class IBKRBroker(BrokerAdapter):
                 result['warnings'].append(
                     'no residual position for %s (nothing to close)' % symbol)
 
-            # 6. FINAL contract-aware open-trades re-read (post-close). The
-            # existing reconcile() uses ib.openOrders() which may not reliably
-            # symbol-map orders, so we must NOT rely on it alone to declare
-            # flat. Re-read the SAME contract-aware openTrades() helper: a
-            # target trade still present, or an ambiguous trade, means we cannot
-            # claim confirmed flat.
+            # 6. FINAL state proof on the SAME active ib connection. We must NOT
+            # call self.reconcile() here: reconcile() opens its OWN _connect()
+            # with the same client id, which collides with this method's still-
+            # open connection on the real gateway. Instead re-use `ib` directly.
+            #
+            # (a) contract-aware openTrades() — a remaining target trade or any
+            #     ambiguous trade means we cannot claim confirmed flat.
             final_target_trades, ambiguous_final = _target_open_trades()
             if ambiguous_final or final_target_trades:
                 result['post_cancel_open_orders_cleared'] = False
@@ -738,28 +742,34 @@ class IBKRBroker(BrokerAdapter):
                 result['flatten_confirmed'] = False
                 return result
 
-            # 6b. reconcile + truthful confirmation. Final confirmation requires
-            # ALL of: no target open trades (checked above), no ambiguous open
-            # trades (checked above), reconcile succeeded, no residual target
-            # position, and no residual target open orders reconcile can see.
-            recon = self.reconcile()
-            if any(str(w).startswith('reconcile failed:')
-                   for w in recon.get('warnings', [])):
-                result['warnings'].append(
-                    'post-flatten reconcile did not succeed: state NOT verified')
-                result['flatten_confirmed'] = False
-                return result
-            rem_pos = [p for p in recon.get('positions', [])
-                       if p.get('symbol') == symbol
-                       and float(p.get('position', 0)) != 0]
-            rem_ord = [o for o in recon.get('open_orders', [])
-                       if o.get('symbol') == symbol]
+            # (b) positions() on the SAME connection — residual target position
+            #     means not flat.
+            rem_pos = []
+            for pos in ib.positions(account=account):
+                psym = getattr(getattr(pos, 'contract', None), 'symbol', None)
+                if psym == symbol and float(getattr(pos, 'position', 0)) != 0:
+                    rem_pos.append({'symbol': psym,
+                                    'position': float(pos.position)})
+
+            # (c) openOrders() on the SAME connection as SECONDARY info only
+            #     (openTrades in (a) is the authoritative order-state source).
+            rem_ord = []
+            for o in ib.openOrders():
+                osym = getattr(getattr(o, 'contract', None), 'symbol', None)
+                if osym == symbol:
+                    rem_ord.append({'symbol': osym,
+                                    'order_id': getattr(o, 'orderId', None)})
+
             result['remaining_positions'] = rem_pos
             result['remaining_open_orders'] = rem_ord
-            result['flatten_confirmed'] = (not rem_pos) and (not rem_ord)
+            # (d) confirmed flat only if openTrades clean/unambiguous (above) AND
+            #     no residual target position. openOrders is secondary info and
+            #     does not by itself flip a clean openTrades result, but a
+            #     residual position always blocks confirmation.
+            result['flatten_confirmed'] = (not rem_pos)
             if not result['flatten_confirmed']:
                 result['warnings'].append(
-                    'flatten NOT confirmed: residual position/orders remain')
+                    'flatten NOT confirmed: residual target position remains')
             return result
         except Exception as e:
             result['warnings'].append('flatten error: %s' % e)

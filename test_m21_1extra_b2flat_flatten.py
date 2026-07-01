@@ -411,25 +411,46 @@ class TestAdapterFlattenGates(unittest.TestCase):
         d = b.flatten_paper_position("AAA", confirm=True)
         self.assertTrue(d["flatten_confirmed"])
 
-    def test_9_reconcile_failure_sets_confirmed_false(self):
-        b, _ = self._broker(
+    def test_does_not_call_self_reconcile(self):
+        # The method must NOT call self.reconcile() (which would open a second
+        # ib connection with the same client id). Track calls on the broker.
+        b, mock_ib = self._broker(
             open_orders=[_MockOrder("AAA")],
-            positions=[_MockPosition("AAA", 10)],
-            recon_after={"open_orders": [], "positions": [],
-                         "warnings": ["reconcile failed: lost conn"]})
+            positions=[_MockPosition("AAA", 10)], recon_after=_clean_recon())
+        b._reconcile_calls = 0
+        orig = b.reconcile
+        def _tracked():
+            b._reconcile_calls += 1
+            return orig()
+        b.reconcile = _tracked
         d = b.flatten_paper_position("AAA", confirm=True)
-        self.assertFalse(d["flatten_confirmed"])
-        self.assertTrue(any("NOT verified" in w for w in d["warnings"]))
+        self.assertEqual(b._reconcile_calls, 0)
+        self.assertTrue(d["flatten_confirmed"])
 
-    def test_9_residual_position_sets_confirmed_false(self):
-        b, _ = self._broker(
+    def test_9_residual_position_same_connection_sets_confirmed_false(self):
+        # Residual position seen via the SAME-connection positions() after the
+        # close -> flatten_confirmed=false. positions_after simulates the close
+        # not fully clearing the position.
+        b, mock_ib = self._broker(
             open_orders=[_MockOrder("AAA")],
-            positions=[_MockPosition("AAA", 10)],
-            recon_after={"open_orders": [],
-                         "positions": [{"symbol": "AAA", "position": 10}],
-                         "warnings": []})
+            positions=[_MockPosition("AAA", 10)], recon_after=_clean_recon())
+        mock_ib._positions_after = [_MockPosition("AAA", 10)]  # still there
         d = b.flatten_paper_position("AAA", confirm=True)
         self.assertFalse(d["flatten_confirmed"])
+        self.assertTrue(any("residual target position" in w
+                            for w in d["warnings"]))
+
+    def test_final_uses_same_connection_positions(self):
+        # Prove the final position proof reads from the same mock ib AFTER the
+        # close (a positions() call occurs after placeOrder in the op log).
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA")],
+            positions=[_MockPosition("AAA", 4)], recon_after=_clean_recon())
+        b.flatten_paper_position("AAA", confirm=True)
+        seq = mock_ib.call_order
+        self.assertIn("placeOrder", seq)
+        last_positions = len(seq) - 1 - seq[::-1].index("positions")
+        self.assertGreater(last_positions, seq.index("placeOrder"))
 
 
 class TestExistingBehaviourUnchanged(unittest.TestCase):

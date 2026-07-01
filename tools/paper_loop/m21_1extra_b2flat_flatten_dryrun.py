@@ -104,11 +104,13 @@ def _render(d: Dict[str, Any], data_source: str) -> str:
     L.append("- entry_order_originated: **false**")
     L.append("")
     L.append("> **B2flat performs ONLY paper cleanup: it cancels the target "
-             "symbol's open orders and places a single offsetting close for an "
-             "existing paper position. It NEVER originates an entry order. "
-             "flatten_confirmed is true only when the post-action reconcile "
-             "shows the symbol genuinely flat (no position AND no open "
-             "orders).**")
+             "symbol's open orders (contract-aware) and places a single "
+             "offsetting close for an existing paper position. It NEVER "
+             "originates an entry order. flatten_confirmed is true only when the "
+             "same-connection final proof (contract-aware openTrades + "
+             "positions) shows the symbol genuinely flat — no target/ambiguous "
+             "open trades and no residual position. It does not open a second "
+             "IB connection.**")
     L.append("")
     if d.get("warnings"):
         L.append("## Warnings")
