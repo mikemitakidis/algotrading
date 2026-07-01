@@ -723,7 +723,25 @@ class IBKRBroker(BrokerAdapter):
                 result['warnings'].append(
                     'no residual position for %s (nothing to close)' % symbol)
 
-            # 6. reconcile + truthful confirmation
+            # 6. FINAL contract-aware open-trades re-read (post-close). The
+            # existing reconcile() uses ib.openOrders() which may not reliably
+            # symbol-map orders, so we must NOT rely on it alone to declare
+            # flat. Re-read the SAME contract-aware openTrades() helper: a
+            # target trade still present, or an ambiguous trade, means we cannot
+            # claim confirmed flat.
+            final_target_trades, ambiguous_final = _target_open_trades()
+            if ambiguous_final or final_target_trades:
+                result['post_cancel_open_orders_cleared'] = False
+                result['warnings'].append(
+                    'post-flatten open trades not cleared / ambiguous: '
+                    'not confirmed flat')
+                result['flatten_confirmed'] = False
+                return result
+
+            # 6b. reconcile + truthful confirmation. Final confirmation requires
+            # ALL of: no target open trades (checked above), no ambiguous open
+            # trades (checked above), reconcile succeeded, no residual target
+            # position, and no residual target open orders reconcile can see.
             recon = self.reconcile()
             if any(str(w).startswith('reconcile failed:')
                    for w in recon.get('warnings', [])):

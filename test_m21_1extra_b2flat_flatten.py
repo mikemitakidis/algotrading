@@ -85,7 +85,8 @@ class _MockIB:
     """Enough of ib_insync.IB for flatten_paper_position."""
 
     def __init__(self, *, open_orders, positions, positions_after=None,
-                 cancel_clears=True, open_trades=None, ambiguous_trade=False):
+                 cancel_clears=True, open_trades=None, ambiguous_trade=False,
+                 trades_after_close=None):
         self._open_orders = list(open_orders)
         self._positions = list(positions)
         self._positions_after = (positions_after if positions_after is not None
@@ -95,6 +96,9 @@ class _MockIB:
         self.placed = []
         self._flattened = False
         self.call_order = []          # records sequence of broker ops
+        # Optional explicit open-trades state to return AFTER the close order is
+        # placed (simulates a leg that survived / an ambiguous trade appearing).
+        self._trades_after_close = trades_after_close
         # Contract-aware open trades. If not supplied, derive from open_orders.
         if open_trades is not None:
             self._open_trades = list(open_trades)
@@ -115,6 +119,8 @@ class _MockIB:
 
     def openTrades(self):
         self.call_order.append("openTrades")
+        if self._flattened and self._trades_after_close is not None:
+            return list(self._trades_after_close)
         return list(self._open_trades)
 
     def cancelOrder(self, order):
@@ -222,10 +228,11 @@ class TestAdapterFlattenGates(unittest.TestCase):
 
     def _broker(self, *, open_orders, positions, recon_after,
                 cancel_clears=True, account_ok=True, open_trades=None,
-                ambiguous_trade=False):
+                ambiguous_trade=False, trades_after_close=None):
         mock_ib = _MockIB(open_orders=open_orders, positions=positions,
                           cancel_clears=cancel_clears, open_trades=open_trades,
-                          ambiguous_trade=ambiguous_trade)
+                          ambiguous_trade=ambiguous_trade,
+                          trades_after_close=trades_after_close)
         return _FlattenBroker(mock_ib, recon_after, account_ok=account_ok), \
             mock_ib
 
@@ -356,6 +363,43 @@ class TestAdapterFlattenGates(unittest.TestCase):
             recon_after=_clean_recon(), account_ok=True)
         d = b.flatten_paper_position("AAA", confirm=True)
         self.assertTrue(d["account_verified"])
+        self.assertTrue(d["flatten_confirmed"])
+        self.assertEqual(len(mock_ib.placed), 1)
+
+    def test_final_openTrades_target_remains_not_confirmed(self):
+        # After the close, a target trade still appears in openTrades ->
+        # flatten_confirmed must be False even if reconcile looks clean.
+        leftover = _MockOrder("AAA", order_id=9)
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA", order_id=1)],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(),
+            trades_after_close=[_MockOpenTrade("AAA", leftover)])
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertTrue(any("post-flatten open trades not cleared" in w
+                            for w in d["warnings"]))
+
+    def test_final_openTrades_ambiguous_not_confirmed(self):
+        # After the close, an ambiguous trade appears -> not confirmed.
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA", order_id=1)],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(),
+            trades_after_close=[_MockOpenTrade(None, None)])
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertTrue(any("not cleared / ambiguous" in w
+                            for w in d["warnings"]))
+
+    def test_final_openTrades_clear_and_reconcile_clean_confirmed(self):
+        # After the close, openTrades clear AND reconcile clean -> confirmed.
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA", order_id=1)],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(),
+            trades_after_close=[])          # nothing left
+        d = b.flatten_paper_position("AAA", confirm=True)
         self.assertTrue(d["flatten_confirmed"])
         self.assertEqual(len(mock_ib.placed), 1)
 
