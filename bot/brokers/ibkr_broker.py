@@ -579,7 +579,9 @@ class IBKRBroker(BrokerAdapter):
             'paper_asserted': False,
             'kill_switch_active': False,
             'confirmed_flag': bool(confirm),
+            'already_flat': False,
             'cancelled_order_ids': [],
+            'post_cancel_open_orders_cleared': None,
             'close_order_placed': False,
             'close_order_id': None,
             'flatten_confirmed': False,
@@ -642,6 +644,24 @@ class IBKRBroker(BrokerAdapter):
                             'cancel of open order failed: %s' % e)
             ib.sleep(2)
 
+            # 3b. RE-READ open orders after cancel: confirm the target's orders
+            # actually cleared BEFORE placing any close. If a cancel silently
+            # failed and legs remain, do NOT place a market close on top of live
+            # SL/TP legs (that is the exact race we are preventing) — report
+            # not-confirmed and stop.
+            post_cancel_target_orders = [
+                o for o in list(ib.openOrders())
+                if getattr(getattr(o, 'contract', None), 'symbol', None)
+                == symbol]
+            result['post_cancel_open_orders_cleared'] = (
+                len(post_cancel_target_orders) == 0)
+            if post_cancel_target_orders:
+                result['warnings'].append(
+                    'post-cancel open orders remain for %s: refusing to place '
+                    'a close (flatten not confirmed)' % symbol)
+                result['flatten_confirmed'] = False
+                return result
+
             # 4. re-read the position for the target symbol
             target = None
             for pos in ib.positions(account=account):
@@ -665,6 +685,10 @@ class IBKRBroker(BrokerAdapter):
                     getattr(trade.order, 'orderId', '?'))
                 ib.sleep(3)
             else:
+                # no residual position; if we also cancelled nothing, the
+                # target was already flat coming in.
+                if not result['cancelled_order_ids']:
+                    result['already_flat'] = True
                 result['warnings'].append(
                     'no residual position for %s (nothing to close)' % symbol)
 

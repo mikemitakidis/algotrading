@@ -76,31 +76,39 @@ class _MockTrade:
 class _MockIB:
     """Enough of ib_insync.IB for flatten_paper_position."""
 
-    def __init__(self, *, open_orders, positions, positions_after=None):
+    def __init__(self, *, open_orders, positions, positions_after=None,
+                 cancel_clears=True):
         self._open_orders = list(open_orders)
         self._positions = list(positions)
         self._positions_after = (positions_after if positions_after is not None
                                  else [])
+        self._cancel_clears = cancel_clears
         self.cancelled = []
         self.placed = []
         self._flattened = False
+        self.call_order = []          # records sequence of broker ops
 
     def isConnected(self):
         return True
 
     def openOrders(self):
+        self.call_order.append("openOrders")
         return list(self._open_orders)
 
     def cancelOrder(self, order):
+        self.call_order.append("cancelOrder")
         self.cancelled.append(order)
-        self._open_orders = [o for o in self._open_orders if o is not order]
+        if self._cancel_clears:
+            self._open_orders = [o for o in self._open_orders if o is not order]
 
     def positions(self, account=None):
+        self.call_order.append("positions")
         # before the close order is placed -> original; after -> post state
         return list(self._positions_after if self._flattened
                     else self._positions)
 
     def placeOrder(self, contract, order):
+        self.call_order.append("placeOrder")
         self.placed.append((contract, order))
         self._flattened = True          # simulate the close filling
         return _MockTrade(order)
@@ -183,8 +191,10 @@ class TestPaperModeGates(unittest.TestCase):
 class TestAdapterFlattenGates(unittest.TestCase):
     """Direct tests of IBKRBroker.flatten_paper_position via a stub broker."""
 
-    def _broker(self, *, open_orders, positions, recon_after):
-        mock_ib = _MockIB(open_orders=open_orders, positions=positions)
+    def _broker(self, *, open_orders, positions, recon_after,
+                cancel_clears=True):
+        mock_ib = _MockIB(open_orders=open_orders, positions=positions,
+                          cancel_clears=cancel_clears)
         return _FlattenBroker(mock_ib, recon_after), mock_ib
 
     def test_5_explicit_symbol_required(self):
@@ -229,6 +239,42 @@ class TestAdapterFlattenGates(unittest.TestCase):
         _c, close = mock_ib.placed[0]
         self.assertEqual(close.action, "BUY")
         self.assertEqual(close.totalQuantity, 5)
+
+    def test_7_cancel_happens_before_close_order(self):
+        # Ordering proof: every cancelOrder precedes the placeOrder in the
+        # recorded broker-op sequence.
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA", order_id=1)],
+            positions=[_MockPosition("AAA", 10)], recon_after=_clean_recon())
+        b.flatten_paper_position("AAA", confirm=True)
+        seq = mock_ib.call_order
+        self.assertIn("cancelOrder", seq)
+        self.assertIn("placeOrder", seq)
+        self.assertLess(seq.index("cancelOrder"), seq.index("placeOrder"))
+
+    def test_11_already_flat_no_position_no_orders(self):
+        # No position, no target orders -> already_flat true, confirmed true,
+        # nothing placed.
+        b, mock_ib = self._broker(
+            open_orders=[], positions=[], recon_after=_clean_recon())
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertTrue(d["already_flat"])
+        self.assertTrue(d["flatten_confirmed"])
+        self.assertFalse(d["close_order_placed"])
+        self.assertEqual(mock_ib.placed, [])
+
+    def test_12_post_cancel_orders_remaining_blocks_close(self):
+        # cancel does NOT clear the order (silent failure) -> primitive must
+        # refuse to place a close and report flatten_confirmed=false.
+        b, mock_ib = self._broker(
+            open_orders=[_MockOrder("AAA", order_id=1)],
+            positions=[_MockPosition("AAA", 10)],
+            recon_after=_clean_recon(), cancel_clears=False)
+        d = b.flatten_paper_position("AAA", confirm=True)
+        self.assertFalse(d["post_cancel_open_orders_cleared"])
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertEqual(mock_ib.placed, [])     # no close placed over live legs
+        self.assertTrue(any("refusing to place" in w for w in d["warnings"]))
 
     def test_8_reconcile_clean_sets_confirmed_true(self):
         b, _ = self._broker(
