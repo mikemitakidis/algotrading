@@ -10581,6 +10581,9 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1extra-B2b one tiny paper-order lifecycle.
             "reports/m21_1extra_b2b_single_submit.md",
             "test_m21_1extra_b2b_single_submit.py",
+            # M21.1extra-C outcome persistence.
+            "reports/m21_1extra_c_outcome_persistence.md",
+            "test_m21_1extra_c_outcome_persistence.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
