@@ -89,14 +89,22 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt is not None else None
 
 
-def market_session_date_for(instant_utc: datetime) -> str:
-    """DST-correct exchange session date: convert a timezone-aware UTC instant
-    to America/New_York and take the calendar date. Uses zoneinfo so US DST
-    transitions are handled correctly and independently of UK/VPS local time."""
-    if instant_utc.tzinfo is None:
-        raise ValueError("instant_utc must be timezone-aware UTC")
-    et = instant_utc.astimezone(ZoneInfo(_EXCHANGE_TZ))
-    return et.date().isoformat()
+def market_session_date_for(instant_utc: datetime,
+                            exchange_timezone: str = _EXCHANGE_TZ) -> str:
+    """DST-correct exchange session date: convert a UTC instant to the given
+    exchange timezone (default America/New_York) and take the calendar date.
+    Uses zoneinfo so DST transitions are handled correctly and independently of
+    UK/VPS/UTC local time. The timezone MUST match the record's
+    exchange_timezone so the stored session date and stored timezone are
+    consistent (D-readiness for non-US exchanges). An invalid timezone raises
+    rather than silently falling back."""
+    instant_utc = _as_utc(instant_utc)   # refuses naive; normalises to UTC
+    try:
+        tz = ZoneInfo(exchange_timezone)
+    except Exception as e:
+        raise ValueError(
+            "invalid exchange_timezone %r" % exchange_timezone) from e
+    return instant_utc.astimezone(tz).date().isoformat()
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -197,7 +205,12 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
     flattened = _normalise_utc_str(b2b.get("flattened_at_utc"))
     event_available = any(x is not None for x in (submitted, observed, flattened))
 
-    session_date = market_session_date_for(persisted_at_utc)
+    # resolve the record's market identity BEFORE deriving the session date, so
+    # the stored session date is computed in the SAME timezone that is stored in
+    # exchange_timezone (consistency for non-US records). Invalid tz raises.
+    exchange_timezone = b2b.get("exchange_timezone") or _EXCHANGE_TZ
+    market_calendar_id = b2b.get("market_calendar_id") or _DEFAULT_CALENDAR_ID
+    session_date = market_session_date_for(persisted_at_utc, exchange_timezone)
 
     row = {
         "lifecycle_id": lifecycle_id,
@@ -230,10 +243,10 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
         "flattened_at_utc": flattened,
         "timestamp_source": "c_persist_time_only",
         "event_timestamps_available": _b(event_available),
-        "exchange_timezone": b2b.get("exchange_timezone") or _EXCHANGE_TZ,
+        "exchange_timezone": exchange_timezone,
         # D-readiness identity only: D maps this to a real exchange calendar.
         # C does NOT check holidays / early closes / weekends / open status.
-        "market_calendar_id": b2b.get("market_calendar_id") or _DEFAULT_CALENDAR_ID,
+        "market_calendar_id": market_calendar_id,
         "market_session_date": session_date,
         "market_session_date_source": "persisted_at_utc_not_execution_time",
         "market_clock_checked": 0,
@@ -260,7 +273,8 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
         "inserted": inserted,
         "duplicate": not inserted,
         "market_session_date": session_date,
-        "exchange_timezone": _EXCHANGE_TZ,
+        "exchange_timezone": exchange_timezone,
+        "market_calendar_id": market_calendar_id,
         "persisted_at_utc": _iso(persisted_at_utc),
         "record_kind": "mechanical_paper_lifecycle",
         "is_edge_outcome": 0,

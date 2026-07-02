@@ -189,6 +189,56 @@ class TestDSTSessionDate(unittest.TestCase):
         with self.assertRaises(ValueError):
             C.market_session_date_for(datetime(2026, 3, 20, 3, 30))  # naive
 
+    def test_session_date_follows_london_tz(self):
+        # 01:30 UTC Jul 3 == 02:30 BST Jul 3 (London date Jul 3), but New York
+        # date would be Jul 2. Session date must follow the record's own tz.
+        t = datetime(2026, 7, 3, 1, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            C.market_session_date_for(t, "Europe/London"), "2026-07-03")
+        self.assertEqual(C.market_session_date_for(t), "2026-07-02")  # default NY
+
+    def test_session_date_follows_tokyo_tz(self):
+        # 01:30 UTC Jul 3 == 10:30 JST Jul 3 (Tokyo date Jul 3), NY date Jul 2.
+        t = datetime(2026, 7, 3, 1, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            C.market_session_date_for(t, "Asia/Tokyo"), "2026-07-03")
+        self.assertNotEqual(
+            C.market_session_date_for(t, "Asia/Tokyo"),
+            C.market_session_date_for(t, "America/New_York"))
+
+    def test_invalid_exchange_timezone_raises(self):
+        t = datetime(2026, 7, 3, 1, 30, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError):
+            C.market_session_date_for(t, "Not/AZone")
+
+    def test_persisted_record_session_date_uses_row_tz(self):
+        # a London-tz record must store a London session date, not New York
+        db = tempfile.mktemp(suffix=".db")
+        try:
+            t = datetime(2026, 7, 3, 1, 30, tzinfo=timezone.utc)
+            r = C.persist_lifecycle(
+                _b2b(exchange_timezone="Europe/London",
+                     market_calendar_id="UK_EQ"),
+                db_path=db, persisted_at_utc=t)
+            self.assertEqual(r["market_session_date"], "2026-07-03")
+            self.assertEqual(r["exchange_timezone"], "Europe/London")
+            row = C.read_lifecycles(db_path=db)[0]
+            self.assertEqual(row["market_session_date"], "2026-07-03")
+            self.assertEqual(row["exchange_timezone"], "Europe/London")
+        finally:
+            if os.path.exists(db):
+                os.remove(db)
+
+    def test_persist_invalid_source_tz_raises(self):
+        db = tempfile.mktemp(suffix=".db")
+        try:
+            with self.assertRaises(ValueError):
+                C.persist_lifecycle(
+                    _b2b(exchange_timezone="Bogus/Zone"), db_path=db)
+        finally:
+            if os.path.exists(db):
+                os.remove(db)
+
 
 class TestSummaryAndIsolation(_DBCase):
     def test_summary_counts(self):
