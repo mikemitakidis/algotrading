@@ -38,6 +38,11 @@ _EXPECTED_PAPER_ACCOUNT = "DUP623346"
 _MAX_QTY = 1
 _MAX_NOTIONAL_USD = 5000.0   # qty 1 * price must stay under this ceiling
 
+# Bounded post-submit observation: poll reconcile for the fill up to the
+# timeout, stopping early when the position appears. Never waits forever.
+_OBSERVE_TIMEOUT_S = 30.0
+_OBSERVE_POLL_S = 2.0
+
 
 class PaperModeRefused(RuntimeError):
     pass
@@ -106,6 +111,9 @@ def run_lifecycle(symbol: str, *, confirm: bool,
         "entry_result_recorded": False,
         "entry_filled": False,
         "position_observed": False,
+        "observation_attempts": 0,
+        "observation_seconds": 0.0,
+        "observation_timeout": False,
         "flatten_called": False,
         "flatten_confirmed": False,
         "close_order_placed": False,
@@ -161,14 +169,23 @@ def run_lifecycle(symbol: str, *, confirm: bool,
     pre_pos = [p for p in recon.get("positions", [])
                if p.get("symbol") == symbol
                and float(p.get("position", 0)) != 0]
-    pre_ord = [o for o in recon.get("open_orders", [])
-               if o.get("symbol") == symbol]
+    # Conservative order gate: adapter reconcile() uses openOrders(), which may
+    # not reliably carry a contract symbol. For this one controlled proof we
+    # require a COMPLETELY clean order slate — ANY open order blocks, not just
+    # symbol-matched ones — so we never submit alongside an order we cannot
+    # attribute.
+    all_open_orders = list(recon.get("open_orders", []))
     result["pre_existing_position"] = bool(pre_pos)
-    result["pre_existing_open_orders"] = bool(pre_ord)
-    if pre_pos or pre_ord:
+    result["pre_existing_open_orders"] = bool(all_open_orders)
+    if pre_pos:
         result["warnings"].append(
-            "pre-existing target position/orders: refusing to submit a new "
-            "entry (B2b requires a clean start for the symbol)")
+            "pre-existing target position: refusing to submit a new entry "
+            "(B2b requires a clean start for the symbol)")
+        return result
+    if all_open_orders:
+        result["warnings"].append(
+            "pre-existing open orders present (any symbol): refusing to submit "
+            "(B2b requires a completely clean order slate)")
         return result
 
     # ── originate exactly ONE entry via the real submit() path ──────────────
@@ -187,11 +204,27 @@ def run_lifecycle(symbol: str, *, confirm: bool,
             % result["entry_result_status"])
         # fall through to cleanup — we must still flatten anything that landed
 
-    # ── observe fill / position before cleanup ──────────────────────────────
-    recon2 = broker.reconcile()
-    obs_pos = [p for p in recon2.get("positions", [])
-               if p.get("symbol") == symbol
-               and float(p.get("position", 0)) != 0]
+    # ── observe fill / position before cleanup (BOUNDED poll) ───────────────
+    # submit() proves broker acknowledgement, but the position may not be
+    # visible in the very next reconcile on the real gateway. Poll reconcile
+    # for the target position up to a bounded timeout, stopping early when it
+    # appears. submit() is NOT called again — only reconcile() is polled.
+    import time as _time
+    _t0 = _time.monotonic()
+    obs_pos = []
+    while True:
+        result["observation_attempts"] += 1
+        recon2 = broker.reconcile()
+        obs_pos = [p for p in recon2.get("positions", [])
+                   if p.get("symbol") == symbol
+                   and float(p.get("position", 0)) != 0]
+        if obs_pos:
+            break
+        if (_time.monotonic() - _t0) >= _OBSERVE_TIMEOUT_S:
+            result["observation_timeout"] = True
+            break
+        _time.sleep(_OBSERVE_POLL_S)
+    result["observation_seconds"] = round(_time.monotonic() - _t0, 2)
     result["position_observed"] = bool(obs_pos)
     result["entry_filled"] = bool(obs_pos)
     if getattr(order_result, "filled_price", None):
@@ -229,7 +262,8 @@ def _render(d: Dict[str, Any], data_source: str) -> str:
               "kill_switch_active", "pre_existing_position",
               "pre_existing_open_orders", "entry_order_originated",
               "entry_order_id", "entry_result_status", "entry_result_recorded",
-              "entry_filled", "position_observed", "flatten_called",
+              "entry_filled", "position_observed", "observation_attempts",
+              "observation_seconds", "observation_timeout", "flatten_called",
               "flatten_confirmed", "close_order_placed", "lifecycle_confirmed"):
         L.append("- %s: **%s**" % (k, d.get(k)))
     L.append("")

@@ -15,6 +15,9 @@
 - entry_result_recorded: **False**
 - entry_filled: **False**
 - position_observed: **False**
+- observation_attempts: **0**
+- observation_seconds: **0.0**
+- observation_timeout: **False**
 - flatten_called: **False**
 - flatten_confirmed: **False**
 - close_order_placed: **False**

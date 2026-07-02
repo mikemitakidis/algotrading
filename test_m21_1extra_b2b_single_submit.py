@@ -36,7 +36,7 @@ class MockBroker:
                  pre_orders=None, submit_status="accepted",
                  submit_order_id="IB-PERM-7", filled_price=308.3,
                  post_submit_positions=None, flatten_result=None,
-                 reconcile_fails=False):
+                 reconcile_fails=False, position_appears_on_attempt=1):
         self._account_verified = account_verified
         self._pre_positions = pre_positions or []
         self._pre_orders = pre_orders or []
@@ -51,6 +51,9 @@ class MockBroker:
             "remaining_positions": [], "remaining_open_orders": [],
             "warnings": []}
         self._reconcile_fails = reconcile_fails
+        # position becomes visible only on the Nth POST-submit reconcile
+        self._appears_on = position_appears_on_attempt
+        self._post_submit_reconciles = 0
         self.submit_calls = []
         self.flatten_calls = []
 
@@ -65,9 +68,10 @@ class MockBroker:
             return {"open_orders": [], "positions": [],
                     "warnings": ["reconcile failed: lost conn"]}
         if self.submit_calls:
-            return {"open_orders": [],
-                    "positions": list(self._post_submit_positions),
-                    "warnings": []}
+            self._post_submit_reconciles += 1
+            pos = (list(self._post_submit_positions)
+                   if self._post_submit_reconciles >= self._appears_on else [])
+            return {"open_orders": [], "positions": pos, "warnings": []}
         return {"open_orders": list(self._pre_orders),
                 "positions": list(self._pre_positions), "warnings": []}
 
@@ -158,6 +162,23 @@ class TestPreExistingStateBlocks(unittest.TestCase):
         self.assertFalse(d["entry_order_originated"])
         self.assertEqual(mb.submit_calls, [])
 
+    def test_open_order_other_symbol_blocks(self):
+        mb = MockBroker(pre_orders=[{"symbol": "MSFT", "order_id": 2}])
+        d = _run(mb)
+        self.assertTrue(d["pre_existing_open_orders"])
+        self.assertFalse(d["entry_order_originated"])
+        self.assertEqual(mb.submit_calls, [])
+
+    def test_open_order_missing_or_unknown_symbol_blocks(self):
+        # order with no symbol / '?' must still block (conservative slate)
+        for order in ({"order_id": 3}, {"symbol": "?", "order_id": 4}):
+            mb = MockBroker(pre_orders=[order])
+            d = _run(mb)
+            self.assertTrue(d["pre_existing_open_orders"],
+                            "order %r should block" % order)
+            self.assertFalse(d["entry_order_originated"])
+            self.assertEqual(mb.submit_calls, [])
+
     def test_account_not_verified_blocks_submit(self):
         mb = MockBroker(account_verified=False)
         d = _run(mb)
@@ -225,9 +246,15 @@ class TestLifecycleFailClosed(unittest.TestCase):
         self.assertFalse(d["lifecycle_confirmed"])
 
     def test_no_fill_observed_makes_lifecycle_false(self):
-        # entry accepted but no position appears -> position_observed False
-        mb = MockBroker(post_submit_positions=[], filled_price=None)
-        d = _run(mb)
+        # entry accepted but no position ever appears -> position_observed False
+        t, p = B2B._OBSERVE_TIMEOUT_S, B2B._OBSERVE_POLL_S
+        B2B._OBSERVE_TIMEOUT_S, B2B._OBSERVE_POLL_S = 0.2, 0.01
+        try:
+            mb = MockBroker(post_submit_positions=[], filled_price=None,
+                            position_appears_on_attempt=9999)
+            d = _run(mb)
+        finally:
+            B2B._OBSERVE_TIMEOUT_S, B2B._OBSERVE_POLL_S = t, p
         self.assertTrue(d["entry_order_originated"])
         self.assertFalse(d["position_observed"])
         self.assertFalse(d["lifecycle_confirmed"])
@@ -279,6 +306,43 @@ class TestOutputAndGuard(unittest.TestCase):
             capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "",
                          "B2b must not modify bot/brokers/ibkr_broker.py")
+
+
+class TestObservationLoop(unittest.TestCase):
+    def setUp(self):
+        # make the poll fast + short so tests don't actually wait 30s
+        self._t, self._p = B2B._OBSERVE_TIMEOUT_S, B2B._OBSERVE_POLL_S
+        B2B._OBSERVE_TIMEOUT_S = 0.2
+        B2B._OBSERVE_POLL_S = 0.01
+
+    def tearDown(self):
+        B2B._OBSERVE_TIMEOUT_S, B2B._OBSERVE_POLL_S = self._t, self._p
+
+    def test_position_appears_on_later_poll_confirms(self):
+        # first post-submit reconcile shows nothing; 3rd shows the position.
+        mb = MockBroker(position_appears_on_attempt=3, filled_price=None)
+        d = _run(mb)
+        self.assertGreaterEqual(d["observation_attempts"], 3)
+        self.assertTrue(d["position_observed"])
+        self.assertFalse(d["observation_timeout"])
+        self.assertTrue(d["lifecycle_confirmed"])
+        self.assertEqual(len(mb.submit_calls), 1)   # still exactly one submit
+
+    def test_no_position_before_timeout_flattens_but_not_confirmed(self):
+        # position never appears -> timeout, flatten still called, not confirmed
+        mb = MockBroker(position_appears_on_attempt=9999, filled_price=None,
+                        post_submit_positions=[])
+        d = _run(mb)
+        self.assertTrue(d["observation_timeout"])
+        self.assertFalse(d["position_observed"])
+        self.assertTrue(d["flatten_called"])         # cleanup still runs
+        self.assertFalse(d["lifecycle_confirmed"])
+        self.assertEqual(len(mb.submit_calls), 1)
+
+    def test_submit_called_once_even_with_polling(self):
+        mb = MockBroker(position_appears_on_attempt=4, filled_price=None)
+        _run(mb)
+        self.assertEqual(len(mb.submit_calls), 1)
 
 
 if __name__ == "__main__":
