@@ -46,11 +46,24 @@ def _intent():
     )
 
 
+def _future_utc(hours=1):
+    from datetime import datetime, timezone, timedelta
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+
+
 def _enabled_policy(broker="etoro_real"):
     p = copy.deepcopy(DEFAULT_POLICY)
     p["global"]["auto_trading_enabled"] = True
+    p["global"]["auto_trading_enabled_until_utc"] = _future_utc()
     p["etoro"]["auto_trading_enabled"] = True
+    # D0: enable the ibkr lanes explicitly with valid unexpired windows (this
+    # helper intentionally builds an ALLOW policy). Never relies on the legacy
+    # ibkr block for lane authorization.
     p["ibkr"]["auto_trading_enabled"] = True
+    p["ibkr_paper"]["auto_trading_enabled"] = True
+    p["ibkr_paper"]["auto_trading_enabled_until_utc"] = _future_utc()
+    p["ibkr_live"]["auto_trading_enabled"] = True
+    p["ibkr_live"]["auto_trading_enabled_until_utc"] = _future_utc()
     p["routing"]["allowed_brokers"] = ["paper", "ibkr_paper", "ibkr_live",
                                        "etoro_paper", "etoro_real"]
     p["routing"]["etoro_live_enabled"] = True

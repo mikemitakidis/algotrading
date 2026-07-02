@@ -22,6 +22,7 @@ broker.submit() is unaffected, which preserves Telegram alerting.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from bot.brokers.base import BrokerAdapter, OrderIntent, OrderResult
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,14 @@ REASON_BROKER_KILL_SWITCH    = "kill_switch_active_broker"
 REASON_BROKER_NOT_ALLOWED    = "broker_not_in_allowed_brokers"
 REASON_ETORO_LIVE_DISABLED   = "etoro_live_disabled_policy"
 REASON_POLICY_MISSING        = "policy_missing_or_invalid"
+# M21.1extra-D0 — time-boxed authorization + explicit lane resolution.
+REASON_GLOBAL_EXPIRY_MISSING   = "auto_trading_global_expiry_missing"
+REASON_GLOBAL_EXPIRY_MALFORMED = "auto_trading_global_expiry_malformed"
+REASON_GLOBAL_EXPIRED          = "auto_trading_global_expired"
+REASON_LANE_EXPIRY_MISSING     = "auto_trading_lane_expiry_missing"
+REASON_LANE_EXPIRY_MALFORMED   = "auto_trading_lane_expiry_malformed"
+REASON_LANE_EXPIRED            = "auto_trading_lane_expired"
+REASON_LANE_UNSUPPORTED        = "auto_trading_lane_unsupported"
 REASON_GENERIC               = "auto_trading_disabled"
 # P0-3 (audit, 2026-06-05): runtime policy fail-safe reason.
 # Emitted by bot.runtime_policy.get_signal_only_reason() when NO
@@ -130,6 +139,34 @@ class SignalOnlyBroker(BrokerAdapter):
             return []
 
 
+def _authorization_expiry_reason(block: dict, missing_reason: str,
+                                 malformed_reason: str,
+                                 expired_reason: str):
+    """Evaluate a time-boxed authorization window. Returns a reason code string
+    if the window is missing / malformed / expired (authorization DENIED), or
+    None if the window is valid AND unexpired (authorization may proceed).
+
+    Fail-closed: a missing expiry, a non-string/unparseable expiry, a naive
+    (tz-less) expiry, or an expiry at/before now(UTC) all DENY. Only a
+    timezone-aware future instant permits authorization."""
+    raw = block.get("auto_trading_enabled_until_utc")
+    if raw is None:
+        return missing_reason
+    if not isinstance(raw, str):
+        return malformed_reason
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        return malformed_reason
+    if until.tzinfo is None:
+        # a naive expiry is ambiguous — refuse rather than assume UTC
+        return malformed_reason
+    now = datetime.now(timezone.utc)
+    if until.astimezone(timezone.utc) <= now:
+        return expired_reason
+    return None
+
+
 def determine_signal_only_reason(policy: dict, broker_name: str) -> tuple[bool, str]:
     """Inspect a policy dict and a broker name. Return (skip, reason).
 
@@ -154,6 +191,15 @@ def determine_signal_only_reason(policy: dict, broker_name: str) -> tuple[bool, 
         return True, REASON_GLOBAL_KILL_SWITCH
     if g.get("auto_trading_enabled") is not True:
         return True, REASON_GLOBAL_DISABLED
+    # M21.1extra-D0: global authorization is time-boxed. Even when enabled, it
+    # must carry a valid, unexpired expiry — a missing/malformed/expired global
+    # window denies (fail-closed), so a stale global True cannot authorize
+    # indefinitely.
+    g_expiry_reason = _authorization_expiry_reason(
+        g, REASON_GLOBAL_EXPIRY_MISSING, REASON_GLOBAL_EXPIRY_MALFORMED,
+        REASON_GLOBAL_EXPIRED)
+    if g_expiry_reason is not None:
+        return True, g_expiry_reason
 
     routing = policy.get("routing")
     if not isinstance(routing, dict):
@@ -168,15 +214,36 @@ def determine_signal_only_reason(policy: dict, broker_name: str) -> tuple[bool, 
         if routing.get("etoro_live_enabled") is not True:
             return True, REASON_ETORO_LIVE_DISABLED
 
-    # Map broker_name → broker block key
-    block_key = None
-    if broker_name in ("ibkr", "ibkr_paper", "ibkr_live"):
-        block_key = "ibkr"
+    # M21.1extra-D0: resolve the broker_name to its authorization block.
+    # CRITICAL: ibkr_paper and ibkr_live resolve to their OWN lean lane blocks
+    # (ibkr_paper / ibkr_live), NOT to the legacy shared `ibkr` block — so paper
+    # and live are authorized independently and the legacy `ibkr.auto_trading_
+    # enabled` can never authorize a lane. Bare "ibkr" is unsupported.
+    lane_key = None
+    if broker_name in ("ibkr_paper", "ibkr_live"):
+        lane_key = broker_name          # own lean lane block
     elif broker_name in ("etoro_paper", "etoro_real"):
-        block_key = "etoro"
+        lane_key = "etoro"              # etoro keeps its legacy block (no D0 lane)
+    elif broker_name == "ibkr":
+        # legacy shared name is NOT an authorization lane — refuse.
+        return True, REASON_LANE_UNSUPPORTED
 
-    if block_key is not None:
-        block = policy.get(block_key)
+    if lane_key in ("ibkr_paper", "ibkr_live"):
+        lane = policy.get(lane_key)
+        if not isinstance(lane, dict):
+            return True, REASON_POLICY_MISSING
+        if lane.get("kill_switch") is True:
+            return True, REASON_BROKER_KILL_SWITCH
+        if lane.get("auto_trading_enabled") is not True:
+            return True, REASON_BROKER_DISABLED
+        # lane authorization is time-boxed too (fail-closed).
+        lane_expiry_reason = _authorization_expiry_reason(
+            lane, REASON_LANE_EXPIRY_MISSING, REASON_LANE_EXPIRY_MALFORMED,
+            REASON_LANE_EXPIRED)
+        if lane_expiry_reason is not None:
+            return True, lane_expiry_reason
+    elif lane_key == "etoro":
+        block = policy.get("etoro")
         if not isinstance(block, dict):
             return True, REASON_POLICY_MISSING
         if block.get("kill_switch") is True:
@@ -184,7 +251,8 @@ def determine_signal_only_reason(policy: dict, broker_name: str) -> tuple[bool, 
         if block.get("auto_trading_enabled") is not True:
             return True, REASON_BROKER_DISABLED
 
-    # paper has no broker block — only global gates apply.
+    # paper (the pure signal/paper broker) has no lane block — only global
+    # gates apply.
     return False, ""
 
 

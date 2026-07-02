@@ -1350,7 +1350,21 @@ class TestM13_4A_PolicySource(unittest.TestCase):
             "version": 1,
             "global": {
                 "auto_trading_enabled": True,
+                "auto_trading_enabled_until_utc": (
+                    __import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc)
+                    + __import__("datetime").timedelta(hours=1)).isoformat(),
                 "max_auto_trading_capital": 100000.0,
+                "kill_switch": False,
+            },
+            "ibkr_paper": {
+                "auto_trading_enabled": False,
+                "auto_trading_enabled_until_utc": None,
+                "kill_switch": False,
+            },
+            "ibkr_live": {
+                "auto_trading_enabled": False,
+                "auto_trading_enabled_until_utc": None,
                 "kill_switch": False,
             },
             "ibkr": {

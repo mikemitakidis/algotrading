@@ -45,8 +45,20 @@ FORBIDDEN_BROKERS: set = set()
 POLICY_VERSION = 1
 
 # Allowed top-level keys (unknown keys are rejected)
-_TOP_LEVEL_KEYS = {"version", "global", "ibkr", "etoro", "routing"}
-_GLOBAL_KEYS = {"auto_trading_enabled", "max_auto_trading_capital", "kill_switch"}
+_TOP_LEVEL_KEYS = {"version", "global", "ibkr", "ibkr_paper", "ibkr_live",
+                   "etoro", "routing"}
+_GLOBAL_KEYS = {"auto_trading_enabled", "auto_trading_enabled_until_utc",
+                "max_auto_trading_capital", "kill_switch"}
+# Lean per-lane authorization blocks (M21.1extra-D0). These carry ONLY the
+# authorization fields — capital/limits stay in the legacy `ibkr`/`etoro`
+# blocks. The reader resolves ibkr_paper/ibkr_live to these, NOT to `ibkr`, so
+# paper and live are authorized independently and the legacy shared
+# `ibkr.auto_trading_enabled` can never authorize a lane.
+_LANE_KEYS = {
+    "auto_trading_enabled",
+    "auto_trading_enabled_until_utc",
+    "kill_switch",
+}
 _BROKER_KEYS = {
     "auto_trading_enabled",
     "max_auto_trading_capital",
@@ -67,7 +79,20 @@ DEFAULT_POLICY: dict = {
     "version": POLICY_VERSION,
     "global": {
         "auto_trading_enabled": False,
+        "auto_trading_enabled_until_utc": None,
         "max_auto_trading_capital": 0.0,
+        "kill_switch": False,
+    },
+    # Lean per-lane authorization blocks (D0). Disabled with no expiry by
+    # default — fail-closed. The D0 CLI can enable ibkr_paper only.
+    "ibkr_paper": {
+        "auto_trading_enabled": False,
+        "auto_trading_enabled_until_utc": None,
+        "kill_switch": False,
+    },
+    "ibkr_live": {
+        "auto_trading_enabled": False,
+        "auto_trading_enabled_until_utc": None,
         "kill_switch": False,
     },
     "ibkr": {
@@ -141,6 +166,45 @@ def _is_non_negative_int(v: Any) -> bool:
     return v >= 0
 
 
+def _is_valid_until_utc(v: Any) -> bool:
+    """auto_trading_enabled_until_utc may be None (no authorization window) or a
+    parseable ISO-8601 string. Validation only checks SHAPE; the reader is what
+    enforces unexpired-ness at read time. A non-None, non-string, or unparseable
+    value is invalid."""
+    if v is None:
+        return True
+    if not isinstance(v, str):
+        return False
+    try:
+        datetime.fromisoformat(v)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_lane_block(name: str, block: Any, errors: list) -> None:
+    """Validate a lean per-lane authorization block (ibkr_paper / ibkr_live)."""
+    if not isinstance(block, dict):
+        _err(errors, name, "type_error", f"{name} must be an object")
+        return
+    extra = set(block.keys()) - _LANE_KEYS
+    if extra:
+        _err(errors, name, "unknown_key",
+             f"unknown keys in {name}: {sorted(extra)}")
+    missing = _LANE_KEYS - set(block.keys())
+    if missing:
+        _err(errors, name, "missing_key",
+             f"missing keys in {name}: {sorted(missing)}")
+        return
+    for k in ("auto_trading_enabled", "kill_switch"):
+        if not _is_bool(block[k]):
+            _err(errors, f"{name}.{k}", "type_error",
+                 f"{k} must be a boolean")
+    if not _is_valid_until_utc(block["auto_trading_enabled_until_utc"]):
+        _err(errors, f"{name}.auto_trading_enabled_until_utc", "value_error",
+             "auto_trading_enabled_until_utc must be null or an ISO-8601 string")
+
+
 def _validate_broker_block(name: str, block: Any, errors: list) -> None:
     path = name
     if not isinstance(block, dict):
@@ -209,6 +273,9 @@ def _validate_global(g: Any, errors: list) -> None:
     if not _is_non_negative_number(g["max_auto_trading_capital"]):
         _err(errors, "global.max_auto_trading_capital", "value_error",
              "max_auto_trading_capital must be a non-negative number")
+    if not _is_valid_until_utc(g["auto_trading_enabled_until_utc"]):
+        _err(errors, "global.auto_trading_enabled_until_utc", "value_error",
+             "auto_trading_enabled_until_utc must be null or an ISO-8601 string")
 
 
 def _validate_routing(r: Any, errors: list) -> None:
@@ -336,6 +403,10 @@ def validate_policy(policy: Any) -> ValidationResult:
         _validate_global(policy["global"], errors)
     if "ibkr" in policy:
         _validate_broker_block("ibkr", policy["ibkr"], errors)
+    if "ibkr_paper" in policy:
+        _validate_lane_block("ibkr_paper", policy["ibkr_paper"], errors)
+    if "ibkr_live" in policy:
+        _validate_lane_block("ibkr_live", policy["ibkr_live"], errors)
     if "etoro" in policy:
         _validate_broker_block("etoro", policy["etoro"], errors)
     if "routing" in policy:

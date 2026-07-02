@@ -62,13 +62,29 @@ class _DB:
             pass
 
 
+def _future_utc_iso(hours=1):
+    from datetime import datetime, timezone, timedelta
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+
+
 def _valid_policy(**overrides) -> dict:
     """Build a valid M13.4A policy. Override via dotted keys."""
     policy = {
         "version": 1,
         "global": {
             "auto_trading_enabled": True,
+            "auto_trading_enabled_until_utc": _future_utc_iso(),
             "max_auto_trading_capital": 100000.0,
+            "kill_switch": False,
+        },
+        "ibkr_paper": {
+            "auto_trading_enabled": False,
+            "auto_trading_enabled_until_utc": None,
+            "kill_switch": False,
+        },
+        "ibkr_live": {
+            "auto_trading_enabled": False,
+            "auto_trading_enabled_until_utc": None,
             "kill_switch": False,
         },
         "ibkr": {

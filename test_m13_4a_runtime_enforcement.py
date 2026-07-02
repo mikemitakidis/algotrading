@@ -74,32 +74,49 @@ def _build_policy_db(policy_dict) -> str:
     return path
 
 
-def _enabled_policy_for(broker: str) -> dict:
-    """Policy that ENABLES auto-trading for `broker`.
+def _future_utc(hours=1):
+    from datetime import datetime, timezone, timedelta
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
-    Note: 'paper' has no broker block; only global gates apply to
-    it. ibkr_paper / ibkr_live / etoro_paper / etoro_real all map
-    to 'ibkr' or 'etoro' blocks per determine_signal_only_reason.
+
+def _lane_key_for(broker: str):
+    if broker in ("ibkr_paper", "ibkr_live"):
+        return broker            # D0: own lean lane block
+    if broker in ("etoro_paper", "etoro_real"):
+        return "etoro"
+    return None
+
+
+def _enabled_policy_for(broker: str) -> dict:
+    """Policy that ENABLES auto-trading for `broker` (D0 lane model).
+
+    'paper' has no lane block; only global gates apply. ibkr_paper /
+    ibkr_live resolve to their OWN lean lane blocks; etoro_* to the
+    'etoro' block. Global + lane are both time-boxed with valid
+    unexpired windows so the reader allows.
     """
-    block_key = None
-    if broker in ("ibkr", "ibkr_paper", "ibkr_live"):
-        block_key = "ibkr"
-    elif broker in ("etoro_paper", "etoro_real"):
-        block_key = "etoro"
+    lane_key = _lane_key_for(broker)
 
     policy = {
         "version": 1,
         "global": {
             "auto_trading_enabled": True,
+            "auto_trading_enabled_until_utc": _future_utc(),
             "kill_switch":          False,
         },
         "routing": {
             "allowed_brokers":      [broker],
-            "etoro_live_enabled":   False,
+            "etoro_live_enabled":   (broker == "etoro_real"),
         },
     }
-    if block_key is not None:
-        policy[block_key] = {
+    if lane_key in ("ibkr_paper", "ibkr_live"):
+        policy[lane_key] = {
+            "auto_trading_enabled": True,
+            "auto_trading_enabled_until_utc": _future_utc(),
+            "kill_switch":          False,
+        }
+    elif lane_key == "etoro":
+        policy["etoro"] = {
             "auto_trading_enabled": True,
             "kill_switch":          False,
         }
@@ -107,19 +124,11 @@ def _enabled_policy_for(broker: str) -> dict:
 
 
 def _kill_switch_policy_for(broker: str) -> dict:
-    """Policy with the BROKER-level kill_switch set.
-
-    Only meaningful for brokers that have a block (ibkr_*, etoro_*).
-    For 'paper' there is no broker block; tests that need broker-
-    level kill must use ibkr_paper instead."""
+    """Policy with the LANE/broker-level kill_switch set."""
     p = _enabled_policy_for(broker)
-    block_key = None
-    if broker in ("ibkr", "ibkr_paper", "ibkr_live"):
-        block_key = "ibkr"
-    elif broker in ("etoro_paper", "etoro_real"):
-        block_key = "etoro"
-    if block_key is not None:
-        p[block_key]["kill_switch"] = True
+    lane_key = _lane_key_for(broker)
+    if lane_key is not None and lane_key in p:
+        p[lane_key]["kill_switch"] = True
     return p
 
 
