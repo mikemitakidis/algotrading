@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 _EXCHANGE_TZ = "America/New_York"
+_DEFAULT_CALENDAR_ID = "US_EQ"
 _TABLE = "paper_lifecycles"
 
 
@@ -138,6 +139,7 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
         " timestamp_source TEXT,"
         " event_timestamps_available INTEGER,"
         " exchange_timezone TEXT,"
+        " market_calendar_id TEXT,"
         " market_session_date TEXT,"
         " market_session_date_source TEXT,"
         " market_clock_checked INTEGER,"
@@ -228,7 +230,10 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
         "flattened_at_utc": flattened,
         "timestamp_source": "c_persist_time_only",
         "event_timestamps_available": _b(event_available),
-        "exchange_timezone": _EXCHANGE_TZ,
+        "exchange_timezone": b2b.get("exchange_timezone") or _EXCHANGE_TZ,
+        # D-readiness identity only: D maps this to a real exchange calendar.
+        # C does NOT check holidays / early closes / weekends / open status.
+        "market_calendar_id": b2b.get("market_calendar_id") or _DEFAULT_CALENDAR_ID,
         "market_session_date": session_date,
         "market_session_date_source": "persisted_at_utc_not_execution_time",
         "market_clock_checked": 0,
@@ -304,6 +309,8 @@ def _render_report(summary: Dict[str, Any], data_source: str) -> str:
     L.append("- record_kind: **mechanical_paper_lifecycle**")
     L.append("- is_edge_outcome: **0**")
     L.append("- exchange_timezone: **%s**" % _EXCHANGE_TZ)
+    L.append("- market_calendar_id: **%s** (identity only; D maps to a calendar)"
+             % _DEFAULT_CALENDAR_ID)
     L.append("- total_lifecycles: **%s**" % summary.get("total_lifecycles"))
     L.append("- lifecycle_confirmed_count: **%s**"
              % summary.get("lifecycle_confirmed_count"))
@@ -318,6 +325,13 @@ def _render_report(summary: Dict[str, Any], data_source: str) -> str:
              "DST-correct), never a fixed offset. C does not schedule, hold "
              "trades open, or touch the dashboard — the market-clock guard is "
              "deferred to D (market_clock_checked=false).**")
+    L.append("")
+    L.append("> **C does NOT check public holidays, early closes, weekends, "
+             "lunch breaks, or market-open status. Those checks are explicitly "
+             "deferred to D. C only stores DST-safe UTC timestamps, an "
+             "America/New_York session date, and market-identity fields "
+             "(market_calendar_id, exchange_timezone) so D can enforce a real "
+             "per-exchange market-open guard.**")
     L.append("")
     return "\n".join(L)
 

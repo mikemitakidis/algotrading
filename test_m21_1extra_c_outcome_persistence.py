@@ -125,6 +125,27 @@ class TestHonestyLabels(_DBCase):
                          "not_checked_in_C_deferred_to_D")
         self.assertEqual(row["exchange_timezone"], "America/New_York")
 
+    def test_market_calendar_id_default_and_override(self):
+        # default identity for US equities
+        C.persist_lifecycle(_b2b(entry_order_id="A"), db_path=self.db)
+        row = [r for r in C.read_lifecycles(db_path=self.db)
+               if r["entry_order_id"] == "A"][0]
+        self.assertEqual(row["market_calendar_id"], "US_EQ")
+        # source-provided identity is honoured (D-readiness for other exchanges)
+        C.persist_lifecycle(
+            _b2b(entry_order_id="B", market_calendar_id="UK_EQ",
+                 exchange_timezone="Europe/London"), db_path=self.db)
+        row2 = [r for r in C.read_lifecycles(db_path=self.db)
+                if r["entry_order_id"] == "B"][0]
+        self.assertEqual(row2["market_calendar_id"], "UK_EQ")
+        self.assertEqual(row2["exchange_timezone"], "Europe/London")
+
+    def test_calendar_id_is_identity_not_a_calendar_check(self):
+        # C must NOT set market_clock_checked just because a calendar id exists
+        C.persist_lifecycle(_b2b(market_calendar_id="US_EQ"), db_path=self.db)
+        row = C.read_lifecycles(db_path=self.db)[0]
+        self.assertEqual(row["market_clock_checked"], 0)
+
 
 class TestDSTSessionDate(unittest.TestCase):
     """The crux of Mike's concern: market_session_date must come from
