@@ -39,7 +39,14 @@ if "ib_insync" not in sys.modules:
             self.account = None
             self.orderId = 0
 
+    class _StubStock:
+        def __init__(self, symbol, exchange, currency):
+            self.symbol = symbol
+            self.exchange = exchange
+            self.currency = currency
+
     _stub.MarketOrder = _StubMarketOrder
+    _stub.Stock = _StubStock
     sys.modules["ib_insync"] = _stub
 
 from bot.brokers.ibkr_broker import IBKRBroker
@@ -51,8 +58,9 @@ _HARNESS_PATH = "tools/paper_loop/m21_1extra_b2flat_flatten_dryrun.py"
 # ---- mock ib_insync surface for the adapter method -------------------------
 
 class _MockContract:
-    def __init__(self, symbol):
+    def __init__(self, symbol, exchange="NASDAQ"):
         self.symbol = symbol
+        self.exchange = exchange
 
 
 class _MockOrder:
@@ -86,7 +94,7 @@ class _MockIB:
 
     def __init__(self, *, open_orders, positions, positions_after=None,
                  cancel_clears=True, open_trades=None, ambiguous_trade=False,
-                 trades_after_close=None):
+                 trades_after_close=None, qualify_ok=True):
         self._open_orders = list(open_orders)
         self._positions = list(positions)
         self._positions_after = (positions_after if positions_after is not None
@@ -96,6 +104,8 @@ class _MockIB:
         self.placed = []
         self._flattened = False
         self.call_order = []          # records sequence of broker ops
+        self._qualify_ok = qualify_ok
+        self.qualified_requests = []  # contracts passed to qualifyContracts
         # Optional explicit open-trades state to return AFTER the close order is
         # placed (simulates a leg that survived / an ambiguous trade appearing).
         self._trades_after_close = trades_after_close
@@ -109,6 +119,13 @@ class _MockIB:
         if ambiguous_trade:
             # a trade whose contract/order cannot be resolved
             self._open_trades.append(_MockOpenTrade(None, None))
+
+    def qualifyContracts(self, contract):
+        self.call_order.append("qualifyContracts")
+        self.qualified_requests.append(contract)
+        if not self._qualify_ok:
+            return []
+        return [contract]
 
     def isConnected(self):
         return True
@@ -228,11 +245,13 @@ class TestAdapterFlattenGates(unittest.TestCase):
 
     def _broker(self, *, open_orders, positions, recon_after,
                 cancel_clears=True, account_ok=True, open_trades=None,
-                ambiguous_trade=False, trades_after_close=None):
+                ambiguous_trade=False, trades_after_close=None,
+                qualify_ok=True):
         mock_ib = _MockIB(open_orders=open_orders, positions=positions,
                           cancel_clears=cancel_clears, open_trades=open_trades,
                           ambiguous_trade=ambiguous_trade,
-                          trades_after_close=trades_after_close)
+                          trades_after_close=trades_after_close,
+                          qualify_ok=qualify_ok)
         return _FlattenBroker(mock_ib, recon_after, account_ok=account_ok), \
             mock_ib
 
@@ -438,6 +457,39 @@ class TestAdapterFlattenGates(unittest.TestCase):
         d = b.flatten_paper_position("AAA", confirm=True)
         self.assertFalse(d["flatten_confirmed"])
         self.assertTrue(any("residual target position" in w
+                            for w in d["warnings"]))
+
+    def test_close_uses_smart_routed_qualified_contract(self):
+        # Position contract is NASDAQ (direct); the close must be placed on a
+        # SMART-routed qualified contract, not the raw direct-exchange contract.
+        pos = _MockPosition("AAPL", 1)
+        # position contract is direct NASDAQ (as IBKR returns)
+        self.assertEqual(pos.contract.exchange, "NASDAQ")
+        b, mock_ib = self._broker(
+            open_orders=[], positions=[pos], recon_after=_clean_recon())
+        d = b.flatten_paper_position("AAPL", confirm=True)
+        # qualifyContracts was called with a SMART Stock for AAPL
+        self.assertEqual(len(mock_ib.qualified_requests), 1)
+        req = mock_ib.qualified_requests[0]
+        self.assertEqual(req.symbol, "AAPL")
+        self.assertEqual(req.exchange, "SMART")
+        self.assertEqual(req.currency, "USD")
+        # the close order was placed against the SMART-qualified contract
+        placed_contract, _order = mock_ib.placed[0]
+        self.assertEqual(placed_contract.exchange, "SMART")
+        self.assertTrue(d["close_order_placed"])
+
+    def test_qualify_failure_refuses_close(self):
+        # If SMART qualification fails, refuse to place the close and report
+        # flatten_confirmed=false (no order placed).
+        b, mock_ib = self._broker(
+            open_orders=[], positions=[_MockPosition("AAPL", 1)],
+            recon_after=_clean_recon(), qualify_ok=False)
+        d = b.flatten_paper_position("AAPL", confirm=True)
+        self.assertFalse(d["close_order_placed"])
+        self.assertFalse(d["flatten_confirmed"])
+        self.assertEqual(mock_ib.placed, [])
+        self.assertTrue(any("could not qualify SMART contract" in w
                             for w in d["warnings"]))
 
     def test_final_uses_same_connection_positions(self):

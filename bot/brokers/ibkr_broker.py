@@ -709,11 +709,24 @@ class IBKRBroker(BrokerAdapter):
                 net = float(target.position)
                 qty = abs(net)
                 close_action = 'SELL' if net > 0 else 'BUY'
-                contract = target.contract
+                # Do NOT reuse the raw position contract for the close: IBKR
+                # returns positions with a DIRECT exchange (e.g. 'NASDAQ'), and
+                # placing a MarketOrder on a direct-routed contract is blocked by
+                # API precautionary settings (error 10311). Build a SMART-routed
+                # contract for the symbol and qualify it, mirroring submit().
+                from ib_insync import Stock
+                close_contract = Stock(symbol, 'SMART', 'USD')
+                qualified = ib.qualifyContracts(close_contract)
+                if not qualified:
+                    result['warnings'].append(
+                        'could not qualify SMART contract for %s: refusing to '
+                        'close (flatten not confirmed)' % symbol)
+                    result['flatten_confirmed'] = False
+                    return result
                 close_order = MarketOrder(close_action, qty)
                 if account:
                     close_order.account = account
-                trade = ib.placeOrder(contract, close_order)
+                trade = ib.placeOrder(qualified[0], close_order)
                 result['close_order_placed'] = True
                 result['close_order_id'] = str(
                     getattr(trade.order, 'orderId', '?'))
