@@ -233,5 +233,87 @@ class TestSourceGuard(unittest.TestCase):
         self.assertNotIn("21:00", src)
 
 
+class TestUTCNormalisation(_DBCase):
+    def test_non_utc_aware_persisted_at_normalised(self):
+        # pass a non-UTC aware zone (Tokyo +09:00); stored value must be UTC
+        from zoneinfo import ZoneInfo
+        t = datetime(2026, 7, 3, 10, 30, tzinfo=ZoneInfo("Asia/Tokyo"))
+        r = C.persist_lifecycle(_b2b(), db_path=self.db, persisted_at_utc=t)
+        row = C.read_lifecycles(db_path=self.db)[0]
+        # 10:30 JST == 01:30 UTC
+        self.assertEqual(row["persisted_at_utc"], "2026-07-03T01:30:00+00:00")
+        self.assertTrue(row["persisted_at_utc"].endswith("+00:00"))
+        # market_session_date still from America/New_York: 01:30 UTC -> ET Jul 2
+        self.assertEqual(row["market_session_date"], "2026-07-02")
+
+    def test_london_bst_normalised_to_utc(self):
+        # London in BST (July) is +01:00; must convert, not store local
+        from zoneinfo import ZoneInfo
+        t = datetime(2026, 7, 3, 2, 30, tzinfo=ZoneInfo("Europe/London"))
+        r = C.persist_lifecycle(_b2b(), db_path=self.db, persisted_at_utc=t)
+        row = C.read_lifecycles(db_path=self.db)[0]
+        # 02:30 BST == 01:30 UTC
+        self.assertEqual(row["persisted_at_utc"], "2026-07-03T01:30:00+00:00")
+        self.assertEqual(row["market_session_date"], "2026-07-02")
+
+    def test_naive_persisted_at_refused(self):
+        with self.assertRaises(ValueError):
+            C.persist_lifecycle(_b2b(), db_path=self.db,
+                                persisted_at_utc=datetime(2026, 7, 3, 1, 30))
+
+    def test_source_event_ts_normalised_to_utc(self):
+        # a non-UTC source event ts must be normalised, not stored as-is
+        b = _b2b(submitted_at_utc="2026-07-03T10:30:00+09:00")  # Tokyo
+        C.persist_lifecycle(b, db_path=self.db)
+        row = C.read_lifecycles(db_path=self.db)[0]
+        self.assertEqual(row["submitted_at_utc"], "2026-07-03T01:30:00+00:00")
+        self.assertEqual(row["event_timestamps_available"], 1)
+
+    def test_naive_source_event_ts_becomes_null(self):
+        # a naive source event ts must NOT be assumed UTC -> stored null
+        b = _b2b(submitted_at_utc="2026-07-03T01:30:00")  # no tz
+        C.persist_lifecycle(b, db_path=self.db)
+        row = C.read_lifecycles(db_path=self.db)[0]
+        self.assertIsNone(row["submitted_at_utc"])
+        self.assertEqual(row["event_timestamps_available"], 0)
+
+
+class TestNoOrderIdReplaySafety(_DBCase):
+    def _failed(self, **over):
+        return _b2b(entry_order_id=None,
+                    entry_result_status="signal_only_skipped",
+                    entry_filled=False, position_observed=False,
+                    lifecycle_confirmed=False, **over)
+
+    def test_same_noid_payload_replayed_is_idempotent(self):
+        f = self._failed()
+        a = C.persist_lifecycle(
+            f, db_path=self.db,
+            persisted_at_utc=datetime(2026, 7, 2, 18, 0, tzinfo=timezone.utc))
+        b = C.persist_lifecycle(
+            f, db_path=self.db,
+            persisted_at_utc=datetime(2026, 7, 2, 19, 0, tzinfo=timezone.utc))
+        self.assertTrue(a["inserted"])
+        self.assertFalse(b["inserted"])
+        self.assertTrue(b["duplicate"])
+        self.assertEqual(len(C.read_lifecycles(db_path=self.db)), 1)
+
+    def test_different_noid_payloads_two_rows(self):
+        C.persist_lifecycle(
+            self._failed(symbol="AAPL"), db_path=self.db,
+            persisted_at_utc=datetime(2026, 7, 2, 18, 0, tzinfo=timezone.utc))
+        C.persist_lifecycle(
+            self._failed(symbol="MSFT"), db_path=self.db,
+            persisted_at_utc=datetime(2026, 7, 2, 18, 0, tzinfo=timezone.utc))
+        self.assertEqual(len(C.read_lifecycles(db_path=self.db)), 2)
+
+    def test_noid_id_is_payload_derived_not_time(self):
+        f = self._failed()
+        i1 = C.compute_lifecycle_id(f)
+        i2 = C.compute_lifecycle_id(f)
+        self.assertEqual(i1, i2)
+        self.assertTrue(i1.startswith("noid:"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

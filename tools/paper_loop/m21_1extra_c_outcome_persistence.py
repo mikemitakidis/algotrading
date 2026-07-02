@@ -54,6 +54,36 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """Normalise a timezone-aware datetime to UTC. Refuses naive datetimes so a
+    field named *_utc is always genuinely UTC (offset +00:00), never merely
+    'timezone-aware in some other zone'."""
+    if dt.tzinfo is None:
+        raise ValueError("datetime must be timezone-aware")
+    return dt.astimezone(timezone.utc)
+
+
+def _normalise_utc_str(value: Any) -> Optional[str]:
+    """Normalise a source-provided event timestamp to a UTC ISO string. Accepts
+    an ISO-8601 string or a datetime; returns None if absent or unparseable, so
+    a field named *_utc never holds a non-UTC value. A naive string/datetime is
+    treated as unusable (None) rather than silently assumed to be UTC."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        return None  # do not assume naive == UTC; leave the *_utc field null
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt is not None else None
 
@@ -117,18 +147,22 @@ def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def compute_lifecycle_id(b2b: Dict[str, Any], persisted_at_utc: datetime) -> str:
-    """Deterministic idempotency key. Prefer the real broker order id (stable,
-    unique per order); fall back to a hash of symbol + persist instant for
-    records that never got an order id (e.g. policy-blocked lifecycles), so
-    those are still de-duplicated per persist but never collide with real ones."""
+def compute_lifecycle_id(b2b: Dict[str, Any]) -> str:
+    """Deterministic idempotency key.
+
+    - Real accepted lifecycles use oid:<entry_order_id> (stable, unique per
+      order).
+    - Order-less lifecycles (e.g. policy-blocked) hash the STABLE source
+      payload, NOT the persist instant — so replaying the same saved B2b JSON
+      later is idempotent (one row), while two genuinely different order-less
+      payloads produce two rows. If future B2b adds real event timestamps or
+      attempt ids, those naturally live in the payload and distinguish separate
+      attempts."""
     oid = b2b.get("entry_order_id")
     if oid:
         return "oid:%s" % oid
-    basis = "%s|%s|%s" % (
-        b2b.get("symbol"), b2b.get("entry_result_status"),
-        persisted_at_utc.isoformat())
-    return "noid:" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+    basis = json.dumps(b2b, sort_keys=True)
+    return "noid:" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
 
 
 def _b(v: Any) -> int:
@@ -148,15 +182,17 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
         db_path = _default_db_path()
     if persisted_at_utc is None:
         persisted_at_utc = _utc_now()
-    if persisted_at_utc.tzinfo is None:
-        raise ValueError("persisted_at_utc must be timezone-aware UTC")
+    # normalise to genuine UTC (refuses naive); a field named *_utc must be UTC
+    persisted_at_utc = _as_utc(persisted_at_utc)
 
-    lifecycle_id = compute_lifecycle_id(b2b, persisted_at_utc)
+    lifecycle_id = compute_lifecycle_id(b2b)
 
-    # honest event timestamps: only use them if the source JSON actually has them
-    submitted = b2b.get("submitted_at_utc")
-    observed = b2b.get("observed_at_utc")
-    flattened = b2b.get("flattened_at_utc")
+    # honest event timestamps: only stored if the source JSON provides a REAL
+    # value, and normalised to UTC — never store a non-UTC string in a _utc
+    # field, and never assume a naive value is UTC (those become null).
+    submitted = _normalise_utc_str(b2b.get("submitted_at_utc"))
+    observed = _normalise_utc_str(b2b.get("observed_at_utc"))
+    flattened = _normalise_utc_str(b2b.get("flattened_at_utc"))
     event_available = any(x is not None for x in (submitted, observed, flattened))
 
     session_date = market_session_date_for(persisted_at_utc)
