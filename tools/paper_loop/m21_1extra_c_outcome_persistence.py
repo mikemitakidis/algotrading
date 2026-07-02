@@ -19,9 +19,12 @@ instants. C stamps persist-time only:
   timestamp_source  = 'c_persist_time_only'
   event_timestamps_available = False
 
-DST safety: the exchange session date is derived by converting the UTC instant
-to America/New_York via zoneinfo (stdlib, DST-correct) — never a fixed UK / VPS /
-Greece / UTC offset, never a hardcoded session window.
+DST safety: the market session date is derived by converting the UTC instant to
+the record's exchange_timezone via zoneinfo (stdlib, DST-correct) — never a
+fixed UK / VPS / Greece / UTC offset, never a hardcoded session window. The
+default exchange_timezone is America/New_York (US_EQ); a record may carry
+another IANA zone (e.g. Europe/London, Asia/Tokyo) and its session date is then
+derived in that zone.
 """
 from __future__ import annotations
 
@@ -334,18 +337,19 @@ def _render_report(summary: Dict[str, Any], data_source: str) -> str:
              "NOT hold-to-exit P&L edge outcomes. Timestamps are persist-time "
              "only (timestamp_source=c_persist_time_only, "
              "event_timestamps_available=false); C does not claim to know exact "
-             "broker submit/observe/flatten instants. The exchange session date "
-             "is derived from the UTC instant via America/New_York (zoneinfo, "
-             "DST-correct), never a fixed offset. C does not schedule, hold "
-             "trades open, or touch the dashboard — the market-clock guard is "
-             "deferred to D (market_clock_checked=false).**")
+             "broker submit/observe/flatten instants. market_session_date is "
+             "derived from the UTC instant using the record's exchange_timezone "
+             "via zoneinfo (DST-correct), default America/New_York for US_EQ, "
+             "never a fixed offset. C does not schedule, hold trades open, or "
+             "touch the dashboard — the market-clock guard is deferred to D "
+             "(market_clock_checked=false).**")
     L.append("")
     L.append("> **C does NOT check public holidays, early closes, weekends, "
              "lunch breaks, or market-open status. Those checks are explicitly "
-             "deferred to D. C only stores DST-safe UTC timestamps, an "
-             "America/New_York session date, and market-identity fields "
-             "(market_calendar_id, exchange_timezone) so D can enforce a real "
-             "per-exchange market-open guard.**")
+             "deferred to D. C only stores DST-safe UTC timestamps, market "
+             "identity fields (market_calendar_id, exchange_timezone), and a "
+             "session date derived from the record's exchange_timezone — so D "
+             "can enforce a real per-exchange market-open guard.**")
     L.append("")
     return "\n".join(L)
 

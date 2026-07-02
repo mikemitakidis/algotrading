@@ -7,7 +7,8 @@ Uses a temp SQLite DB; no gateway needed. Proves:
   - failed lifecycles persisted truthfully (not dropped)
   - honest labels: record_kind / is_edge_outcome / timestamp_source /
     event_timestamps_available, and null event timestamps when absent
-  - DST correctness: market_session_date derived from America/New_York, proven
+  - DST correctness: market_session_date derived from the record's
+    exchange_timezone (default America/New_York for US_EQ), proven in the US/UK
     in the US/UK DST divergence windows (NOT just normal dates)
   - reader summary counts correct
   - no writes outside paper_lifecycles
