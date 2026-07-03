@@ -438,6 +438,35 @@ class TestDisablePreservesNonTarget(_Base):
         self.assertFalse(p["ibkr_paper"]["auto_trading_enabled"])
 
 
+class TestSourceHygiene(_Base):
+    """Guard against stale/dead design fragments in the authorization file."""
+
+    def _src(self):
+        with open("tools/paper_loop/m21_1extra_d0_auth_cli.py") as fh:
+            return fh.read()
+
+    def test_old_normaliser_name_absent(self):
+        self.assertNotIn("_normalise_policy_for_d0", self._src())
+
+    def test_stale_base_version_line_absent(self):
+        self.assertNotIn('base["version"] = policy.get', self._src())
+
+    def test_no_base_dict_references(self):
+        # the old destructive normaliser built a local 'base' dict; none remain.
+        self.assertNotIn('base[', self._src())
+
+    def test_no_unreachable_code_after_return(self):
+        import ast
+        tree = ast.parse(self._src())
+        offenders = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                for stmt in node.body[:-1]:
+                    if isinstance(stmt, ast.Return):
+                        offenders.append((node.name, stmt.lineno))
+        self.assertEqual(offenders, [])
+
+
 class TestNoAssertForSafety(_Base):
     """Blocker 3: safety must not depend on `assert` (stripped under -O)."""
 

@@ -42,15 +42,16 @@ real operator control.
   validation refusal);
 - **bounded window**: duration `0 < h <= 8.0` (hard cap); genuine UTC `+00:00`
   expiries;
-- **old-policy safe (Blocker 1 fix):** a `_normalise_policy_for_d0` step rebuilds
-  the policy on the `DEFAULT_POLICY` structure before mutation, so an old
-  pre-D0 `signals.db` row missing `ibkr_paper` / `ibkr_live` /
-  `global.auto_trading_enabled_until_utc` is handled without `KeyError`.
-  Normalisation preserves capital/limits/kill_switch but forces every
-  authorization field disabled/null — it **never** carries a legacy enable into
-  a lane and **never** enables `ibkr_live`;
+- **old-policy safe (add-missing-only):** an `_ensure_d0_fields` step adds any
+  missing D0 schema fields (`ibkr_paper` / `ibkr_live` /
+  `global.auto_trading_enabled_until_utc`) to an old pre-D0 `signals.db` row so
+  it can be mutated + validated without `KeyError`. It is **add-missing-only**:
+  it **never modifies an existing value**, so no non-target flag is ever
+  silently changed. `enable` sets only its four target fields and refuses
+  hostile/non-target states first; `disable` clears only its four target
+  fields;
 - validates via `validate_policy` before writing (rejects malformed/non-UTC
-  expiry);
+  expiry, or a malformed non-target field, as a clean audited refusal);
 - **atomic + auditable by construction (Blocker 2 fix):** on `enable`/`disable`
   the audit row and the policy row are written on the **same `signals.db`
   connection in one transaction and committed together**. If the audit write
