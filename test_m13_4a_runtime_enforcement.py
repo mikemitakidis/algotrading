@@ -180,21 +180,48 @@ class TestRuntimePolicyCache(unittest.TestCase):
         self.assertEqual(reason, REASON_BROKER_KILL_SWITCH)
 
     def test_cache_returns_same_value_within_ttl(self):
-        """Calls within TTL must not re-read the DB. We prove this
-        by deleting the DB after the first call and asserting the
-        second call still returns the cached value."""
+        """D0: a cached REFUSAL is reused within TTL (no DB re-read), but a
+        cached ALLOWED is never reused. Prove the refusal path here: a blocked
+        result is cached and served again within TTL even if the DB vanishes."""
+        # global-disabled policy for paper -> a REFUSAL
+        db = _build_policy_db(_global_kill_policy_for("paper"))
+        try:
+            r1 = rt.get_signal_only_reason(
+                "paper", db_path=db, ttl_sec=5.0, now=100.0)
+            self.assertTrue(r1[0])  # blocked
+        finally:
+            os.unlink(db)
+        # DB gone — a second call within TTL reuses the cached REFUSAL.
+        r2 = rt.get_signal_only_reason(
+            "paper", db_path=db, ttl_sec=5.0, now=102.0)  # +2s, < 5s
+        self.assertEqual(r1, r2)
+        self.assertTrue(r2[0])
+
+    def test_cached_allowed_is_never_reused_within_ttl(self):
+        """D0 blocker fix: a cached ALLOWED must NOT be reused within TTL. A
+        time-boxed authorization can expire between cache write and now, so the
+        allowed result is always re-checked against the DB."""
+        # T0: enabled/allowed for paper (global enabled + valid expiry)
         db = _build_policy_db(_enabled_policy_for("paper"))
         try:
             r1 = rt.get_signal_only_reason(
                 "paper", db_path=db, ttl_sec=5.0, now=100.0)
+            self.assertFalse(r1[0])  # allowed
+            # Mutate DB: global kill (now a refusal).
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "UPDATE portfolio_risk_state SET value=? WHERE key=?",
+                (json.dumps(_global_kill_policy_for("paper")),
+                 "broker_allocation_policy"))
+            conn.commit()
+            conn.close()
+            # WITHIN TTL: cached allow must NOT be served — re-read sees the kill.
+            r2 = rt.get_signal_only_reason(
+                "paper", db_path=db, ttl_sec=5.0, now=101.0)  # +1s, < 5s
+            self.assertTrue(r2[0], "cached allowed must not be reused")
+            self.assertEqual(r2[1], REASON_GLOBAL_KILL_SWITCH)
         finally:
             os.unlink(db)
-        # DB now gone — but a second call within TTL must NOT
-        # attempt to read it.
-        r2 = rt.get_signal_only_reason(
-            "paper", db_path=db, ttl_sec=5.0, now=102.0)  # +2s, < 5s
-        self.assertEqual(r1, r2)
-        self.assertFalse(r2[0])
 
     def test_cache_refreshes_after_ttl(self):
         """After TTL elapses, a re-read against a CHANGED DB must
@@ -214,11 +241,12 @@ class TestRuntimePolicyCache(unittest.TestCase):
             )
             conn.commit()
             conn.close()
-            # Within TTL: still cached as enabled.
+            # D0: a cached ALLOWED is NOT served within TTL — the very next
+            # call re-reads and sees the kill (was: cached-enabled within TTL).
             r_cached = rt.get_signal_only_reason(
                 "paper", db_path=db, ttl_sec=5.0, now=104.0)
-            self.assertFalse(r_cached[0])
-            # Past TTL: must re-read and see kill_switch active.
+            self.assertTrue(r_cached[0])
+            # Past TTL: also re-reads and sees kill_switch active.
             r_refreshed = rt.get_signal_only_reason(
                 "paper", db_path=db, ttl_sec=5.0, now=110.0)
             self.assertTrue(r_refreshed[0])
@@ -262,31 +290,44 @@ class TestCorrectionAFailSafe(unittest.TestCase):
                       "REASON_POLICY_UNAVAILABLE must be in the "
                       "SignalOnlyBroker VALID_REASONS set.")
 
-    def test_runtime_policy_uses_cache_when_db_fails_and_cache_exists(self):
-        """Cached policy exists from prior successful read; next
-        read fails. Must return cached value + log warning."""
-        # First read: success, cache populated with skip=False.
+    def test_db_fail_after_allowed_does_not_keep_allowing(self):
+        """D0 blocker fix: if a prior read was ALLOWED and the DB then fails,
+        the cached allow must NOT be served — we fail closed to
+        policy_unavailable rather than keep permitting on an unconfirmable
+        authorization."""
         db = _build_policy_db(_enabled_policy_for("paper"))
         try:
             r1 = rt.get_signal_only_reason(
                 "paper", db_path=db, ttl_sec=5.0, now=100.0)
-            self.assertFalse(r1[0])
+            self.assertFalse(r1[0])  # allowed
         finally:
             os.unlink(db)
-
-        # Second read past TTL: simulate DB read failure via patch.
-        # Cache age = 10s, well under STALE_CACHE_MAX_AGE_SEC = 300s.
         with patch.object(rt, "_read_policy_from_db", return_value=None):
             with self.assertLogs("bot.runtime_policy", level="WARNING") as cm:
                 skip, reason = rt.get_signal_only_reason(
                     "paper", db_path=db, ttl_sec=5.0, now=110.0)
-        self.assertFalse(skip,
-                         "Must use cached (skip=False), not fail-safe, "
-                         "when cache exists and is reasonably fresh.")
-        self.assertEqual(reason, "")
-        self.assertTrue(any("using cached policy" in m
-                            for m in cm.output),
-                        "Must log a warning indicating cache fallback.")
+        self.assertTrue(skip, "cached ALLOWED must not survive a DB failure")
+        self.assertEqual(reason, REASON_POLICY_UNAVAILABLE)
+        self.assertTrue(any("refusing to serve a stale allow" in m
+                            for m in cm.output))
+
+    def test_db_fail_after_refusal_reuses_cached_refusal(self):
+        """A cached REFUSAL may still be served on DB failure within the stale
+        window — safe, since it only withholds authorization."""
+        db = _build_policy_db(_global_kill_policy_for("paper"))
+        try:
+            r1 = rt.get_signal_only_reason(
+                "paper", db_path=db, ttl_sec=5.0, now=100.0)
+            self.assertTrue(r1[0])  # blocked
+        finally:
+            os.unlink(db)
+        with patch.object(rt, "_read_policy_from_db", return_value=None):
+            with self.assertLogs("bot.runtime_policy", level="WARNING") as cm:
+                skip, reason = rt.get_signal_only_reason(
+                    "paper", db_path=db, ttl_sec=5.0, now=110.0)
+        self.assertTrue(skip)
+        self.assertEqual(reason, r1[1])
+        self.assertTrue(any("using cached REFUSAL" in m for m in cm.output))
 
     def test_stale_cache_too_old_fails_safe(self):
         """If cached policy is too old (> STALE_CACHE_MAX_AGE_SEC)

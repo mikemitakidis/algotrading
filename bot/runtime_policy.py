@@ -171,14 +171,17 @@ def get_signal_only_reason(
     Behaviour
     ─────────
     1. Look up cache entry for `broker_name`.
-    2. If cache fresh (age < ttl_sec) → return cached value.
+    2. If cache fresh (age < ttl_sec) AND cached value is a REFUSAL
+       (skip=True) → return it. A cached ALLOWED (skip=False) is NEVER
+       reused — a time-boxed authorization can expire between the cache
+       write and now, so an allow is always re-checked against the DB.
     3. Otherwise read policy from DB.
        3a. Read succeeds → compute (skip, reason) via
            determine_signal_only_reason, update cache, return.
-       3b. Read fails → CORRECTION A:
-           * if a cache entry exists AND its age <
-             STALE_CACHE_MAX_AGE_SEC → return cached value, log
-             warning ("DB unavailable, using cached policy").
+       3b. Read fails →
+           * if a cached REFUSAL exists AND its age <
+             STALE_CACHE_MAX_AGE_SEC → return it, log warning.
+           * a cached ALLOWED is NEVER served on DB failure.
            * else → return (True, REASON_POLICY_UNAVAILABLE). Never
              fail-open.
 
@@ -203,10 +206,16 @@ def get_signal_only_reason(
 
     with _lock:
         entry = _cache.get(broker_name)
-        # 2. Fresh-cache fast path.
+        # 2. Fresh-cache fast path — but NEVER reuse a cached ALLOWED result.
+        # A time-boxed authorization can expire between the cache write and now;
+        # serving a cached (skip=False) would permit submits past the operator's
+        # expiry. So an allowed result is ALWAYS re-checked against the DB.
+        # Cached refusals (skip=True) are safe to reuse within the TTL (they only
+        # delay re-enabling, never permit).
         if entry is not None:
             age = now - entry["fetched_at"]
-            if age < ttl_sec:
+            cached_skip = entry["value"][0]
+            if age < ttl_sec and cached_skip is True:
                 return entry["value"]
 
         # 3. Refresh.
@@ -214,19 +223,29 @@ def get_signal_only_reason(
         policy = _read_policy_from_db(resolved_path)
 
         if policy is None:
-            # DB read failed. Correction A: prefer cached, else fail-safe.
+            # DB read failed. Prefer a cached REFUSAL (safe), else fail-safe.
+            # A cached ALLOWED must NEVER be served on DB failure: if the DB
+            # cannot confirm authorization is still valid and unexpired, we fail
+            # closed rather than keep permitting on a stale yes.
             if entry is not None:
                 age = now - entry["fetched_at"]
-                if age < STALE_CACHE_MAX_AGE_SEC:
+                cached_skip = entry["value"][0]
+                if cached_skip is True and age < STALE_CACHE_MAX_AGE_SEC:
                     log.warning("[runtime_policy] DB read failed; "
-                                 "using cached policy for %s (age=%.1fs)",
+                                 "using cached REFUSAL for %s (age=%.1fs)",
                                  broker_name, age)
                     return entry["value"]
-                log.warning("[runtime_policy] DB read failed and "
-                             "cached policy for %s is too stale "
-                             "(age=%.1fs > %ds); failing safe "
-                             "(policy_unavailable)",
-                             broker_name, age, STALE_CACHE_MAX_AGE_SEC)
+                if cached_skip is False:
+                    log.warning("[runtime_policy] DB read failed and cached "
+                                 "result for %s is ALLOWED; refusing to serve a "
+                                 "stale allow — failing safe "
+                                 "(policy_unavailable)", broker_name)
+                else:
+                    log.warning("[runtime_policy] DB read failed and "
+                                 "cached policy for %s is too stale "
+                                 "(age=%.1fs > %ds); failing safe "
+                                 "(policy_unavailable)",
+                                 broker_name, age, STALE_CACHE_MAX_AGE_SEC)
             else:
                 log.warning("[runtime_policy] DB read failed and no "
                              "cached policy for %s; failing safe "

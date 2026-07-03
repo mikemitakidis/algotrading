@@ -4344,6 +4344,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m13_5_signal_only.py",
             "test_m14_e_engine.py",
             "test_m14_f_preflight.py",
+            "test_m13_4a_allocation.py",
         }
         # Per-sub-milestone closeout docs: docs/M17_A_closeout.md,
         # docs/M17_B_closeout.md, etc.

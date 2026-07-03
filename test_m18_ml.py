@@ -10597,6 +10597,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m13_5_signal_only.py",
             "test_m14_e_engine.py",
             "test_m14_f_preflight.py",
+            "test_m13_4a_allocation.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
