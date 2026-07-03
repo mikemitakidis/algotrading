@@ -300,7 +300,10 @@ class TestValidatorRouting(unittest.TestCase):
         self.assertTrue(result.ok, msg=f"errors={result.errors}")
         # And policy alone is still insufficient to enable live trading:
         # without etoro_live_enabled=True, is_auto_trading_allowed says no.
+        from datetime import datetime, timezone, timedelta
         p["global"]["auto_trading_enabled"] = True
+        p["global"]["auto_trading_enabled_until_utc"] = (
+            datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         p["etoro"]["auto_trading_enabled"] = True
         ok, reason = is_auto_trading_allowed(p, "etoro_real")
         self.assertFalse(ok)
@@ -462,9 +465,14 @@ class TestPersistence(unittest.TestCase):
 
 class TestReadHelpers(unittest.TestCase):
     def _enable(self) -> dict:
+        from datetime import datetime, timezone, timedelta
+        fut = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         p = _good()
         p["global"]["auto_trading_enabled"] = True
-        p["ibkr"]["auto_trading_enabled"] = True
+        p["global"]["auto_trading_enabled_until_utc"] = fut
+        # D0: authorize the ibkr_paper LANE (not the legacy ibkr block).
+        p["ibkr_paper"]["auto_trading_enabled"] = True
+        p["ibkr_paper"]["auto_trading_enabled_until_utc"] = fut
         p["etoro"]["auto_trading_enabled"] = True
         return p
 
@@ -511,14 +519,14 @@ class TestReadHelpers(unittest.TestCase):
 
     def test_auto_trading_broker_disabled(self):
         p = self._enable()
-        p["ibkr"]["auto_trading_enabled"] = False
+        p["ibkr_paper"]["auto_trading_enabled"] = False
         ok, reason = is_auto_trading_allowed(p, "ibkr_paper")
         self.assertFalse(ok)
         self.assertEqual(reason, "broker_disabled")
 
     def test_auto_trading_broker_kill_switch(self):
         p = self._enable()
-        p["ibkr"]["kill_switch"] = True
+        p["ibkr_paper"]["kill_switch"] = True
         ok, reason = is_auto_trading_allowed(p, "ibkr_paper")
         self.assertFalse(ok)
         self.assertEqual(reason, "broker_kill_switch")

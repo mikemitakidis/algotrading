@@ -24,7 +24,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -168,18 +168,22 @@ def _is_non_negative_int(v: Any) -> bool:
 
 def _is_valid_until_utc(v: Any) -> bool:
     """auto_trading_enabled_until_utc may be None (no authorization window) or a
-    parseable ISO-8601 string. Validation only checks SHAPE; the reader is what
-    enforces unexpired-ness at read time. A non-None, non-string, or unparseable
-    value is invalid."""
+    genuine UTC ISO-8601 string. Because the field is named *_utc, a naive
+    (tz-less) string or a non-UTC offset (e.g. +02:00) is INVALID — only a UTC
+    offset (+00:00) or a trailing 'Z' is accepted. Validation checks shape only;
+    the reader enforces unexpired-ness at read time."""
     if v is None:
         return True
     if not isinstance(v, str):
         return False
+    parse_str = v[:-1] + "+00:00" if v.endswith("Z") else v
     try:
-        datetime.fromisoformat(v)
-        return True
+        dt = datetime.fromisoformat(parse_str)
     except ValueError:
         return False
+    if dt.tzinfo is None:
+        return False
+    return dt.utcoffset() == timedelta(0)
 
 
 def _validate_lane_block(name: str, block: Any, errors: list) -> None:
@@ -501,6 +505,24 @@ def is_broker_allowed(policy: dict, broker_name: str) -> bool:
     return broker_name in allowed
 
 
+def _until_utc_active(block: dict) -> bool:
+    """True only if block['auto_trading_enabled_until_utc'] is a genuine UTC
+    ISO string (+00:00 / Z, not naive, not a non-UTC offset) AND is strictly in
+    the future. Fail-closed: any missing/malformed/naive/non-UTC/expired value
+    returns False."""
+    raw = block.get("auto_trading_enabled_until_utc")
+    if not isinstance(raw, str):
+        return False
+    parse_str = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        until = datetime.fromisoformat(parse_str)
+    except ValueError:
+        return False
+    if until.tzinfo is None or until.utcoffset() != timedelta(0):
+        return False
+    return until.astimezone(timezone.utc) > datetime.now(timezone.utc)
+
+
 def is_auto_trading_allowed(policy: dict, broker_name: str) -> tuple[bool, str]:
     """Return (allowed, reason). False with named reason when blocked.
 
@@ -527,6 +549,9 @@ def is_auto_trading_allowed(policy: dict, broker_name: str) -> tuple[bool, str]:
         return False, "global_kill_switch"
     if g.get("auto_trading_enabled") is not True:
         return False, "global_disabled"
+    # D0: global authorization is time-boxed (fail-closed).
+    if not _until_utc_active(g):
+        return False, "global_expiry_invalid_or_expired"
 
     routing = policy.get("routing") or {}
     # Strict: routing.etoro_live_enabled must be True identity, not just truthy.
@@ -542,12 +567,26 @@ def is_auto_trading_allowed(policy: dict, broker_name: str) -> tuple[bool, str]:
     if not is_broker_allowed(policy, broker_name):
         return False, "broker_not_allowed"
 
-    # Map broker_name -> broker block. paper has no block; treat as
-    # globally controlled only.
+    # D0: resolve broker_name to its authorization block. ibkr_paper/ibkr_live
+    # use their OWN lean lane blocks (with time-box), NOT the legacy shared
+    # `ibkr` block. Bare "ibkr" is not an authorization lane. paper has no block.
+    if broker_name in ("ibkr_paper", "ibkr_live"):
+        lane = policy.get(broker_name)
+        if not isinstance(lane, dict):
+            return False, "broker_block_missing"
+        if lane.get("kill_switch") is True:
+            return False, "broker_kill_switch"
+        if lane.get("auto_trading_enabled") is not True:
+            return False, "broker_disabled"
+        if not _until_utc_active(lane):
+            return False, "lane_expiry_invalid_or_expired"
+        return True, "ok"
+    if broker_name == "ibkr":
+        # legacy shared name is not an authorization lane.
+        return False, "lane_unsupported"
+
     block_key = None
-    if broker_name in ("ibkr_paper", "ibkr_live", "ibkr"):
-        block_key = "ibkr"
-    elif broker_name in ("etoro_paper", "etoro_real"):
+    if broker_name in ("etoro_paper", "etoro_real"):
         block_key = "etoro"
 
     if block_key is None:

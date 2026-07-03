@@ -22,7 +22,7 @@ broker.submit() is unaffected, which preserves Telegram alerting.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bot.brokers.base import BrokerAdapter, OrderIntent, OrderResult
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,16 @@ VALID_REASONS = {
     REASON_POLICY_MISSING,
     REASON_GENERIC,
     REASON_POLICY_UNAVAILABLE,
+    # M21.1extra-D0 time-boxed / per-lane authorization reason codes. These
+    # MUST be accepted by SignalOnlyBroker so the reader's new return values can
+    # safely wrap the concrete broker instead of crashing the factory.
+    REASON_GLOBAL_EXPIRY_MISSING,
+    REASON_GLOBAL_EXPIRY_MALFORMED,
+    REASON_GLOBAL_EXPIRED,
+    REASON_LANE_EXPIRY_MISSING,
+    REASON_LANE_EXPIRY_MALFORMED,
+    REASON_LANE_EXPIRED,
+    REASON_LANE_UNSUPPORTED,
 }
 
 
@@ -154,12 +164,19 @@ def _authorization_expiry_reason(block: dict, missing_reason: str,
         return missing_reason
     if not isinstance(raw, str):
         return malformed_reason
+    # Accept 'Z' as UTC (fromisoformat pre-3.11 doesn't).
+    parse_str = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     try:
-        until = datetime.fromisoformat(raw)
+        until = datetime.fromisoformat(parse_str)
     except ValueError:
         return malformed_reason
     if until.tzinfo is None:
         # a naive expiry is ambiguous — refuse rather than assume UTC
+        return malformed_reason
+    # Field is named *_utc: require a genuine UTC offset (+00:00 / Z), not merely
+    # any tz-aware value. A non-UTC offset (e.g. +02:00) is refused so the stored
+    # value can never misrepresent the window.
+    if until.utcoffset() != timedelta(0):
         return malformed_reason
     now = datetime.now(timezone.utc)
     if until.astimezone(timezone.utc) <= now:

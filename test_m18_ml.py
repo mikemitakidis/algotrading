@@ -10589,6 +10589,14 @@ class G10_Hygiene(unittest.TestCase):
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
             "bot/brokers/ibkr_broker.py",
+            # M21.1extra-D0: time-boxed per-lane authorization edits.
+            "bot/broker_allocation.py",
+            "bot/etoro/signal_only_broker.py",
+            # M21.1extra-D0: migrated policy-consuming test suites.
+            "test_m13_4a_runtime_enforcement.py",
+            "test_m13_5_signal_only.py",
+            "test_m14_e_engine.py",
+            "test_m14_f_preflight.py",
         }
         allowed_doc_regex = re.compile(
             r"^docs/M1[78]_[A-Za-z]\w*(?:_[\w]+)?\.md$")
