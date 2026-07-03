@@ -10592,6 +10592,7 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1extra-D0: time-boxed per-lane authorization edits.
             "bot/broker_allocation.py",
             "bot/etoro/signal_only_broker.py",
+            "bot/runtime_policy.py",
             # M21.1extra-D0: migrated policy-consuming test suites.
             "test_m13_4a_runtime_enforcement.py",
             "test_m13_5_signal_only.py",

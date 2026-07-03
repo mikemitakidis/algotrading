@@ -19,21 +19,22 @@ handful of DB reads.
 The TTL is overridable via env var `M13_4A_RUNTIME_POLICY_TTL_SEC`.
 Set to 0 for strictest behaviour (re-check every submit, no cache).
 
-Fail-safe semantics (audit Correction A)
+Fail-safe semantics (audit Correction A + D0 cache-safety)
 ────────────────────────────────────────
-On DB read failure the module returns the safest available answer:
+On DB read failure the module returns the safest available answer.
+Only a cached REFUSAL (skip=True) may be reused; a cached ALLOWED
+(skip=False) is NEVER reused, because a time-boxed authorization may
+have expired since it was cached (D0).
 
-  * If a cached policy exists from a prior successful read AND that
-    cache entry is within `STALE_CACHE_MAX_AGE_SEC` (5 minutes) of
-    the failed read → return the cached (skip, reason) and emit
-    a warning log. Operator gets coverage even during transient DB
-    blips. After 5 minutes of continuous failure the cache itself
-    is considered too stale to rely on.
-  * If NO cached policy exists, OR the cache is too stale →
-    fail-SAFE: return (True, REASON_POLICY_UNAVAILABLE). The broker
-    submit paths interpret this as "skip — policy state unknown".
+  * If a cached REFUSAL exists from a prior read AND that cache entry
+    is within `STALE_CACHE_MAX_AGE_SEC` (5 minutes) of the failed read
+    → return the cached (skip, reason) and emit a warning log. A
+    refusal only withholds authorization, so reusing it is safe. After
+    5 minutes of continuous failure the cache is too stale to rely on.
+  * If the cached value is ALLOWED, OR no cache exists, OR the cache is
+    too stale → fail-SAFE: return (True, REASON_POLICY_UNAVAILABLE).
     Never fail-OPEN: a safety surface must not assume "ok to trade"
-    when it cannot confirm policy state.
+    when it cannot freshly confirm an unexpired authorization.
 
 Public API
 ──────────
