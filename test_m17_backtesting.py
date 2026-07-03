@@ -4340,6 +4340,8 @@ class G10_Hygiene(unittest.TestCase):
             "bot/broker_allocation.py",
             "bot/etoro/signal_only_broker.py",
             "bot/runtime_policy.py",
+            "test_m21_1extra_d0_auth_cli.py",
+            "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.
             "test_m13_4a_runtime_enforcement.py",
             "test_m13_5_signal_only.py",
