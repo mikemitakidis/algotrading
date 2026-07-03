@@ -135,19 +135,30 @@ class TestOldPolicyNormalisation(_Base):
         self.assertTrue(validate_policy(p).ok)
 
     def test_legacy_ibkr_enabled_not_copied_to_paper(self):
+        # _ensure_d0_fields adds missing lanes disabled; a legacy ibkr enable is
+        # never propagated into a lane.
         _write_raw_policy(self.conn, _old_pre_d0_policy(legacy_ibkr_enabled=True))
-        norm = CLI._normalise_policy_for_d0(load_policy(self.conn))
+        norm = CLI._ensure_d0_fields(load_policy(self.conn))
         self.assertFalse(norm["ibkr_paper"]["auto_trading_enabled"])
 
     def test_legacy_ibkr_enabled_not_copied_to_live(self):
         _write_raw_policy(self.conn, _old_pre_d0_policy(legacy_ibkr_enabled=True))
-        norm = CLI._normalise_policy_for_d0(load_policy(self.conn))
+        norm = CLI._ensure_d0_fields(load_policy(self.conn))
         self.assertFalse(norm["ibkr_live"]["auto_trading_enabled"])
 
-    def test_normalised_policy_validates(self):
+    def test_ensure_d0_fields_validates(self):
         _write_raw_policy(self.conn, _old_pre_d0_policy(legacy_ibkr_enabled=True))
-        norm = CLI._normalise_policy_for_d0(load_policy(self.conn))
+        norm = CLI._ensure_d0_fields(load_policy(self.conn))
         self.assertTrue(validate_policy(norm).ok)
+
+    def test_ensure_d0_fields_preserves_existing_values(self):
+        # add-missing-only: it must NOT change an existing non-target value.
+        pol = _old_pre_d0_policy()
+        pol["etoro"]["auto_trading_enabled"] = True
+        pol["routing"]["etoro_live_enabled"] = True
+        norm = CLI._ensure_d0_fields(pol)
+        self.assertTrue(norm["etoro"]["auto_trading_enabled"])
+        self.assertTrue(norm["routing"]["etoro_live_enabled"])
 
 
 class TestAtomicity(_Base):
@@ -241,8 +252,8 @@ class TestNonTargetRefusal(_Base):
 
     def _seed(self, **flags):
         pol = _old_pre_d0_policy()
-        # normalise to D0 shape first so we can set lane/flags cleanly
-        base = CLI._normalise_policy_for_d0(pol)
+        base = CLI._ensure_d0_fields(pol)  # add D0 fields, preserve values
+        base["global"]["auto_trading_enabled"] = False  # isolate the flag under test
         for k, v in flags.items():
             d = base
             parts = k.split(".")
@@ -316,24 +327,126 @@ class TestAllLanesAfterEnable(_Base):
 
 
 class TestSafetyBooleanStrictness(_Base):
-    """Safety flags must use `is True`, never bool(): string 'false' is truthy."""
+    """Safety flags use `is True`, never bool(): a truthy string like 'false'
+    must never be read as an active/enabled flag."""
 
-    def test_string_false_not_treated_as_true(self):
-        norm = CLI._normalise_policy_for_d0({
-            "global": {"kill_switch": "false"},
-            "ibkr": {"auto_trading_enabled": "false"},
-            "ibkr_paper": {"kill_switch": "false"},
-        })
-        self.assertIs(norm["global"]["kill_switch"], False)
-        self.assertIs(norm["ibkr"]["auto_trading_enabled"], False)
-        self.assertIs(norm["ibkr_paper"]["kill_switch"], False)
+    def test_string_false_kill_not_treated_as_active_but_refused_as_malformed(self):
+        # A raw kill_switch of the string "false" is NOT `is True`, so it is not
+        # treated as an active kill switch — but it is a malformed boolean, so
+        # enable refuses cleanly at validation rather than writing bad state.
+        pol = _old_pre_d0_policy()
+        pol["global"]["auto_trading_enabled"] = False
+        pol["global"]["kill_switch"] = "false"
+        _write_raw_policy(self.conn, pol)
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable(hours=1)
+        self.assertFalse(
+            load_policy(self.conn)["global"]["auto_trading_enabled"])
+
+    def test_string_true_ibkr_live_not_treated_as_enabled(self):
+        # "true" (string) is not `is True`; the non-target refusal must use `is
+        # True`, so a string does not trip it — but a real bool True does.
+        pol = _old_pre_d0_policy()
+        base = CLI._ensure_d0_fields(pol)
+        base["ibkr_live"]["auto_trading_enabled"] = "true"  # string, not True
+        _write_raw_policy(self.conn, base)
+        # string "true" is not `is True` -> not treated as active; enable
+        # proceeds past the refusal check, then validation rejects the non-bool.
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable(hours=1)
 
     def test_no_bool_calls_on_safety_fields_in_source(self):
-        import ast
         with open("tools/paper_loop/m21_1extra_d0_auth_cli.py") as fh:
             src = fh.read()
-        # the normalisation must not use bool(...) for authorization/kill flags
         self.assertNotIn("bool(", src)
+
+
+class TestKillSwitchRefusal(_Base):
+    """Blocker 1: enable must refuse if a kill switch is active (else the reader
+    would block ibkr_paper → a fake ENABLED)."""
+
+    def test_refuse_if_global_kill_switch(self):
+        pol = CLI._ensure_d0_fields(_old_pre_d0_policy())
+        pol["global"]["auto_trading_enabled"] = False
+        pol["global"]["kill_switch"] = True
+        _write_raw_policy(self.conn, pol)
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable(hours=1)
+        p = load_policy(self.conn)
+        self.assertFalse(p["global"]["auto_trading_enabled"])
+        self.assertIn("refused",
+                      [r["action"] for r in CLI.read_audit(self.conn)])
+
+    def test_refuse_if_ibkr_paper_kill_switch(self):
+        pol = CLI._ensure_d0_fields(_old_pre_d0_policy())
+        pol["global"]["auto_trading_enabled"] = False
+        pol["ibkr_paper"]["kill_switch"] = True
+        _write_raw_policy(self.conn, pol)
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable(hours=1)
+        self.assertFalse(
+            load_policy(self.conn)["global"]["auto_trading_enabled"])
+
+    def test_kill_switch_refusal_leaves_policy_unchanged(self):
+        pol = CLI._ensure_d0_fields(_old_pre_d0_policy())
+        pol["global"]["auto_trading_enabled"] = False
+        pol["global"]["kill_switch"] = True
+        _write_raw_policy(self.conn, pol)
+        before = load_policy(self.conn)
+        try:
+            self._enable(hours=1)
+        except CLI.AuthorizationRefused:
+            pass
+        self.assertEqual(before, load_policy(self.conn))
+
+
+class TestDisablePreservesNonTarget(_Base):
+    """Blocker 2: disable must clear only D0 fields, preserving non-target."""
+
+    def _seed_all_on(self):
+        pol = CLI._ensure_d0_fields(_old_pre_d0_policy())
+        pol["etoro"]["auto_trading_enabled"] = True
+        pol["routing"]["etoro_live_enabled"] = True
+        pol["ibkr_live"]["auto_trading_enabled"] = True
+        pol["global"]["auto_trading_enabled"] = True
+        pol["ibkr_paper"]["auto_trading_enabled"] = True
+        _write_raw_policy(self.conn, pol)
+
+    def test_disable_preserves_etoro_enabled(self):
+        self._seed_all_on()
+        CLI.disable_ibkr_paper(self.conn, operator="op")
+        self.assertTrue(
+            load_policy(self.conn)["etoro"]["auto_trading_enabled"])
+
+    def test_disable_preserves_etoro_live_enabled(self):
+        self._seed_all_on()
+        CLI.disable_ibkr_paper(self.conn, operator="op")
+        self.assertTrue(
+            load_policy(self.conn)["routing"]["etoro_live_enabled"])
+
+    def test_disable_preserves_ibkr_live_enabled(self):
+        self._seed_all_on()
+        CLI.disable_ibkr_paper(self.conn, operator="op")
+        self.assertTrue(
+            load_policy(self.conn)["ibkr_live"]["auto_trading_enabled"])
+
+    def test_disable_still_clears_global_and_paper(self):
+        self._seed_all_on()
+        CLI.disable_ibkr_paper(self.conn, operator="op")
+        p = load_policy(self.conn)
+        self.assertFalse(p["global"]["auto_trading_enabled"])
+        self.assertFalse(p["ibkr_paper"]["auto_trading_enabled"])
+
+
+class TestNoAssertForSafety(_Base):
+    """Blocker 3: safety must not depend on `assert` (stripped under -O)."""
+
+    def test_no_assert_statements_in_source(self):
+        import ast
+        with open("tools/paper_loop/m21_1extra_d0_auth_cli.py") as fh:
+            tree = ast.parse(fh.read())
+        asserts = [n for n in ast.walk(tree) if isinstance(n, ast.Assert)]
+        self.assertEqual(asserts, [], "no assert may guard safety in D0 CLI")
 
 
 if __name__ == "__main__":

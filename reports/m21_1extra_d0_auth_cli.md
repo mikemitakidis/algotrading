@@ -15,26 +15,33 @@ real operator control.
 
 ## Hard safety properties (enforced in code)
 - **operator-only**, behind an ugly confirmation flag on `enable`;
-- **ibkr_paper lane only** — `enable` sets `global` + `ibkr_paper` authorization;
-  it **never** enables `ibkr_live` and **never** touches any eToro/live flag;
-- **refuses if any NON-TARGET authorization is active** — because writing
-  `global=True` could otherwise make a pre-existing non-target lane *become
-  allowed* by the reader (e.g. `etoro_paper` if `etoro.auto_trading_enabled` was
-  already on). Before enabling, `enable` inspects the **raw** loaded policy and
-  refuses (audit + no change) if any of these is active:
-  `ibkr_live.auto_trading_enabled`, `etoro.auto_trading_enabled`,
-  `routing.etoro_live_enabled`. Refusal (not silent disabling) — the operator
-  resolves the other authorization explicitly;
-- **no fake ENABLED** — normalisation guarantees `ibkr_paper` is in
-  `routing.allowed_brokers` (and keeps `route_overrides`/`default_broker`
-  consistent with it), so a successful `enable` genuinely allows `ibkr_paper`
-  under the real reader — the CLI never prints ENABLED while the reader would
-  still block it;
+- **refuses on any hostile/non-target state** (checked on the raw loaded
+  policy, before any write): `global.kill_switch`, `ibkr_paper.kill_switch`
+  (else a "successful" enable would be silently blocked by the reader — a fake
+  ENABLED), `ibkr_live.auto_trading_enabled`, `etoro.auto_trading_enabled`,
+  `routing.etoro_live_enabled`. Refusal writes an audit row and leaves the
+  policy unchanged. Never silently clears a kill switch or a non-target flag;
+- **non-destructive by construction** — `_ensure_d0_fields` is *add-missing-only*
+  (adds absent D0 schema fields for old pre-D0 DBs) and **never modifies an
+  existing value**. `enable` sets only its four target fields; `disable` clears
+  only its four target fields. Non-target flags (eToro, ibkr_live, kill
+  switches, capital/limits) are always preserved;
+- **disable preserves non-target state** — clears only
+  `global.auto_trading_enabled(+expiry)` and `ibkr_paper.auto_trading_enabled
+  (+expiry)`; if the resulting policy can't validate, it **refuses** rather than
+  silently rewriting non-target fields;
+- **no `assert` for safety** — all pre-write safety checks are explicit runtime
+  checks that raise `AuthorizationRefused` (asserts are stripped under `python
+  -O`, so they must never guard safety);
+- **no fake ENABLED** — `enable` guarantees `ibkr_paper` is in
+  `routing.allowed_brokers` (keeping `route_overrides`/`default_broker`
+  consistent) so the real reader genuinely allows `ibkr_paper` afterwards;
 - **never copies** the legacy `ibkr.auto_trading_enabled` into a lane;
-- **safety booleans use `is True`**, never `bool(...)` (so a truthy string like
-  `"false"` can never be read as enabled);
-- **bounded window**: duration must be `0 < h <= 8.0` (hard cap in code);
-- writes **genuine UTC `+00:00`** expiry strings;
+- **safety booleans use `is True`**, never `bool(...)` (a truthy string like
+  `"false"` is never read as enabled; a malformed non-boolean causes a clean
+  validation refusal);
+- **bounded window**: duration `0 < h <= 8.0` (hard cap); genuine UTC `+00:00`
+  expiries;
 - **old-policy safe (Blocker 1 fix):** a `_normalise_policy_for_d0` step rebuilds
   the policy on the `DEFAULT_POLICY` structure before mutation, so an old
   pre-D0 `signals.db` row missing `ibkr_paper` / `ibkr_live` /
@@ -84,7 +91,7 @@ python3 tools/paper_loop/m21_1extra_d0_auth_cli.py status
 ```
 
 ## Tests
-`test_m21_1extra_d0_auth_cli.py` (27): enable requires confirmation; duration
+`test_m21_1extra_d0_auth_cli.py` (37): enable requires confirmation; duration
 cap enforced; enable writes UTC expiry + authorizes paper (validated policy);
 enable never enables ibkr_live; never touches eToro; refuses if live already
 enabled; **works on old pre-D0 policy rows (normalisation) — Blocker 1**;
