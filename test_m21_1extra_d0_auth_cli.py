@@ -235,5 +235,106 @@ class TestAudit(_Base):
         self.assertNotIn("determine_signal_only_reason", called)
 
 
+class TestNonTargetRefusal(_Base):
+    """D0 enable must refuse if ANY non-target authorization is active, because
+    writing global=True could otherwise activate a pre-existing lane."""
+
+    def _seed(self, **flags):
+        pol = _old_pre_d0_policy()
+        # normalise to D0 shape first so we can set lane/flags cleanly
+        base = CLI._normalise_policy_for_d0(pol)
+        for k, v in flags.items():
+            d = base
+            parts = k.split(".")
+            for pp in parts[:-1]:
+                d = d[pp]
+            d[parts[-1]] = v
+        _write_raw_policy(self.conn, base)
+
+    def test_refuse_if_etoro_auto_trading_enabled(self):
+        self._seed(**{"etoro.auto_trading_enabled": True})
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable()
+        p = load_policy(self.conn)
+        self.assertFalse(p["global"]["auto_trading_enabled"])
+        self.assertIn("refused",
+                      [r["action"] for r in CLI.read_audit(self.conn)])
+
+    def test_refuse_if_etoro_live_enabled(self):
+        self._seed(**{"routing.etoro_live_enabled": True})
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable()
+        p = load_policy(self.conn)
+        self.assertFalse(p["global"]["auto_trading_enabled"])
+        self.assertIn("refused",
+                      [r["action"] for r in CLI.read_audit(self.conn)])
+
+    def test_refuse_if_ibkr_live_enabled(self):
+        self._seed(**{"ibkr_live.auto_trading_enabled": True})
+        with self.assertRaises(CLI.AuthorizationRefused):
+            self._enable()
+        self.assertFalse(
+            load_policy(self.conn)["global"]["auto_trading_enabled"])
+
+    def test_refused_non_target_leaves_policy_unchanged(self):
+        self._seed(**{"etoro.auto_trading_enabled": True})
+        before = load_policy(self.conn)
+        try:
+            self._enable()
+        except CLI.AuthorizationRefused:
+            pass
+        after = load_policy(self.conn)
+        self.assertEqual(before, after)
+
+
+class TestAllowedBrokers(_Base):
+    """No fake ENABLED: after enable the reader must actually allow ibkr_paper."""
+
+    def test_old_policy_missing_ibkr_paper_in_allowed_still_works(self):
+        pol = _old_pre_d0_policy()
+        pol["routing"]["allowed_brokers"] = ["paper"]  # ibkr_paper NOT allowed
+        _write_raw_policy(self.conn, pol)
+        self._enable(hours=1)
+        p = load_policy(self.conn)
+        self.assertIn("ibkr_paper", p["routing"]["allowed_brokers"])
+        self.assertTrue(validate_policy(p).ok)
+        skip, reason = R(p, "ibkr_paper")
+        self.assertFalse(skip, msg="reader must allow after ENABLED: %s" % reason)
+
+
+class TestAllLanesAfterEnable(_Base):
+    """Personally check EVERY non-target lane after a clean enable."""
+
+    def test_every_lane_state_after_enable(self):
+        self._enable(hours=1)
+        p = load_policy(self.conn)
+        self.assertFalse(R(p, "ibkr_paper")[0])   # allowed
+        self.assertTrue(R(p, "ibkr_live")[0])      # blocked
+        self.assertTrue(R(p, "etoro_paper")[0])    # blocked
+        self.assertTrue(R(p, "etoro_real")[0])     # blocked
+        self.assertTrue(R(p, "ibkr")[0])           # blocked/unsupported
+
+
+class TestSafetyBooleanStrictness(_Base):
+    """Safety flags must use `is True`, never bool(): string 'false' is truthy."""
+
+    def test_string_false_not_treated_as_true(self):
+        norm = CLI._normalise_policy_for_d0({
+            "global": {"kill_switch": "false"},
+            "ibkr": {"auto_trading_enabled": "false"},
+            "ibkr_paper": {"kill_switch": "false"},
+        })
+        self.assertIs(norm["global"]["kill_switch"], False)
+        self.assertIs(norm["ibkr"]["auto_trading_enabled"], False)
+        self.assertIs(norm["ibkr_paper"]["kill_switch"], False)
+
+    def test_no_bool_calls_on_safety_fields_in_source(self):
+        import ast
+        with open("tools/paper_loop/m21_1extra_d0_auth_cli.py") as fh:
+            src = fh.read()
+        # the normalisation must not use bool(...) for authorization/kill flags
+        self.assertNotIn("bool(", src)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

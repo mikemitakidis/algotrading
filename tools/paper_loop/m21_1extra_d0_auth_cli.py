@@ -62,7 +62,7 @@ def _normalise_policy_for_d0(policy: Any) -> Dict[str, Any]:
     g_in = policy.get("global") if isinstance(policy.get("global"), dict) else {}
     base["global"]["max_auto_trading_capital"] = g_in.get(
         "max_auto_trading_capital", base["global"]["max_auto_trading_capital"])
-    base["global"]["kill_switch"] = bool(g_in.get("kill_switch", False))
+    base["global"]["kill_switch"] = (g_in.get("kill_switch") is True)
     base["global"]["auto_trading_enabled"] = False
     base["global"]["auto_trading_enabled_until_utc"] = None
 
@@ -75,17 +75,18 @@ def _normalise_policy_for_d0(policy: Any) -> Dict[str, Any]:
             base["ibkr"][k] = ibkr_in[k]
     # legacy auto_trading_enabled is intentionally NOT propagated to lanes; keep
     # the legacy block's own flag value for backward-compat display only.
-    base["ibkr"]["auto_trading_enabled"] = bool(
-        ibkr_in.get("auto_trading_enabled", False))
+    base["ibkr"]["auto_trading_enabled"] = (
+        ibkr_in.get("auto_trading_enabled") is True)
 
-    # etoro block: preserve, never enable anything here.
+    # etoro block: preserve limits, but D0 NEVER runs alongside an enabled eToro
+    # (the enable path refuses first). Normalisation itself forces it disabled so
+    # a D0-written policy can never leave eToro auto-trading on.
     etoro_in = policy.get("etoro") if isinstance(policy.get("etoro"), dict) else {}
     for k in ("max_auto_trading_capital", "max_single_trade_amount",
               "max_daily_loss", "max_open_positions", "kill_switch"):
         if k in etoro_in:
             base["etoro"][k] = etoro_in[k]
-    base["etoro"]["auto_trading_enabled"] = bool(
-        etoro_in.get("auto_trading_enabled", False))
+    base["etoro"]["auto_trading_enabled"] = False
 
     # lanes: if present, preserve ONLY a kill_switch; force auth disabled/null.
     # NEVER carry an enable/expiry forward implicitly — the enable path sets them.
@@ -93,15 +94,38 @@ def _normalise_policy_for_d0(policy: Any) -> Dict[str, Any]:
         lane_in = policy.get(lane) if isinstance(policy.get(lane), dict) else {}
         base[lane]["auto_trading_enabled"] = False
         base[lane]["auto_trading_enabled_until_utc"] = None
-        base[lane]["kill_switch"] = bool(lane_in.get("kill_switch", False))
+        base[lane]["kill_switch"] = (lane_in.get("kill_switch") is True)
 
-    # routing: preserve if present and shaped, else keep default.
+    # routing: preserve if present and shaped, else keep default. eToro live is
+    # forced off in a D0-written policy (D0 never authorizes live).
     r_in = policy.get("routing")
     if isinstance(r_in, dict):
-        for k in ("default_broker", "route_overrides", "allowed_brokers",
-                  "etoro_live_enabled"):
+        for k in ("default_broker", "route_overrides", "allowed_brokers"):
             if k in r_in:
                 base["routing"][k] = r_in[k]
+    base["routing"]["etoro_live_enabled"] = False
+    # D0 authorizes ibkr_paper — guarantee it is an allowed broker so a
+    # successful enable actually allows it under the reader (never a fake ENABLED).
+    allowed = base["routing"].get("allowed_brokers")
+    if not isinstance(allowed, list):
+        allowed = []
+    if "ibkr_paper" not in allowed:
+        allowed = list(allowed) + ["ibkr_paper"]
+    base["routing"]["allowed_brokers"] = allowed
+    # Keep route_overrides consistent with allowed_brokers (the validator
+    # requires every override target to be allowed). Drop any dangling override
+    # rather than fail validation. default_broker likewise must be allowed.
+    ov = base["routing"].get("route_overrides")
+    if isinstance(ov, dict):
+        base["routing"]["route_overrides"] = {
+            k: v for k, v in ov.items() if v in allowed}
+    else:
+        base["routing"]["route_overrides"] = {}
+    if base["routing"].get("default_broker") not in allowed:
+        # 'paper' is always safe and always allowed.
+        if "paper" not in allowed:
+            base["routing"]["allowed_brokers"] = list(allowed) + ["paper"]
+        base["routing"]["default_broker"] = "paper"
 
     return base
 
@@ -212,30 +236,54 @@ def enable_ibkr_paper(conn: sqlite3.Connection, *, duration_hours: float,
 
     expiry = _utc_iso(now + timedelta(hours=duration_hours))
 
-    # Refuse if ibkr_live is genuinely enabled in the CURRENT policy (check the
-    # raw loaded policy BEFORE normalisation, which would reset lanes). The D0
-    # CLI manages paper only and will not act alongside a live authorization.
+    # D0 authorizes ibkr_paper ONLY. Before turning global auto-trading on,
+    # refuse if ANY non-target authorization is active in the CURRENT policy —
+    # because writing global=True could otherwise make a pre-existing non-target
+    # lane (ibkr_live, etoro_paper via etoro.auto_trading_enabled, or etoro live)
+    # become allowed by the reader. Check the RAW loaded policy, before
+    # normalisation (which would reset these). Refuse rather than silently
+    # disable — the operator must resolve the other authorization explicitly.
     raw = load_policy(conn)
-    raw_live = raw.get("ibkr_live") if isinstance(raw.get("ibkr_live"), dict) else {}
-    if raw_live.get("auto_trading_enabled") is True:
+
+    def _flag(path_a, path_b=None):
+        d = raw.get(path_a) if isinstance(raw.get(path_a), dict) else {}
+        if path_b is None:
+            return d
+        return d.get(path_b)
+
+    non_target_active = []
+    if _flag("ibkr_live", "auto_trading_enabled") is True:
+        non_target_active.append("ibkr_live.auto_trading_enabled")
+    if _flag("etoro", "auto_trading_enabled") is True:
+        non_target_active.append("etoro.auto_trading_enabled")
+    routing = raw.get("routing") if isinstance(raw.get("routing"), dict) else {}
+    if routing.get("etoro_live_enabled") is True:
+        non_target_active.append("routing.etoro_live_enabled")
+
+    if non_target_active:
+        reason = ("non-target authorization active: %s — D0 authorizes "
+                  "ibkr_paper only; resolve these first"
+                  % ", ".join(non_target_active))
         _audit_write_standalone(
             conn, action="refused", lane=_LANE, operator=operator,
             expiry_utc=None, duration_hours=duration_hours,
-            reason="ibkr_live is enabled; D0 CLI manages paper only",
-            created_at_utc=created)
-        raise AuthorizationRefused(
-            "ibkr_live is enabled — the D0 CLI only manages ibkr_paper")
+            reason=reason, created_at_utc=created)
+        raise AuthorizationRefused(reason)
 
     # D0-safe normalisation (handles old pre-D0 rows; never copies legacy enable
-    # into a lane, never enables ibkr_live).
+    # into a lane, never enables ibkr_live, forces eToro off, guarantees
+    # ibkr_paper is an allowed broker).
     policy = _normalise_policy_for_d0(raw)
 
     policy["global"]["auto_trading_enabled"] = True
     policy["global"]["auto_trading_enabled_until_utc"] = expiry
     policy["ibkr_paper"]["auto_trading_enabled"] = True
     policy["ibkr_paper"]["auto_trading_enabled_until_utc"] = expiry
-    # ibkr_live stays disabled (normalisation guarantees it); assert defensively.
+    # defensive: normalisation guarantees these — assert non-target lanes off.
     assert policy["ibkr_live"]["auto_trading_enabled"] is False
+    assert policy["etoro"]["auto_trading_enabled"] is False
+    assert policy["routing"]["etoro_live_enabled"] is False
+    assert "ibkr_paper" in policy["routing"]["allowed_brokers"]
 
     # Validate BEFORE writing anything (rejects malformed/non-UTC expiry).
     vr = validate_policy(policy)

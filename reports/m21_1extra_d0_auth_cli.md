@@ -17,7 +17,22 @@ real operator control.
 - **operator-only**, behind an ugly confirmation flag on `enable`;
 - **ibkr_paper lane only** — `enable` sets `global` + `ibkr_paper` authorization;
   it **never** enables `ibkr_live` and **never** touches any eToro/live flag;
+- **refuses if any NON-TARGET authorization is active** — because writing
+  `global=True` could otherwise make a pre-existing non-target lane *become
+  allowed* by the reader (e.g. `etoro_paper` if `etoro.auto_trading_enabled` was
+  already on). Before enabling, `enable` inspects the **raw** loaded policy and
+  refuses (audit + no change) if any of these is active:
+  `ibkr_live.auto_trading_enabled`, `etoro.auto_trading_enabled`,
+  `routing.etoro_live_enabled`. Refusal (not silent disabling) — the operator
+  resolves the other authorization explicitly;
+- **no fake ENABLED** — normalisation guarantees `ibkr_paper` is in
+  `routing.allowed_brokers` (and keeps `route_overrides`/`default_broker`
+  consistent with it), so a successful `enable` genuinely allows `ibkr_paper`
+  under the real reader — the CLI never prints ENABLED while the reader would
+  still block it;
 - **never copies** the legacy `ibkr.auto_trading_enabled` into a lane;
+- **safety booleans use `is True`**, never `bool(...)` (so a truthy string like
+  `"false"` can never be read as enabled);
 - **bounded window**: duration must be `0 < h <= 8.0` (hard cap in code);
 - writes **genuine UTC `+00:00`** expiry strings;
 - **old-policy safe (Blocker 1 fix):** a `_normalise_policy_for_d0` step rebuilds
@@ -69,7 +84,7 @@ python3 tools/paper_loop/m21_1extra_d0_auth_cli.py status
 ```
 
 ## Tests
-`test_m21_1extra_d0_auth_cli.py` (19): enable requires confirmation; duration
+`test_m21_1extra_d0_auth_cli.py` (27): enable requires confirmation; duration
 cap enforced; enable writes UTC expiry + authorizes paper (validated policy);
 enable never enables ibkr_live; never touches eToro; refuses if live already
 enabled; **works on old pre-D0 policy rows (normalisation) — Blocker 1**;
