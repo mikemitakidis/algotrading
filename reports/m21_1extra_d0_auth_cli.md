@@ -92,7 +92,7 @@ python3 tools/paper_loop/m21_1extra_d0_auth_cli.py status
 ```
 
 ## Tests
-`test_m21_1extra_d0_auth_cli.py` (37): enable requires confirmation; duration
+`test_m21_1extra_d0_auth_cli.py` (41): enable requires confirmation; duration
 cap enforced; enable writes UTC expiry + authorizes paper (validated policy);
 enable never enables ibkr_live; never touches eToro; refuses if live already
 enabled; **works on old pre-D0 policy rows (normalisation) — Blocker 1**;
@@ -109,3 +109,44 @@ All Commit 1 safety tests remain green.
 No `ibkr_live` enablement, no eToro/live writes, no scheduler (D2), no
 market-clock check (D1), no dashboard (D3), no adapter/B/C edits, no M21.2. The
 CLI cannot itself place a trade.
+
+---
+
+## Real VPS proof (2026-07-03, authorization gate only — no broker, no orders)
+
+The D0 authorization gate was proven on the real VPS `signals.db` at commit
+`314524a36af896ce84c7e99079b22d1565ce5767`. The proof is scoped to the
+**authorization gate only** — it does not exercise a broker connection, order
+placement, a scheduler, or any market-clock logic. Those belong to later
+milestones (D1 online market-clock guard, D2 unattended loop, D3 dashboard) and
+are explicitly **not** covered here.
+
+**Method.** On the real `/opt/algo-trader/data/signals.db`: back up the DB;
+enable `ibkr_paper` for a real ~7.2s bounded window (`duration_hours=0.002`);
+verify both readers immediately; sleep 12s past the window; re-verify both
+readers; disable; verify final safe state; then restore the DB from the backup
+and confirm it is byte-identical (`cmp -s`). Status reads used raw read-only SQL
+so the context reads never create the audit table. Both enforcement paths were
+checked at each step: `determine_signal_only_reason(policy, lane)` and
+`runtime_policy.get_signal_only_reason(lane, db_path=DB, ttl_sec=300)`.
+
+**Result — all checks true; `M21_1EXTRA_D0_VPS_VERIFY_RC=0`:**
+
+- After enable, `ibkr_paper` is allowed by **both** readers; `ibkr_live`,
+  `etoro_paper`, `etoro_real`, and bare `ibkr` are blocked by **both** readers.
+- Legacy `ibkr.auto_trading_enabled=True` (with both lanes disabled and no
+  expiry) authorizes **nothing**: `ibkr_paper`, `ibkr_live`, and bare `ibkr`
+  all blocked.
+- After the real window elapsed (12s sleep, runtime cache **not** cleared),
+  `ibkr_paper` is blocked by **both** readers — proving the time-box is enforced
+  at read time and the runtime cache does not serve a stale allowed result past
+  expiry.
+- After `disable`, `ibkr_paper` is blocked by both readers and both
+  `global.auto_trading_enabled` and `ibkr_paper.auto_trading_enabled` are false.
+- The enable audit row was written into the same `signals.db`.
+- The DB was restored byte-identical to the pre-proof backup
+  (`RESTORE_VERIFIED`).
+
+**Scope reminder.** This proves the gate decides authorization correctly and
+fail-closed. It is not evidence about market-open logic, unattended scheduling,
+or dashboards — D0 is the master switch only.
