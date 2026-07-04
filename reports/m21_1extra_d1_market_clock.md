@@ -90,9 +90,20 @@ enable/disable, D2 loop, or IBKR gateway connection, and prints no secrets.
 - If `ALPACA_KEY`/`ALPACA_SECRET` are absent: it proves the real adapter fails
   closed (`market_status_no_credentials`) and marks the live fresh-response
   proof as *pending credentials* — still `RC=0` when the fail-closed checks pass.
-- If present: one read-only clock/calendar check, proving the response parsed
-  into a `MarketClockDecision` with a fresh `fetched_at_utc` (open or closed
-  both acceptable).
+- If present: one read-only clock/calendar check. The **live-source proof
+  passes only if Alpaca returned a fresh, well-formed `market_open` or
+  `market_closed`**. If the live source is `unavailable`/`stale`/`malformed`/
+  `internal_error`, the guard still fails closed correctly (that safety property
+  is separately asserted and remains true), but the **live-source proof did not
+  pass**, so the runner returns `RC=1` and prints the reason honestly (no
+  secrets). This separates two distinct claims: *guard fail-closed works* vs
+  *the live Alpaca source proof passed*.
+
+```
+Credentials absent          = fail-closed proof passes; live-source proof pending credentials (RC=0).
+Credentials present + fresh open/closed = live-source proof passes (RC=0).
+Credentials present + unavailable/stale/malformed = live-source proof failed/pending rerun (RC=1); fail-closed guard still correct.
+```
 
 Output ends with `D1_VPS_VERIFY_OK` and `M21_1EXTRA_D1_VPS_VERIFY_RC=0` (or the
 failure RC). The runner is invoked by a wrapper that logs the full transcript to

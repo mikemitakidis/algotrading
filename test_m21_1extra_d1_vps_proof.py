@@ -97,18 +97,80 @@ class TestCredentialsPathMocked(unittest.TestCase):
                 {"date": ds, "open": "00:00", "close": "23:59"}])
         AC._default_http_get = fake
 
-    def test_live_open_parsed_fresh_rc0(self):
+    def _patch_raw(self, fn):
+        AC._default_http_get = fn
+
+    def test_live_open_fresh_rc0(self):
         self._patch(is_open=True)
         rc, proof = PROOF.run_proof()
         self.assertEqual(rc, 0)
-        self.assertTrue(proof["checks"]["alpaca_live_parsed_into_decision"])
-        self.assertTrue(proof["checks"]["alpaca_live_fresh"])
+        self.assertTrue(
+            proof["checks"]["alpaca_live_source_returned_fresh_open_or_closed"])
+        self.assertEqual(proof["live"]["live_source_proof"], "passed")
 
-    def test_live_closed_parsed_rc0(self):
+    def test_live_closed_fresh_rc0(self):
         self._patch(is_open=False)
         rc, proof = PROOF.run_proof()
         self.assertEqual(rc, 0)
-        self.assertTrue(proof["checks"]["alpaca_live_parsed_into_decision"])
+        self.assertTrue(
+            proof["checks"]["alpaca_live_source_returned_fresh_open_or_closed"])
+
+    def test_live_unavailable_rc1(self):
+        # 503 on the clock -> unavailable -> live-source proof fails (RC=1)
+        def fake(url, *, headers, params, timeout):
+            return HttpResponse(status_code=503, json_body=None)
+        self._patch_raw(fake)
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 1)
+        self.assertFalse(
+            proof["checks"]["alpaca_live_source_returned_fresh_open_or_closed"])
+        self.assertEqual(proof["live"]["live_source_proof"],
+                         "failed_or_pending_rerun")
+
+    def test_live_timeout_rc1(self):
+        def fake(url, *, headers, params, timeout):
+            raise HttpError("Timeout")
+        self._patch_raw(fake)
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 1)
+
+    def test_live_malformed_rc1(self):
+        def fake(url, *, headers, params, timeout):
+            return HttpResponse(status_code=200, json_body=None, ok_json=False)
+        self._patch_raw(fake)
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 1)
+
+    def test_live_stale_rc1(self):
+        # clock timestamp far in the past -> stale -> RC=1
+        def fake(url, *, headers, params, timeout):
+            if "/v2/clock" in url:
+                old = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+                return HttpResponse(status_code=200,
+                                    json_body={"is_open": True,
+                                               "timestamp": old})
+            ds = datetime.now(timezone.utc).date().isoformat()
+            return HttpResponse(status_code=200,
+                                json_body=[{"date": ds, "open": "00:00",
+                                            "close": "23:59"}])
+        self._patch_raw(fake)
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 1)
+        self.assertFalse(
+            proof["checks"]["alpaca_live_source_returned_fresh_open_or_closed"])
+
+    def test_offline_checks_still_pass_when_live_fails(self):
+        # even when the live-source proof fails, the fail-closed guard checks
+        # must still be TRUE — the two claims are separated.
+        def fake(url, *, headers, params, timeout):
+            return HttpResponse(status_code=503, json_body=None)
+        self._patch_raw(fake)
+        _, proof = PROOF.run_proof()
+        for name in ("unsupported_blocks", "no_source_blocks",
+                     "mock_unavailable_blocks", "mock_malformed_blocks",
+                     "mock_open_with_calendar_allows",
+                     "mock_open_missing_calendar_blocks"):
+            self.assertTrue(proof["checks"][name])
 
     def test_no_secret_in_proof_blob(self):
         self._patch(is_open=True)
@@ -118,6 +180,16 @@ class TestCredentialsPathMocked(unittest.TestCase):
         self.assertNotIn(os.environ["ALPACA_KEY"], blob)
         self.assertNotIn(os.environ["ALPACA_SECRET"], blob)
         self.assertTrue(proof["checks"]["no_secret_in_proof"])
+
+    def test_no_secret_in_proof_even_when_live_fails(self):
+        def fake(url, *, headers, params, timeout):
+            raise HttpError("Timeout")
+        self._patch_raw(fake)
+        _, proof = PROOF.run_proof()
+        import json
+        blob = json.dumps(proof)
+        self.assertNotIn(os.environ["ALPACA_KEY"], blob)
+        self.assertNotIn(os.environ["ALPACA_SECRET"], blob)
 
 
 class TestHygiene(unittest.TestCase):

@@ -143,23 +143,21 @@ def run_proof() -> Tuple[int, Dict[str, Any]]:
                and d.reason == REASON_NO_CREDENTIALS)
         proof["live"]["live_fresh_response_proof"] = "pending_credentials"
     else:
-        # credentials present: ONE read-only clock/calendar check.
+        # credentials present: ONE read-only clock/calendar check. The
+        # live-source proof PASSES only if Alpaca actually returned a fresh,
+        # well-formed open/closed decision. A live unavailable/stale/malformed/
+        # internal_error is a fail-closed decision (the guard is working), but
+        # it does NOT prove the live source responded — so it fails the proof.
         src = AlpacaClockSource()
         d = evaluate_market_clock(market_calendar_id="US_EQ", now_utc=now,
                                   sources=[src])
-        # open OR closed both acceptable; the proof is: parsed + fresh + valid.
         proof["live"]["decision_reason"] = d.reason
         proof["live"]["fetched_at_utc"] = d.fetched_at_utc
         proof["live"]["may_submit"] = d.may_submit
-        # "parsed into a valid decision" = the reason is any VALID_REASON and
-        # the decision object is well-formed. A live source that is slow/degraded
-        # legitimately yields a fail-closed reason (stale/unavailable/malformed);
-        # that is still a correctly parsed decision, not a proof failure.
-        from bot.market_clock import VALID_REASONS
-        valid_reason = (d.reason in VALID_REASONS
-                        and d.may_submit in (True, False))
-        _check("alpaca_live_parsed_into_decision", valid_reason)
-        # freshness: fetched_at within a generous bound of now (read-only).
+
+        got_open_closed = d.reason in (REASON_MARKET_OPEN, REASON_MARKET_CLOSED)
+
+        # freshness of the live response (measured on fetched_at_utc).
         fresh = False
         if d.fetched_at_utc:
             try:
@@ -168,18 +166,33 @@ def run_proof() -> Tuple[int, Dict[str, Any]]:
                 fresh = abs((now - fa).total_seconds()) < 120
             except ValueError:
                 fresh = False
-        # only require freshness when the source actually responded OK-ish;
-        # a genuine live unavailable (e.g. network egress blocked) still yields
-        # a well-formed fail-closed decision and must not fail the proof.
-        if d.reason in (REASON_MARKET_OPEN, REASON_MARKET_CLOSED):
-            _check("alpaca_live_fresh", fresh)
+        proof["live"]["fresh"] = fresh
+
+        # decision well-formed: valid reason + boolean may_submit + the
+        # open/closed <-> may_submit invariant.
+        from bot.market_clock import VALID_REASONS
+        well_formed = (
+            d.reason in VALID_REASONS
+            and d.may_submit in (True, False)
+            and ((d.reason == REASON_MARKET_OPEN) == (d.may_submit is True)))
+
+        # THE live-source proof: only a fresh, well-formed open/closed passes.
+        _check("alpaca_live_source_returned_fresh_open_or_closed",
+               got_open_closed and fresh and well_formed)
+
+        if not got_open_closed:
+            # honest, secret-free note about why the live proof did not pass.
+            proof["live"]["live_source_proof"] = "failed_or_pending_rerun"
+            proof["live"]["note"] = (
+                "live Alpaca returned '%s' (not open/closed); VPS live-source "
+                "proof did not pass — rerun when the source is reachable"
+                % d.reason)
         else:
-            proof["live"]["note"] = ("live source did not return open/closed; "
-                                     "fail-closed decision is acceptable")
+            proof["live"]["live_source_proof"] = "passed"
+
         # secret safety: ensure no secret substring in the proof blob.
         blob = json.dumps(proof)
-        _check("no_secret_in_proof",
-               key not in blob and secret not in blob)
+        _check("no_secret_in_proof", key not in blob and secret not in blob)
 
     # always: the final safety property — no offline check ever allowed on a
     # failure path.
