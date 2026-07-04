@@ -10421,6 +10421,7 @@ class G10_Hygiene(unittest.TestCase):
             "tools/signal_scoring/",                        # M21.1 scoring bridge
             "tools/paper_loop/",                            # M21.1extra paper loop
             "bot/market_clock/",                            # M21.1extra-D1 market clock
+            "bot/paper_loop_d2/",                           # M21.1extra-D2 loop
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10598,6 +10599,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1extra_d1_guard.py",
             "test_m21_1extra_d1_alpaca_source.py",
             "test_m21_1extra_d1_vps_proof.py",
+            "test_m21_1extra_d2_0_dryrun.py",
+            "test_m21_1extra_d2_0_lock.py",
+            "reports/m21_1extra_d2_0_loop_dryrun.md",
             "reports/m21_1extra_d1_market_clock.md",
             "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.
