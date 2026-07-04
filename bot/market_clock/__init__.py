@@ -20,6 +20,7 @@ from bot.market_clock.sources import (
 from bot.market_clock.guard import (
     evaluate_market_clock, MarketClockCache, DEFAULT_MAX_AGE_SEC,
 )
+from bot.market_clock.alpaca_clock import AlpacaClockSource
 
 __all__ = [
     "MarketClockDecision", "VALID_REASONS", "SUPPORTED_CALENDAR_IDS",
@@ -31,4 +32,5 @@ __all__ = [
     "IbkrMarketStatusSource", "STATUS_OK", "STATUS_NO_CREDENTIALS",
     "STATUS_UNAVAILABLE", "STATUS_MALFORMED",
     "evaluate_market_clock", "MarketClockCache", "DEFAULT_MAX_AGE_SEC",
+    "AlpacaClockSource",
 ]
