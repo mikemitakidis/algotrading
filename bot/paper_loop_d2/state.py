@@ -23,6 +23,12 @@ class LoopState(str, Enum):
     D1_BLOCKED = "D1_BLOCKED"
     PRECHECK_FAILED = "PRECHECK_FAILED"
     DRY_RUN_WOULD_SUBMIT = "DRY_RUN_WOULD_SUBMIT"
+    # Supervised (real paper lifecycle) states — reached only AFTER both gates
+    # are affirmative, and only via run_supervised_cycle (never dry-run).
+    ORDER_SUBMITTED = "ORDER_SUBMITTED"
+    POSITION_OBSERVED = "POSITION_OBSERVED"
+    FLATTEN_CONFIRMED = "FLATTEN_CONFIRMED"
+    PERSISTED = "PERSISTED"
     FAILED_CLOSED = "FAILED_CLOSED"
 
 
@@ -33,6 +39,7 @@ TERMINAL_STATES = frozenset({
     LoopState.D1_BLOCKED,
     LoopState.PRECHECK_FAILED,
     LoopState.DRY_RUN_WOULD_SUBMIT,
+    LoopState.PERSISTED,
     LoopState.FAILED_CLOSED,
 })
 

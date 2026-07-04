@@ -210,9 +210,11 @@ class TestStateMachineWithRealGates(_D0Fixture):
                         make_d1_gate(sources=[_src(_open_res())], now_utc=NOW))
         self.assertEqual(r.state, LoopState.DRY_RUN_WOULD_SUBMIT.value)
         self.assertTrue(r.would_submit)
-        # would_submit is the terminal — NOT an order. There is no
-        # ORDER_SUBMITTED state in this milestone.
-        self.assertNotIn("ORDER_SUBMITTED", {s.value for s in LoopState})
+        # the dry-run terminal is WOULD_SUBMIT — NOT an order. run_dry_cycle
+        # never returns ORDER_SUBMITTED/PERSISTED even though those states now
+        # exist for the supervised path.
+        self.assertNotEqual(r.state, "ORDER_SUBMITTED")
+        self.assertNotEqual(r.state, "PERSISTED")
 
     def test_d0_blocked_short_circuits_d1(self):
         self._seed_raw()

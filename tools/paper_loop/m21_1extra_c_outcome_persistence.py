@@ -252,8 +252,16 @@ def persist_lifecycle(b2b: Dict[str, Any], *, db_path: Optional[str] = None,
         "market_calendar_id": market_calendar_id,
         "market_session_date": session_date,
         "market_session_date_source": "persisted_at_utc_not_execution_time",
-        "market_clock_checked": 0,
-        "market_clock_reason": "not_checked_in_C_deferred_to_D",
+        # market-clock provenance. C itself does NOT check the market clock;
+        # if a caller (D2, which runs the D1 guard BEFORE submitting) supplies
+        # these, persist them truthfully. When ABSENT, keep the historical
+        # defaults so pre-D2 records are unchanged.
+        "market_clock_checked": (
+            _b(b2b.get("market_clock_checked"))
+            if "market_clock_checked" in b2b else 0),
+        "market_clock_reason": (
+            b2b.get("market_clock_reason")
+            if b2b.get("market_clock_reason") else "not_checked_in_C_deferred_to_D"),
         "raw_json": json.dumps(b2b, sort_keys=True),
     }
 

@@ -207,8 +207,16 @@ class TestInvariant(unittest.TestCase):
         self.assertEqual(_run().mode, "dry_run")
         self.assertEqual(_run().market_calendar_id, "US_EQ")
 
-    def test_no_order_submitted_state_exists(self):
-        self.assertNotIn("ORDER_SUBMITTED", {s.value for s in LoopState})
+    def test_dry_run_never_returns_order_submitted(self):
+        # ORDER_SUBMITTED exists in the enum (supervised mode uses it), but the
+        # dry-run path must NEVER return it — dry-run places no orders.
+        import itertools
+        for d0v, d1v, has_cand in itertools.product(
+                [True, False], [True, False], [True, False]):
+            items = [("AAPL", 8.0)] if has_cand else []
+            r = _run(items=items, d0=d0v, d1=d1v)
+            self.assertNotEqual(r.state, "ORDER_SUBMITTED")
+            self.assertNotEqual(r.state, "PERSISTED")
 
 
 class TestDependencyFailClosed(unittest.TestCase):
