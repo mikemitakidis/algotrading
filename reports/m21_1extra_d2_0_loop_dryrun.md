@@ -58,11 +58,24 @@ score, breaking ties by lexicographic symbol. No qualifying candidate →
 ## Lock (overlap prevention)
 
 `CycleLock(path)` — path injected (tests use temp paths; the real
-`/opt/algo-trader/data/d2_loop.lock` is never touched in D2.0). A lock held by a
-**live** pid refuses acquisition (`LockHeld`); a **stale** lock (owning pid not
-alive, or a corrupt file) is reclaimed and logged. The lock is always released,
-on normal completion and on exception, via the context manager (which does not
-suppress the exception). No daemon, cron, or systemd.
+`/opt/algo-trader/data/d2_loop.lock` is never touched in D2.0). Acquisition is
+**atomic** via `os.open(O_CREAT | O_EXCL)`: winning the create holds the lock;
+losing it (`FileExistsError`) reads the existing lock — a lock held by **any
+live pid, including our own**, refuses acquisition (`LockHeld`), while a
+**stale** lock (owning pid not alive) or a **corrupt** file is removed and the
+atomic create retried. The lock is always released, on normal completion and on
+exception, via the context manager (which does not suppress the exception), and
+only a lock we actually acquired (still naming our pid) is removed. No daemon,
+cron, or systemd.
+
+## Fail-closed dependency handling
+
+The injected `clock()` and `cycle_id_factory()` are called under fail-closed
+handling: if the clock raises, returns a non-datetime, or returns a **naive**
+datetime, or if the cycle-id factory raises or returns an empty/non-string id,
+`run_dry_cycle` returns a `FAILED_CLOSED` record (with a safe fallback UTC
+timestamp used only to build that record) rather than raising. A naive datetime
+is never silently assumed to be UTC.
 
 ## Tests
 

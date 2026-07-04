@@ -52,6 +52,10 @@ class MalformedCandidate(ValueError):
     """A candidate did not match the (symbol: str, score: number) contract."""
 
 
+class _DependencyError(RuntimeError):
+    """An injected dependency (clock/cycle_id) produced unusable output."""
+
+
 def _validate_candidate(item: Any) -> Tuple[str, float]:
     """Return (symbol, score) or raise MalformedCandidate. Strict: the provider
     contract is (str, number); anything else is ambiguous -> fail closed."""
@@ -92,12 +96,11 @@ def run_dry_cycle(
     cycle_id_factory: Optional[CycleIdFn] = None,
 ) -> DryRunCycleRecord:
     """Run one dry-run cycle and return a DryRunCycleRecord. Never places an
-    order, never touches a broker/D0/D1/network/DB. Fail-closed throughout."""
+    order, never touches a broker/D0/D1/network/DB. Fail-closed throughout —
+    including a bad injected clock or cycle_id factory (those yield a
+    FAILED_CLOSED record rather than raising)."""
     clock = clock or _default_clock
     cycle_id_factory = cycle_id_factory or _default_cycle_id
-
-    started = clock()
-    cycle_id = cycle_id_factory()
 
     # accumulators
     symbol: Optional[str] = None
@@ -109,11 +112,56 @@ def run_dry_cycle(
     d1_reason: Optional[str] = None
     errors: List[str] = []
 
+    def _now() -> datetime:
+        """Call the injected clock and REQUIRE a timezone-aware datetime.
+        Raises on bad output; callers convert that into FAILED_CLOSED."""
+        val = clock()
+        if not isinstance(val, datetime):
+            raise _DependencyError("clock did not return a datetime")
+        if val.tzinfo is None or val.tzinfo.utcoffset(val) is None:
+            raise _DependencyError("clock returned a naive datetime")
+        return val.astimezone(timezone.utc)
+
+    def _safe_now_iso() -> str:
+        """A timestamp that always works, ONLY for building a failure record
+        when the injected clock is unusable. Uses real UTC now."""
+        try:
+            return _iso(_now())
+        except Exception:
+            return _iso(datetime.now(timezone.utc))
+
+    # ── set up clock + cycle_id under fail-closed handling ────────────────
+    try:
+        started = _now()
+    except Exception as exc:
+        errors.append("clock_setup: %s" % type(exc).__name__)
+        return DryRunCycleRecord(
+            cycle_id="d2cyc-clock-error", started_at_utc=_safe_now_iso(),
+            finished_at_utc=_safe_now_iso(),
+            state=LoopState.FAILED_CLOSED.value, would_submit=False,
+            d0_checked=False, d1_checked=False,
+            market_calendar_id=_MARKET_CALENDAR_ID,
+            submit_blocked_reason="clock_dependency_error", errors=errors)
+
+    try:
+        cycle_id = cycle_id_factory()
+        if not isinstance(cycle_id, str) or not cycle_id:
+            raise _DependencyError("cycle_id_factory returned empty/non-string")
+    except Exception as exc:
+        errors.append("cycle_id_setup: %s" % type(exc).__name__)
+        return DryRunCycleRecord(
+            cycle_id="d2cyc-id-error", started_at_utc=_iso(started),
+            finished_at_utc=_safe_now_iso(),
+            state=LoopState.FAILED_CLOSED.value, would_submit=False,
+            d0_checked=False, d1_checked=False,
+            market_calendar_id=_MARKET_CALENDAR_ID,
+            submit_blocked_reason="cycle_id_dependency_error", errors=errors)
+
     def _finish(state: LoopState, *, would_submit: bool = False,
                 blocked: Optional[str] = None) -> DryRunCycleRecord:
         return DryRunCycleRecord(
             cycle_id=cycle_id, started_at_utc=_iso(started),
-            finished_at_utc=_iso(clock()), state=state.value,
+            finished_at_utc=_safe_now_iso(), state=state.value,
             would_submit=would_submit, d0_checked=d0_checked,
             d1_checked=d1_checked, symbol=symbol, candidate_score=score,
             d0_allowed=d0_allowed, d0_reason=d0_reason, d1_may_submit=d1_may,

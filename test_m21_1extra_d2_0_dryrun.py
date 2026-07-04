@@ -211,6 +211,56 @@ class TestInvariant(unittest.TestCase):
         self.assertNotIn("ORDER_SUBMITTED", {s.value for s in LoopState})
 
 
+class TestDependencyFailClosed(unittest.TestCase):
+    """Bad injected clock / cycle_id must yield FAILED_CLOSED, never raise."""
+
+    def _run(self, **kw):
+        base = dict(d0_gate=_d0(True), d1_gate=_d1(True),
+                    candidate_provider=_prov([("AAPL", 8.0)]), threshold=5.0)
+        base.update(kw)
+        return run_dry_cycle(**base)
+
+    def test_clock_raises_fail_closed(self):
+        def boom():
+            raise RuntimeError("clock down")
+        r = self._run(clock=boom)
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+        self.assertEqual(r.submit_blocked_reason, "clock_dependency_error")
+        self.assertFalse(r.would_submit)
+        self.assertTrue(r.started_at_utc)   # safe fallback timestamp present
+
+    def test_naive_clock_fail_closed(self):
+        r = self._run(clock=lambda: datetime(2026, 7, 6, 15, 0))  # naive
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+        self.assertEqual(r.submit_blocked_reason, "clock_dependency_error")
+
+    def test_clock_returns_non_datetime_fail_closed(self):
+        r = self._run(clock=lambda: "not-a-datetime")
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+
+    def test_cycle_id_raises_fail_closed(self):
+        def boom():
+            raise ValueError("id down")
+        r = self._run(cycle_id_factory=boom)
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+        self.assertEqual(r.submit_blocked_reason, "cycle_id_dependency_error")
+
+    def test_empty_cycle_id_fail_closed(self):
+        r = self._run(cycle_id_factory=lambda: "")
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+        self.assertEqual(r.submit_blocked_reason, "cycle_id_dependency_error")
+
+    def test_non_string_cycle_id_fail_closed(self):
+        r = self._run(cycle_id_factory=lambda: 12345)
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+
+    def test_failure_record_satisfies_invariant(self):
+        # a dependency-failure record is a valid DryRunCycleRecord.
+        r = self._run(clock=lambda: (_ for _ in ()).throw(RuntimeError()))
+        self.assertFalse(r.would_submit)
+        self.assertTrue(r.terminal)
+
+
 class TestHygiene(unittest.TestCase):
     def _imports(self, path):
         with open(path) as fh:
