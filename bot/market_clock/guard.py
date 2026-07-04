@@ -101,19 +101,27 @@ def _fresh_cached_open(cache: Optional[MarketClockCache],
     return dec
 
 
+_FUTURE_SKEW_TOLERANCE_SEC = 5.0
+
+
 def _age_ok(fetched_at_utc: Optional[datetime], as_of_utc: Optional[datetime],
             now_utc: datetime, max_age_sec: float) -> bool:
     """Fresh iff our fetch time is present and within max_age_sec, AND if the
     source provided its own as_of, that too is within max_age_sec. Missing
-    fetch time -> not fresh (fail closed)."""
+    fetch time -> not fresh (fail closed).
+
+    A small amount of FUTURE skew is tolerated (a source clock a few seconds
+    ahead of ours, or sub-second ordering effects, is normal and must not read
+    as stale); a large future value is rejected as implausible.
+    """
     if fetched_at_utc is None:
         return False
     fa = (now_utc - fetched_at_utc).total_seconds()
-    if fa < 0 or fa >= max_age_sec:
+    if fa < -_FUTURE_SKEW_TOLERANCE_SEC or fa >= max_age_sec:
         return False
     if as_of_utc is not None:
         ao = (now_utc - as_of_utc).total_seconds()
-        if ao < 0 or ao >= max_age_sec:
+        if ao < -_FUTURE_SKEW_TOLERANCE_SEC or ao >= max_age_sec:
             return False
     return True
 

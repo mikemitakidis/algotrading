@@ -200,6 +200,22 @@ class TestStaleness(unittest.TestCase):
         self.assertTrue(d2.may_submit)
 
 
+class TestFreshnessSkew(unittest.TestCase):
+    def test_small_future_skew_is_fresh(self):
+        # a source clock a few seconds AHEAD of ours must not read as stale
+        now = _mon(15)
+        ahead = now + timedelta(seconds=2)
+        d = _ev(now, [_src(_ok(now, as_of=ahead))])
+        self.assertTrue(d.may_submit, "small future skew must be fresh")
+
+    def test_large_future_skew_rejected(self):
+        now = _mon(15)
+        far = now + timedelta(seconds=60)
+        d = _ev(now, [_src(_ok(now, as_of=far))])
+        self.assertFalse(d.may_submit)
+        self.assertEqual(d.reason, REASON_SOURCE_STALE)
+
+
 class TestCache(unittest.TestCase):
     def test_19_cached_open_within_freshness_served(self):
         now = _mon(15)
