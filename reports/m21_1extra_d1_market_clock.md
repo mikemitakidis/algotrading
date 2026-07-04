@@ -109,3 +109,30 @@ Output ends with `D1_VPS_VERIFY_OK` and `M21_1EXTRA_D1_VPS_VERIFY_RC=0` (or the
 failure RC). The runner is invoked by a wrapper that logs the full transcript to
 `/tmp/m21_1extra_d1_market_clock_<timestamp>.log`, hard-aborts unless HEAD is the
 approved D1 SHA, and does not close an interactive shell.
+
+---
+
+## Real VPS proof (2026-07-04, read-only, no-credentials mode)
+
+The D1 read-only proof ran on the VPS at commit
+`c4bcb296f265eac1b5234900d3e5b3693def7c15` with `M21_1EXTRA_D1_VPS_VERIFY_RC=0`.
+
+**What it proves:** the fail-closed guard and the Alpaca **no-credentials**
+safety path, on the real VPS. All offline/safe checks were true — unsupported
+market blocks, no-source blocks, mock unavailable/malformed block, mock
+open+calendar allows, mock open+missing-calendar blocks, no-allow-on-any-failure
+holds, and the decision exposes C-compatible fields (writing nothing). The real
+Alpaca adapter, with `ALPACA_KEY`/`ALPACA_SECRET` absent, failed closed with
+`market_status_no_credentials`.
+
+**What it does NOT prove:** this run was in **no-credentials mode**, so it did
+**not** prove a live Alpaca API fresh open/closed response. The live Alpaca
+source proof remains **pending credentials** (`live_fresh_response_proof:
+pending_credentials`) — to be run later with credentials present and the Alpaca
+API reachable from the VPS, at which point RC=0 additionally requires a fresh,
+well-formed `market_open`/`market_closed`.
+
+**Scope (unchanged, restated honestly):** D1 proves the market-clock guard only.
+It does not prove a scheduler, order placement, D2/D3, lifecycle DB writes, or
+any strategy edge/profitability. D2 (unattended scheduler/loop) and D3
+(dashboard metrics) remain pending inside M21.1extra.
