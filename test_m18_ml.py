@@ -10420,6 +10420,7 @@ class G10_Hygiene(unittest.TestCase):
             "tools/universe_quality/",                      # M21.UQ quality
             "tools/signal_scoring/",                        # M21.1 scoring bridge
             "tools/paper_loop/",                            # M21.1extra paper loop
+            "bot/market_clock/",                            # M21.1extra-D1 market clock
         )
         allowed_exact = {
             "test_m17_backtesting.py",
@@ -10594,6 +10595,7 @@ class G10_Hygiene(unittest.TestCase):
             "bot/etoro/signal_only_broker.py",
             "bot/runtime_policy.py",
             "test_m21_1extra_d0_auth_cli.py",
+            "test_m21_1extra_d1_guard.py",
             "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.
             "test_m13_4a_runtime_enforcement.py",
