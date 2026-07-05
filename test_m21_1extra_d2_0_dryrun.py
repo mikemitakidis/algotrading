@@ -207,6 +207,16 @@ class TestInvariant(unittest.TestCase):
         self.assertEqual(_run().mode, "dry_run")
         self.assertEqual(_run().market_calendar_id, "US_EQ")
 
+    def test_dry_run_record_rejects_supervised_states(self):
+        # Blocker 1: a dry-run record must reject supervised-only states.
+        for st in ("ORDER_SUBMITTED", "POSITION_OBSERVED",
+                   "FLATTEN_CONFIRMED", "PERSISTED"):
+            with self.assertRaises(ValueError, msg="should reject %s" % st):
+                DryRunCycleRecord(cycle_id="x", started_at_utc="t",
+                                  finished_at_utc="t", state=st,
+                                  would_submit=False, d0_checked=True,
+                                  d1_checked=False)
+
     def test_dry_run_never_returns_order_submitted(self):
         # ORDER_SUBMITTED exists in the enum (supervised mode uses it), but the
         # dry-run path must NEVER return it — dry-run places no orders.

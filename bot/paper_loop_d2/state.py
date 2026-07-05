@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""M21.1extra-D2.0 — loop state machine + dry-run cycle record.
+"""M21.1extra-D2 — loop state machine + cycle records.
 
-D2.0 is PURE dry-run orchestration. It decides what a real cycle WOULD do,
-given injected gate decisions and candidates, and NEVER places an order, opens
-a broker/gateway connection, touches D0/D1 modules, hits the network, or writes
-a DB. The only "success" terminal is DRY_RUN_WOULD_SUBMIT (a real cycle would
-submit here) — there is deliberately no ORDER_SUBMITTED state in D2.0.
+The dry-run path decides what a real cycle WOULD do, given injected gate
+decisions and candidates, and NEVER places an order (its only success terminal
+is DRY_RUN_WOULD_SUBMIT). The supervised path (run_supervised_cycle) reuses the
+same states plus the supervised-only lifecycle states (ORDER_SUBMITTED,
+POSITION_OBSERVED, FLATTEN_CONFIRMED, PERSISTED), which a dry-run record is
+forbidden from carrying (see DryRunCycleRecord.__post_init__ and
+DRY_RUN_ALLOWED_STATES).
 """
 from __future__ import annotations
 
@@ -43,6 +45,30 @@ TERMINAL_STATES = frozenset({
     LoopState.FAILED_CLOSED,
 })
 
+# States a DRY-RUN record may legitimately hold. Supervised-only states
+# (ORDER_SUBMITTED / POSITION_OBSERVED / FLATTEN_CONFIRMED / PERSISTED) are
+# excluded — a dry-run places no orders and persists nothing, so a dry-run
+# record carrying one of those states would violate the dry-run contract.
+DRY_RUN_ALLOWED_STATES = frozenset({
+    LoopState.IDLE,
+    LoopState.SCAN_STARTED,
+    LoopState.NO_CANDIDATE,
+    LoopState.CANDIDATE_SELECTED,
+    LoopState.D0_BLOCKED,
+    LoopState.D1_BLOCKED,
+    LoopState.PRECHECK_FAILED,
+    LoopState.DRY_RUN_WOULD_SUBMIT,
+    LoopState.FAILED_CLOSED,
+})
+
+# Supervised-only states, forbidden in a dry-run record.
+SUPERVISED_ONLY_STATES = frozenset({
+    LoopState.ORDER_SUBMITTED,
+    LoopState.POSITION_OBSERVED,
+    LoopState.FLATTEN_CONFIRMED,
+    LoopState.PERSISTED,
+})
+
 # The ONLY state in which a real cycle would have submitted.
 _WOULD_SUBMIT_STATE = LoopState.DRY_RUN_WOULD_SUBMIT
 
@@ -76,6 +102,13 @@ class DryRunCycleRecord:
         valid_states = {s.value for s in LoopState}
         if self.state not in valid_states:
             raise ValueError("unknown loop state: %r" % (self.state,))
+        # a DRY-RUN record must never carry a supervised-only state.
+        if self.state in {s.value for s in SUPERVISED_ONLY_STATES}:
+            raise ValueError(
+                "dry-run record cannot hold supervised state %r" % self.state)
+        if self.state not in {s.value for s in DRY_RUN_ALLOWED_STATES}:
+            raise ValueError(
+                "state %r is not a valid dry-run state" % self.state)
         if self.mode != "dry_run":
             raise ValueError("D2.0 record mode must be 'dry_run'")
         # the core invariant: would_submit True <=> DRY_RUN_WOULD_SUBMIT.

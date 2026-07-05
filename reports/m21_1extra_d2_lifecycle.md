@@ -28,6 +28,21 @@ touched, a narrow flatten is attempted via the same injected broker's
 cycle fails closed **loudly** (`EMERGENCY_FLATTEN_UNCONFIRMED`) and never claims
 flatness.
 
+**Important (broker=None):** the real proof runner passes `broker=None`, so B2b
+builds its **own internal** paper broker that D2 cannot reach. If B2b raises
+after touching that internal broker, D2 **cannot** emergency-flatten it — the
+result carries `emergency_flatten_unavailable_b2b_internal_broker` plus
+`EMERGENCY_FLATTEN_UNCONFIRMED`, and a **human must manually verify flatness** on
+the account. D2 never implies a guaranteed flatten when `broker=None`.
+
+## Core price validation
+
+`run_supervised_cycle` validates prices itself, before any B2b call (the future
+scheduler calls it directly, so runner-only validation is insufficient): all
+prices > 0 and `stop_loss < entry_price < target_price`. Invalid prices →
+`PRECHECK_FAILED` with **no B2b call, no flatten, no persist** — never
+`PERSISTED`. The proof runner keeps its own validation too.
+
 ## State transitions added
 
 ```
@@ -77,12 +92,19 @@ C persist fails               -> FAILED_CLOSED
 
 `tools/paper_loop/m21_1extra_d2_lifecycle_proof.py` requires `--symbol`,
 `--entry-price`, `--stop-loss`, `--target-price`, and the ugly confirm flag
-`yes-run-one-real-paper-lifecycle`. It refuses (RC=1, no broker touched) unless
-all prices are > 0 and `stop_loss < entry_price < target_price`; B2b enforces
-qty/notional caps, paper mode, account `DUP623346`, and port 4002. There is no
-live price fetch. RC=0 only if the lifecycle reaches `PERSISTED`. The runner is
-invoked on the VPS during real US market open, D0 enabled, D1 `market_open`,
-IBKR paper only, human watching, with signals.db backed up and restore-verified.
+`yes-run-one-real-paper-lifecycle`. It acquires a `CycleLock` (default
+`/opt/algo-trader/data/d2_loop.lock`, `--lock-path` overridable; tests use temp
+paths) — a lock held by a live process refuses with RC=1 and **no broker
+action**. It refuses (RC=1, no broker touched) unless all prices are > 0 and
+`stop_loss < entry_price < target_price`; B2b enforces qty/notional caps, paper
+mode, account `DUP623346`, and port 4002. DB paths are **split**:
+`--policy-db-path` is passed only to the D0 gate, `--lifecycle-db-path` only to
+C — lifecycle rows never land in the policy DB and D0 never reads from the
+lifecycle DB. There is no live price fetch. RC=0 only if the lifecycle reaches
+`PERSISTED`. The lock is released on normal completion and on exception. The
+runner is invoked on the VPS during real US market open, D0 enabled, D1
+`market_open`, IBKR paper only, human watching, with signals.db backed up and
+restore-verified.
 
 ## Scope
 

@@ -268,6 +268,101 @@ class TestProofRunnerValidation(unittest.TestCase):
         self.assertEqual(PR.OK_MARKER, "D2_LIFECYCLE_VERIFY_OK")
         self.assertEqual(PR.RC_MARKER, "M21_1EXTRA_D2_LIFECYCLE_VERIFY_RC")
 
+    def test_lock_held_refuses_rc1_no_broker(self):
+        # Blocker 2: a lock held by a LIVE pid -> RC=1, no state (no broker).
+        import io
+        import os
+        import tempfile
+        import shutil
+        from contextlib import redirect_stdout
+        import tools.paper_loop.m21_1extra_d2_lifecycle_proof as PR
+        from bot.paper_loop_d2 import CycleLock
+
+        d = tempfile.mkdtemp()
+        lockp = os.path.join(d, "d2.lock")
+        held = CycleLock(lockp, pid=os.getpid())  # our own live pid
+        held.acquire()
+
+        class _Args:
+            symbol = "AAPL"
+            entry_price = 100.0
+            stop_loss = 99.0
+            target_price = 102.0
+            policy_db_path = None
+            lifecycle_db_path = None
+            lock_path = lockp
+            confirm = "yes-run-one-real-paper-lifecycle"
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = PR.run(_Args())
+            out = buf.getvalue()
+            self.assertEqual(rc, 1)
+            self.assertIn("lock_held", out)
+            self.assertNotIn('"state"', out)   # broker never reached
+        finally:
+            held.release()
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_split_db_paths_are_separate_args(self):
+        # Blocker 3: policy and lifecycle DBs are distinct flags.
+        import tools.paper_loop.m21_1extra_d2_lifecycle_proof as PR
+        ns = PR.build_arg_parser().parse_args([
+            "--symbol", "AAPL", "--entry-price", "100", "--stop-loss", "99",
+            "--target-price", "102", "--policy-db-path", "/tmp/pol.db",
+            "--lifecycle-db-path", "/tmp/life.db", "--confirm", "x"])
+        self.assertEqual(ns.policy_db_path, "/tmp/pol.db")
+        self.assertEqual(ns.lifecycle_db_path, "/tmp/life.db")
+        self.assertNotEqual(ns.policy_db_path, ns.lifecycle_db_path)
+
+
+class TestCorePriceValidation(unittest.TestCase):
+    """Blocker 4: run_supervised_cycle validates prices BEFORE any B2b call."""
+
+    def _run(self, entry, stop, target):
+        c = _Counter({"entry_order_originated": True,
+                      "lifecycle_confirmed": True})
+        b = _Broker()
+        r = run_supervised_cycle(
+            d0_gate=_d0(True), d1_gate=_d1(True), candidate_provider=_PROV,
+            threshold=5.0, entry_price=entry, stop_loss=stop,
+            target_price=target, b2b_run_lifecycle=c.b2b,
+            c_persist_lifecycle=c.persist, broker=b)
+        return r, c, b
+
+    def test_invalid_prices_no_b2b_no_flatten_precheck(self):
+        for entry, stop, target in [(100, 101, 102), (100, 99, 99),
+                                    (0, -1, 5), (-5, -6, -4), (100, 50, 100)]:
+            r, c, b = self._run(entry, stop, target)
+            self.assertEqual(r.state, LoopState.PRECHECK_FAILED.value,
+                             "prices %r" % ((entry, stop, target),))
+            self.assertEqual(c.b2b_calls, 0)
+            self.assertEqual(c.persist_calls, 0)
+            self.assertEqual(b.flatten_calls, 0)
+            self.assertNotEqual(r.state, LoopState.PERSISTED.value)
+
+    def test_valid_prices_reach_b2b(self):
+        r, c, b = self._run(100.0, 99.0, 102.0)
+        self.assertEqual(c.b2b_calls, 1)
+        self.assertEqual(r.state, LoopState.PERSISTED.value)
+
+
+class TestBrokerNoneEmergency(unittest.TestCase):
+    """Blocker 5: broker=None -> D2 cannot flatten B2b's internal broker."""
+
+    def test_broker_none_b2b_raises_explicit_unavailable(self):
+        def b2b_raise(symbol, **kw):
+            raise RuntimeError("boom")
+        r = run_supervised_cycle(
+            d0_gate=_d0(True), d1_gate=_d1(True), candidate_provider=_PROV,
+            threshold=5.0, entry_price=100.0, stop_loss=99.0,
+            target_price=102.0, b2b_run_lifecycle=b2b_raise,
+            c_persist_lifecycle=_Counter({}).persist, broker=None)
+        self.assertEqual(r.state, LoopState.FAILED_CLOSED.value)
+        self.assertIn("emergency_flatten_unavailable_b2b_internal_broker",
+                      r.errors)
+        self.assertIn("EMERGENCY_FLATTEN_UNCONFIRMED", r.errors)
+
 
 class TestHygiene(unittest.TestCase):
     def _read(self):

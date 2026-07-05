@@ -190,7 +190,16 @@ def run_supervised_cycle(
             return _finish(LoopState.D1_BLOCKED,
                            blocked=d1_reason or "d1_blocked")
 
-        # ── both gates affirmative: call B2b EXACTLY ONCE ──
+        # ── core price validation BEFORE any broker action ──
+        # The scheduler will call run_supervised_cycle directly, so this must
+        # not rely on the proof runner's validation. Fail closed with NO B2b
+        # call and NO persist (a pre-submit config refusal is not a lifecycle).
+        if not _prices_valid(entry_price, stop_loss, target_price):
+            errors.append("invalid_prices")
+            return _finish(LoopState.PRECHECK_FAILED,
+                           blocked="invalid_prices")
+
+        # ── both gates affirmative + prices valid: call B2b EXACTLY ONCE ──
         try:
             b2b_result = b2b_run_lifecycle(
                 symbol, confirm=True, entry_price=entry_price,
@@ -255,6 +264,22 @@ def run_supervised_cycle(
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+def _prices_valid(entry_price: Any, stop_loss: Any, target_price: Any) -> bool:
+    """Core price sanity: all positive and stop_loss < entry_price <
+    target_price. Fail closed (False) on any non-numeric / NaN / bad order."""
+    try:
+        e = float(entry_price)
+        s = float(stop_loss)
+        t = float(target_price)
+    except (TypeError, ValueError):
+        return False
+    if e != e or s != s or t != t:   # NaN
+        return False
+    if not (e > 0 and s > 0 and t > 0):
+        return False
+    return s < e < t
+
+
 def _enrich(b2b: Dict[str, Any], d0_allowed, d0_reason, d1_may,
             d1_reason) -> Dict[str, Any]:
     """Attach D0/D1 provenance + market-clock fields to a B2b result dict.
@@ -285,8 +310,19 @@ def _emergency_flatten(broker: Any, symbol: Optional[str],
                        errors: List[str]) -> bool:
     """Narrow emergency flatten via the injected broker's own
     flatten_paper_position. Returns True only if flatness is affirmatively
-    confirmed. No new wrapper, no B2flat duplication."""
+    confirmed. No new wrapper, no B2flat duplication.
+
+    IMPORTANT: when broker is None, B2b builds its OWN internal broker that D2
+    cannot reach, so D2 cannot emergency-flatten it. In that case we record an
+    explicit, loud marker and return False — a human must verify flatness. We
+    never imply a guaranteed flatten when broker is None."""
     if symbol is None:
+        errors.append("no_flatten_capability")
+        return False
+    if broker is None:
+        # the real proof runner passes broker=None; B2b's internal broker is
+        # unreachable from here. Be explicit and loud; do NOT claim flatness.
+        errors.append("emergency_flatten_unavailable_b2b_internal_broker")
         return False
     flatten = getattr(broker, "flatten_paper_position", None)
     if not callable(flatten):
