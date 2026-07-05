@@ -5,6 +5,14 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
+> **Current operating state (M21.1extra docs-debt pass):** active milestone is
+> **M21.1extra D2**, IBKR **paper only** (port 4002, account `DUP623346`), no
+> IBKR live, no eToro real orders. **D3 pending; no M21.2; no eToro (M22 gate).**
+> Known previous-milestone debt is tracked in
+> [`docs/PREVIOUS_MILESTONE_DEBT.md`](docs/PREVIOUS_MILESTONE_DEBT.md) — notably
+> the M14 scanner→IBKR risk-authority gap, M15 IBKR-paper PnL, and the M15
+> IBKR-paper account/equity reader not being wired in production.
+
 ## Status legend
 
 - **CLOSED** — implemented, tests/evidence captured, VPS-verified where applicable.
@@ -138,7 +146,7 @@ project-wide reconciliation narrative lives in
 - **Files:** 15 modules under `bot/etoro/`, `tools/etoro_live_write.py`, `tools/etoro_reconcile.py`, 9 test suites under `test_m13_5_*.py`, 6 docs under `docs/M13_*.md`.
 - **Closeout artifact:** `docs/M13_7_closeout.md` (commit chain `61a` → `1e2ced7`, 13 accepted safety invariants with 173 proving tests in `test_m13_5_*.py` + M13.2 42 + M13.3 48 + M13.4A 61).
 - **Safety stance:** demo disabled (fail-closed), `--base-url` removed, real mode pinned to `https://public-api.etoro.com`, double live-flag + per-payload nonce, full scanner-isolation, no dashboard live-write button.
-- **Zero real eToro orders placed.** First funded eToro order is **outside M13 and M14**; tracked as **M21** (First Funded eToro Go-Live).
+- **Zero real eToro orders placed.** First funded eToro order is **outside M13 and M14**; it is gated at **M22 (Controlled Live Readiness) or later**, per the canonical roadmap. (Older text tracked this as "M21"; that is superseded — the first funded eToro order is an M22 gate, not M21.)
 - **Status correction:** older notes called M13 "externally blocked." That is no longer true; M13 closed in the current chat thread.
 
 ### Milestone 14 — Portfolio / Risk Layer (CLOSED — A through H)
@@ -160,7 +168,7 @@ project-wide reconciliation narrative lives in
 
 **Carry-forward limitations (tracked in M15):**
 - IBKR exposure reader is a `NotImplementedError` stub — engine returns `exposure_unknown` for IBKR scopes until wired to Gateway (M15.x).
-- eToro keys absent on VPS (no `ETORO_LIVE_ENABLED`, no `ETORO_REAL_API_KEY`). First funded order is M21, not M14.
+- eToro keys absent on VPS (no `ETORO_LIVE_ENABLED`, no `ETORO_REAL_API_KEY`). First funded order is gated at **M22 or later**, not M14 (and not M21 — see the correction above).
 - Dashboard accessed via `http://138.199.196.95:8080/` — security hardening is M15.3.
 - `manual_reset` is design-only; no UI or API path can issue one in M14.
 

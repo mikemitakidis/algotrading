@@ -354,7 +354,7 @@ After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safet
 - Operator-in-the-loop confirmation on every order.
 - Daily-loss seam fed by M14.E/F.
 - Capital allocation policy review.
-- Was previously sketched as "M21 — First Funded eToro Go-Live" and "M22 — Semi-Automated Live Trading".
+- Was previously sketched as "M21 — First Funded eToro Go-Live" and "M22 — Semi-Automated Live Trading". **Superseded:** under the canonical roadmap the first funded eToro order is gated at **M22 (Controlled Live Readiness) or later**; M21 is the score-optimisation / live-loop band and involves **no** real eToro money.
 
 #### Fully autonomous advanced live bot (3-6+ months minimum from M15 closeout)
 - Authority ladder reaches `AUTO_ALLOWED` for one broker at a time.

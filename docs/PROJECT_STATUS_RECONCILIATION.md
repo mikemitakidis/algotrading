@@ -188,3 +188,8 @@ M6/M15; not reopened in M5.
 - [`docs/M14_A_design.md`](M14_A_design.md) — M14 risk intelligence design.
 - [`docs/M13_5_D_open_unknowns.md`](M13_5_D_open_unknowns.md) — eToro open-unknowns provenance register.
 - [`docs/M15_2_external_monitoring.md`](M15_2_external_monitoring.md) — health endpoint surface.
+
+
+---
+
+> **Correction (M21.1extra docs-debt pass):** references above to the first funded eToro order as **"M21"** are superseded. Under the canonical roadmap the first funded eToro order is gated at **M22 (Controlled Live Readiness) or later**. M21 involves no real eToro money. This note corrects milestone-number drift only; it does not change any M14 finding.

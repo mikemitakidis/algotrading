@@ -324,3 +324,8 @@ IBKR live submissions in production must remain operator-supervised; do not enab
 ---
 
 *End of M14 final audit.*
+
+
+---
+
+> **Correction (M21.1extra docs-debt pass):** references above to the first funded eToro order as **"M21"** are superseded. Under the canonical roadmap the first funded eToro order is gated at **M22 (Controlled Live Readiness) or later**. M21 involves no real eToro money. This note corrects milestone-number drift only; it does not change any M14 finding.
