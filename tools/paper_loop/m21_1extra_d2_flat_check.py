@@ -90,24 +90,55 @@ def decide(*, connected: bool, account_ok: bool,
     return "YES"
 
 
+def preflight_ok(port: Any, account: Any, is_live: bool
+                 ) -> Tuple[bool, str]:
+    """Pure pre-connect guard (unit-tested). Refuse BEFORE opening any
+    connection unless paper mode, port == PAPER_PORT (4002), and account ==
+    DUP623346. Mirrors B2b/flatten refusal conditions."""
+    from bot.brokers.ibkr_broker import PAPER_PORT
+    if is_live:
+        return False, "live_mode_refused"
+    try:
+        if int(port) != int(PAPER_PORT):
+            return False, "wrong_port_%s_expected_%s" % (port, PAPER_PORT)
+    except (TypeError, ValueError):
+        return False, "unreadable_port"
+    if str(account).strip() != _EXPECTED_ACCOUNT:
+        return False, "wrong_account_%s" % account
+    return True, "ok"
+
+
 def verify_flat(symbol: str, *, broker_factory: Callable[[], Any] = None
                 ) -> str:
-    """Connect once (read-only), gather openTrades() + positions() + account,
-    and classify. Any exception -> UNKNOWN. Never cancels/closes/submits."""
+    """Connect once (read-only in intent — the verifier makes NO mutation
+    calls; see the read-only hygiene test), gather openTrades() + positions() +
+    account, and classify. Any exception -> UNKNOWN. Never cancels/closes/
+    submits.
+
+    NOTE on read-only: the shared adapter `_connect()` opens ib_insync with
+    readonly=False (we reuse it so we hit the SAME gateway/params as B2b), but
+    this function issues only read queries (openTrades/positions/account) and no
+    order mutation — proven by the read-only hygiene test. A pre-connect guard
+    refuses wrong port/account/live BEFORE any socket is opened.
+    """
     warnings: List[str] = []
+    ib = None
     try:
         if broker_factory is None:
             from bot.brokers.ibkr_broker import IBKRBroker
             broker_factory = IBKRBroker
         broker = broker_factory()
 
-        # refuse to even try if the broker reports live mode.
-        if getattr(broker, "is_live", False):
+        # ── pre-connect guard: refuse wrong port/account/live WITHOUT
+        #    opening any connection ──
+        from bot.brokers.ibkr_broker import _get_connection_params
+        _, port, account, _ = _get_connection_params()
+        ok, _reason = preflight_ok(port, account,
+                                   bool(getattr(broker, "is_live", False)))
+        if not ok:
             return "UNKNOWN"
 
         ib = broker._connect()   # raises on failure -> caught below
-        from bot.brokers.ibkr_broker import _get_connection_params
-        _, port, account, _ = _get_connection_params()
 
         # account must verify AND equal the paper account.
         acct_ok, acct_msg = broker._verify_account(ib)
@@ -117,18 +148,20 @@ def verify_flat(symbol: str, *, broker_factory: Callable[[], Any] = None
         open_trades = list(ib.openTrades())
         positions = list(ib.positions(account=account))
 
-        result = decide(connected=True, account_ok=bool(acct_ok),
-                        open_trades=open_trades, positions=positions,
-                        symbol=symbol, account=account, warnings=warnings)
-        try:
-            if ib.isConnected():
-                ib.disconnect()
-        except Exception:
-            pass
-        return result
+        return decide(connected=True, account_ok=bool(acct_ok),
+                      open_trades=open_trades, positions=positions,
+                      symbol=symbol, account=account, warnings=warnings)
     except Exception:
         # any connection/query failure -> cannot prove flat -> UNKNOWN
         return "UNKNOWN"
+    finally:
+        # ALWAYS disconnect if we opened a connection, even on exception.
+        if ib is not None:
+            try:
+                if ib.isConnected():
+                    ib.disconnect()
+            except Exception:
+                pass
 
 
 def main(argv=None) -> int:
