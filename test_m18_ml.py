@@ -10606,6 +10606,7 @@ class G10_Hygiene(unittest.TestCase):
             "reports/m21_1extra_d2_gates.md",
             "test_m21_1extra_d2_lifecycle.py",
             "reports/m21_1extra_d2_lifecycle.md",
+            "test_m21_1extra_d2_flat_check.py",
             "reports/m21_1extra_d1_market_clock.md",
             "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.
