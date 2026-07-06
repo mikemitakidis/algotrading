@@ -488,15 +488,42 @@ class TestGateOrdering(unittest.TestCase):
         self.assertIn("spread_too_wide", d.reason_codes)
 
     def test_gate_25_data_staleness_sweep(self):
-        scopes = {s: _scope(scope=s, exposure_fresh_reads_count=0,
-                            exposure_known=True)
-                  for s in ALL_BROKER_SCOPES}
-        snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(scope="ibkr_paper"), snap, _req(),
-                   policy=_baseline_policy())
-        # Either exposure_stale (count<1) fires or it passes; this test
-        # asserts the gate exists and runs without crashing.
-        self.assertIn(d.result, ("allow", "block"))
+        # C4 (R2-7): a MEANINGFUL data-staleness assertion. Previously this only
+        # asserted d.result in ('allow','block') — always true, proving nothing.
+        # Now: stale exposure (0 fresh reads) MUST block with 'exposure_stale';
+        # fresh exposure (>=1 fresh read) MUST NOT fire the staleness gate.
+
+        # STALE: exposure_fresh_reads_count=0 -> gate fires -> block.
+        stale_scopes = {s: _scope(scope=s, exposure_fresh_reads_count=0,
+                                  exposure_known=True)
+                        for s in ALL_BROKER_SCOPES}
+        d_stale = decide(_ctx(scope="ibkr_paper"),
+                         _snapshot(scopes_override=stale_scopes), _req(),
+                         policy=_baseline_policy())
+        self.assertEqual(d_stale.result, "block",
+                         "stale exposure (0 fresh reads) must block")
+        self.assertIn("exposure_stale", d_stale.reason_codes,
+                      "block reason must identify exposure staleness")
+
+        # FRESH: exposure_fresh_reads_count>=1 -> staleness gate does NOT fire.
+        fresh_scopes = {s: _scope(scope=s, exposure_fresh_reads_count=3,
+                                  exposure_known=True)
+                        for s in ALL_BROKER_SCOPES}
+        d_fresh = decide(_ctx(scope="ibkr_paper"),
+                         _snapshot(scopes_override=fresh_scopes), _req(),
+                         policy=_baseline_policy())
+        self.assertNotIn("exposure_stale", d_fresh.reason_codes,
+                         "fresh exposure must not trigger the staleness gate")
+
+        # BOUNDARY: the gate uses `< 1`, so exactly 1 fresh read clears it.
+        one_scopes = {s: _scope(scope=s, exposure_fresh_reads_count=1,
+                                exposure_known=True)
+                      for s in ALL_BROKER_SCOPES}
+        d_one = decide(_ctx(scope="ibkr_paper"),
+                       _snapshot(scopes_override=one_scopes), _req(),
+                       policy=_baseline_policy())
+        self.assertNotIn("exposure_stale", d_one.reason_codes,
+                         "exactly 1 fresh read must clear the staleness gate")
 
     def test_first_failure_wins(self):
         """Multiple violations: only the first gate's reason code appears."""
