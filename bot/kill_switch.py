@@ -15,7 +15,10 @@ Design decisions:
     mis-sequenced bracket cancellation — operator cancels manually via Gateway)
   - State persists across bot restart so kill switch stays active
     if bot crashes and restarts while operator investigates
-  - Fail-safe: if state file is unreadable, kill switch is treated as ACTIVE
+  - Fail-safe: if state file is unreadable OR missing, kill switch is
+    treated as ACTIVE (read-path fails closed). The only intended way to have
+    an inactive/default state is ensure_default_state(), which explicitly
+    initialises {'active': false} at startup.
 """
 import json
 import logging
@@ -32,7 +35,13 @@ def _read_state() -> dict:
     try:
         if KILL_SWITCH_PATH.exists():
             return json.loads(KILL_SWITCH_PATH.read_text())
-        return {'active': False}
+        # fail-CLOSED: a missing state file on the read path means we cannot
+        # prove trading is enabled, so treat as ACTIVE. The ONLY intended way
+        # to have an inactive/default state is ensure_default_state(), which
+        # explicitly writes {'active': False} at startup. (R2-1 fix.)
+        log.warning('[KILL_SWITCH] state file missing on read — defaulting to '
+                    'ACTIVE (fail-closed); ensure_default_state() initialises)')
+        return {'active': True}
     except Exception as e:
         log.error('[KILL_SWITCH] Failed to read state — defaulting to ACTIVE: %s', e)
         return {'active': True}   # fail-safe: if unreadable, treat as active

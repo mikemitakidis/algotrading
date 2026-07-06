@@ -96,34 +96,55 @@ class TestFailSafe(_IsolatedKillSwitch):
         self.assertFalse(ks.is_kill_switch_active())
 
 
-class TestMissingFileAsymmetry(_IsolatedKillSwitch):
-    """R2-1: a CLEANLY-missing file is fail-OPEN (inactive), while an
-    unreadable/corrupt file is fail-SAFE (active). This test PINS the CURRENT
-    behaviour truthfully — it does not endorse it. Changing the missing-file
-    case to fail-safe is a Bucket-D runtime decision, not a C change; if that
-    change is made, this test should be updated deliberately."""
+class TestMissingFileFailsClosed(_IsolatedKillSwitch):
+    """R2-1 FIXED (D1): a missing state file on the read path now fails CLOSED
+    (ACTIVE), consistent with the corrupt-file case. The only way to get an
+    inactive/default state is ensure_default_state(), tested separately."""
 
-    def test_cleanly_missing_file_is_inactive_current_behaviour(self):
-        # no file at all -> _read_state returns {'active': False} -> inactive.
+    def test_cleanly_missing_file_is_active_failclosed(self):
+        # no file at all -> read path now returns ACTIVE (was inactive pre-D1).
         if ks.KILL_SWITCH_PATH.exists():
             ks.KILL_SWITCH_PATH.unlink()
-        self.assertFalse(
+        self.assertTrue(
             ks.is_kill_switch_active(),
-            "current behaviour: cleanly-missing file reads INACTIVE (fail-open)")
+            "D1: a missing state file must fail CLOSED (ACTIVE)")
 
-    def test_asymmetry_is_real(self):
-        # missing -> inactive; corrupt -> active. Prove both in one place so the
-        # asymmetry is visible and regression-guarded.
+    def test_missing_and_corrupt_both_fail_closed(self):
+        # both the missing and corrupt read paths now agree: ACTIVE.
         if ks.KILL_SWITCH_PATH.exists():
             ks.KILL_SWITCH_PATH.unlink()
         missing_active = ks.is_kill_switch_active()
         self._write_raw("{corrupt")
         corrupt_active = ks.is_kill_switch_active()
-        self.assertFalse(missing_active)   # fail-open
-        self.assertTrue(corrupt_active)    # fail-safe
-        self.assertNotEqual(
+        self.assertTrue(missing_active)   # fail-closed (changed by D1)
+        self.assertTrue(corrupt_active)   # fail-safe (unchanged)
+        self.assertEqual(
             missing_active, corrupt_active,
-            "documented R2-1 asymmetry: missing=open, corrupt=safe")
+            "D1: missing and corrupt now both fail closed (asymmetry removed)")
+
+
+class TestEnsureDefaultState(_IsolatedKillSwitch):
+    """ensure_default_state() remains the ONLY intended initializer of an
+    inactive/default state, and it does so explicitly."""
+
+    def test_ensure_default_creates_inactive_when_missing(self):
+        if ks.KILL_SWITCH_PATH.exists():
+            ks.KILL_SWITCH_PATH.unlink()
+        # before init: read path fails closed (active).
+        self.assertTrue(ks.is_kill_switch_active())
+        # deliberate initializer writes an inactive default.
+        ks.ensure_default_state()
+        self.assertTrue(ks.KILL_SWITCH_PATH.exists())
+        self.assertFalse(ks.is_kill_switch_active(),
+                         "ensure_default_state must create an inactive default")
+
+    def test_ensure_default_preserves_existing_active_state(self):
+        # if the file already exists (active), ensure_default_state must NOT
+        # overwrite it back to inactive.
+        ks.activate_kill_switch("pre-existing active")
+        ks.ensure_default_state()
+        self.assertTrue(ks.is_kill_switch_active(),
+                        "ensure_default_state must not clobber an active state")
 
 
 class TestProductionPathUntouched(_IsolatedKillSwitch):
