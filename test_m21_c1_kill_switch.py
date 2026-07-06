@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""C1 (M21 safety-test repair) — kill-switch CI coverage.
+"""M21 safety-test coverage for bot/kill_switch.py (C1 + D1).
 
-Closes audit R1-4 (kill_switch fail-safe has zero CI coverage). Also documents
-the R2-1 asymmetry (cleanly-missing file is fail-OPEN, unreadable/corrupt is
-fail-SAFE) truthfully without changing runtime behaviour.
+History:
+  - C1 originally added kill-switch CI coverage, closing audit R1-4
+    (kill_switch fail-safe had zero CI coverage).
+  - D1 closes audit R2-1 by changing the missing-file read path to fail
+    CLOSED. A missing kill_switch.json and a corrupt/unreadable one now BOTH
+    read ACTIVE — the earlier fail-open asymmetry is removed. This file's
+    expectations were updated accordingly (see TestMissingFileFailsClosed).
+
+ensure_default_state() remains the deliberate initializer for the
+inactive/default state: it explicitly writes {'active': False} at startup, and
+is the ONLY intended way to obtain an inactive state (see TestEnsureDefaultState).
 
 Isolation: every test monkeypatches bot.kill_switch.KILL_SWITCH_PATH to a temp
 file, so the PRODUCTION data/kill_switch.json is never read or written. A guard
 test asserts the production path is untouched.
 
-These tests are red/green guardrails: if the fail-safe (unreadable -> ACTIVE)
-behaviour is removed, test_unreadable_state_fails_safe_active must fail.
+These tests are red/green guardrails: if the read-path fail-closed behaviour
+(missing OR unreadable -> ACTIVE) is removed, the corresponding tests must fail.
 """
 from __future__ import annotations
 
