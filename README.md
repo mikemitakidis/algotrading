@@ -4,9 +4,11 @@ Multi-timeframe algorithmic trading bot for US equities.
 
 **Current state (2026):** Milestones **M1–M18 are complete**. M18 (the ML
 strategy/criteria foundation) has been merged to `main` at
-`264fba841298d852deb9ccffc059e35fc896cd38`. The active cleanup branch is
-`pre-m19-audit-fixes`. **M19 (signal scoring engine) is the next milestone
-and has not been started.**
+`264fba841298d852deb9ccffc059e35fc896cd38`. **Since then M19 (signal scoring),
+M20 (paper decision/orchestration), and M21.1extra-D0/D1/D2 have all been
+delivered.** The current work item is **M21.1extra-D3 (dashboard metrics),
+not started** — M21.1extra is not complete until D3. See
+[`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) for the authoritative state.
 
 Important scope notes:
 

@@ -10,7 +10,9 @@
 > says ML closed-loop / sentiment / scoring is "M17 or M18 scope", note that
 > M18 delivers the ML *foundation* only (sklearn/RandomForest, gated,
 > shadow-only); it is **not** live trading and **not** M19 signal scoring.
-> M19 (signal scoring) is the next concrete milestone after M18 merges.
+> M19, M20, and M21.1extra-D0/D1/D2 have been delivered since M18. The current
+> work item is M21.1extra-D3 (dashboard metrics), not started. M21.1extra is not
+> complete until D3. See MILESTONE_STATUS.md for authoritative state.
 
 **Date:** 2026-05-29
 **Repo HEAD at writing:** `729ad2d` (M14.D bugfix; M14.D accepted on VPS)
@@ -46,7 +48,8 @@ The single source of truth for the live state of each milestone is
 ### What is actually true now
 
 - M1–M7: closed.
-- M8: implemented as a real NewsAPI integration with caching and pluggable
+- M8: implemented via yfinance / Google News / AlphaVantage news providers
+  (NOT NewsAPI — no NewsAPI provider exists in the repo), with caching and pluggable
   providers, used in the live cycle. Not yet macro-aware or multi-source.
 - M9: XGBoost meta-labeling **training infrastructure** complete
   (`ml_train.py`, `ml_build_dataset.py`); **not** yet wired into the
@@ -112,7 +115,8 @@ in its closeout doc:
 Two milestones (M8 sentiment, M9 ML) carry an explicit "implemented but
 not closed-loop" label. This is deliberate honesty, not foot-dragging:
 
-- **M8** has a real NewsAPI integration used in the live cycle. Calling
+- **M8** has a real news integration (yfinance / Google News / AlphaVantage,
+  not NewsAPI) used in the live cycle in shadow/ignore mode. Calling
   it "closed" would imply macro/multi-source aggregation and
   confidence-weighted scoring exist. They don't. Those are M18 scope.
   Keeping M8 as "implemented, not closed" preserves the original goal

@@ -5,6 +5,43 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
+> ## Current operating state (updated 2026-07-06, A1 docs realignment)
+>
+> **Active milestone:** M21.1extra. **IBKR paper only** (port 4002, account
+> `DUP623346`); no IBKR live, no eToro real orders.
+>
+> ```
+> ✅ D0 — authorization gate
+> ✅ D1 — market-clock guard (Alpaca calendar parser fixed, main aa32dcb)
+> ✅ D2 — supervised paper lifecycle proof (2026-07-06: state=PERSISTED,
+>          ACCOUNT_FLAT=YES, D0 disabled, SUPERVISED_PROOF_PACKAGE_RC=0;
+>          IBKR confirmed bought 1 AAPL @313.14 / sold @313.08, OCA leg cancelled)
+> ⏳ D3 — dashboard metrics — NOT STARTED
+> ```
+>
+> **M21.1extra is NOT complete until D3.** D2 done ≠ M21.1extra done.
+> **No M21.2, no scheduler, no live, no eToro** until D3 and their own approvals.
+>
+> **Completed audit remediation this cycle:**
+> - **B — config hygiene (COMPLETE 2026-07-06):** `.env` cleaned for paper —
+>   `BROKER` deduped 2→1 (`ibkr_paper`), latent `IBKR_LIVE_ACCOUNT` /
+>   `IBKR_LIVE_PORT=4001` commented (reversible, not deleted),
+>   `ALPACA_BASE_URL=https://paper-api.alpaca.markets` single/correct; effective
+>   paper runtime confirmed; backup stored outside the repo tree.
+> - **ALPACA_BASE_URL fix:** removed the erroneous `/v2` suffix that caused
+>   `/v2/v2/clock` 404s.
+>
+> **Known benign follow-up (P2 cleanup):** IBKR `Error 10148 … OrderId … already
+> Cancelled` during flatten is idempotent-cancel noise — the flatten re-reads
+> the contract-aware order/position state and only confirms flat on the verified
+> end state, so it is cosmetic, not a safety gap.
+>
+> **Controlled audit remediation order (A → G), still to run (no scope bleed):**
+> A1 docs/status truth realignment (this pass) · B config hygiene (done) ·
+> C safety tests · D runtime hardening · E cleanup · F live-readiness designs ·
+> G audits. Previous-milestone debt is tracked in the debt register (pending merge on
+> branch `m21-docs-debt-register`).
+
 ## Status legend
 
 - **CLOSED** — implemented, tests/evidence captured, VPS-verified where applicable.
@@ -38,7 +75,7 @@ project-wide reconciliation narrative lives in
 | 5 | Backtesting | ACCEPTED ENOUGH | `bot/backtest.py`, `backtest_cli.py`; Yahoo/cache limits tracked under M6/M15 |
 | 6 | Modular Data-Provider Architecture | CLOSED | `bot/providers/{base,yfinance_provider,alpaca_provider}.py` |
 | 7 | More Indicators / Richer Logging | CLOSED | `_ml_features` block per signal in `bot/scanner.py:~245` |
-| 8 | News / Sentiment Module | IMPLEMENTED, NOT CLOSED-LOOP | `bot/sentiment/news_provider.py` (456 lines, real NewsAPI); single-provider; macro/multi-source → M18 |
+| 8 | News / Sentiment Module | IMPLEMENTED, NOT CLOSED-LOOP (shadow/ignore mode) | `bot/sentiment/news_provider.py` — providers are **yfinance / Google News / AlphaVantage** (NOT "NewsAPI"); wired into the live cycle but runs `SENTIMENT_MODE=ignore` (fetched/logged, does not filter signals); single-source, no macro overlay, no confidence-weighting |
 | 9 | ML Pipeline | INFRASTRUCTURE COMPLETE, NOT CLOSED-LOOP | `ml_train.py` (541 lines XGBoost meta-labeling), `ml_build_dataset.py`; not wired as a live filter in `scanner.py`. **Superseded by the M18 ML foundation** (`bot/ml/*`, sklearn/RandomForest, read-only/shadow-only) on branch `m18-recovery-from-transcripts` — see row 18 + `docs/M18_ACCEPTANCE.md`. The old `ml_train.py` remains on main as historical infra; M18 is the current ML direction |
 | 10 | Broker Execution Architecture | CLOSED | `bot/brokers/{base,ibkr_broker,paper_broker}.py`; flywheel schema |
 | 11 | IBKR Paper Trading | CLOSED | `bot/brokers/ibkr_broker.py` + IBC 3.22.0; `test_m11.py` |
@@ -49,7 +86,11 @@ project-wide reconciliation narrative lives in
 | 16 | Historical Data + First Signal Engine | CLOSED 2026-06-05 (M16.A + M16.B + fixes 1-4) | See M16 detail below; `bot/historical/*`, `data/historical/yfinance/1D/AAPL.parquet` (real data); commit chain `c6e98b7` → `aef8335` |
 | 17 | Backtesting engine (scanner_replica + multi-TF confluence) | CLOSED — `origin/main` is `M17.B.closeout` (`a8d8ca4`) | `test_m17_backtesting` 200 OK (skipped=2); on main |
 | 18 | ML strategy/criteria foundation (read-only / shadow-only) | **CLOSED — merged to `main` at `264fba84`** | sklearn/RandomForest foundation; `test_m18_ml` loader 669 (668 + duplicate-class guard added in pre-M19 cleanup); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
-| 19–23 | Future scope | PENDING | See `ROADMAP.md`. M19 signal scoring is the next concrete milestone after M18 merges. |
+| 19 | Signal scoring engine (M19) | CLOSED | `bot/signal_scoring/` — pure scoring/explainability layer; see `bot/signal_scoring/M19_STATUS.md`. Not execution |
+| 20 | Paper decision/orchestration (M20) | CLOSED | `bot/paper/`; see `docs/ROADMAP_M20.md` |
+| 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (M21.1extra D0/D1/D2 done; D3 not started) | `bot/paper_loop_d2/`; D0 auth gate, D1 market-clock, D2 supervised paper lifecycle proven; **D3 dashboard metrics not started** |
+| 21.2 | Parameter optimisation | NOT STARTED | Blocked on D3 + the PnL/backtest debt (debt register pending on branch `m21-docs-debt-register`) |
+| 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later** |
 
 ---
 
@@ -96,7 +137,7 @@ project-wide reconciliation narrative lives in
 ### Milestone 8 — News / Sentiment Module (IMPLEMENTED, NOT CLOSED-LOOP)
 - **Files:**
   - `bot/sentiment/__init__.py` — pluggable provider factory + `apply_sentiment(signal, result, mode)`.
-  - `bot/sentiment/news_provider.py` (~456 lines) — real NewsAPI integration with caching, error classification, fetch-success flag, headline extraction.
+  - `bot/sentiment/news_provider.py` (~456 lines) — real news integration via **yfinance / Google News / AlphaVantage** providers (NOT "NewsAPI"; no NewsAPI provider exists in the repo), with caching, error classification, fetch-success flag, headline extraction. Runs in `SENTIMENT_MODE=ignore` (shadow) so signals are fetched/logged but not filtered.
   - `bot/sentiment/disabled_provider.py` — opt-out path.
   - `bot/sentiment/base.py` — `SentimentResult` dataclass with `unavailable()` factory.
 - **Evidence:** Sentiment integrated into the live cycle in `bot/scanner.py` (provider selection at line ~103; per-symbol `sent_provider.get_sentiment(sym)` at line ~250; signals are blocked by sentiment when mode requires alignment).
@@ -378,7 +419,7 @@ These are acceptable for M14 closure because every "unknown" returns fail-closed
   - M15.4 — IB Gateway visibility/truth layer (CLOSED 2026-06-02)
   - M15.5 — IBKR paper exposure wiring (CLOSED earlier)
   - M15.3.A / .A.2 / .A.cutover / .B / .C — Dashboard auth + 2FA + TLS + manual_reset + audit export (all CLOSED, see above)
-**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **M17 is now CLOSED** — `origin/main` is `M17.B.closeout` (`a8d8ca4`), `test_m17_backtesting` 200 OK (skipped=2). **M18 (ML strategy/criteria foundation, read-only/shadow-only) is CLOSED and merged to `main` at `264fba84`** (`test_m18_ml` loader 669 — 668 + the duplicate-class guard added in the pre-M19 cleanup; see `docs/M18_ACCEPTANCE.md`). M18 is the ML foundation only — not live trading and not M19 signal scoring. The next concrete work item is M19 (not started). Dashboard work stops unless safety- or compliance-driven.
+**M15 is now fully CLOSED.** **M16 is now fully CLOSED.** **M17 is now CLOSED** — `origin/main` is `M17.B.closeout` (`a8d8ca4`), `test_m17_backtesting` 200 OK (skipped=2). **M18 (ML strategy/criteria foundation, read-only/shadow-only) is CLOSED and merged to `main` at `264fba84`** (`test_m18_ml` loader 669 — 668 + the duplicate-class guard added in the pre-M19 cleanup; see `docs/M18_ACCEPTANCE.md`). M18 is the ML foundation only — not live trading and not M19 signal scoring. **M19 (signal scoring), M20 (paper decision/orchestration), and M21/M21.1/M21.1extra-D0/D1/D2 are all now delivered** (see the quick-status table and `bot/signal_scoring/`, `bot/paper/`, `bot/paper_loop_d2/`). The next concrete work item is **M21.1extra-D3 (dashboard metrics), not started** — M21.1extra is not complete until D3.
 
 ---
 

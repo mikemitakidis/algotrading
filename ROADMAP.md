@@ -17,8 +17,9 @@ narrative snapshot of where the project is right now, see
 > strategy/criteria foundation — is CLOSED and merged to `main`**
 > (`test_m18_ml` loader 669; see [`docs/M18_ACCEPTANCE.md`](docs/M18_ACCEPTANCE.md)).
 > M18 is read-only/shadow-only: it is the ML foundation, **not** live trading
-> and **not** M19 signal scoring. The next concrete milestone after M18 merges
-> is M19 (signal scoring).
+> and **not** M19 signal scoring. **M19, M20, and M21.1extra-D0/D1/D2 have since
+> been delivered;** the current work item is M21.1extra-D3 (dashboard metrics),
+> not started. See [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) for authoritative state.
 
 ---
 
@@ -85,7 +86,7 @@ hardening, not reopened in M5.
 
 ### Milestone 8 — News / Sentiment Module ⚠ IMPLEMENTED (real, not closed-loop)
 **Goal:** Pre-filter signals with news-sentiment alignment.
-- `bot/sentiment/news_provider.py` (~456 lines) — real NewsAPI integration
+- `bot/sentiment/news_provider.py` (~456 lines) — real news integration via yfinance / Google News / AlphaVantage (not NewsAPI)
   with caching, error classification, fetch-success flags
 - `bot/sentiment/disabled_provider.py` — opt-out path
 - Pluggable via `get_sentiment_provider()`; sentiment applied inside the
