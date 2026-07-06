@@ -10591,6 +10591,8 @@ class G10_Hygiene(unittest.TestCase):
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
             "bot/brokers/ibkr_broker.py",
+            # M21 D1 (R2-1): kill-switch missing-file fail-closed edit.
+            "bot/kill_switch.py",
             # M21.1extra-D0: time-boxed per-lane authorization edits.
             "bot/broker_allocation.py",
             "bot/etoro/signal_only_broker.py",
@@ -10609,6 +10611,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1extra_d2_flat_check.py",
             "test_m21_c1_kill_switch.py",
             "test_m21_c2_d2_b2b_composition.py",
+            "test_m21_d2_paper_port_guard.py",
             "reports/m21_1extra_d1_market_clock.md",
             "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.

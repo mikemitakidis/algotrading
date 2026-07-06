@@ -281,6 +281,24 @@ class IBKRBroker(BrokerAdapter):
                     reason=f'Live safety gate: {reason}',
                     submitted_at=datetime.now(timezone.utc).isoformat(),
                 )
+        else:
+            # ── Paper-mode port guard (R2-3, defense-in-depth) ──────────────────
+            # In paper mode the resolved port MUST be the paper port (4002).
+            # Refuse before any network probe / connection / order placement so
+            # paper mode can never submit through the live gateway (4001), even
+            # if IBKR_PORT were misconfigured. Mirrors the flatten-path guard.
+            # Account verification remains a separate, independent backstop.
+            if int(port) != int(PAPER_PORT):
+                log.error('[IBKR] PAPER submit refused: expected paper port %s, '
+                          'got %s — refusing before any order.', PAPER_PORT, port)
+                return OrderResult(
+                    intent=intent,
+                    status='paper_port_refused',
+                    reason=(f'Paper mode requires port {PAPER_PORT}; resolved '
+                            f'{port}. Refusing to submit (would risk the live '
+                            f'gateway).'),
+                    submitted_at=datetime.now(timezone.utc).isoformat(),
+                )
 
         # ── Pre-submit gateway health check (after safety gate) ─────────────────
         if not _gateway_available(host, port):
