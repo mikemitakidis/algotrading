@@ -103,20 +103,53 @@ def _parse_iso_utc(s: Any) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+def _parse_hhmm(hhmm: str) -> Optional[Tuple[int, int]]:
+    """Parse an ET clock time into (hour, minute), tolerant of the formats
+    Alpaca actually returns: 'HH:MM' (e.g. '09:30'), 'HH:MM:SS' (e.g.
+    '09:30:00'), and 'HHMM' (e.g. '0930', '0400'). Seconds are accepted but
+    ignored (session boundaries are minute-granular). Returns None on anything
+    genuinely malformed (fail-closed)."""
+    if not isinstance(hhmm, str):
+        return None
+    s = hhmm.strip()
+    if not s:
+        return None
+    try:
+        if ":" in s:
+            parts = s.split(":")
+            # accept HH:MM or HH:MM:SS (2 or 3 parts); ignore seconds.
+            if len(parts) not in (2, 3):
+                return None
+            hh, mm = int(parts[0]), int(parts[1])
+            if len(parts) == 3:
+                int(parts[2])  # validate seconds are numeric, then ignore
+        else:
+            # bare digits: HHMM (4) — the Alpaca session_open/close form.
+            if len(s) != 4 or not s.isdigit():
+                return None
+            hh, mm = int(s[:2]), int(s[2:])
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh, mm
+
+
 def _parse_session_dt(date_str: Any, hhmm: Any) -> Optional[datetime]:
-    """Combine a calendar 'date' (YYYY-MM-DD) and a local ET 'HH:MM' into an
+    """Combine a calendar 'date' (YYYY-MM-DD) and a local ET time into an
     aware UTC datetime, using America/New_York (DST-correct via zoneinfo).
-    No hardcoded offset. Returns None on any malformed input."""
+    Accepts ET time as 'HH:MM', 'HH:MM:SS', or 'HHMM'. No hardcoded offset.
+    Returns None on any malformed input (fail-closed)."""
     if not isinstance(date_str, str) or not isinstance(hhmm, str):
         return None
     try:
         y, m, d = (int(x) for x in date_str.strip().split("-"))
-        parts = hhmm.strip().split(":")
-        if len(parts) != 2:
-            return None
-        hh, mm = int(parts[0]), int(parts[1])
     except (ValueError, AttributeError):
         return None
+    parsed = _parse_hhmm(hhmm)
+    if parsed is None:
+        return None
+    hh, mm = parsed
     try:
         naive_local = datetime(y, m, d, hh, mm)
         aware_local = naive_local.replace(tzinfo=_US_EASTERN)
@@ -278,9 +311,14 @@ class AlpacaClockSource:
         if not isinstance(row, dict):
             return None, None, False, STATUS_MALFORMED
         rdate = row.get("date") or ds
-        # prefer explicit session_open/close; fall back to open/close.
-        open_hhmm = row.get("session_open") or row.get("open")
-        close_hhmm = row.get("session_close") or row.get("close")
+        # Prefer the REGULAR-session open/close (e.g. "09:30"/"16:00"). Alpaca's
+        # session_open/session_close are the EXTENDED-hours window (e.g.
+        # "0400"/"2000") — the wrong window for a regular-session confirmation,
+        # and in a bare-HHMM format. So open/close is primary; session_* is only
+        # a fallback if open/close are absent. _parse_session_dt tolerates
+        # HH:MM, HH:MM:SS, and HHMM either way.
+        open_hhmm = row.get("open") or row.get("session_open")
+        close_hhmm = row.get("close") or row.get("session_close")
         so = _parse_session_dt(rdate, open_hhmm)
         sc = _parse_session_dt(rdate, close_hhmm)
         if so is None or sc is None or not (so < sc):

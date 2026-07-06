@@ -108,6 +108,74 @@ class TestOpenClosed(_Creds):
         self.assertFalse(r.calendar_present)
 
 
+# The real Alpaca /v2/calendar row carries BOTH regular open/close ("09:30"/
+# "16:00") AND extended-hours session_open/session_close ("0400"/"2000", bare
+# HHMM). Regression: the parser must use the REGULAR session and tolerate the
+# HHMM format on the extended fields (so a fallback never explodes).
+CAL_REAL_FULL = [{
+    "date": "2026-07-06", "open": "09:30", "close": "16:00",
+    "session_open": "0400", "session_close": "2000",
+    "settlement_date": "2026-07-08",
+}]
+
+
+class TestRealCalendarShape(_Creds):
+    def test_prefers_regular_session_not_extended(self):
+        # with both fields present, D1 must confirm the REGULAR 09:30-16:00 ET
+        # session (13:30-20:00 UTC EDT), NOT the extended 04:00-20:00 window.
+        r = self._status(cal_body=CAL_REAL_FULL)
+        self.assertEqual(r.status, STATUS_OK)
+        self.assertIs(r.is_open, True)
+        self.assertTrue(r.calendar_present)
+        self.assertEqual(r.session_open_utc,
+                         datetime(2026, 7, 6, 13, 30, tzinfo=timezone.utc))
+        self.assertEqual(r.session_close_utc,
+                         datetime(2026, 7, 6, 20, 0, tzinfo=timezone.utc))
+
+    def test_real_shape_flows_to_may_submit(self):
+        d = evaluate_market_clock(market_calendar_id="US_EQ", now_utc=NOW,
+                                  sources=[self._src(cal_body=CAL_REAL_FULL)])
+        self.assertTrue(d.may_submit)
+
+    def test_hhmmss_open_close_accepted(self):
+        cal = [{"date": "2026-07-06", "open": "09:30:00", "close": "16:00:00"}]
+        r = self._status(cal_body=cal)
+        self.assertTrue(r.calendar_present)
+        self.assertEqual(r.session_open_utc,
+                         datetime(2026, 7, 6, 13, 30, tzinfo=timezone.utc))
+
+    def test_hhmm_only_session_fields_fallback(self):
+        # open/close absent -> fall back to session_* (HHMM), still parses.
+        cal = [{"date": "2026-07-06", "session_open": "0930",
+                "session_close": "1600"}]
+        r = self._status(cal_body=cal)
+        self.assertTrue(r.calendar_present)
+        self.assertEqual(r.session_open_utc,
+                         datetime(2026, 7, 6, 13, 30, tzinfo=timezone.utc))
+
+    def test_malformed_time_still_fails_closed(self):
+        cal = [{"date": "2026-07-06", "open": "notatime", "close": "16:00"}]
+        r = self._status(cal_body=cal)
+        self.assertEqual(r.status, STATUS_MALFORMED)
+        self.assertFalse(r.calendar_present)
+
+
+class TestParseHhmm(unittest.TestCase):
+    def test_formats_accepted(self):
+        from bot.market_clock.alpaca_clock import _parse_hhmm
+        self.assertEqual(_parse_hhmm("09:30"), (9, 30))
+        self.assertEqual(_parse_hhmm("09:30:00"), (9, 30))
+        self.assertEqual(_parse_hhmm("0930"), (9, 30))
+        self.assertEqual(_parse_hhmm("0400"), (4, 0))
+        self.assertEqual(_parse_hhmm("2000"), (20, 0))
+
+    def test_malformed_rejected(self):
+        from bot.market_clock.alpaca_clock import _parse_hhmm
+        for bad in ("", "  ", "xyz", "040", "24:00", "09:60", "2530",
+                    "09:30:00:00", "ab30", None):
+            self.assertIsNone(_parse_hhmm(bad), "should reject %r" % (bad,))
+
+
 class TestCredentials(_Creds):
     def test_missing_key(self):
         os.environ["ALPACA_KEY"] = ""
@@ -239,8 +307,16 @@ class TestDateParsing(unittest.TestCase):
     def test_session_dt_malformed(self):
         self.assertIsNone(_parse_session_dt("2026-07-06", "xx:yy"))
         self.assertIsNone(_parse_session_dt("bad-date", "09:30"))
-        self.assertIsNone(_parse_session_dt("2026-07-06", "0930"))
         self.assertIsNone(_parse_session_dt(None, "09:30"))
+        # genuinely malformed HHMM-ish inputs still rejected (fail-closed).
+        self.assertIsNone(_parse_session_dt("2026-07-06", "093"))    # 3 digits
+        self.assertIsNone(_parse_session_dt("2026-07-06", "09305"))  # 5 digits
+
+    def test_session_dt_hhmm_now_valid(self):
+        # regression: bare HHMM (Alpaca session_open/close form) is now accepted
+        # -> "0930" = 09:30 ET = 13:30 UTC (EDT). This is the D1 calendar fix.
+        self.assertEqual(_parse_session_dt("2026-07-06", "0930"),
+                         datetime(2026, 7, 6, 13, 30, tzinfo=timezone.utc))
 
 
 class TestDstThroughGuard(_Creds):
