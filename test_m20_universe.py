@@ -8,6 +8,8 @@ import ast
 import os
 import pathlib
 import subprocess
+
+import _protected_baselines  # C5b approved-change table
 import unittest
 
 import bot.universe as bu
@@ -335,7 +337,10 @@ class M20UABackwardCompat(unittest.TestCase):
                             "--", *paths], capture_output=True, text=True,
                            timeout=10)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), "", f"{paths} changed")
+        # C5b: excuse only exact, approved transitions (see _protected_baselines).
+        changed = _protected_baselines.unapproved(
+            baseline, r.stdout.split(), target="HEAD")
+        self.assertEqual(changed, [], f"{paths} changed")
 
     def test_focus_unchanged(self):
         self._unchanged("bot/focus.py")

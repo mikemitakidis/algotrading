@@ -10618,6 +10618,10 @@ class G10_Hygiene(unittest.TestCase):
             # opt-in guards, no-network CLI test variants).
             "_test_isolation.py",
             "test_m21_c5a_test_isolation.py",
+            # M21 C5b: approved-change table for stale protected-file
+            # guards (exact from/to blob transitions, test-only).
+            "_protected_baselines.py",
+            "test_m21_c5b_protected_baselines.py",
             "test_m10.py",
             "test_m11.py",
             "test_m12.py",

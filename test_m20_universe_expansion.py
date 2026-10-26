@@ -9,6 +9,8 @@ remain frozen. No bot/paper or runtime touch.
 import json
 import pathlib
 import subprocess
+
+import _protected_baselines  # C5b approved-change table
 import unittest
 
 from bot.universe.schema import SymbolRecord, AssetClass, DataQualityStatus
@@ -158,7 +160,10 @@ class M20UBFrozenChecks(unittest.TestCase):
                             "--", *paths], capture_output=True, text=True,
                            timeout=10)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), "", f"{paths} changed vs {baseline}")
+        # C5b: excuse only exact, approved transitions (see _protected_baselines).
+        changed = _protected_baselines.unapproved(
+            baseline, r.stdout.split(), target="HEAD")
+        self.assertEqual(changed, [], f"{paths} changed vs {baseline}")
 
     def test_paper_frozen_vs_m20h(self):
         self._unchanged(_M20H_HEAD, "bot/paper")

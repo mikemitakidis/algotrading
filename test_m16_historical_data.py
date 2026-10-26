@@ -49,6 +49,7 @@ import pandas as pd
 # runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
 import _test_isolation  # noqa: E402
 _test_isolation.install()
+import _protected_baselines  # noqa: E402  (C5b approved-change table)
 
 # Workdir helpers ------------------------------------------------------------
 
@@ -1023,7 +1024,9 @@ class TestProtectedFilesUntouched(unittest.TestCase):
             except Exception as e:  # noqa: BLE001
                 self.skipTest(f"git diff unavailable: {e}")
                 return
-            if rc.stdout.strip():
+            if rc.stdout.strip() and not (
+                    _protected_baselines.is_approved_change(
+                        BASELINE_COMMIT, path)):
                 modified.append(path)
         self.assertEqual(modified, [], f"protected files modified: {modified}")
 

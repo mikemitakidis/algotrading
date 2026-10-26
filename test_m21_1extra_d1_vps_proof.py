@@ -14,12 +14,22 @@ import os
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import tools.paper_loop.m21_1extra_d1_market_clock_proof as PROOF
-from bot.market_clock.alpaca_clock import HttpResponse
+from bot.market_clock.alpaca_clock import HttpError, HttpResponse
 import bot.market_clock.alpaca_clock as AC
 
 RUNNER_SRC = "tools/paper_loop/m21_1extra_d1_market_clock_proof.py"
+_US_EASTERN = ZoneInfo("America/New_York")
+
+
+def _session_date(now_utc: datetime) -> str:
+    # The Alpaca calendar is keyed by the US/Eastern trading date, and the
+    # production adapter looks up now_utc.astimezone(America/New_York).date().
+    # Using the UTC date here made the row "tomorrow" between 00:00 and
+    # 04:00/05:00 UTC, so the open check failed in that window (C5b).
+    return now_utc.astimezone(_US_EASTERN).date().isoformat()
 
 
 class _NoCreds(unittest.TestCase):
@@ -86,15 +96,15 @@ class TestCredentialsPathMocked(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def _patch(self, is_open):
+    def _patch(self, is_open, session_date=_session_date):
         def fake(url, *, headers, params, timeout):
+            now = PROOF._utcnow()
             if "/v2/clock" in url:
                 return HttpResponse(status_code=200, json_body={
                     "is_open": is_open,
-                    "timestamp": datetime.now(timezone.utc).isoformat()})
-            ds = datetime.now(timezone.utc).date().isoformat()
+                    "timestamp": now.isoformat()})
             return HttpResponse(status_code=200, json_body=[
-                {"date": ds, "open": "00:00", "close": "23:59"}])
+                {"date": session_date(now), "open": "00:00", "close": "23:59"}])
         AC._default_http_get = fake
 
     def _patch_raw(self, fn):
@@ -107,6 +117,32 @@ class TestCredentialsPathMocked(unittest.TestCase):
         self.assertTrue(
             proof["checks"]["alpaca_live_source_returned_fresh_open_or_closed"])
         self.assertEqual(proof["live"]["live_source_proof"], "passed")
+
+    def _pin_now(self, iso):
+        pinned = datetime.fromisoformat(iso)
+        orig = PROOF._utcnow
+        PROOF._utcnow = lambda: pinned
+        self.addCleanup(setattr, PROOF, "_utcnow", orig)
+
+    def test_live_open_fresh_rc0_in_utc_rollover_window(self):
+        # 02:30 UTC on 27 Oct is 22:30 ET on 26 Oct: UTC and ET dates differ.
+        # Deterministic regression for the former 00:00-04:00 UTC failure.
+        self._pin_now("2026-10-27T02:30:00+00:00")
+        self._patch(is_open=True)
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 0)
+        self.assertEqual(proof["live"]["live_source_proof"], "passed")
+
+    def test_utc_dated_calendar_row_fails_in_rollover_window(self):
+        # Non-vacuity: at the same instant the old UTC-dated row (27 Oct) is
+        # not today's ET session, so the proof fails. This is the bug the
+        # ET-dated fixture fixes, not a production defect.
+        self._pin_now("2026-10-27T02:30:00+00:00")
+        self._patch(is_open=True,
+                    session_date=lambda now: now.date().isoformat())
+        rc, proof = PROOF.run_proof()
+        self.assertEqual(rc, 1)
+        self.assertNotEqual(proof["live"]["live_source_proof"], "passed")
 
     def test_live_closed_fresh_rc0(self):
         self._patch(is_open=False)
@@ -149,7 +185,7 @@ class TestCredentialsPathMocked(unittest.TestCase):
                 return HttpResponse(status_code=200,
                                     json_body={"is_open": True,
                                                "timestamp": old})
-            ds = datetime.now(timezone.utc).date().isoformat()
+            ds = _session_date(PROOF._utcnow())
             return HttpResponse(status_code=200,
                                 json_body=[{"date": ds, "open": "00:00",
                                             "close": "23:59"}])

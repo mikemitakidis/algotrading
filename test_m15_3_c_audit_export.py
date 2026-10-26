@@ -50,6 +50,7 @@ from pathlib import Path
 # runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
 import _test_isolation  # noqa: E402
 _test_isolation.install()
+import _protected_baselines  # noqa: E402  (C5b approved-change table)
 
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
@@ -1188,7 +1189,9 @@ class TestProtectedFilesUntouched(unittest.TestCase):
                     ["git", "diff", "--stat", self._BASELINE, "--", f],
                     cwd=_REPO, capture_output=True, text=True, timeout=10,
                 )
-                if r.stdout.strip():
+                if r.stdout.strip() and not (
+                        _protected_baselines.is_approved_change(
+                            self._BASELINE, f)):
                     modified.append(f)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             self.skipTest("git not available")

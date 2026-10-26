@@ -324,7 +324,10 @@ class M20ASafetyGuards(unittest.TestCase):
             ["git", "diff", "--name-only", _M20_BASELINE, "HEAD", "--",
              "bot/signal_scoring"], capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), "", "M19 files changed (frozen)")
+        import _protected_baselines  # C5b approved-change table
+        changed = _protected_baselines.unapproved(
+            _M20_BASELINE, r.stdout.split(), target="HEAD")
+        self.assertEqual(changed, [], "M19 files changed (frozen)")
 
     def test_protected_runtime_files_unchanged(self):
         import subprocess
@@ -338,8 +341,10 @@ class M20ASafetyGuards(unittest.TestCase):
              "dashboard/app.py", "bot/brokers", "bot/flywheel.py"],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), "",
-                         "protected runtime files changed")
+        import _protected_baselines  # C5b approved-change table
+        changed = _protected_baselines.unapproved(
+            _M20_BASELINE, r.stdout.split(), target="HEAD")
+        self.assertEqual(changed, [], "protected runtime files changed")
         import hashlib, pathlib
         _mp = pathlib.Path(__file__).resolve().parent / "main.py"
         self.assertEqual(

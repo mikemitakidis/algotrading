@@ -139,3 +139,30 @@ What isolation does (`_test_isolation.py`, test-only; production code unchanged)
 
 Not covered by the child-process propagation: children started with
 `python -I`/`-S`, through a shell string, or non-Python programs.
+
+## 4. Protected-file guards and approved changes (M21 C5b)
+
+Many milestone modules freeze protected production files against the commit
+that was HEAD when the milestone was written (`git diff <baseline> -- <file>`
+must be empty). When a later milestone is approved to change one of those
+files, the old guards go red even though nothing is wrong.
+
+Do **not** fix that by moving a guard's baseline forward (that silently
+re-approves everything changed in between) or by deleting the file from the
+protected list (the file is then no longer guarded). Instead, record the
+approved change in `_protected_baselines.APPROVED_CHANGES`:
+
+- `from_blob`: the file's git blob id at the old baselines;
+- `to_blob`: the approved current blob id;
+- `commit` / `approval`: the approving commit and milestone.
+
+A guard then excuses that file only if its content at the guard's baseline is
+exactly `from_blob` **and** its current content (working tree, or `HEAD` for
+guards that diff `<baseline> HEAD`) is exactly `to_blob`. Any other edit, or
+any change to any other protected file, still fails.
+`test_m21_c5b_protected_baselines.py` checks the table against git history,
+checks the helper's semantics in a throwaway repo, and checks that the guard
+modules keep their baselines and protected paths.
+
+The next approved change to one of these files must update its `to_blob` and
+`commit` in the same reviewed commit.

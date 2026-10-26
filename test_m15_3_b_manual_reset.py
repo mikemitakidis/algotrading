@@ -43,6 +43,7 @@ from unittest.mock import patch
 # runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
 import _test_isolation  # noqa: E402
 _test_isolation.install()
+import _protected_baselines  # noqa: E402  (C5b approved-change table)
 
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
@@ -1344,7 +1345,8 @@ class TestProtectedFilesUntouched(unittest.TestCase):
             if not full.exists():
                 continue
             d = self._git_diff(f)
-            if d.strip():
+            if d.strip() and not _protected_baselines.is_approved_change(
+                    self._BASELINE, f):
                 modified.append(f)
         self.assertEqual(modified, [],
             f"M15.3.B must not modify protected files; modified: {modified}")

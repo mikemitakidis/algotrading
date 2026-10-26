@@ -42,6 +42,7 @@ from pathlib import Path
 # runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
 import _test_isolation  # noqa: E402
 _test_isolation.install()
+import _protected_baselines  # noqa: E402  (C5b approved-change table)
 
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
@@ -1492,7 +1493,8 @@ test_audit_decisions_only_additive_change` which checks that all
                 cwd=_REPO, capture_output=True, text=True,
             )
             out = result.stdout.strip()
-            if out:
+            if out and not _protected_baselines.is_approved_change(
+                    self.BASE_REV, rel):
                 offenders.append(f"{rel}: {out}")
         self.assertEqual(offenders, [],
             f"M15.3.A modified protected files: {offenders}")

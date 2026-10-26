@@ -40,6 +40,7 @@ if _REPO not in sys.path:
 # runtime files, secrets (.env) and brokers. See _test_isolation.py.
 import _test_isolation  # noqa: E402
 _test_isolation.install()
+import _protected_baselines  # noqa: E402  (C5b approved-change table)
 
 from bot.risk_authority.ibkr_paper_reader import (
     DEFAULT_API_TIMEOUT_SEC,
@@ -1610,7 +1611,9 @@ class TestProtectedFilesUntouched(unittest.TestCase):
             r = subprocess.run(
                 ["git", "diff", "--stat", self.BASE_REV, "--", f],
                 capture_output=True, text=True, cwd=_REPO)
-            if r.stdout.strip():
+            if r.stdout.strip() and not (
+                    _protected_baselines.is_approved_change(
+                        self.BASE_REV, f)):
                 offenders.append(f"{f}: {r.stdout.strip()}")
         self.assertEqual(offenders, [],
             f"M15.5 modified protected files: {offenders}")
