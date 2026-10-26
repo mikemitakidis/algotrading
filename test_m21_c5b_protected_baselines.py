@@ -5,7 +5,8 @@ without weakening them.
 25 protected-file / frozen-file guards in 17 modules compared protected
 production files against milestone baselines that later, approved milestones
 legitimately changed (bot/scanner.py, bot/signal_scoring/gates.py,
-bot/brokers/ibkr_broker.py). The guards keep their original baselines and
+bot/brokers/ibkr_broker.py; later dashboard/app.py for the D3 panel wiring,
+which the 10 M20 protected-runtime guards cover). The guards keep their original baselines and
 full protected lists; _protected_baselines excuses a changed file ONLY when the
 change is exactly a recorded approved transition (from_blob at the baseline,
 to_blob now).
@@ -19,8 +20,9 @@ What this module proves:
      table, and a mismatch on the side the guard diffs (working tree vs HEAD)
      are all NOT excused.
   3. Static guard integrity (AST/text only): the 17 modules still use their
-     original baselines, still protect the three files, and route their
-     result through the helper.
+     original baselines, still protect the approved files, and route their
+     result through the helper. The dashboard/app.py transition adds exactly
+     the reviewed nav link and blueprint registration and removes nothing.
 
 No project module imported, no network, no production file touched.
 """
@@ -45,6 +47,7 @@ _GUARD_BASELINES = {
                        "d73a04a", "ceb8cd5"),
     "bot/signal_scoring/gates.py": ("e823fe6", "5cdd083"),
     "bot/brokers/ibkr_broker.py": ("e823fe6",),
+    "dashboard/app.py": ("e823fe6",),
 }
 
 # module -> (baseline literals that must still be present, protected path
@@ -58,7 +61,8 @@ _GUARD_MODULES = {
     "test_m16_historical_data.py": (("ceb8cd5",), ("bot/scanner.py",)),
     "test_m20_paper.py": (
         ("e823fe6779deaccc7b8ff7859c17b4dab564b868",),
-        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers")),
+        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers",
+         "dashboard/app.py")),
     "test_m20_universe.py": (
         ("e823fe6779deaccc7b8ff7859c17b4dab564b868",
          "5cdd0839204a71436579f9ed9a8c4a7d69681e87"),
@@ -68,11 +72,13 @@ for _m in ("routing", "sizing", "orders_fills", "positions_pnl", "closing",
            "account_ledger", "storage"):
     _GUARD_MODULES[f"test_m20_paper_{_m}.py"] = (
         ("e823fe6779deaccc7b8ff7859c17b4dab564b868",),
-        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers"))
+        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers",
+         "dashboard/app.py"))
 for _m in ("universe_expansion", "universe_quality_collector"):
     _GUARD_MODULES[f"test_m20_{_m}.py"] = (
         ("e823fe6779deaccc7b8ff7859c17b4dab564b868",),
-        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers"))
+        ("bot/signal_scoring", "bot/scanner.py", "bot/brokers",
+         "dashboard/app.py"))
 
 
 def _git(*args, cwd=REPO):
@@ -83,9 +89,28 @@ def _git(*args, cwd=REPO):
 
 class TestApprovedTableMatchesHistory(unittest.TestCase):
 
-    def test_table_covers_exactly_the_three_drifted_files(self):
+    def test_table_covers_exactly_the_approved_files(self):
         # Adding an entry must be a reviewed change to this test as well.
         self.assertEqual(sorted(PB.APPROVED_CHANGES), sorted(_GUARD_BASELINES))
+
+    def test_dashboard_app_transition_is_exactly_the_d3_wiring(self):
+        # The fourth transition is narrow: from the frozen app.py it adds the
+        # nav link and the read-only blueprint registration, removes nothing.
+        e = PB.APPROVED_CHANGES["dashboard/app.py"]
+        rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:].strip() for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        code = [l for l in added if l and not l.startswith("#")]
+        self.assertEqual(removed, [])
+        self.assertEqual(code, [
+            '<a href="/paper-loop/metrics" id="n-paperloop">Paper Loop</a>',
+            "from dashboard.paper_metrics_view import bp as "
+            "_d3_paper_metrics_bp  # noqa: E402",
+            "app.register_blueprint(_d3_paper_metrics_bp)",
+        ])
 
     def test_approving_commit_is_ancestor_and_produced_to_blob(self):
         for rel, e in PB.APPROVED_CHANGES.items():

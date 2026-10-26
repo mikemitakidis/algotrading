@@ -10,8 +10,9 @@ Several milestone test modules freeze protected production files against
 the commit that was HEAD when that milestone was written (e.g. M15.3.A
 freezes ``bot/scanner.py`` at ``648682c``; the M20 suites freeze
 ``bot/brokers`` and ``bot/signal_scoring`` at M19 head ``e823fe6``). Later,
-separately reviewed and approved milestones legitimately changed three of
-those files, so the guards went red for a reason that is not a defect.
+separately reviewed and approved milestones legitimately changed some of
+those files (three at C5b; dashboard/app.py added with the D3 wiring), so
+the guards went red for a reason that is not a defect.
 
 Rather than moving each baseline forward (which would silently re-bless
 everything that changed in between) or removing files from the protected
@@ -65,6 +66,14 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
         commit="5d6a2300fa3cc9aa4847bb7a58fbf97ce49de4a5",
         approval="M21.1extra-B2flat flatten primitive (3a5d74f..802491b) + "
                  "D2/R2-3 paper-mode submit() port==4002 guard (5d6a230)",
+    ),
+    "dashboard/app.py": ApprovedChange(
+        from_blob="1bd8712c660348d0471ac8a56759c5880e868908",
+        to_blob="564fc812ef15e2cc088ab84f1e377021a18b8e99",
+        commit="7f65141329bb1a3af4e5a84203b3a1cf06037ca5",
+        approval="M21.1extra-D3b: one nav link + registration of the read-only, "
+                 "GET-only, auth-required paper-metrics blueprint (reviewed "
+                 "patch a4986d2; sha256 97a3d678... pinned in test_m17)",
     ),
 }
 
