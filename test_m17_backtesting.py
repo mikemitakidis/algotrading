@@ -4189,6 +4189,9 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",
+            # M21 research track (Issue #2): docs-only proposal + offline power analysis
+            "docs/research/M21_autonomous_research_engine_proposal.md",
+            "docs/research/m21_research_power_analysis.py",
             "docs/TESTING.md",
             # pre-M19 Group B (ISSUE-020): static quarantine guard keeping the
             # script-style operator tests non-discoverable (operator-approved).
