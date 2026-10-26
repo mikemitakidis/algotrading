@@ -10443,6 +10443,9 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group B (ISSUE-020): static quarantine guard keeping the
             # script-style operator tests non-discoverable (operator-approved).
             "test_quarantine_guard.py",
+            # M21.1extra-D3: read-only paper outcome metrics panel + tests.
+            "dashboard/paper_metrics_view.py",
+            "test_m21_1extra_d3_metrics.py",
             # pre-M19 Group C (ISSUE-012/015/011): cleanup proof tests
             # (operator-approved).
             "test_group_c_cleanup.py",
