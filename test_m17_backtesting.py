@@ -4213,6 +4213,8 @@ class G10_Hygiene(unittest.TestCase):
             "bot/brokers/__init__.py",
             "dashboard/app.py",
             "test_group_e_safety.py",
+            # M21.1 signals-only Telegram BUY/SHORT alerts
+            "test_m21_1_signal_alerts.py",
             # pre-M19 Group F1 (ISSUE-007): predict-time calibration proof tests.
             "test_group_f_calibration.py",
             # pre-M19 Group F2 (ISSUE-016/017): price-adjustment provenance +
