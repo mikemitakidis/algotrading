@@ -281,6 +281,41 @@ class D3DashboardView(unittest.TestCase):
         self.assertEqual(self.client.get("/paper-loop/metrics").status_code, 401)
 
 
+class D3AppIntegration(unittest.TestCase):
+    """The real dashboard app registers the D3 blueprint (integration patch)."""
+
+    def setUp(self):
+        import sys
+        for mod in ("dashboard.app", "dashboard"):
+            sys.modules.pop(mod, None)
+        from dashboard import app as app_mod
+        self.fx = D3DbFixture()
+        self.fx.create(outcomes=[_outcome("a", 1.5, "2026-10-01T15:00:00+00:00")])
+        self.app = app_mod.app
+        self.app.config["TESTING"] = True
+        self.app.config["PAPER_LIFECYCLES_DB_PATH"] = self.fx.path
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        self.app.config.pop("PAPER_LIFECYCLES_DB_PATH", None)
+        self.fx.cleanup()
+
+    def test_routes_registered_get_only_and_auth_required(self):
+        rules = {str(r): r.methods - {"HEAD", "OPTIONS"} for r in self.app.url_map.iter_rules()}
+        for url in ("/api/paper-loop/metrics", "/paper-loop/metrics"):
+            self.assertEqual(rules.get(url), {"GET"}, url)
+            self.assertEqual(self.client.get(url).status_code, 401, url)
+        with self.client.session_transaction() as s:
+            s["authed"] = True
+        r = self.client.get("/api/paper-loop/metrics")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(json.loads(r.data)["edge_outcomes"]["overall"]["trades"], 1)
+
+    def test_nav_links_to_panel(self):
+        src = (REPO / "dashboard" / "app.py").read_text(encoding="utf-8")
+        self.assertIn('href="/paper-loop/metrics"', src)
+
+
 class D3StaticSafety(unittest.TestCase):
     FORBIDDEN = ("bot.brokers", "bot.etoro", "ib_insync", "tools.etoro_live_write",
                  "tools.paper_loop.m21_1extra_b2b_single_submit", "bot.notifier",

@@ -3653,7 +3653,9 @@ _PROTECTED_APPROVED_SHA256 = {
     # pre-M19 Group E (ISSUE-013): dashboard refuses to start without an
     # explicit DASHBOARD_SECRET_KEY when DASHBOARD_ENV=production (dev/local
     # keeps the warned fallback). No route/auth/CSRF logic changed.
-    "dashboard/app.py": "e6a120afac2d9e4e8759209d70ae866551393b7622fbe834713d815eff963e53",
+    # M21.1extra-D3 integration: registers the read-only paper-metrics blueprint
+    # (GET-only, auth-required) and adds one nav link. No other change.
+    "dashboard/app.py": "97a3d678418add7be62ec14564a8bce1446ee6b261a7bc8c38250687c30180cd",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except

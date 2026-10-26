@@ -361,6 +361,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
     <a onclick="go('risk');loadRisk()" id="n-risk">Risk</a>
     <a onclick="go('riskauth');loadRiskAuthority()" id="n-riskauth">Risk Authority</a>
     <a onclick="go('recovery');loadRecovery()" id="n-recovery" style="color:#f0883e">Recovery</a>
+    <a href="/paper-loop/metrics" id="n-paperloop">Paper Loop</a>
     <a onclick="doLogout()" class="out">Logout</a>
   </div>
 </nav>
@@ -6107,6 +6108,12 @@ def m16_historical_quality_events():
         symbol=sym, timeframe=tf, severity=severity,
         since_utc=since, limit=limit)
     return jsonify({'ok': True, 'count': len(events), 'events': events})
+
+
+# M21.1extra-D3 — read-only paper-loop outcome metrics (blueprint: GET-only,
+# auth-required, opens the paper-loop DB with mode=ro; no writes, no broker).
+from dashboard.paper_metrics_view import bp as _d3_paper_metrics_bp  # noqa: E402
+app.register_blueprint(_d3_paper_metrics_bp)
 
 
 if __name__ == '__main__':
