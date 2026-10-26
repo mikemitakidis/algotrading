@@ -9,14 +9,17 @@ B. Champion-vs-challenger sample size per arm.
 C. Selection bias: the Sharpe ratio a pure-noise search "finds" after N
    trials (analytic expected maximum, after Bailey & Lopez de Prado), checked
    by Monte Carlo.
-D. Calendar time those sample sizes imply at the paper loop's throughput.
+D. Calendar time those sample sizes imply under ASSUMED paper-loop throughput
+   scenarios (the loop has not run unattended; real throughput is unknown).
+E. How many independent null canaries are needed to bound a false-pass rate:
+   one-sided 95 % Clopper-Pearson upper bound after 0 passes in n nulls.
 """
 from __future__ import annotations
 
 import math
 
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import beta, norm
 
 Z_A = norm.ppf(0.95)          # one-sided alpha = 5 %
 Z_B = norm.ppf(0.80)          # power = 80 %
@@ -83,7 +86,7 @@ def main() -> None:
         mc = mc_max_sharpe(n, 3.0, sims=60 if n >= 1000 else 200) if n <= 10000 else float("nan")
         print("| %s | %.2f | %.2f |" % ("{:,}".format(n), expected_max_sharpe(n, 3.0), mc))
 
-    print("\n## D. Calendar time at paper-loop throughput\n")
+    print("\n## D. Calendar time under ASSUMED paper-loop throughput (scenarios)\n")
     mu, sd = bracket_moments(0.45, 1.5)
     n1 = n_detect(mu, sd)
     per_arm = 2 * ((Z_A + Z_B) * sd / 0.05) ** 2
@@ -94,6 +97,14 @@ def main() -> None:
     print("|---|---|---|")
     for tpd in (0.5, 1.0, 3.0):
         print("| %.1f | %.1f years | %.1f years |" % (tpd, n1 / tpd / 252, total / tpd / 252))
+
+    print("\n## E. Null canaries: one-sided 95 % upper bound on the false-pass rate after 0 passes\n")
+    print("| independent nulls run | passes | 95 % upper bound (Clopper-Pearson) |")
+    print("|---|---|---|")
+    for n in (5, 10, 30, 58, 59, 100, 300):
+        ub = 1.0 - 0.05 ** (1.0 / n)            # exact for x = 0: solves (1-p)^n = 0.05
+        assert abs(ub - beta.ppf(0.95, 1, n)) < 1e-12
+        print("| %d | 0 | %.2f %% |" % (n, 100 * ub))
 
 
 if __name__ == "__main__":

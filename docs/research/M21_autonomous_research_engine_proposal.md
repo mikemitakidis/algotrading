@@ -2,11 +2,26 @@
 
 | | |
 |---|---|
-| **Status** | Research / design only. Nothing here changes production, merges code, deploys, enables trading or contacts IBKR. |
-| **Scope** | Answers Issue #2 ("M21.2–M21.7: continuous-learning research lab and experiment governance") and its 26 Oct 2026 request for an independent, decision-grade proposal. Kept separate from WS2 / PR #1. |
+| **Status** | Design reference for the M21 research lanes. Nothing here changes production, merges code, deploys, enables trading or contacts IBKR. Implementation of the offline lanes happens on separate `research/*` branches and draft PRs (operator direction, Issue #2 comment of 26 Oct 22:36 and Issue #3). |
+| **Revision** | **r2** — applies the independent ChatGPT critique of r1 (`fbf6e68`, Issue #2 comment of 26 Oct 22:24); see §0. Calendar plans removed per the full canonical handoff (Issue #3): no timeframes, deadlines or engineer-week estimates. |
+| **Scope** | Answers Issue #2 ("M21.2–M21.7: continuous-learning research lab and experiment governance"). Task IDs (A01–E09) refer to the full canonical register in Issue #3. Kept separate from WS2 / PR #1. |
 | **For** | Mike (decision) and ChatGPT (independent evaluation). |
-| **Date** | 26 Oct 2026, written against `main` @ `015d2ce`. |
+| **Date** | r1 and r2: 26 Oct 2026, written against `main` @ `015d2ce`. |
 | **Reproducibility** | Every number in §1 and Appendix A comes from `docs/research/m21_research_power_analysis.py` (offline, fixed seed). |
+
+---
+
+## 0. Revision r2: response to the independent critique
+
+| # | Critique (Issue #2) | Accepted? | Change in r2 |
+|---|---|---|---|
+| 1 | Counterfactual labels are not full-information *execution*: fills, spread at signal time, queue priority, impact and slot opportunity cost are unobserved; EOD OHLC cannot order stop vs target inside a bar | **Yes** | §1, §3 #8 and §6.1 now say "full information about *hypothetical price paths*, not about execution". Every label carries `path_observed` / `ambiguous_intrabar` / `unfillable` / `simulated_execution` flags plus data-source quality; ambiguous cases are excluded from definitive labels; non-fill assumptions are explicit. Effective N is computed by time, symbol and sector clusters and overlapping holding windows, not from raw scan counts. M17 parity is claimed only on unambiguous paths. |
+| 2 | Five nulls cannot bound a false-pass rate: 0/5 passes gives a one-sided 95 % upper bound of ~45 % | **Yes** (recomputed: 1 − 0.05^(1/5) = 45.1 %; 0/59 gives 4.95 %) | §6.2 and §7.5 now require a large pre-registered null battery (≥ 59 *independent* nulls just to bound the false-pass rate below 5 % with zero passes; more when trials are correlated), Clopper–Pearson intervals on every reported rate, and a *planted synthetic* positive with a known effect size instead of hoping reversal or momentum shows up in a small sample. |
+| 3 | Git signatures prove identity and content, not time; dates can be set and history rewritten; CODEOWNERS is not a security boundary | **Yes** | §7.4 rewritten: pre-registration digests are anchored in **server-side** GitHub records (issue/PR comment creation time) and, if approved, an external timestamp; refs are protected; a holdout release log is append-only and separately permissioned. The sealed holdout lives in a separately permissioned store/workflow, not just behind CODEOWNERS. |
+| 4 | Data-readiness gate before throughput claims | **Yes** | §6.1 / §6.3: pilot on synthetic data and the existing small M16 sample first. "Hundreds of independent events a day" and "thousands of specs an hour" are now labelled **hypotheses to benchmark**, not measured outputs. A data-readiness gate (coverage, adjustment semantics, as-of universe membership, delistings, timestamps, licences, real intraday availability) precedes any cross-sectional efficacy claim. |
+| 5 | Runner-cost and procurement claims | **Yes** | §6.3 / §12: the heise "self-hosted 0.2 ¢/min" claim is withdrawn. GitHub announced that charge in Dec 2025 and postponed it two days later with no new date; self-hosted runners currently incur no Actions minute charge (the machine itself still costs money). Norgate's own installation page requires Windows (a VM is allowed), so no Norgate decision until Linux export licensing and universe completeness are verified. Alpaca's $99/month SIP tier is real but is not by itself proof of survivorship-free membership history. |
+| — | Throughput "0.5–1 closures/day" | **Yes** | Labelled everywhere as an *assumed scenario*, not observed bot throughput. |
+| — | 30/60/90-day plan | Superseded by operator | §9 is now a dependency-ordered plan with evidence gates and no calendar. |
 
 ---
 
@@ -16,13 +31,13 @@
 
 Three numbers, all reproducible in Appendix A, frame everything else:
 
-1. **Paper trades alone cannot teach the system fast enough.** Take a bracket with a 1.5R target and 1R stop that genuinely wins 45 % of the time. Detecting that edge takes about **612 closed trades** at no cost, or **1,700** with 0.05R of costs (one-sided 5 %, power 80 %). The WS2 loop (PR #1 defaults) is capped at one open trade and three entries a day. At realistic 0.5–1 closed trades a day, that is **2.4–4.9 years**.
+1. **Paper trades alone cannot teach the system fast enough.** Take a bracket with a 1.5R target and 1R stop that genuinely wins 45 % of the time. Detecting that edge takes about **612 closed trades** at no cost, or **1,700** with 0.05R of costs (one-sided 5 %, power 80 %, independent trades — an optimistic assumption). The WS2 loop (PR #1 defaults) is capped at one open trade and three entries a day. **If** it closed 0.5–1 trades a day (an assumed scenario, not observed throughput — the loop has not run unattended), that would be **2.4–4.9 years**.
 2. **Champion/challenger on paper trades is statistically hopeless at our scale.** Telling apart two strategies whose edge differs by 0.05R needs about **7,650 trades per arm**. That is decades of paper trading.
 3. **An autonomous engine that searches widely will produce convincing false discoveries.** Search 10,000 strategies on 3 years of daily data where no edge exists at all, and the best one shows an **annual Sharpe of about 2.2** (Monte Carlo: 2.29). An AI that runs thousands of experiments and promotes the best is a false-discovery machine unless it accounts for every trial.
 
 So the most valuable things to build are not a bigger model or a cleverer agent. They are the machinery that:
 
-- **(a) multiplies evidence:** label *every* scanner evaluation (taken, rejected, near-miss and gated) with its counterfactual outcome. At qty 1 our orders do not move prices, so the outcome of a signal we skipped is observable from market data. That gives **full-information feedback**, not the bandit feedback that would require reinforcement learning (RL).
+- **(a) multiplies evidence:** label *every* scanner evaluation (taken, rejected, near-miss and gated) with its counterfactual outcome. At qty 1 our orders are unlikely to move prices, so the *hypothetical price path* after a signal we skipped is observable from market data. That gives full information about **price paths**, not about **execution**: fills, the spread at signal time, queue priority, impact and the opportunity cost of a scarce position slot remain unobserved, and coarse bars often cannot say whether the stop or the target was hit first. Each label therefore carries explicit observability flags (§6.1), and only unambiguous paths become definitive labels.
 - **(b) keeps evidence honest:** an immutable trial ledger, a sealed holdout the agents cannot see, deflated Sharpe / PBO, and planted "canary" strategies that continuously test the research engine itself.
 - **(c) makes research cheap:** strategies expressed as data rather than code, plus a fast cross-sectional event backtester, so thousands of variants cost minutes, not weeks.
 
@@ -34,13 +49,13 @@ Ranked by how much validated evidence each produces (§6):
 
 | # | Opportunity | One-line rationale |
 |---|---|---|
-| 1 | **Counterfactual Evidence Engine** (point-in-time outcome store for every candidate, gate and decision) | Turns about 1 learning event a day into tens to hundreds of independent events (thousands raw), and directly answers "learn from rejected signals". |
+| 1 | **Counterfactual Evidence Engine** (point-in-time outcome store for every candidate, gate and decision) | *Hypothesis to benchmark:* turns about 1 learning event a day into many more labelled path outcomes, of which the effective (de-correlated) count is reported, and directly answers "learn from rejected signals". |
 | 2 | **Research Integrity Stack** (immutable trial ledger, sealed + forward holdouts, validation gauntlet, canaries) | Without it, items 3–5 manufacture false edges faster. |
 | 3 | **Strategy Genome + high-throughput cross-sectional backtester** | Strategies become searchable, hashable and diffable data; the cost of one experiment drops by orders of magnitude. |
 | 4 | **Continuous Validation** (decay monitors, expectation calibration, shadow champion/challenger on the counterfactual stream) | Detects when a strategy stops working within weeks, not years. |
 | 5 | **Autonomous Research Organization** (multi-agent, GitHub-native, with a knowledge graph and a research-yield allocator) | The self-development engine you asked for, safely bounded: agents propose and build, deterministic code measures, humans approve. It ranks fifth only because it depends on #1–#3. |
 
-**Recommendation for the next 30 days:** build items 1 and 2 at minimal cost on data we already have (M16 bars and `candidate_snapshots`), and prove them on synthetic data with no edge plus a known positive control before any agent is given an objective. Specs and gates are in §9.
+**Recommendation:** build items 1 and 2 first and together, prove them on synthetic data (a large null battery plus a planted positive with known size) and then on the existing small M16 sample, and pass a data-readiness gate before any cross-sectional efficacy claim. Advanced model work (Lane C) proceeds in parallel on the same synthetic and repository data, because the operator wants evidence and AI capability developed together. No agent gets a research objective until the integrity stack can measure it. Lanes, dependencies and evidence gates are in §9.
 
 ---
 
@@ -90,7 +105,7 @@ I read the repo rather than the roadmap. M17–M21 already contain more research
    
    A point-in-time, survivorship-free research lake is a prerequisite, not a nice-to-have.
 7. **"Each strategy is a hand-coded template."** Strategies should be *data*: a declarative spec compiled into the existing scanner semantics. That makes them searchable, hashable, de-duplicated and lineage-tracked. It is also the only safe way to let an LLM generate them, because agents emit specs that are validated against a grammar, not arbitrary code paths into execution.
-8. **"RL or bandits are needed for trade decisions."** Not at our size. Our feedback is full-information (point 1), so supervised learning plus explicit decision rules (expected value, costs, risk budget) is more data-efficient and auditable. Bandit methods are useful for allocating *research effort* across hypothesis families, not capital, at least initially.
+8. **"RL or bandits are needed for trade decisions."** Not at our size. Feedback about *price paths* is full-information (point 1), so supervised learning plus explicit decision rules (expected value, costs, risk budget) is more data-efficient and auditable. The caveat is execution: fills, spreads and slot opportunity costs are only observed for orders actually placed, so the paper loop remains the source of execution evidence. Bandit methods are useful for allocating *research effort* across hypothesis families, not capital, at least initially.
 9. **"LLMs reading news will find alpha."** There is real evidence, but it decays:
    - GPT-4 headline signals had pre-cost Sharpe of **6.54 (2021Q4) → 1.22 (Jan–May 2024)**, were stronger in small caps, and were unprofitable at 20 bps round-trip costs (Lopez-Lira & Tang).
    - **Look-ahead bias is material.** Point-in-time-trained models show a measurable "lookahead premium" for models that have seen the outcome period (DatedGPT, 2026). Standard open models show double-digit alpha decay out of sample (Look-Ahead-Bench, 2026).
@@ -112,34 +127,34 @@ A source establishing a *method* is never evidence that *our* strategy has an ed
 
 ## 5. Candidate capabilities (24)
 
-Effort is in engineer-weeks. "Exists" marks overlap with the repo or roadmap so nothing is proposed twice under a new name.
+Size is relative build complexity (S / M / L), not a time estimate (the canonical handoff forbids calendar estimates). "Overlap" marks what already exists in the repo or roadmap so nothing is proposed twice under a new name.
 
-| # | Capability | What it is | Evidence | Overlap | Effort |
+| # | Capability | What it is | Evidence | Overlap | Size |
 |---|---|---|---|---|---|
-| C1 | **Counterfactual Outcome Engine** | Label every candidate at every *decision stage* (rejected, partial, final, blocked by M19 / Risk Authority / gates, actually traded) with multi-horizon, execution-aware triple-barrier outcomes from point-in-time bars, for both the live stream and historical replay. Effective sample size counted honestly (overlap and cross-sectional correlation). | Proven method (labeling), novel use | Builds on M18 anchor sets A/B and labels (historical replay already exists); adds live decision stages, gate attribution and effective-N | 2–3 |
-| C2 | **Gate-economics / regret ledger** *(original)* | For each gate (confluence, M19 bucket, liquidity, Risk Authority reason code), measure the counterfactual net R it avoided or forfeited. Answers "is this rule earning its keep?" without touching the rule. | Promising | New | 1 (after C1) |
-| C3 | **Point-in-time research data lake** | Survivorship-free universe membership, delisted symbols, corporate actions, "as-of" timestamps, content-addressed snapshots; Parquet + DuckDB. Separate from the production VPS. | Proven | Extends M16 | 2–4 + vendor |
-| C4 | **Immutable trial ledger with family-wise accounting** | Every run, including failures and abandoned searches, is recorded with provenance, family id and a running trial count that feeds deflated Sharpe. Pre-registration fields (hypothesis, falsifier, expected effect) are written *before* results exist. | Proven | Issue #2 item 2; adds trial budgets and pre-registration | 1–2 |
-| C5 | **Sealed holdout vault + forward holdout via Git pre-registration** *(original twist)* | The most recent data is quarantined and never mounted in agent jobs. A strategy spec's hash is committed and tagged before its forward test period exists, so the Git timestamp proves the test is genuinely out-of-sample. | Proven principle, novel mechanism | New | 1 |
-| C6 | **Validation gauntlet / report card** | Combinatorial purged CV (CPCV), PBO, deflated Sharpe, White's Reality Check / Hansen's SPA. Negative controls: shuffled labels, random-walk universes, placebo signals. Also cost ×2 stress, regime splits, parameter-plateau test and cross-market transfer. Produces one standard report card. | Proven | Issue #2 item 4; adds controls, plateau and transfer tests | 2–3 |
-| C7 | **Canary strategies** *(original)* | Known-null and known-positive (e.g., short-term reversal) strategies are continuously injected into the pipeline, unlabeled. The engine's measured false-discovery and detection rates become first-class KPIs. | Proven idea (QA / A-A tests), novel here | New | 0.5 |
-| C8 | **Strategy Genome (strategy-as-data)** | Declarative spec (entry, exit, filters, sizing, universe) compiled to `scanner_replica` semantics with parity tests. Hash identity, lineage, mutation and crossover operators, semantic de-duplication. | Proven pattern | Enables M23.1 "template breeding" earlier | 2–3 |
-| C9 | **Cross-sectional event backtester** | Vectorized multi-symbol, portfolio-aware simulation of genome specs, run thousands at a time, with parity tests against the M17 engine on overlapping cases. | Proven | Fills M17's "multi-symbol deferred" | 3–4 |
-| C10 | **Autonomous Research Organization** | Role-separated agents (Director, Scout, Hypothesist, Engineer, Skeptic, Librarian, Reporter) on GitHub. No broker authority; deterministic auditors compute every number. | Promising (RD-Agent(Q), AlphaAgent) | New | 3–5 |
-| C11 | **Research knowledge graph & graveyard** | Hypotheses, sources, datasets, specs, trials, results and *reasons for failure*. Semantic dedupe stops re-testing dead ideas; expiry dates force re-assessment. | Proven (knowledge management), promising for agents | Issue #2 item 1; adds a graveyard and expiry | 1–2 |
-| C12 | **Research-yield allocator** | Bandit over hypothesis families and idea sources, rewarded by *validated* discoveries (sealed-holdout passes), not backtest Sharpe. | Promising (RD-Agent(Q) uses a bandit scheduler) | New | 0.5 |
-| C13 | **Calibrated decision layer** | Meta-labeling output becomes calibrated P(win), then expected net R with **conformal intervals**. Trade only if the lower bound is above 0. Abstaining is a first-class action. | Promising (meta-labeling); proven (adaptive conformal) | Extends M21.4 | 2 |
-| C14 | **Decay and expectation-calibration monitor** | Per strategy: CUSUM / sequential probability ratio tests (SPRT) on realized R versus the backtest's predicted distribution, Bayesian online change-point detection, and a PIT histogram of predicted versus realized. Proposes demotion automatically. | Proven (SPC, BOCPD) | Extends M23.2 | 1–2 |
-| C15 | **Shadow champion/challenger on the counterfactual stream** | Challengers score the *same* live candidates as the champion; paired comparison cuts variance compared with separate paper arms. | Proven (paired designs) | Reframes M23.1 | 1 |
-| C16 | **Regime state as features and throttles** | Statistical jump model / hidden Markov model (HMM) on volatility, breadth, dispersion and correlation, used for conditioning and risk budgets, not switching. | Promising | Overlaps M21.5 / M21.7; redefines their use | 1–2 |
-| C17 | **Portfolio intelligence (simulation first)** | Correlation clusters, hierarchical risk parity (HRP) risk budgets, sector and beta exposure, cross-strategy crowding, vol targeting (with known caveats). | Proven tools, mixed alpha evidence | M23.3, moved earlier into research simulation | 2 |
-| C18 | **Execution realism / TCA learner** | Spread, slippage and fill-probability models from paper fills and quotes. Paper-fill optimism is quantified, not ignored. Feeds the costs in C1/C6. | Proven | New (cost constants are static today) | 1–2 |
-| C19 | **Point-in-time alternative data** | SEC EDGAR XBRL by `filed` date, Form 4 insider trades, 8-K events, earnings dates and surprises, FINRA short interest, options implied volatility / skew. Each with a licensing and provenance ledger. | Mixed by dataset | Extends M21.6 / M23.4 | 1 per source |
-| C20 | **LLM event extraction with look-ahead controls** | News and filings become structured events. Evaluated only after the model's cutoff, or with point-in-time models; signals carry a model-cutoff field. | Promising, decaying | Extends M8 | 2–3 |
-| C21 | **Causal and mechanism checks** | Each hypothesis states its mechanism and who is on the other side; DAG review; double/debiased ML (DML) for confounded effects; natural experiments (index inclusion, earnings windows). | Promising | New | 1–2 |
-| C22 | **Stress and adversarial lab** | Stationary block bootstrap, regime-conditioned resampling, historical episode replay (2008, 2020, 2022), and perturbations of costs, latency and missing data. | Proven (bootstrap / replay); generative models speculative | Extends Issue #2 item 4 | 1–2 |
-| C23 | **Cross-market falsification** *(original use)* | Develop on US data, test unchanged on UK/EU/HK registry symbols. A transfer failure is a red flag. | Promising | Uses the M21.U registry | 1 |
-| C24 | **Post-trade forensics and decision journal** | Every closed paper trade and its counterfactual cohort get attribution (signal, regime, timing, slippage, exit). A grounded LLM narrative cites computed facts only. Human approvals are also logged and later scored. | Proven (attribution); human-approval scoring is novel | Extends D3 / roadmap "what did it know" | 1–2 |
+| C1 | **Counterfactual Outcome Engine** | Label every candidate at every *decision stage* (rejected, partial, final, blocked by M19 / Risk Authority / gates, actually traded) with multi-horizon, execution-aware triple-barrier outcomes from point-in-time bars, for both the live stream and historical replay. Effective sample size counted honestly (overlap and cross-sectional correlation). | Proven method (labeling), novel use | Builds on M18 anchor sets A/B and labels (historical replay already exists); adds live decision stages, gate attribution and effective-N | L |
+| C2 | **Gate-economics / regret ledger** *(original)* | For each gate (confluence, M19 bucket, liquidity, Risk Authority reason code), measure the counterfactual net R it avoided or forfeited. Answers "is this rule earning its keep?" without touching the rule. | Promising | New | S (after C1) |
+| C3 | **Point-in-time research data lake** | Survivorship-free universe membership, delisted symbols, corporate actions, "as-of" timestamps, content-addressed snapshots; Parquet + DuckDB. Separate from the production VPS. | Proven | Extends M16 | L + vendor |
+| C4 | **Immutable trial ledger with family-wise accounting** | Every run, including failures and abandoned searches, is recorded with provenance, family id and a running trial count that feeds deflated Sharpe. Pre-registration fields (hypothesis, falsifier, expected effect) are written *before* results exist. | Proven | Issue #2 item 2; adds trial budgets and pre-registration | M |
+| C5 | **Sealed holdout vault + forward holdout via Git pre-registration** *(original twist)* | The most recent data is quarantined and never mounted in agent jobs. A strategy spec's hash is committed and tagged before its forward test period exists, so the Git timestamp proves the test is genuinely out-of-sample. | Proven principle, novel mechanism | New | S |
+| C6 | **Validation gauntlet / report card** | Combinatorial purged CV (CPCV), PBO, deflated Sharpe, White's Reality Check / Hansen's SPA. Negative controls: shuffled labels, random-walk universes, placebo signals. Also cost ×2 stress, regime splits, parameter-plateau test and cross-market transfer. Produces one standard report card. | Proven | Issue #2 item 4; adds controls, plateau and transfer tests | L |
+| C7 | **Canary strategies** *(original)* | Known-null and known-positive (e.g., short-term reversal) strategies are continuously injected into the pipeline, unlabeled. The engine's measured false-discovery and detection rates become first-class KPIs. | Proven idea (QA / A-A tests), novel here | New | S |
+| C8 | **Strategy Genome (strategy-as-data)** | Declarative spec (entry, exit, filters, sizing, universe) compiled to `scanner_replica` semantics with parity tests. Hash identity, lineage, mutation and crossover operators, semantic de-duplication. | Proven pattern | Enables M23.1 "template breeding" earlier | L |
+| C9 | **Cross-sectional event backtester** | Vectorized multi-symbol, portfolio-aware simulation of genome specs, run thousands at a time, with parity tests against the M17 engine on overlapping cases. | Proven | Fills M17's "multi-symbol deferred" | L |
+| C10 | **Autonomous Research Organization** | Role-separated agents (Director, Scout, Hypothesist, Engineer, Skeptic, Librarian, Reporter) on GitHub. No broker authority; deterministic auditors compute every number. | Promising (RD-Agent(Q), AlphaAgent) | New | L |
+| C11 | **Research knowledge graph & graveyard** | Hypotheses, sources, datasets, specs, trials, results and *reasons for failure*. Semantic dedupe stops re-testing dead ideas; expiry dates force re-assessment. | Proven (knowledge management), promising for agents | Issue #2 item 1; adds a graveyard and expiry | M |
+| C12 | **Research-yield allocator** | Bandit over hypothesis families and idea sources, rewarded by *validated* discoveries (sealed-holdout passes), not backtest Sharpe. | Promising (RD-Agent(Q) uses a bandit scheduler) | New | S |
+| C13 | **Calibrated decision layer** | Meta-labeling output becomes calibrated P(win), then expected net R with **conformal intervals**. Trade only if the lower bound is above 0. Abstaining is a first-class action. | Promising (meta-labeling); proven (adaptive conformal) | Extends M21.4 | M |
+| C14 | **Decay and expectation-calibration monitor** | Per strategy: CUSUM / sequential probability ratio tests (SPRT) on realized R versus the backtest's predicted distribution, Bayesian online change-point detection, and a PIT histogram of predicted versus realized. Proposes demotion automatically. | Proven (SPC, BOCPD) | Extends M23.2 | M |
+| C15 | **Shadow champion/challenger on the counterfactual stream** | Challengers score the *same* live candidates as the champion; paired comparison cuts variance compared with separate paper arms. | Proven (paired designs) | Reframes M23.1 | S |
+| C16 | **Regime state as features and throttles** | Statistical jump model / hidden Markov model (HMM) on volatility, breadth, dispersion and correlation, used for conditioning and risk budgets, not switching. | Promising | Overlaps M21.5 / M21.7; redefines their use | M |
+| C17 | **Portfolio intelligence (simulation first)** | Correlation clusters, hierarchical risk parity (HRP) risk budgets, sector and beta exposure, cross-strategy crowding, vol targeting (with known caveats). | Proven tools, mixed alpha evidence | M23.3, moved earlier into research simulation | M |
+| C18 | **Execution realism / TCA learner** | Spread, slippage and fill-probability models from paper fills and quotes. Paper-fill optimism is quantified, not ignored. Feeds the costs in C1/C6. | Proven | New (cost constants are static today) | M |
+| C19 | **Point-in-time alternative data** | SEC EDGAR XBRL by `filed` date, Form 4 insider trades, 8-K events, earnings dates and surprises, FINRA short interest, options implied volatility / skew. Each with a licensing and provenance ledger. | Mixed by dataset | Extends M21.6 / M23.4 | S per source |
+| C20 | **LLM event extraction with look-ahead controls** | News and filings become structured events. Evaluated only after the model's cutoff, or with point-in-time models; signals carry a model-cutoff field. | Promising, decaying | Extends M8 | L |
+| C21 | **Causal and mechanism checks** | Each hypothesis states its mechanism and who is on the other side; DAG review; double/debiased ML (DML) for confounded effects; natural experiments (index inclusion, earnings windows). | Promising | New | M |
+| C22 | **Stress and adversarial lab** | Stationary block bootstrap, regime-conditioned resampling, historical episode replay (2008, 2020, 2022), and perturbations of costs, latency and missing data. | Proven (bootstrap / replay); generative models speculative | Extends Issue #2 item 4 | M |
+| C23 | **Cross-market falsification** *(original use)* | Develop on US data, test unchanged on UK/EU/HK registry symbols. A transfer failure is a red flag. | Promising | Uses the M21.U registry | S |
+| C24 | **Post-trade forensics and decision journal** | Every closed paper trade and its counterfactual cohort get attribution (signal, regime, timing, slippage, exit). A grounded LLM narrative cites computed facts only. Human approvals are also logged and later scored. | Proven (attribution); human-approval scoring is novel | Extends D3 / roadmap "what did it know" | M |
 
 Deliberately **not** proposed now:
 
@@ -176,36 +191,46 @@ Weights: value 30 %, data feasibility 15 %, cost/compute 10 %, operational risk 
 
 ### 6.1 Counterfactual Evidence Engine
 
-**Benefit.** It turns every scan into learning data:
-- **Raw volume:** the scanner already evaluates thousands of (symbol, direction) candidates a day: 150 focus symbols × 2 directions × ~26 scans.
-- **After de-duplication:** with event sampling (first trigger per symbol and direction per holding horizon), this is roughly tens to low hundreds of independent events a day.
-- **From history:** a 1,200-symbol, 10-year backfill would add an estimated 10⁵–10⁶ historical events. That needs the M16 store, currently a 10-symbol sample, extended through a non-rate-limited source.
+**Benefit.** It turns every scan into learning data. The volumes below are **hypotheses to benchmark**, not measured outputs:
+- **Raw volume:** the scanner evaluates many (symbol, direction) candidates a day (configuration-dependent: focus symbols × 2 directions × scans per day).
+- **After de-duplication:** with event sampling (first trigger per symbol and direction per holding horizon), the *effective* count is far lower and must be computed, not assumed: clusters by time, symbol and sector, plus overlapping holding windows, all reduce it.
+- **From history:** a broad multi-year backfill could add many historical events, but only after the data-readiness gate below; the M16 store currently holds a small sample, and the repository holds no bars at all.
 
 It also directly delivers what you asked for in point 5, "learn from rejected signals", plus gate economics (C2). It is the training set M21.4 (meta-labeling) needs and the comparison stream M23.1 needs.
 
 **Technical requirements.**
 - Reuse M18's anchor sets and label functions for historical replay. Add a labeler over the live `candidate_snapshots` stages and M19 / Risk Authority decisions; bracket and horizon labels with costs; overlap-aware sample weights (average uniqueness, López de Prado).
+- **Observability flags on every label** (critique #1):
+  - `path_observed`: the bars resolve the path without ambiguity (one barrier touched in a bar, or the timeout reached);
+  - `ambiguous_intrabar`: the stop and target were both inside one bar's range, so the order is unknowable from these bars (EOD OHLC cannot resolve it, and it cannot be claimed to match an intraday scanner outcome);
+  - `unfillable`: the hypothetical entry could not be assumed fillable (missing or invalid next bar, gap through a limit, zero volume, halted or stale data);
+  - `simulated_execution`: every counterfactual price is a modelled fill, never an observed one; the flag is always set for counterfactual labels and always cleared only for broker-confirmed paper or live fills.
+  Ambiguous and unfillable rows are kept for accounting but excluded from **definitive** labels; their share is reported. Pessimistic and optimistic bounds are reported for ambiguous rows instead of a single number.
+- Market-data source quality per row (provider, timeframe, adjustment basis, gaps, stale bars) and explicit non-fill assumptions (next-bar-open entry, gap-aware stop fills, cost scenario).
+- **Effective N** from time, symbol and sector clusters and overlapping holding windows (average uniqueness and cluster-robust design effects), never from raw scan frequency.
 - An "as-of" join so features use only data available at decision time.
 - Storage in a new research DB, never the production `signals.db`.
-- Parity test: on cases the M17 engine also simulates, counterfactual outcomes must match the engine's to the cent.
+- Parity test: on **unambiguous** cases the M17 engine also simulates, counterfactual exit reason, exit bar and barrier price must match the engine's exactly (to the cent, before costs). Ambiguous cases are excluded from the parity claim by construction.
+
+**Data-readiness gate (critique #4)** before any cross-sectional efficacy claim: verified M16 coverage per symbol and timeframe, corporate-action / adjustment semantics, as-of universe membership, delistings, timestamp conventions, vendor licences and real intraday availability. Where data are insufficient, report N/A rather than an edge.
 
 **Limitations.**
-- **Counterfactual ≠ realised:** queue position, partial fills and paper-fill optimism are not captured. C18 measures that gap.
+- **Counterfactual ≠ realised:** fills, the spread at signal time, queue position, partial fills, impact, slot opportunity cost and paper-fill optimism are not captured. C18 and the paper loop measure that gap; counterfactual R is never reported as P&L.
 - **Correlation inflates naive counts:** cross-sectional correlation means effective N is far below raw N, so reports must show effective N.
 - **Survivorship bias:** it persists until C3 is done.
 
 **Costs.**
-- Engineering: about 2–3 weeks.
-- Compute: modest (daily bars; Parquet + DuckDB on one research machine).
-- Data: free (M16) for v0; survivorship-free EOD around **$270–$788/yr** (Norgate tiers, per vendor-comparison page); SIP intraday about **$99/month** (Alpaca Algo Trader Plus; IEX-only is free).
+- Engineering: size L (relative; no time estimate).
+- Compute: modest (daily bars; Parquet on one research machine).
+- Data: free (synthetic + existing M16 sample) for v0. Paid options are **not chosen**: survivorship-free EOD (e.g. Norgate, whose updater requires Windows, so Linux export licensing must be checked first) and SIP intraday (Alpaca's $99/month tier, which is not by itself proof of survivorship-free membership history). See the Lane F vendor memo.
 
 **Dependencies.** M16 store, `candidate_snapshots`, M18 label code; a read-only export of the VPS data into the research environment (operator action).
 
 **Measurement.**
-1. Parity with the M17 engine on overlapping cases: exact match.
-2. Effective sample size per hypothesis family: reported.
-3. Planted-null canaries labeled through the engine show no edge.
-4. Gate-economics report for current gates, read-only, with confidence intervals.
+1. Parity with the M17 engine on overlapping **unambiguous** cases: exact match; ambiguous share reported.
+2. Effective sample size per hypothesis family: reported alongside raw N.
+3. A large null battery labeled through the engine shows no edge, with binomial uncertainty on the false-pass rate.
+4. Gate-economics report for current gates, read-only, with confidence intervals and an explicit "observational, not causal" caveat.
 
 ### 6.2 Research Integrity Stack
 
@@ -216,28 +241,28 @@ It also directly delivers what you asked for in point 5, "learn from rejected si
 - Family ids, with a trial counter that feeds the deflated Sharpe ratio (DSR).
 - CPCV (multi-fold, purged, embargoed) generalising the existing single split.
 - PBO via combinatorially symmetric CV (CSCV); White's Reality Check / SPA for best-of-N searches.
-- A sealed vault: the last *k* months are encrypted or simply not present in research runners, and released only by an explicit operator action per frozen spec.
-- Forward-holdout pre-registration: a signed tag on the spec commit.
+- A sealed vault: the most recent data is held in a **separately permissioned store and workflow** that research runners and agents cannot read, released only by an explicit operator action per frozen spec, with an append-only access log. CODEOWNERS alone is not a security boundary.
+- Forward-holdout pre-registration: a spec digest anchored in server-side GitHub records (§7.4).
 - A report-card generator run by CI, not by agents.
 
 **Limitations.**
 - DSR assumes an "effective number of independent trials", which must be estimated, for example from strategy-return clustering. Correlated variants make naive counts too harsh; unlogged trials make them too lenient.
 - A sealed holdout can be spent only once per family. Discipline is required.
 
-**Costs.** About 2–3 engineer-weeks; negligible compute.
+**Costs.** Size L (relative); negligible compute.
 
 **Dependencies.** None beyond existing M17/M18; it builds on `walk_forward.py`.
 
 **Measurement.**
-1. Canary false-positive rate ≤ the target (e.g., ≤5 % of nulls pass the full gauntlet) at the trial counts actually used.
-2. A positive-control detection rate is reported.
+1. Canary false-pass rate with a Clopper–Pearson interval, from a **large pre-registered null battery** run at the trial counts actually used. Zero passes out of *n* independent nulls bounds the one-sided 95 % false-pass rate at 1 − 0.05^(1/n): 45 % for n = 5, 26 % for n = 10, 4.95 % for n = 59. Correlated nulls (shared data, similar specs) need more than 59; the effective number is reported.
+2. A detection rate (with interval) for **planted synthetic positives of known effect size**, reported as a power curve against effect size.
 3. 100 % of runs are present in the ledger; CI fails if a report card references an unledgered run.
 4. Hash-chain verification passes.
 
 ### 6.3 Strategy Genome + cross-sectional backtester
 
 **Benefit.**
-- Each experiment drops from engineering-weeks to seconds.
+- Each experiment drops from a hand-coded change to a validated spec run.
 - Searches become reproducible and de-duplicated (the same spec hash is never re-run).
 - LLM agents can contribute safely: they write *specs*, the compiler validates them against a grammar, and the backtester is the only executor.
 - It is the substrate for M21.2 (parameter surfaces), M23.1 (breeding) and M23.5 (multi-strategy).
@@ -252,15 +277,15 @@ It also directly delivers what you asked for in point 5, "learn from rejected si
 - Speed invites over-search. That is why #2 comes first.
 
 **Costs.**
-- About 5–7 engineer-weeks.
-- Compute: one research machine should handle thousands of daily-bar specs per hour; intraday needs more.
-- GitHub Actions from Jan 2026: hosted-runner prices about 40 % lower, self-hosted runners charged 0.2 ¢/min. A dedicated research box is likely cheaper for heavy batches; to be confirmed.
+- Size L (relative).
+- Compute: throughput on one machine is a **hypothesis to benchmark** (Lane D measures specs per second on fixtures); intraday needs more.
+- GitHub Actions (corrected, critique #5): self-hosted runners currently incur no Actions minute charge. GitHub announced a $0.002/min self-hosted charge in Dec 2025 and postponed it two days later with no new date; the underlying machine still costs money. Private-repo GitHub-hosted runners have plan-specific included minutes, then billed rates (hosted prices were cut from Jan 2026). No workflow is enabled by this proposal; any CI that spends minutes needs operator approval.
 
 **Dependencies.** #1 for labels and costs, #2 for accounting, C3 for unbiased universes.
 
 **Measurement.**
 1. Parity suite green.
-2. Throughput (specs per hour) and cost per 1,000 specs.
+2. Measured throughput (specs per second on stated hardware) and cost per 1,000 specs.
 3. The fraction of agent-generated specs rejected by validation versus failing statistically, which tracks agent quality.
 
 ### 6.4 Continuous Validation
@@ -278,7 +303,7 @@ It also directly delivers what you asked for in point 5, "learn from rejected si
 
 **Limitations.** Sequential tests trade detection speed against false alarms. Regime-driven drawdowns can look like decay, so diagnostics must separate them using regime state.
 
-**Costs.** About 2–3 engineer-weeks; trivial compute.
+**Costs.** Size M (relative); trivial compute.
 
 **Dependencies.** #1, #2, and a promoted or shadow strategy to monitor.
 
@@ -298,7 +323,7 @@ Both are factor-mining systems with self-reported results and selection effects 
 - Claude Code in GitHub Actions (`anthropics/claude-code-action@v1`) and/or the Agent SDK. Runs are triggered manually or on a schedule, with `--max-turns` and workflow timeouts.
 - Scoped tool allow-lists. Agents write only under `research/` paths and open PRs to `research/*` branches.
 - **No secrets beyond the model API key; no broker credentials anywhere in the research environment.**
-- The deterministic evaluator lives in protected paths (CODEOWNERS) that agents cannot modify.
+- The deterministic evaluator lives in protected paths that agents cannot modify, enforced by branch/ref protection and a separately permissioned evaluation workflow. CODEOWNERS only routes review; it is not an access control.
 - Per-run token and compute budgets; the knowledge graph stored in Git (YAML/JSON) plus a local index.
 
 **Limitations.**
@@ -309,7 +334,7 @@ Both are factor-mining systems with self-reported results and selection effects 
   - **The agent must never be able to edit, see or influence its own scoreboard** (§7.3).
 
 **Costs.**
-- About 3–5 engineer-weeks for v1.
+- Size L (relative) for v1; the offline mock foundation comes first.
 - LLM spend should be a *fixed monthly cap you choose*, enforced in the workflow.
 - Measure cost per validated discovery, not per run.
 
@@ -352,8 +377,8 @@ flowchart LR
   subgraph G[Governance plane]
     PR[GitHub research PRs<br/>report cards]
     REV[ChatGPT + Mike review]
-    VAULT[(Sealed holdout vault)]
-    FWD[Forward-holdout<br/>pre-registration tags]
+    VAULT[(Sealed holdout vault<br/>separately permissioned)]
+    FWD[Forward-holdout<br/>pre-registration digests<br/>server-side timestamps]
   end
   subgraph O[Operations plane: unchanged, no agent access]
     PAPER[WS2 paper loop] --> RA[Risk Authority]
@@ -410,25 +435,32 @@ These measures come from the documented failure modes above:
 - **Budget caps:** turns, minutes, tokens.
 - **Random human audits** of a sample of agent runs, recorded in the decision journal (C24).
 
-### 7.4 Forward holdout via Git pre-registration *(original)*
+### 7.4 Forward holdout via pre-registration *(original; mechanism corrected in r2)*
 
-When a candidate passes the gauntlet, its spec is **frozen**: a signed tag `prereg/<spec-hash>`, with the expected effect and pass/fail thresholds written into the tag message. Data arriving *after* the tag timestamp is a forward holdout nobody could have seen. The counterfactual engine scores it daily. After a pre-set number of effective events, the pre-registered test is run once.
+When a candidate passes the gauntlet, its spec is **frozen**: a canonical digest of the spec, the expected effect, the pass/fail thresholds and the one-shot test plan. Data arriving *after* the freeze is a forward holdout nobody could have seen. The counterfactual engine scores it as it arrives. After a pre-set number of **effective** events, the pre-registered test is run exactly once.
 
-This turns GitHub into a tamper-evident pre-registration registry, which is the strongest out-of-sample evidence available short of trading.
+What proves *when* the freeze happened (critique #3):
+- **Not** Git commit or tag dates: author and committer dates are client-set and history can be rewritten. Signing proves identity and content, not time.
+- **Server-side GitHub records:** the digest is posted in an issue or PR comment, whose creation time is recorded by GitHub's servers and visible in the API. Edits are visible in the comment's edit history.
+- **Protected refs:** the pre-registration branch/tag namespace is protected against force-push and deletion.
+- **Optional external anchor** (needs operator approval, since it contacts a third-party service): an RFC 3161 timestamp or similar for the digest.
+- **Append-only release log** for the sealed holdout, held outside the research runners' write scope; each release records the spec digest, the requester, the approver and the data range released.
 
-### 7.5 Proof-of-concept design: "Research Cell v0" (≈2 weeks, no production contact)
+The integrity lane implements the local half (canonical digests, a hash-chained registry that refuses edits, one-use enforcement, and verification of a pre-registration against a supplied server-side timestamp). Posting digests to GitHub is a manual operator/reviewer step until separately approved.
 
-1. **Data:** read-only snapshot of M16 daily bars for the current registry plus `candidate_snapshots` (operator exports once). Survivorship bias is explicitly flagged.
-2. **Engine:** C1 labeler, bracket labels at three horizons with costs at 1× and 2×.
-3. **Integrity:** C4 ledger, CPCV + DSR + PBO, C7 canaries (5 nulls, 1 positive control: short-term reversal or 12-1 momentum as a known effect).
+### 7.5 Proof-of-concept design: "Research Cell v0" (no production contact)
+
+1. **Data, in order:** (i) synthetic markets with known ground truth; (ii) the existing small M16 sample; (iii) only after the data-readiness gate and a separately approved read-only export, M16 daily bars and `candidate_snapshots`. Survivorship bias is explicitly flagged.
+2. **Engine:** C1 labeler with observability flags, bracket labels at several horizons with costs at 1× and 2×.
+3. **Integrity:** C4 ledger, CPCV + DSR + PBO, and a **large pre-registered null battery** plus **planted synthetic positives of known effect size** (not short-term reversal or momentum, which may not appear in a small sample).
 4. **Hypothesis family:** confluence-threshold and ATR-multiple variants of Template 1, versus Template 2 (mean reversion), evaluated as *families* with plateau analysis.
-5. **Agent step (manually triggered):** one Claude Code GitHub Action run proposes three new specs within the grammar; CI evaluates them; the Reporter opens a PR with report cards.
+5. **Agent step:** offline mock agents first (deterministic, no paid model, no scheduler). A manually triggered real-model run is a later, separately approved step.
 6. **Pass criteria:**
-   - (a) all 5 nulls rejected;
-   - (b) positive control detected;
-   - (c) counterfactual / M17 parity exact on overlapping cases;
+   - (a) the null battery's false-pass rate and its Clopper–Pearson interval are reported at the trial counts used, with the upper bound below the pre-registered target;
+   - (b) the planted positives are detected at their known effect sizes (power curve reported);
+   - (c) counterfactual / M17 parity exact on overlapping **unambiguous** cases;
    - (d) end-to-end run reproducible from the ledger;
-   - (e) agent PR contains no number absent from CI artifacts.
+   - (e) agent output contains no number absent from deterministic artifacts.
 
 ---
 
@@ -444,48 +476,26 @@ This turns GitHub into a tamper-evident pre-registration registry, which is the 
 | Execution | Paper vs counterfactual gap (slippage, fill rate) | Two independent streams |
 | Governance | % runs ledgered (target 100 %); bypass count (target 0); human-approval outcomes scored | Hash chain plus decision journal |
 
-**Primary success criterion for the whole initiative (90 days):** the pipeline demonstrably rejects noise and detects a known effect at the trial counts it actually uses, *and* at least one strategy family has a pre-registered forward test running. Not "we found alpha".
+**Primary success criterion for the initiative (evidence-gated, no calendar):** the pipeline demonstrably rejects noise and detects a known effect at the trial counts it actually uses, *and* at least one strategy family has a pre-registered forward test running. Not "we found alpha".
 
 ---
 
-## 9. 30 / 60 / 90-day roadmap (aligned with existing milestones)
+## 9. Dependency-ordered plan with evidence gates (no calendar)
 
-Original milestone numbering is preserved; these are research-track work items inside M21.2–M21.7 and preparatory work for M23. WS2 / PR #1 continues separately.
+Per the full canonical handoff (Issue #3), there are no timeframes or deadlines: work proceeds by dependencies, test evidence and operator approvals. Original milestone numbering is preserved; lanes are research-track work inside M21.2–M21.7 and foundations for M23. WS2 / PR #1 continues separately. Each lane has its own `research/*` branch and draft PR.
 
-### Days 0–30: "Evidence and integrity foundations" (M21.2 / M21.3 foundation per Issue #2)
+| Lane | Canonical tasks | Builds now (offline, synthetic / repository data) | Evidence gate before it can claim more |
+|---|---|---|---|
+| **A. Counterfactual evidence** | B03, B04 (with A02, A17) | Candidate/outcome labeler with observability flags, cost scenarios, data-quality flags, overlap- and cluster-aware effective N, gate-economics ledger, M17 parity harness | Exact M17 parity on unambiguous paths; ambiguous share reported; effective N shown beside raw N; gate economics labelled observational |
+| **B. Research integrity** | B05, B06, B07, B08, B20 | Hash-chained trial ledger, hypothesis pre-registration, purged/embargoed walk-forward and CPCV, PSR/DSR, PBO (CSCV), White RC / SPA, multiple-testing corrections, null battery + planted positives with Clopper–Pearson intervals, report cards, sealed-holdout design | Null false-pass upper bound below target at the trial counts used; planted positives detected; ledger verification passes |
+| **C. Advanced AI laboratory** | B14, B15, B16, B17, B19, D07 | M18-backed harness comparing simple baselines with boosted trees, calibrated out-of-fold stacking, meta-labeling, regime-conditioned challengers, conformal / ensemble uncertainty and abstention, with cost-aware report cards and paired tests against the baseline | A challenger is reported as better only if it beats the simpler baseline out of sample with a paired test, after costs, *and* the same harness finds nothing on null data. Synthetic results never claim market edge |
+| **D. Strategy genome + backtesting** | B09, B10, B11, A15 | Declarative spec schema, the four original templates as specs, fail-closed validator, semantic IDs and lineage, parameter-surface exploration with trial accounting, multi-symbol portfolio-aware backtester, M17 parity fixtures, measured throughput | Parity green; every evaluated variant ledgered; plateau, not peak, reporting |
+| **E. Research agents** | B21, B22, D06 | Permission manifest, budgets, deny-by-default tool sandbox, knowledge library with graveyard, deterministic mock agent flow producing a review bundle, research-quality metrics, security tests | No paid or scheduled agent, no API key, no autonomous PR or merge until separately approved |
+| **F. Data and infrastructure** | B01, B02, E05, E09 | Read-only repository data inventory, OHLCV quality auditor, snapshot manifests, M16 read-only adapter, vendor/licensing memo (Linux), inactive no-secrets CI definition | No purchase, no VPS export, no enabled workflow without approval |
 
-| Lane (own GitHub research branch) | Deliverable | Gate (day 30) |
-|---|---|---|
-| A. Evidence | C1 labeler v0 on M16 daily + `candidate_snapshots` export; effective-N reporting; C2 gate-economics read-only report | Parity with M17 on overlap; first gate-economics table with CIs |
-| B. Integrity | C4 ledger + family trial accounting; CPCV generalising `walk_forward.py`; DSR / PBO / SPA; C7 canaries; report-card generator in CI (no secrets) | All nulls rejected, positive control detected, ledger hash-chain verified |
-| C. Genome | Spec schema v0 for Templates 1 and 2; compiler parity with `scanner_replica` on fixtures | Parity green |
-| D. Agents (design only) | Agent permissions matrix, CODEOWNERS protection for evaluator paths, PoC workflow file *not enabled* | Reviewed by ChatGPT; Mike decides on LLM budget cap |
-| Data decision | Vendor evaluation: survivorship-free EOD (e.g., Norgate) vs alternatives; Alpaca SIP for intraday | Decision memo, licensing checked (redistribution in GitHub?) |
+**Dependencies.** A, B, E and F depend only on existing code. C and D use B's splits, statistics and ledger. An integration branch joins them end to end (genome → backtester → counterfactual labels → model laboratory → ledger and report card → mock agent loop). Later, evidence-gated steps (not started here): B11–B13 optimiser and Promotion & Approval Model, B18 market context, B23 decay monitoring on a real stream, D01–D10, and all C01–C11 funded-readiness tasks. M22 stays blocked by C01 (M14 scanner-path Risk Authority parity).
 
-Early no/low-cost wins: power calculator and effective-N in reports; gate economics on existing data; canaries; ledger.
-
-### Days 31–60: "Throughput and honest optimisation" (M21.2 proper, M21.3, M21.4 start)
-
-| Lane | Deliverable | Gate (day 60) |
-|---|---|---|
-| A | Point-in-time data lake v1 (survivorship-free if vendor approved); C18 cost model from any available paper fills (WS2 approval permitting) | Survivorship impact quantified on Template 1 (before/after) |
-| B | Sealed vault + Git pre-registration (C5); stress lab basics (C22: block bootstrap, episode replay) | Vault access only via operator action; first prereg tag |
-| C | Cross-sectional backtester v1 (C9); M21.2 as *parameter surfaces with plateau test* | ≥1,000 specs/hour on daily bars; plateau report for Templates 1–2 |
-| D | Research Cell v0 PoC (§7.5): one manually triggered agent run → PR with report cards; Librarian verification | §7.5 pass criteria (a)–(e) |
-| E. Monitoring | C14 decay monitor + C15 paired shadow on counterfactual stream (simulated decay tests) | Detection delay / false-alarm curve published |
-
-### Days 61–90: "Adaptive intelligence, safely" (M21.4–M21.7; M23.1–M23.3 prerequisites)
-
-| Lane | Deliverable | Gate (day 90) |
-|---|---|---|
-| A | C19 first alt-data source with point-in-time `filed` timestamps (SEC EDGAR events / insider filings) | Point-in-time audit passes; licensing ledger entry |
-| B | Cross-market falsification (C23) built into report card | Transfer results for all surviving families |
-| C | C13 calibrated decision layer (M21.4 meta-labeling + conformal EV); C16 regime features (M21.5/7) as conditioning only | Gauntlet pass on sealed holdout *or* documented rejection |
-| D | Agent org v1: Scout / Hypothesist / Engineer / Skeptic on a schedule with budget caps; C12 yield allocator; knowledge-graph graveyard | Duplicate rate falling; cost per validated discovery reported |
-| E | C17 portfolio research simulation (HRP, exposure, crowding) | Portfolio-level report card |
-| Decision | Which (if any) family enters a **forward pre-registered test**, and later a capped shadow/paper stage under the Promotion & Approval Model. M22 still blocked by `M14-extension-to-scanner-path`. | Mike + ChatGPT decision |
-
-**Run in parallel from day 1:** lanes A, B and C, plus D's design. **Run sequentially:** D's live agent runs need B and C; E needs A and B; C13/C16 need A–C. Each lane is a separate `research/<lane>-<topic>` branch with its own PR. CI runs the existing isolation suite plus the research report card; no Actions secrets except, later, the model API key in the agent workflow only.
+**Needs separate operator approval** (none requested by this document): VPS/private data export, vendor spend, paid model APIs, enabled or scheduled workflows and agents, any broker or Telegram action, and any merge to `main`.
 
 ---
 
@@ -496,7 +506,7 @@ Early no/low-cost wins: power calculator and effective-N in reports; gate econom
 - **Effective-N estimation is hard;** both under- and over-counting trials distort DSR. Report sensitivity.
 - **Agent quality varies by model and prompt;** budgets can be burnt on plausible nonsense. The yield allocator and cost-per-validated-discovery metric are the guard.
 - **Regime-shift risk:** everything validated on 2016–2026 data can still fail in an unseen regime. Monitors reduce damage; they do not prevent it.
-- **Scope risk:** this is a large programme for a solo owner. The 30-day lanes are deliberately small, and nothing here is required for WS2 to proceed.
+- **Scope risk:** this is a large programme for a solo owner. Lanes are independent and evidence-gated, and nothing here is required for WS2 to proceed.
 
 ---
 
@@ -506,11 +516,11 @@ Early no/low-cost wins: power calculator and effective-N in reports; gate econom
 2. Is the full-information argument (no RL/bandits for trade selection at qty 1) sound once partial fills and paper-fill optimism are considered?
 3. What effective-trial estimator do you recommend for DSR with heavily correlated genome variants (strategy-return clustering vs eigenvalue-based)?
 4. Is the replacement of "win-rate-first" by net-expectancy-with-constraints acceptable to adopt in the Promotion & Approval Model?
-5. Are Git signed tags sufficient as a tamper-evident pre-registration mechanism, or should hashes also be published externally (e.g., in Issue comments)?
-6. Which survivorship-free data source fits licensing and Linux-only constraints (Norgate's updater is Windows-only)?
+5. ~~Are Git signed tags sufficient as a tamper-evident pre-registration mechanism?~~ **Answered (critique #3): no.** Use server-side GitHub records, protected refs, an append-only release log, and optionally an approved external timestamp (§7.4).
+6. Which survivorship-free data source fits licensing and Linux-only constraints? **Open.** Norgate's updater requires Windows (VM allowed); no vendor is chosen until Linux export licensing and universe completeness are verified (Lane F memo).
 7. Should the sealed holdout be time-based only, or also symbol-based (held-out names), given cross-sectional correlation?
-8. Minimum canary design: how many nulls per batch, and what false-positive target, at the trial counts we expect?
-9. Is a separate research machine preferable to GitHub-hosted runners for the backtester, given 2026 Actions pricing and data-licensing constraints?
+8. ~~Minimum canary design?~~ **Answered (critique #2):** at least 59 independent nulls just to bound a 5 % false-pass rate with zero passes; more when correlated; Clopper–Pearson intervals; planted synthetic positives.
+9. Is a separate research machine preferable to GitHub-hosted runners for the backtester? **Partly answered (critique #5):** self-hosted runners currently incur no Actions minute charge; hosted runners in a private repo bill beyond plan-included minutes. Data licensing may still require a private store.
 10. Which of the 24 capabilities would you cut entirely?
 
 ---
@@ -546,9 +556,10 @@ Early no/low-cost wins: power calculator and effective-N in reports; gate econom
 | Lu et al. — [The AI Scientist](https://arxiv.org/abs/2408.06292) | 2024 | End-to-end automated research is feasible; agent modified its own runtime limit | Sandboxing lesson |
 | Dharna et al. — [AI Finds A Way](https://arxiv.org/abs/2608.23875) | 2026 | Reward hacking / loophole exploitation is common across optimising systems | Mostly RL examples |
 | [Claude Code GitHub Actions docs](https://code.claude.com/docs/en/github-actions) | 2026 | `anthropics/claude-code-action@v1`: scheduled/automation mode, tool allow-lists, max-turns, write-access checks | Permissions must be scoped |
-| [heise: GitHub Actions 2026 pricing](https://heise.de/-11118027) | 2025/26 | Hosted runners ~40 % cheaper from Jan 2026; self-hosted 0.2 ¢/min | Check plan specifics |
+| [Techzine: GitHub delays paid self-hosted runners](https://www.techzine.eu/news/devops/137396/github-bends-to-criticism-and-delays-paid-self-hosting-of-runners/) | Dec 2025 | GitHub announced a $0.002/min self-hosted charge on 16 Dec 2025 and postponed it on 18 Dec with no new date; hosted-runner price cuts went ahead from 1 Jan 2026 | Replaces r1's heise claim (withdrawn); recheck GitHub's billing docs before any spend |
 | [Alpaca market data plans](https://docs.alpaca.markets/docs/about-market-data-api) | 2026 | Free = IEX only, latest 15 min restricted; $99/mo = all exchanges, history since 2016, 10k calls/min | Equities only price shown |
-| [Norgate via MarketParquet comparison](https://marketparquet.com/vs/norgate) | 2026 | Survivorship-free US EOD with point-in-time index constituents, ~$270–$788/yr, Windows-only updater | Third-party page; verify with vendor |
+| [Norgate via MarketParquet comparison](https://marketparquet.com/vs/norgate) | 2026 | Survivorship-free US EOD with point-in-time index constituents, ~$270–$788/yr | Third-party page; pricing to verify with vendor |
+| [Norgate Data Updater installation](https://norgatedata.com/ndu-installation.php) | 2026 | Vendor's own page: the updater supports Windows 10/11/365/Server only; "VM usage is allowed" | No Linux client; export licensing unverified |
 | [SEC EDGAR APIs](https://www.sec.gov/page/sec-api-documentation) | 2026 | Free submissions / companyfacts / frames APIs + nightly bulk zips | Frames use latest filed values: use `filed` dates for point-in-time |
 | [IBKR paper-trading limitations](https://www.interactivebrokers.com/campus/glossary-terms/paper-trading-account/) (from Issue #2) | — | Paper fills / data differ from live | Motivates C18 |
 
@@ -588,7 +599,7 @@ Bracket: target = 1.5R, stop = 1R (break-even win rate 40.0 %).
 | 1,000 | 1.88 | 1.89 |
 | 10,000 | 2.23 | 2.29 |
 
-### D. Calendar time at paper-loop throughput
+### D. Calendar time under *assumed* paper-loop throughput (scenarios, not observed)
 
 | closed trades per trading day | detect a 45 % win-rate edge (612 trades) | A/B a 0.05R improvement (7,651 per arm, 15,302 total) |
 |---|---|---|
@@ -596,7 +607,21 @@ Bracket: target = 1.5R, stop = 1R (break-even win rate 40.0 %).
 | 1.0 | 2.4 years | 60.7 years |
 | 3.0 | 0.8 years | 20.2 years |
 
-**Assumptions.** Two-outcome bracket (no timeouts), independent trades, normal approximation. Real trades are not independent, which makes these numbers *optimistic*. Sharpe-search figures assume independent trials with normal daily returns; correlated variants reduce the effective N.
+**Assumptions.** Two-outcome bracket (no timeouts), independent trades, normal approximation. Real trades are not independent, which makes these numbers *optimistic*. The trades-per-day rows are scenarios: the WS2 loop has not run unattended, so its real throughput is unknown. Sharpe-search figures assume independent trials with normal daily returns; correlated variants reduce the effective N.
+
+### E. Null canaries: how many are needed to bound a false-pass rate (critique #2)
+
+| independent nulls run | passes | one-sided 95 % upper bound on false-pass rate (Clopper–Pearson) |
+|---|---|---|
+| 5 | 0 | 45.07 % |
+| 10 | 0 | 25.89 % |
+| 30 | 0 | 9.50 % |
+| 58 | 0 | 5.03 % |
+| 59 | 0 | 4.95 % |
+| 100 | 0 | 2.95 % |
+| 300 | 0 | 0.99 % |
+
+Exact for zero passes: the bound solves (1 − p)ⁿ = 0.05. Correlated nulls carry less information than independent ones, so the effective number must be estimated and reported.
 
 ## Appendix B — Mapping to Issue #2's eight components
 
@@ -609,4 +634,4 @@ Bracket: target = 1.5R, stop = 1R (break-even win rate 40.0 %).
 | 5 Regime / drift observability | C14, C16 | Expectation calibration, sequential tests on counterfactual stream, BOCPD |
 | 6 Champion / challenger | C15 | Paired evaluation on the same candidates; demotion proposals as GREEN tier |
 | 7 Research dashboard | §8 metrics | Engine-level KPIs (canary rates, cost per validated discovery) |
-| 8 Faster feedback via Actions | §7, §9 | Agent permissions, evaluator immutability, budget caps, lanes as research branches |
+| 8 Faster feedback via Actions | §7, §9 | Agent permissions, evaluator immutability, budget caps, lanes as research branches; no workflow enabled without approval |
