@@ -94,6 +94,28 @@ def _str_id(v: Any) -> Optional[str]:
     return str(v)
 
 
+UNSET_DOUBLE = 1.7976931348623157e308      # ib_insync / IB API "value not set"
+
+
+def _reported_commission(fill: Any, ex: Any) -> Optional[float]:
+    """The commission IBKR actually reported for this execution, or None.
+
+    IBKR delivers commission reports asynchronously; until the report for this
+    execId arrives, ib_insync carries a DEFAULT CommissionReport (execId '',
+    commission 0.0). A default, missing, unset, non-finite or mismatched
+    report is UNKNOWN, never zero. Only a report whose execId matches the
+    execution proves the fee (including a genuine 0.0)."""
+    rep = getattr(fill, "commissionReport", None)
+    if rep is None or not str(getattr(rep, "execId", "") or "").strip():
+        return None
+    if str(rep.execId) != str(ex.execId):
+        return None
+    c = _finite_or_none(getattr(rep, "commission", None))
+    if c is None or abs(c) >= UNSET_DOUBLE / 2 or c < 0:
+        return None
+    return c
+
+
 def _aware(t: Any) -> datetime:
     if isinstance(t, datetime):
         dt = t
@@ -218,8 +240,7 @@ class IbkrLoopBroker:
         if getattr(ex, "acctNumber", None) != self.account:
             return None
         t = _aware(getattr(f, "time", None) or ex.time)
-        comm = getattr(getattr(f, "commissionReport", None), "commission", 0.0) or 0.0
-        comm = float(comm) if math.isfinite(float(comm)) else 0.0
+        comm = _reported_commission(f, ex)
         side = {"BOT": "BUY", "SLD": "SELL"}.get(ex.side, ex.side)
         return FillView(exec_id=str(ex.execId), symbol=str(f.contract.symbol), side=side,
                         qty=float(ex.shares), price=float(ex.price), time_utc=t.isoformat(),
@@ -423,18 +444,29 @@ class IbkrLoopBroker:
         position. Never cancels or closes anything that is not the trade's."""
         why = self._preflight(entry=False)
         if why:
-            return FlattenResult(confirmed=False, detail={"reason": why})
+            return FlattenResult(confirmed=False, close_placed=False, detail={"reason": why})
         if not trade.con_id:
-            return FlattenResult(confirmed=False, refused=True, detail={"reason": "contract_unknown"})
+            return FlattenResult(confirmed=False, refused=True, close_placed=False,
+                                 detail={"reason": "contract_unknown"})
         if trade.account and trade.account != self.account:
-            return FlattenResult(confirmed=False, refused=True, detail={"reason": "account_mismatch"})
+            return FlattenResult(confirmed=False, refused=True, close_placed=False,
+                                 detail={"reason": "account_mismatch"})
         refs = {trade.order_ref, flatten_ref(trade.order_ref)}
         perms = set(trade.leg_perm_ids)
+        st: Dict[str, Any] = {"placing": False, "placed": False, "order_id": None, "perm_id": None}
         try:
             with self._session() as ib:
-                return self._flatten_on(ib, trade, refs, perms)
-        except BrokerUnavailable as exc:
-            return FlattenResult(confirmed=False, detail={"reason": "broker_unavailable:%s" % exc})
+                return self._flatten_on(ib, trade, refs, perms, st)
+        except Exception as exc:
+            # Whether a close reached the broker decides what the caller may do next.
+            placed = True if st["placed"] else (None if st["placing"] else False)
+            return FlattenResult(confirmed=False, close_placed=placed,
+                                 close_order_ref=flatten_ref(trade.order_ref) if placed is not False
+                                 else None,
+                                 close_order_id=st["order_id"], close_perm_id=st["perm_id"],
+                                 detail={"reason": "%s:%s" % ("close_outcome_unknown" if placed is not False
+                                                              else "broker_unavailable",
+                                                              type(exc).__name__)})
 
     def _exit_leg_filled(self, ib: Any, trade: OwnedTrade) -> Optional[bool]:
         """True if one of the trade's own exit legs is already Filled at the
@@ -447,19 +479,23 @@ class IbkrLoopBroker:
             getattr(tr.order, "orderRef", None), tr.order.permId or tr.orderStatus.permId,
             getattr(tr.order, "action", None)) for tr in done)
 
-    def _flatten_on(self, ib: Any, trade: OwnedTrade, refs: set, perms: set) -> FlattenResult:
+    def _flatten_on(self, ib: Any, trade: OwnedTrade, refs: set, perms: set,
+                    st: Dict[str, Any]) -> FlattenResult:
+        """Every return before ``placeOrder`` reports close_placed=False."""
         from ib_insync import Contract, MarketOrder
         signed = trade.signed_qty
+
+        def not_placed(reason: str, refused: bool = False, **extra: Any) -> FlattenResult:
+            return FlattenResult(confirmed=False, refused=refused, close_placed=False,
+                                 detail=dict(reason=reason, **extra))
         filled = self._exit_leg_filled(ib, trade)
         if filled is None:
-            return FlattenResult(confirmed=False, detail={"reason": "leg_state_unknown"})
+            return not_placed("leg_state_unknown")
         if filled:
-            return FlattenResult(confirmed=False, detail={"reason": "exit_leg_filled"})
+            return not_placed("exit_leg_filled")
         pos = self._contract_qty(ib, trade.con_id)
         if abs(pos - signed) > 1e-9:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "position_not_owned", "broker_qty": pos,
-                                         "loop_qty": signed})
+            return not_placed("position_not_owned", refused=True, broker_qty=pos, loop_qty=signed)
         on_contract = [tr for tr in self._open_trades(ib)
                        if _str_id(getattr(tr.contract, "conId", None)) == str(trade.con_id)
                        and tr.orderStatus.status not in DEAD_STATUSES | {"Filled"}]
@@ -469,10 +505,11 @@ class IbkrLoopBroker:
                     or _str_id(tr.order.permId or tr.orderStatus.permId) in perms)
         foreign = [tr for tr in on_contract if not mine(tr)]
         if foreign:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "foreign_orders_on_contract",
-                                         "foreign_order_ids": [_str_id(t.order.orderId)
-                                                               for t in foreign]})
+            return not_placed("foreign_orders_on_contract", refused=True,
+                              foreign_order_ids=[_str_id(t.order.orderId) for t in foreign])
+        if any((getattr(tr.order, "orderRef", "") or "").strip() == flatten_ref(trade.order_ref)
+               for tr in on_contract):
+            return not_placed("close_already_working")     # never a second close
         own = [tr for tr in on_contract if mine(tr)]
         for tr in own:
             ib.cancelOrder(tr.order)
@@ -481,29 +518,41 @@ class IbkrLoopBroker:
                 and waited < self._cancel_wait:
             ib.sleep(self._poll)
             waited += self._poll
-        if any(tr.orderStatus.status == "Filled" for tr in own) or self._exit_leg_filled(ib, trade):
-            return FlattenResult(confirmed=False, detail={"reason": "exit_leg_filled"})
+        if any(tr.orderStatus.status == "Filled" for tr in own):
+            return not_placed("exit_leg_filled")
+        # Second, post-cancel check: an exit leg may have filled during the
+        # cancellation. Unknown (read failed) is NOT safe: fail closed.
+        filled = self._exit_leg_filled(ib, trade)
+        if filled is None:
+            return not_placed("leg_state_unknown_after_cancel")
+        if filled:
+            return not_placed("exit_leg_filled")
         if any(tr.orderStatus.status not in DEAD_STATUSES for tr in own):
-            return FlattenResult(confirmed=False, detail={"reason": "cancel_unconfirmed"})
+            return not_placed("cancel_unconfirmed")
         pos = self._contract_qty(ib, trade.con_id)
         if abs(pos - signed) > 1e-9:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "position_changed", "broker_qty": pos})
+            return not_placed("position_changed", refused=True, broker_qty=pos)
         q = ib.qualifyContracts(Contract(conId=int(trade.con_id)))
         if len(q or []) != 1 or getattr(q[0], "symbol", None) != trade.symbol:
-            return FlattenResult(confirmed=False, refused=True, detail={"reason": "contract_mismatch"})
+            return not_placed("contract_mismatch", refused=True)
         close = MarketOrder(exit_side(trade.direction), abs(signed))
         close.account = self.account
         close.tif = "DAY"
         close.orderRef = flatten_ref(trade.order_ref)
+        st["placing"] = True
         tr = ib.placeOrder(q[0], close)
+        st["placed"] = True
+        st["order_id"] = _str_id(getattr(tr.order, "orderId", None))
+        st["perm_id"] = _str_id(tr.orderStatus.permId or tr.order.permId)
         waited = 0.0
         while tr.orderStatus.status != "Filled" and waited < self._close_wait:
             ib.sleep(self._poll)
             waited += self._poll
+        st["perm_id"] = _str_id(tr.orderStatus.permId or tr.order.permId) or st["perm_id"]
         left = self._contract_qty(ib, trade.con_id)
-        perm = _str_id(tr.orderStatus.permId or tr.order.permId)
         return FlattenResult(confirmed=(tr.orderStatus.status == "Filled" and abs(left) < 1e-9),
+                             close_placed=True,
                              detail={"close_status": tr.orderStatus.status, "remaining_qty": left,
                                      "cancelled_perm_ids": [_str_id(t.order.permId) for t in own]},
-                             close_order_ref=close.orderRef, close_perm_id=perm)
+                             close_order_ref=close.orderRef, close_perm_id=st["perm_id"],
+                             close_order_id=st["order_id"])

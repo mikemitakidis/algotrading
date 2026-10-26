@@ -80,6 +80,8 @@ class LoopConfig:
     recovery_absence_grace_minutes: float = 5.0
     recovery_absence_confirmations: int = 2
     pending_review_after_minutes: float = 60.0
+    close_resolution_minutes: float = 30.0          # unresolved time-stop close -> NEEDS_REVIEW
+    fee_finalization_hours: float = 72.0            # how long to wait for broker commissions
 
     def validate(self) -> "LoopConfig":
         if self.qty != 1:
@@ -105,10 +107,17 @@ def _parse(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
-def _vwap(fills) -> Tuple[float, str, float]:
+def _fees(fills) -> Optional[float]:
+    """Sum of broker-reported commissions; None if ANY is unknown (never 0)."""
+    vals = [f.commission for f in fills]
+    if any(v is None for v in vals):
+        return None
+    return float(sum(vals))
+
+
+def _vwap(fills) -> Tuple[float, str, Optional[float]]:
     qty = sum(f.qty for f in fills)
-    return (sum(f.qty * f.price for f in fills) / qty, max(f.time_utc for f in fills),
-            sum(f.commission for f in fills))
+    return (sum(f.qty * f.price for f in fills) / qty, max(f.time_utc for f in fills), _fees(fills))
 
 
 class PaperLearningLoop:
@@ -156,7 +165,8 @@ class PaperLearningLoop:
         key = self.cycle_key(now)
         res: Dict[str, Any] = {"cycle_key": key, "at_utc": _iso(now), "skipped": None,
                                "interrupted_cycles": [], "recovered": [], "opened": [],
-                               "closed": [], "review": [], "entry": None, "entry_block": None,
+                               "closed": [], "review": [], "fees_finalized": [],
+                               "entry": None, "entry_block": None,
                                "errors": [], "data_source": getattr(self.broker, "data_source", None)}
         try:
             lock = CycleLock(self.lock_path, pid=self.pid, pid_alive=self.pid_alive,
@@ -208,7 +218,8 @@ class PaperLearningLoop:
         tick. Any other failure is recorded and blocks this tick's entry
         (state may be inconsistent), but never kills the unattended loop."""
         for name, step in (("recovery", lambda: self._recover(now, res)),
-                           ("capture", lambda: self._capture(now, res))):
+                           ("capture", lambda: self._capture(now, res)),
+                           ("fees", lambda: self._finalize_fees(now, res))):
             try:
                 step()
             except BrokerUnavailable as exc:
@@ -366,23 +377,13 @@ class PaperLearningLoop:
         exits = [f for f in att.exits if _parse(f.time_utc) >= _parse(o["entry_filled_at_utc"])]
         exit_qty = sum(f.qty for f in exits)
         if exit_qty >= qty - 1e-9:
-            vwap, t_last, fees = _vwap(exits)
-            reason = _exit_reason(o, vwap, [att.legs[f.exec_id] for f in exits])
-            out = self.journal.close_with_outcome(
-                ref, exit_price=vwap, exit_filled_at_utc=t_last, exit_reason=reason, exit_fees=fees,
-                now=now, claims=[(f.exec_id, att.legs[f.exec_id]) for f in exits])
-            res["closed"].append({"client_ref": ref, "exit_reason": reason,
-                                  "realized_pnl": out["realized_pnl"]})
-            return
+            return self._close(o, exits, att.legs, now, res)
+        if o.get("close_state"):
+            # a close may exist at the broker: reconcile it, NEVER send another
+            return self._reconcile_close(o, exit_qty, now, res)
         entry_t = _parse(o["entry_filled_at_utc"])
-        if o["time_stop_requested_at_utc"] is None and \
-                now - entry_t >= timedelta(minutes=self.config.max_hold_minutes):
+        if now - entry_t >= timedelta(minutes=self.config.max_hold_minutes):
             return self._time_stop(o, qty - exit_qty, now, res)
-        if o["time_stop_requested_at_utc"] is not None:
-            if now - _parse(o["time_stop_requested_at_utc"]) > timedelta(
-                    minutes=self.config.entry_fill_timeout_minutes):
-                self._review(o, "OPEN", now, "time-stop close confirmed but no exit execution seen", res)
-            return
         if exit_qty == 0:
             pos = self._contract_position(o)
             if pos is not None and pos == 0:
@@ -434,18 +435,40 @@ class PaperLearningLoop:
                            leg_perm_ids=tuple(sorted(perms)),
                            exit_leg_perm_ids=tuple(p for p in (o.get("tp_perm_id"), o.get("sl_perm_id"))
                                                    if p))
-        flat = self.broker.flatten_owned(trade)
-        if flat.refused:
-            return self._review(o, "OPEN", now, "time stop refused by broker: %s"
-                                % flat.detail.get("reason", "ownership not proven"), res)
-        if not flat.confirmed:
-            res["errors"].append("time_stop_flatten_unconfirmed:%s:%s"
+        # DURABLE CLOSE INTENT before the broker is called: from here on a close
+        # may exist at the broker, so this trade is never sent another close
+        # unless the broker PROVES none was placed.
+        self.journal.update_fields(ref, "OPEN", now, close_state="INTENT",
+                                   time_stop_requested_at_utc=_iso(now),
+                                   close_attempts=int(o.get("close_attempts") or 0) + 1)
+        try:
+            flat = self.broker.flatten_owned(trade)
+        except Exception as exc:
+            res["errors"].append("time_stop_close_outcome_unknown:%s:%s"
+                                 % (o["symbol"], type(exc).__name__))
+            return                                   # intent stays; reconciled by order_ref
+        ids = {}
+        if flat.close_order_id:
+            ids["flatten_order_id"] = flat.close_order_id
+        if flat.close_perm_id:
+            ids["flatten_perm_id"] = flat.close_perm_id
+        if flat.close_placed is False or (flat.refused and flat.close_placed is not True):
+            # the broker proves no close order was placed (a refusal takes no
+            # broker action by contract): clear the intent
+            self.journal.update_fields(ref, "OPEN", now, close_state=None,
+                                       time_stop_requested_at_utc=None, **ids)
+            if flat.refused:
+                return self._review(o, "OPEN", now, "time stop refused by broker: %s"
+                                    % flat.detail.get("reason", "ownership not proven"), res)
+            res["errors"].append("time_stop_not_placed:%s:%s"
                                  % (o["symbol"], flat.detail.get("reason", "")))
             return
-        fields = {"time_stop_requested_at_utc": _iso(now)}
-        if flat.close_perm_id:
-            fields["flatten_perm_id"] = flat.close_perm_id
-        self.journal.update_fields(ref, "OPEN", now, **fields)
+        state = "CONFIRMED" if flat.confirmed else ("SUBMITTED" if flat.close_placed else "INTENT")
+        self.journal.update_fields(ref, "OPEN", now, close_state=state, **ids)
+        if not flat.confirmed:
+            res["errors"].append("time_stop_close_unconfirmed:%s:%s"
+                                 % (o["symbol"], flat.detail.get("reason", "")))
+            return                                   # reconciled on later ticks, never resent
         o = self.journal.get_order(ref)
         att = attribute_fills(o, self.broker.fills(o["entry_filled_at_utc"]),
                               account=self._account, claims=self.journal.exec_claims())
@@ -453,6 +476,85 @@ class PaperLearningLoop:
             return self._review(o, "OPEN", now, "identity conflict after time stop: "
                                 + "; ".join(att.conflicts), res)
         self._capture_open(o, att, now, res)
+
+    def _reconcile_close(self, o: Dict[str, Any], exit_qty: float, now: datetime,
+                         res: Dict[str, Any]) -> None:
+        """A time-stop close intent exists. Look for the ``order_ref:FLAT``
+        order and executions across open orders, completed orders and
+        executions. Close on the executions; learn the close's ids; never send
+        another close; anything unresolved goes to NEEDS_REVIEW."""
+        ref = o["client_ref"]
+        lk = self.broker.lookup_order_ref(o["order_ref"], o["planned_at_utc"])
+        legs, _owned, conflicts = classify_owned_orders(o, lk.orders, account=self._account)
+        att = attribute_fills(o, lk.fills, account=self._account,
+                              claims=self.journal.exec_claims())
+        conflicts = conflicts + att.conflicts
+        if conflicts:
+            return self._review(o, "OPEN", now, "identity conflict while reconciling the time-stop "
+                                                "close: " + "; ".join(conflicts), res)
+        close = legs.get(LEG_FLATTEN)
+        ids = {}
+        if close is not None:
+            if close.order_id and not o.get("flatten_order_id"):
+                ids["flatten_order_id"] = close.order_id
+            if close.perm_id and not o.get("flatten_perm_id"):
+                ids["flatten_perm_id"] = close.perm_id
+            if o.get("close_state") == "INTENT":
+                ids["close_state"] = "SUBMITTED"
+        if ids:
+            self.journal.update_fields(ref, "OPEN", now, **ids)
+            o = self.journal.get_order(ref)
+        exits = [f for f in att.exits if _parse(f.time_utc) >= _parse(o["entry_filled_at_utc"])]
+        if sum(f.qty for f in exits) >= float(o["qty"]) - 1e-9:
+            return self._close(o, exits, att.legs, now, res)
+        age = now - _parse(o["time_stop_requested_at_utc"])
+        if close is not None and close.status in DEAD_STATUSES and \
+                not any(att.legs.get(f.exec_id) == LEG_FLATTEN for f in exits):
+            return self._review(o, "OPEN", now, "time-stop close order %s without an execution; "
+                                                "not resent" % close.status, res)
+        if age <= timedelta(minutes=self.config.close_resolution_minutes):
+            res["errors"].append("time_stop_close_pending:%s:%s"
+                                 % (o["symbol"], close.status if close is not None else
+                                    ("no_close_order_seen" + ("" if lk.complete else ":incomplete"))))
+            return
+        what = ("close order %s" % close.status if close is not None else
+                "no close order or execution found%s" % ("" if lk.complete else " (incomplete view)"))
+        self._review(o, "OPEN", now, "time-stop close unresolved after %d min: %s; not resent"
+                     % (self.config.close_resolution_minutes, what), res)
+
+    def _close(self, o: Dict[str, Any], exits, legs: Dict[str, str], now: datetime,
+               res: Dict[str, Any]) -> None:
+        ref = o["client_ref"]
+        vwap, t_last, fees = _vwap(exits)
+        reason = _exit_reason(o, vwap, [legs[f.exec_id] for f in exits])
+        out = self.journal.close_with_outcome(
+            ref, exit_price=vwap, exit_filled_at_utc=t_last, exit_reason=reason, exit_fees=fees,
+            now=now, claims=[(f.exec_id, legs[f.exec_id]) for f in exits])
+        res["closed"].append({"client_ref": ref, "exit_reason": reason,
+                              "realized_pnl": out["realized_pnl"],
+                              "fees_final": out["fees_final"]})
+
+    def _finalize_fees(self, now: datetime, res: Dict[str, Any]) -> None:
+        """Closed trades whose broker commissions were not all reported yet:
+        once EVERY claimed execution shows a reported commission, write the
+        proven net P&L. Until then realized_pnl stays NULL (D3 ignores it)."""
+        since = _iso(now - timedelta(hours=self.config.fee_finalization_hours))
+        pending = self.journal.unfinalized_outcomes(since)
+        if not pending:
+            return
+        fills = {f.exec_id: f for f in self.broker.fills(min(p["entry_filled_at_utc"] for p in pending))}
+        for p in pending:
+            claims = self.journal.claims_for(p["trade_id"])
+            got = [fills.get(x) for x in claims]
+            if not claims or any(f is None or f.commission is None for f in got):
+                continue                                  # still unknown: stays unfinalized
+            entry = [fills[x] for x, leg in claims.items() if leg == LEG_ENTRY]
+            exits = [fills[x] for x, leg in claims.items() if leg != LEG_ENTRY]
+            if not entry or not exits:
+                continue
+            self.journal.finalize_fees(p["trade_id"], entry_fees=_fees(entry),
+                                       exit_fees=_fees(exits), now=now)
+            res["fees_finalized"].append(p["trade_id"])
 
     # ── entry ──
     def _quote_block(self, cand, now: datetime) -> Tuple[Optional[str], Optional[float]]:
@@ -607,10 +709,12 @@ class PaperLearningLoop:
 
 def _exit_reason(order: Dict[str, Any], vwap: float, legs: List[str]) -> str:
     kinds = set(legs)
-    if order.get("time_stop_requested_at_utc") or LEG_FLATTEN in kinds:
+    if LEG_FLATTEN in kinds:
         return "time_stop"
     if len(kinds) == 1 and next(iter(kinds)) in (LEG_TP, LEG_SL):
         return next(iter(kinds))
+    if order.get("time_stop_requested_at_utc"):
+        return "time_stop"
     tp, sl = order["take_profit"], order["stop_loss"]
     if order["direction"] == "long":
         if vwap >= tp:

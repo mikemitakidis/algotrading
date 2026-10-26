@@ -58,6 +58,9 @@ class SimulatedPaperBroker:
         self.lose_ack_next_submit = False                # orders placed, then the call fails
         self.incomplete_lookup = False                   # lookup_order_ref cannot see everything
         self.quote_override: Optional[Callable[[str, datetime], Quote]] = None
+        self.hold_commissions = False                    # new fills report commission as unknown
+        self.close_fill_not_before: Optional[datetime] = None   # time-stop close fills late
+        self.lose_flatten_ack = False                    # close placed, then the call fails
         self.calls: List[str] = []
         self.cancelled: List[str] = []                   # perm ids cancelled by flatten_owned
         self._s: Dict[str, Any] = {"cash": float(starting_cash), "positions": {},
@@ -113,7 +116,8 @@ class SimulatedPaperBroker:
             "qty": float(qty), "price": float(price), "time_utc": now,
             "order_id": order["order_id"], "perm_id": order["perm_id"], "commission": comm,
             "order_kind": order["kind"], "order_ref": order["order_ref"],
-            "account": self.account, "con_id": order["con_id"]})
+            "account": self.account, "con_id": order["con_id"],
+            "commission_known": not self.hold_commissions})
         order["status"] = "Filled"
         sym = order["symbol"]
         signed = qty if order["side"] == "BUY" else -qty
@@ -150,8 +154,26 @@ class SimulatedPaperBroker:
                     if o is not hit and o["status"] == WORKING:
                         o["status"] = "Cancelled"         # OCA
                 changed = True
+        for o in self._s["orders"]:                       # working time-stop closes (market)
+            if o["kind"] == "flatten" and o["status"] == WORKING and (
+                    self.close_fill_not_before is None or now >= self.close_fill_not_before):
+                self._fill(o, float(self._price_fn(o["symbol"], now)))
+                changed = True
         if changed:
             self._save()
+
+    @staticmethod
+    def _fill_view(f: Dict[str, Any]) -> FillView:
+        d = {k: v for k, v in f.items() if k != "commission_known"}
+        if not f.get("commission_known", True):
+            d["commission"] = None                       # not reported yet: unknown, not zero
+        return FillView(**d)
+
+    def release_commissions(self) -> None:
+        """The broker's commission reports arrive (late)."""
+        for f in self._s["fills"]:
+            f["commission_known"] = True
+        self._save()
 
     def _view(self, o: Dict[str, Any]) -> OrderView:
         return OrderView(order_id=o["order_id"], symbol=o["symbol"], side=o["side"], qty=o["qty"],
@@ -186,7 +208,7 @@ class SimulatedPaperBroker:
         self._maybe_fail("fills")
         self._process()
         since = datetime.fromisoformat(since_utc)
-        return [FillView(**f) for f in self._s["fills"]
+        return [self._fill_view(f) for f in self._s["fills"]
                 if datetime.fromisoformat(f["time_utc"]) >= since]
 
     def lookup_order_ref(self, order_ref: str, since_utc: str) -> OrderLookup:
@@ -200,7 +222,7 @@ class SimulatedPaperBroker:
         return OrderLookup(
             order_ref=order_ref, complete=True,
             orders=[self._view(o) for o in self._s["orders"] if o["order_ref"] in refs],
-            fills=[FillView(**f) for f in self._s["fills"] if f["order_ref"] in refs
+            fills=[self._fill_view(f) for f in self._s["fills"] if f["order_ref"] in refs
                    and datetime.fromisoformat(f["time_utc"]) >= since])
 
     def submit_bracket(self, req: BracketRequest) -> SubmitAck:
@@ -258,36 +280,44 @@ class SimulatedPaperBroker:
         refs = {trade.order_ref, flatten_ref(trade.order_ref)}
         perms = set(trade.leg_perm_ids)
         mine = lambda o: o["order_ref"] in refs or o["perm_id"] in perms   # noqa: E731
+        def not_placed(reason: str, refused: bool = False, **extra: Any) -> FlattenResult:
+            return FlattenResult(confirmed=False, refused=refused, close_placed=False,
+                                 detail=dict(reason=reason, **extra))
         if any(trade.is_own_exit_leg(o["order_ref"], o["perm_id"], o["side"])
                and o["status"] == "Filled" for o in self._s["orders"]):
-            return FlattenResult(confirmed=False, detail={"reason": "exit_leg_filled"})
+            return not_placed("exit_leg_filled")
         con = sim_con_id(trade.symbol)
         if trade.con_id and trade.con_id != con:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "contract_mismatch"})
+            return not_placed("contract_mismatch", refused=True)
         pos = self._s["positions"].get(trade.symbol, {"qty": 0.0})["qty"]
         if abs(pos - trade.signed_qty) > 1e-9:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "position_not_owned", "broker_qty": pos,
-                                         "loop_qty": trade.signed_qty})
+            return not_placed("position_not_owned", refused=True, broker_qty=pos,
+                              loop_qty=trade.signed_qty)
         working = [o for o in self._s["orders"] if o["symbol"] == trade.symbol
                    and o["status"] == WORKING]
         foreign = [o["order_id"] for o in working if not mine(o)]
         if foreign:
-            return FlattenResult(confirmed=False, refused=True,
-                                 detail={"reason": "foreign_orders_on_contract",
-                                         "foreign_order_ids": foreign})
+            return not_placed("foreign_orders_on_contract", refused=True, foreign_order_ids=foreign)
+        if any(o["order_ref"] == flatten_ref(trade.order_ref) for o in working):
+            return not_placed("close_already_working")
         for o in working:                                   # only ours remain
             o["status"] = "Cancelled"
             self.cancelled.append(o["perm_id"])
         close = self._order(symbol=trade.symbol, side=exit_side(trade.direction),
                             qty=trade.open_qty, order_type="MKT", kind="flatten",
                             order_ref=flatten_ref(trade.order_ref))
-        self._fill(close, float(self._price_fn(trade.symbol, self._now())))
+        self.calls.append("close_placed")
+        if self.close_fill_not_before is None or self._now() >= self.close_fill_not_before:
+            self._fill(close, float(self._price_fn(trade.symbol, self._now())))
         self._save()
+        if self.lose_flatten_ack:
+            self.lose_flatten_ack = False
+            raise TimeoutError("simulated: close placed, acknowledgement lost")
         flat = trade.symbol not in self._s["positions"]
-        return FlattenResult(confirmed=flat, detail={"symbol": trade.symbol},
-                             close_order_ref=close["order_ref"], close_perm_id=close["perm_id"])
+        return FlattenResult(confirmed=flat, close_placed=True,
+                             detail={"symbol": trade.symbol, "close_status": close["status"]},
+                             close_order_ref=close["order_ref"], close_perm_id=close["perm_id"],
+                             close_order_id=close["order_id"])
 
     # ── foreign (manual) activity on the same account ──
     def manual_fill(self, symbol: str, side: str, qty: float, price: Optional[float] = None) -> str:

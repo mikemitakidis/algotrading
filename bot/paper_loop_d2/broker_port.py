@@ -103,7 +103,7 @@ class FillView:
     time_utc: str
     order_id: Optional[str] = None
     perm_id: Optional[str] = None
-    commission: float = 0.0
+    commission: Optional[float] = None  # None = not (yet) reported by the broker; 0.0 = proven zero
     order_kind: Optional[str] = None   # informational only (simulator); never used for ownership
     order_ref: Optional[str] = None
     account: Optional[str] = None
@@ -193,11 +193,22 @@ class OwnedTrade:
 
 @dataclass(frozen=True)
 class FlattenResult:
+    """Outcome of one close attempt.
+
+    ``close_placed`` is the broker's statement about the closing order:
+      * False — PROVEN not placed (every exit before ``placeOrder``); the
+        caller may clear its close intent;
+      * True  — placed (ids below when known), filled or not;
+      * None  — unknown (``placeOrder`` raised or an unexpected error):
+        the caller must treat the close as possibly live and never resend it.
+    ``confirmed`` — placed, filled and the contract position proven flat."""
     confirmed: bool
     detail: Dict[str, Any] = field(default_factory=dict)
     refused: bool = False              # ownership could not be proven: no broker action taken
     close_order_ref: Optional[str] = None
     close_perm_id: Optional[str] = None
+    close_placed: Optional[bool] = None
+    close_order_id: Optional[str] = None
 
 
 def entry_side(direction: str) -> str:

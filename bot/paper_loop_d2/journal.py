@@ -144,6 +144,15 @@ _ADDED_COLUMNS = (
     ("flatten_order_id", "TEXT"), ("flatten_perm_id", "TEXT"),
     ("absence_checks", "INTEGER NOT NULL DEFAULT 0"), ("last_lookup_at_utc", "TEXT"),
     ("last_lookup_note", "TEXT"),
+    # time-stop close intent: written BEFORE the broker call (INTENT), then
+    # SUBMITTED / CONFIRMED; cleared only when the broker PROVES nothing was placed
+    ("close_state", "TEXT"), ("close_attempts", "INTEGER NOT NULL DEFAULT 0"),
+)
+# Outcome columns added later (also migrated onto older DBs).
+_ADDED_OUTCOME_COLUMNS = (
+    # 1 = every entry/exit commission was reported by the broker (realized_pnl is
+    # a proven net figure); 0 = some fee is still unknown (realized_pnl is NULL)
+    ("fees_final", "INTEGER"),
 )
 _INDEXES = """
 CREATE UNIQUE INDEX IF NOT EXISTS loop_orders_one_active_per_symbol
@@ -184,6 +193,10 @@ class LoopJournal:
             for col, decl in _ADDED_COLUMNS:
                 if col not in have:
                     c.execute("ALTER TABLE loop_orders ADD COLUMN %s %s" % (col, decl))
+            have_o = {r["name"] for r in c.execute("PRAGMA table_info(paper_trade_outcomes)")}
+            for col, decl in _ADDED_OUTCOME_COLUMNS:
+                if col not in have_o:
+                    c.execute("ALTER TABLE paper_trade_outcomes ADD COLUMN %s %s" % (col, decl))
             c.executescript(_INDEXES)
             c.execute("INSERT OR IGNORE INTO loop_meta (key, value) VALUES ('journal_id', ?)",
                       (secrets.token_hex(4),))
@@ -326,11 +339,22 @@ class LoopJournal:
     def update_fields(self, client_ref: str, expected: str, now: datetime, **fields: Any) -> None:
         self.transition(client_ref, expected, expected, now, **fields)
 
+    @staticmethod
+    def _money(gross: float, entry_fees: Optional[float], exit_fees: Optional[float]
+               ) -> Dict[str, Any]:
+        """Net P&L only when EVERY fee is known; unknown is never zero."""
+        if entry_fees is None or exit_fees is None:
+            return {"fees": None, "realized_pnl": None, "fees_final": 0}
+        fees = float(entry_fees) + float(exit_fees)
+        return {"fees": fees, "realized_pnl": gross - fees, "fees_final": 1}
+
     def close_with_outcome(self, client_ref: str, *, exit_price: float, exit_filled_at_utc: str,
-                           exit_reason: str, exit_fees: float, now: datetime,
+                           exit_reason: str, exit_fees: Optional[float], now: datetime,
                            claims: Optional[List[tuple]] = None) -> Dict[str, Any]:
         """OPEN -> CLOSED, claim the exit executions and write the edge
-        outcome, atomically."""
+        outcome, atomically. If any commission is still unknown the outcome
+        is written with gross P&L, ``fees``/``realized_pnl`` NULL and
+        ``fees_final=0`` (D3 does not count it) until ``finalize_fees``."""
         with self._tx() as c:
             r = c.execute("SELECT * FROM loop_orders WHERE client_ref=?", (client_ref,)).fetchone()
             if r is None or r["state"] != "OPEN":
@@ -338,7 +362,7 @@ class LoopJournal:
             o = dict(r)
             sign = 1.0 if o["direction"] == "long" else -1.0
             gross = sign * (exit_price - o["entry_fill_price"]) * o["qty"]
-            fees = (o["entry_fees"] or 0.0) + (exit_fees or 0.0)
+            money = self._money(gross, o["entry_fees"], exit_fees)
             risk = abs(o["entry_fill_price"] - o["stop_loss"]) * o["qty"] if o["stop_loss"] else 0.0
             outcome = {
                 "trade_id": client_ref, "cycle_key": o["cycle_key"], "strategy_id": o["strategy_id"],
@@ -347,8 +371,9 @@ class LoopJournal:
                 "entry_price": o["entry_fill_price"], "exit_price": exit_price,
                 "entry_filled_at_utc": o["entry_filled_at_utc"],
                 "exit_filled_at_utc": exit_filled_at_utc, "exit_reason": exit_reason,
-                "gross_pnl": gross, "fees": fees, "realized_pnl": gross - fees,
-                "r_multiple": (gross / risk) if risk > 0 else None,
+                "gross_pnl": gross, "fees": money["fees"], "realized_pnl": money["realized_pnl"],
+                "fees_final": money["fees_final"],
+                "r_multiple": (gross / risk) if risk > 0 else None,      # gross R
                 "data_source": o["data_source"], "record_kind": EDGE_RECORD_KIND,
                 "is_edge_outcome": 1, "recorded_at_utc": _utc(now)}
             outcome["raw_json"] = json.dumps({"order": o, "outcome": dict(outcome)},
@@ -360,6 +385,33 @@ class LoopJournal:
             c.execute("INSERT OR IGNORE INTO paper_trade_outcomes (%s) VALUES (%s)" % (
                 ",".join(outcome), ",".join("?" * len(outcome))), list(outcome.values()))
             return outcome
+
+    def claims_for(self, client_ref: str) -> Dict[str, str]:
+        with self._conn() as c:
+            return {r["exec_id"]: r["leg"] for r in c.execute(
+                "SELECT exec_id, leg FROM loop_exec_claims WHERE client_ref=?", (client_ref,))}
+
+    def unfinalized_outcomes(self, recorded_since_utc: str) -> List[Dict[str, Any]]:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM paper_trade_outcomes WHERE fees_final=0 AND recorded_at_utc>=?"
+                " ORDER BY recorded_at_utc", (recorded_since_utc,))]
+
+    def finalize_fees(self, trade_id: str, *, entry_fees: float, exit_fees: float,
+                      now: datetime) -> Dict[str, Any]:
+        """Broker commissions are now known for every claimed execution:
+        write the proven net P&L, atomically, once."""
+        with self._tx() as c:
+            r = c.execute("SELECT * FROM paper_trade_outcomes WHERE trade_id=?", (trade_id,)).fetchone()
+            if r is None or r["fees_final"] != 0:
+                raise JournalConflict("%s: no unfinalized outcome" % trade_id)
+            money = self._money(float(r["gross_pnl"]), entry_fees, exit_fees)
+            c.execute("UPDATE paper_trade_outcomes SET fees=?, realized_pnl=?, fees_final=1"
+                      " WHERE trade_id=? AND fees_final=0",
+                      (money["fees"], money["realized_pnl"], trade_id))
+            c.execute("UPDATE loop_orders SET entry_fees=?, exit_fees=?, updated_at_utc=?"
+                      " WHERE client_ref=?", (entry_fees, exit_fees, _utc(now), trade_id))
+            return money
 
     def outcomes(self) -> List[Dict[str, Any]]:
         with self._conn() as c:

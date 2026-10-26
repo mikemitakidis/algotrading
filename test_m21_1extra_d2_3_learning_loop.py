@@ -1077,6 +1077,8 @@ class FakeWorld:
         self.fail_place_at = None
         self.fail_completed = False
         self.cancel_ok = True
+        self.on_cancel = None
+        self.position_lags = False          # positions() does not reflect a close fill yet
         self.ticker = SimpleNamespace(last=100.0, bid=99.9, ask=100.1, time=T0, marketDataType=1)
         self.account_values = [FakeIBValue(account=ACCT, tag="NetLiquidation", value="1000000",
                                            currency="USD")]
@@ -1096,12 +1098,16 @@ class FakeWorld:
         self.trades.append(tr)
         return tr
 
-    def add_execution(self, symbol, con_id, side, qty, price, *, ref="", perm=1, acct=ACCT, t=T0):
+    def add_execution(self, symbol, con_id, side, qty, price, *, ref="", perm=1, acct=ACCT, t=T0,
+                      report="match", commission=1.0):
         ex = SimpleNamespace(execId="x%d" % (len(self.executions) + 1), acctNumber=acct, time=t,
                              side=side, shares=qty, price=price, orderId=1, permId=perm, orderRef=ref)
+        rep = {"match": SimpleNamespace(execId=ex.execId, commission=commission),
+               "default": SimpleNamespace(execId="", commission=0.0),     # ib_insync placeholder
+               "other": SimpleNamespace(execId="zz", commission=commission),
+               "none": None}[report]
         self.executions.append(SimpleNamespace(execution=ex, contract=self.contract(symbol, con_id),
-                                               commissionReport=SimpleNamespace(commission=1.0),
-                                               time=t))
+                                               commissionReport=rep, time=t))
 
     def set_position(self, symbol, con_id, qty, account=ACCT):
         self.positions = [p for p in self.positions if p.contract.conId != con_id or p.account != account]
@@ -1167,7 +1173,8 @@ class FakeIB:
             status = "Filled"
             sign = 1 if order.action == "BUY" else -1
             cur = sum(p.position for p in self.w.positions if p.contract.conId == contract.conId)
-            self.w.set_position(contract.symbol, contract.conId, cur + sign * order.totalQuantity)
+            if not self.w.position_lags:
+                self.w.set_position(contract.symbol, contract.conId, cur + sign * order.totalQuantity)
             self.w.add_execution(contract.symbol, contract.conId, "BOT" if sign > 0 else "SLD",
                                  order.totalQuantity, 100.0, ref=order.orderRef, perm=order.permId)
         tr = SimpleNamespace(contract=contract, order=order,
@@ -1178,6 +1185,8 @@ class FakeIB:
 
     def cancelOrder(self, order):
         self.w.cancelled.append(order.permId)
+        if self.w.on_cancel is not None:
+            self.w.on_cancel()
         if self.w.cancel_ok:
             for t in self.w.trades:
                 if t.order is order:
@@ -1439,6 +1448,346 @@ class D23IbkrAdapter(unittest.TestCase):
         out = loop.journal.outcomes()[0]
         self.assertEqual((out["entry_price"], out["exit_price"], out["data_source"]),
                          (100.0, 110.0, "ibkr_paper"))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PR #1 review: P0 duplicate-close risk, P0 fail-open exit-leg recheck,
+# P1 commission integrity.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class PaperTaggedSim(SimulatedPaperBroker):
+    """Contract-test broker: tags rows like IBKR paper so D3 would count them."""
+    data_source = "ibkr_paper"
+
+    def account_snapshot(self):
+        s = super().account_snapshot()
+        return AccountSnapshot(s.account, s.net_liquidation, s.cash, s.currency, s.as_of_utc,
+                               "ibkr_paper")
+
+
+def time_stop_harness(testcase, broker_cls=SimulatedPaperBroker, **broker_kw):
+    """OPEN trade on AAA at T0+15; the time stop (max_hold 60) fires at T0+90."""
+    h = LoopHarness(testcase, once=True, config=LoopConfig(max_hold_minutes=60))
+    h.broker = broker_cls(price_fn=lambda s, now: h.prices[s], clock=h.clock, **broker_kw)
+    h.loop = h.make_loop()
+    h.tick()
+    h.tick(15)
+    testcase.assertEqual(h.orders()[0]["state"], "OPEN")
+    return h
+
+
+def close_orders(broker):
+    return [o for o in broker.raw_state()["orders"] if o["kind"] == "flatten"]
+
+
+class D23CloseIntent(unittest.TestCase):
+    """P0-1: a close that may exist is never sent again."""
+
+    def test_intent_is_durable_before_the_broker_is_called(self):
+        seen = {}
+
+        class Spy(SimulatedPaperBroker):
+            journal_db = None
+
+            def flatten_owned(self, trade):
+                seen["row"] = LoopJournal(self.journal_db).get_order(trade.client_ref)
+                return super().flatten_owned(trade)
+        h = time_stop_harness(self, Spy)
+        h.broker.journal_db = h.db
+        h.prices["AAA"] = 101.0
+        r = h.tick(75)
+        self.assertEqual(seen["row"]["close_state"], "INTENT")
+        self.assertIsNotNone(seen["row"]["time_stop_requested_at_utc"])
+        self.assertEqual(seen["row"]["close_attempts"], 1)
+        self.assertEqual(r["closed"][0]["exit_reason"], "time_stop")
+
+    def test_late_filled_close_is_captured_and_never_resent(self):
+        h = time_stop_harness(self)
+        h.broker.close_fill_not_before = T0 + timedelta(minutes=100)
+        h.prices["AAA"] = 101.0
+        r = h.tick(75)                                            # T0+90: close placed, not filled
+        self.assertTrue(any(e.startswith("time_stop_close_unconfirmed") for e in r["errors"]))
+        o = h.orders()[0]
+        (close,) = close_orders(h.broker)
+        self.assertEqual((o["close_state"], o["flatten_perm_id"], o["flatten_order_id"]),
+                         ("SUBMITTED", close["perm_id"], close["order_id"]))
+        r = h.tick(15)                                            # T0+105: the close fills late
+        self.assertEqual(r["closed"][0]["exit_reason"], "time_stop")
+        self.assertEqual(h.broker.calls.count("flatten_owned"), 1)
+        self.assertEqual(len(close_orders(h.broker)), 1)
+        self.assertEqual(h.broker.positions(), [])                # flat, not short
+
+    def test_broker_timeout_after_placing_is_reconciled_not_resent(self):
+        h = time_stop_harness(self)
+        h.broker.close_fill_not_before = T0 + timedelta(minutes=115)
+        h.broker.lose_flatten_ack = True
+        r = h.tick(75)                                            # T0+90: placed, then timeout
+        self.assertTrue(any(e.startswith("time_stop_close_outcome_unknown") for e in r["errors"]))
+        o = h.orders()[0]
+        self.assertEqual((o["close_state"], o["flatten_perm_id"]), ("INTENT", None))
+        r = h.tick(15)                                            # T0+105: still working
+        o = h.orders()[0]
+        (close,) = close_orders(h.broker)
+        self.assertEqual((o["close_state"], o["flatten_perm_id"]), ("SUBMITTED", close["perm_id"]))
+        self.assertTrue(any(e.startswith("time_stop_close_pending") for e in r["errors"]))
+        r = h.tick(15)                                            # T0+120: filled
+        self.assertEqual(r["closed"][0]["exit_reason"], "time_stop")
+        self.assertEqual((h.broker.calls.count("flatten_owned"), len(close_orders(h.broker))), (1, 1))
+
+    def test_unknown_close_that_never_appears_goes_to_review_unsent(self):
+        h = time_stop_harness(self)
+        h.broker.fail_once["flatten_owned"] = TimeoutError("lost before anything was known")
+        h.tick(75)
+        self.assertEqual(h.orders()[0]["close_state"], "INTENT")
+        for _ in range(2):                                        # +15, +30: inside the window
+            r = h.tick(15)
+            self.assertIn("time_stop_close_pending:AAA:no_close_order_seen", r["errors"])
+            self.assertEqual(h.orders()[0]["state"], "OPEN")
+        h.tick(15)                                                # +45 > 30 min
+        o = h.orders()[0]
+        self.assertEqual(o["state"], "NEEDS_REVIEW")
+        self.assertIn("no close order or execution found", o["note"])
+        self.assertEqual(h.broker.calls.count("flatten_owned"), 1)
+        self.assertEqual(close_orders(h.broker), [])
+
+    def test_dead_close_order_goes_to_review_unsent(self):
+        h = time_stop_harness(self)
+        h.broker.close_fill_not_before = T0 + timedelta(days=1)
+        h.tick(75)
+        (close,) = close_orders(h.broker)
+        h.broker.order_by_perm(close["perm_id"])["status"] = "Cancelled"   # rejected/cancelled at broker
+        h.tick(15)
+        o = h.orders()[0]
+        self.assertEqual(o["state"], "NEEDS_REVIEW")
+        self.assertIn("close order Cancelled without an execution", o["note"])
+        self.assertEqual(len(close_orders(h.broker)), 1)
+
+    def test_proven_not_placed_clears_the_intent_and_retries(self):
+        from bot.paper_loop_d2.broker_port import FlattenResult
+
+        class OnceNotPlaced(SimulatedPaperBroker):
+            first = True
+
+            def flatten_owned(self, trade):
+                if self.first:
+                    self.first = False
+                    self.calls.append("flatten_owned")
+                    return FlattenResult(confirmed=False, close_placed=False,
+                                         detail={"reason": "cancel_unconfirmed"})
+                return super().flatten_owned(trade)
+        h = time_stop_harness(self, OnceNotPlaced)
+        r = h.tick(75)
+        self.assertIn("time_stop_not_placed:AAA:cancel_unconfirmed", r["errors"])
+        o = h.orders()[0]
+        self.assertEqual((o["close_state"], o["time_stop_requested_at_utc"], o["close_attempts"]),
+                         (None, None, 1))
+        r = h.tick(15)
+        self.assertEqual(r["closed"][0]["exit_reason"], "time_stop")
+        self.assertEqual(h.orders()[0]["close_attempts"], 2)
+        self.assertEqual(len(close_orders(h.broker)), 1)
+
+    def test_simulator_itself_refuses_a_second_close_while_one_works(self):
+        h = time_stop_harness(self)
+        h.broker.close_fill_not_before = T0 + timedelta(days=1)
+        h.tick(75)
+        o = h.orders()[0]
+        legs = (o["tp_perm_id"], o["sl_perm_id"])
+        res = h.broker.flatten_owned(OwnedTrade(o["client_ref"], o["order_ref"], "AAA", o["con_id"],
+                                                "SIM-PAPER", "long", 1.0, legs, legs))
+        self.assertEqual((res.close_placed, res.detail["reason"]), (False, "close_already_working"))
+        self.assertEqual(len(close_orders(h.broker)), 1)
+
+    def test_unknown_placement_is_never_treated_as_not_placed(self):
+        from bot.paper_loop_d2.broker_port import FlattenResult
+
+        class Unknown(SimulatedPaperBroker):
+            def flatten_owned(self, trade):
+                self.calls.append("flatten_owned")
+                return FlattenResult(confirmed=False, close_placed=None,
+                                     detail={"reason": "close_outcome_unknown:ConnectionError"})
+        h = time_stop_harness(self, Unknown)
+        h.tick(75)
+        self.assertEqual(h.orders()[0]["close_state"], "INTENT")
+        h.tick(15)
+        h.tick(15)
+        self.assertEqual(h.broker.calls.count("flatten_owned"), 1)
+
+
+class D23AdapterCloseOutcomes(unittest.TestCase):
+    """P0-1 / P0-2 at the IBKR adapter."""
+    adapter = D23IbkrAdapter.adapter          # shared fake-IB fixtures (no inherited tests)
+    owned = D23IbkrAdapter.owned
+
+    def test_close_placed_but_unfilled_reports_placed_with_ids(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)
+        res = self.adapter(w).flatten_owned(trade)                # fill_market False: stays working
+        close, = w.placed
+        self.assertEqual((res.confirmed, res.close_placed), (False, True))
+        self.assertEqual((res.close_perm_id, res.close_order_ref), (str(close.permId),
+                                                                    flatten_ref(trade.order_ref)))
+
+    def test_stale_position_after_fill_is_placed_but_unconfirmed(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)
+        w.fill_market = True
+        w.position_lags = True
+        res = self.adapter(w).flatten_owned(trade)
+        self.assertEqual((res.confirmed, res.close_placed), (False, True))
+        self.assertEqual(res.detail["remaining_qty"], 1.0)
+
+    def test_place_order_failure_is_unknown_not_not_placed(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)
+        w.fail_place_at = 0
+        res = self.adapter(w).flatten_owned(trade)
+        self.assertIsNone(res.close_placed)
+        self.assertFalse(res.confirmed)
+        self.assertTrue(res.detail["reason"].startswith("close_outcome_unknown"))
+        self.assertEqual(res.close_order_ref, flatten_ref(trade.order_ref))
+
+    def test_every_pre_placement_exit_reports_not_placed(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 2)
+        b = self.adapter(w)
+        self.assertIs(b.flatten_owned(trade).close_placed, False)          # not owned
+        self.state["kill"] = True
+        self.assertIs(b.flatten_owned(trade).close_placed, False)          # kill switch
+        self.state["kill"] = False
+        w.set_position("AAA", 111, 1)
+        w.add_trade("AAA", 111, "SELL", 1, ref=flatten_ref(trade.order_ref), order_type="MKT")
+        res = b.flatten_owned(trade)                                       # a close already works
+        self.assertEqual((res.close_placed, res.detail["reason"]), (False, "close_already_working"))
+        self.assertEqual((w.placed, w.cancelled), ([], []))
+
+    def test_unknown_exit_leg_state_after_cancellation_blocks_the_close(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)
+
+        def completed_orders_fail():
+            w.fail_completed = True                               # read fails AFTER cancelling
+        w.on_cancel = completed_orders_fail
+        res = self.adapter(w).flatten_owned(trade)
+        self.assertEqual((res.confirmed, res.close_placed, res.detail["reason"]),
+                         (False, False, "leg_state_unknown_after_cancel"))
+        self.assertEqual(w.placed, [])                            # no market close
+        self.assertEqual(sorted(w.cancelled), sorted([tp.order.permId, sl.order.permId]))
+
+    def test_leg_fill_reported_only_after_cancellation_blocks_the_close(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)                             # position read lags the fill
+
+        def late_fill_report():
+            if not any(t.orderStatus.status == "Filled" for t in w.trades):
+                w.add_trade("AAA", 111, "SELL", 1, ref=trade.order_ref, order_type="STP",
+                            status="Filled")                      # an own exit leg, seen only now
+        w.on_cancel = late_fill_report
+        res = self.adapter(w).flatten_owned(trade)
+        self.assertEqual((res.close_placed, res.detail["reason"]), (False, "exit_leg_filled"))
+        self.assertEqual(w.placed, [])
+
+    def test_exit_leg_filled_during_cancellation_blocks_the_close(self):
+        w = FakeWorld()
+        trade, tp, sl = self.owned(w)
+        w.set_position("AAA", 111, 1)
+        w.cancel_ok = False
+
+        def tp_fills():
+            tp.orderStatus.status = "Filled"
+            sl.orderStatus.status = "Cancelled"                   # OCA
+        w.on_cancel = tp_fills
+        res = self.adapter(w).flatten_owned(trade)
+        self.assertEqual((res.close_placed, res.detail["reason"]), (False, "exit_leg_filled"))
+        self.assertEqual(w.placed, [])
+
+
+class D23CommissionIntegrity(unittest.TestCase):
+    """P1-3: unknown fees are never zero; net P&L only when proven."""
+
+    def test_adapter_distinguishes_unknown_from_proven_zero(self):
+        w = FakeWorld()
+        kinds = [("none", 1.0), ("default", 0.0), ("other", 1.0), ("match", float("nan")),
+                 ("match", 1.7976931348623157e308), ("match", -1.0), ("match", 0.0), ("match", 1.25)]
+        for i, (rep, c) in enumerate(kinds):
+            w.add_execution("AAA", 111, "BOT", 1, 100.0, ref="R%d" % i, report=rep, commission=c)
+        b = D23IbkrAdapter.adapter(self, w)                      # fake IB, no gateway
+        got = [f.commission for f in sorted(b.fills(T0.isoformat()), key=lambda f: f.order_ref)]
+        self.assertEqual(got, [None, None, None, None, None, None, 0.0, 1.25])
+
+    def run_round_trip(self, broker_cls=PaperTaggedSim, **kw):
+        h = LoopHarness(self, once=True)
+        h.broker = broker_cls(price_fn=lambda s, now: h.prices[s], clock=h.clock, **kw)
+        h.loop = h.make_loop()
+        return h
+
+    def test_unknown_fees_keep_net_pnl_unproven_until_reported(self):
+        from bot.runtime.paper_outcome_metrics import compute_paper_metrics
+        h = self.run_round_trip()
+        h.broker.hold_commissions = True
+        h.tick()
+        h.tick(15)
+        self.assertIsNone(h.orders()[0]["entry_fees"])            # not 0.0
+        h.prices["AAA"] = 111.0
+        r = h.tick(15)
+        self.assertEqual(r["closed"][0]["fees_final"], 0)
+        o = h.outcomes()[0]
+        self.assertEqual((o["gross_pnl"], o["fees"], o["realized_pnl"], o["fees_final"]),
+                         (10.0, None, None, 0))
+        m = compute_paper_metrics(h.db)
+        self.assertEqual((m["edge_outcomes"]["rows_total"], m["edge_outcomes"]["rows_genuine"]), (1, 0))
+        self.assertIsNone(m["edge_outcomes"]["overall"]["total_pnl"])
+        r = h.tick(15)                                            # reports still missing
+        self.assertEqual(r["fees_finalized"], [])
+        h.broker.release_commissions()
+        r = h.tick(15)
+        self.assertEqual(r["fees_finalized"], [o["trade_id"]])
+        o = h.outcomes()[0]
+        self.assertEqual((o["fees"], o["realized_pnl"], o["fees_final"]), (2.0, 8.0, 1))
+        self.assertEqual((h.orders()[0]["entry_fees"], h.orders()[0]["exit_fees"]), (1.0, 1.0))
+        m = compute_paper_metrics(h.db)
+        self.assertEqual(m["edge_outcomes"]["rows_genuine"], 1)
+        self.assertAlmostEqual(m["edge_outcomes"]["overall"]["total_pnl"], 8.0)
+        self.assertEqual(h.tick(15)["fees_finalized"], [])        # finalized once
+
+    def test_proven_zero_commission_is_final(self):
+        h = self.run_round_trip(commission_per_share=0.0, min_commission=0.0)
+        h.tick()
+        h.tick(15)
+        h.prices["AAA"] = 111.0
+        h.tick(15)
+        o = h.outcomes()[0]
+        self.assertEqual((o["fees"], o["realized_pnl"], o["fees_final"]), (0.0, 10.0, 1))
+
+    def test_fees_that_never_arrive_stay_unfinalized(self):
+        h = self.run_round_trip()
+        h.broker.hold_commissions = True
+        h.tick()
+        h.tick(15)
+        h.prices["AAA"] = 111.0
+        h.tick(15)
+        h.clock.advance(73 * 60)                                  # past the 72 h window
+        h.broker.release_commissions()
+        self.assertEqual(h.tick()["fees_finalized"], [])
+        self.assertEqual(h.outcomes()[0]["fees_final"], 0)
+
+    def test_outcomes_table_migration_adds_fees_final(self):
+        d = tempfile.mkdtemp(prefix="d23fees_")
+        self.addCleanup(shutil.rmtree, d, True)
+        db = os.path.join(d, "old.db")
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE paper_trade_outcomes (trade_id TEXT PRIMARY KEY, realized_pnl REAL)")
+        con.close()
+        LoopJournal(db)
+        con = sqlite3.connect(db)
+        cols = {r[1] for r in con.execute("PRAGMA table_info(paper_trade_outcomes)")}
+        con.close()
+        self.assertIn("fees_final", cols)
 
 
 class D23DashboardContract(unittest.TestCase):
