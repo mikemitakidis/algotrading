@@ -27,6 +27,11 @@ import sys
 import tokenize
 import unittest
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 import tools.paper_loop.m21_1extra_b2a_gateway_readiness as B2A
 
 _MODULE_PATH = "tools/paper_loop/m21_1extra_b2a_gateway_readiness.py"

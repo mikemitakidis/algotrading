@@ -27,6 +27,11 @@ import subprocess
 import sys
 import unittest
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 from bot.brokers.base import OrderIntent
 import tools.paper_loop.m21_1extra_b1_ibkr_paper_contract_dryrun as B1
 

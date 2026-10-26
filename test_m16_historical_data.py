@@ -45,6 +45,11 @@ from pathlib import Path
 
 import pandas as pd
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 # Workdir helpers ------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent

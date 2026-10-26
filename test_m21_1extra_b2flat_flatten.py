@@ -49,6 +49,11 @@ if "ib_insync" not in sys.modules:
     _stub.Stock = _StubStock
     sys.modules["ib_insync"] = _stub
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 from bot.brokers.ibkr_broker import IBKRBroker
 import tools.paper_loop.m21_1extra_b2flat_flatten_dryrun as B2FLAT
 

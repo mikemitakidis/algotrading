@@ -32,6 +32,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
@@ -871,9 +876,16 @@ class TestDryRun(unittest.TestCase):
         """Per ChatGPT correction #6: the CLI dry-run uses :memory:, and
         MUST call init_flywheel_tables on it FIRST so a missing table
         doesn't mask real dry-run behaviour. We exercise this by running
-        the CLI with --dry-run --all against a fresh real DB and
-        asserting (a) no writes to the real DB, (b) the CLI doesn't
-        crash with "no such table" on the in-memory conn."""
+        the CLI with --dry-run against a fresh real DB and asserting
+        (a) no writes to the real DB, (b) the CLI doesn't crash with
+        "no such table" on the in-memory conn.
+
+        M21 C5a (N-1c): uses --scope ibkr_live, whose reader is
+        intentionally unwired and raises before any connection, instead
+        of --all (which made real IBKR-paper / eToro reads on a host with
+        a running gateway or broker keys). The child process inherits
+        _test_isolation, so its audit log goes to the temp dir, not
+        data/risk_exposure.log."""
         env = dict(os.environ)
         env["SIGNALS_DB_PATH"] = self.fx.path
         # Snapshot before.
@@ -886,7 +898,7 @@ class TestDryRun(unittest.TestCase):
             ).fetchone()[0]
         res = subprocess.run(
             [sys.executable, "tools/ingest_exposure_state.py",
-             "--all", "--dry-run"],
+             "--scope", "ibkr_live", "--dry-run"],
             capture_output=True, text=True, env=env, cwd=_REPO,
         )
         with self.fx.conn() as c:
@@ -903,6 +915,11 @@ class TestDryRun(unittest.TestCase):
         # missing-table SQL error. "no such table" must not appear.
         combined = (res.stdout or "") + "\n" + (res.stderr or "")
         self.assertNotIn("no such table", combined.lower())
+        # M21 C5a: the child must have run under isolation (97 = refused)
+        # and reached the dry-run adapter path for the no-network scope.
+        self.assertNotEqual(res.returncode, 97, combined[-500:])
+        self.assertIn("[ibkr_live]", combined)
+        self.assertIn("dry_run", combined)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

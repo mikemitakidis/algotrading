@@ -25,6 +25,11 @@ import sys
 import tokenize
 import unittest
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 from bot.brokers.base import OrderResult
 import tools.paper_loop.m21_1extra_b2b_single_submit as B2B
 
@@ -262,17 +267,37 @@ class TestLifecycleFailClosed(unittest.TestCase):
 
 class TestOutputAndGuard(unittest.TestCase):
     def test_writes_only_tmp(self):
-        env = {**os.environ, "PYTHONPATH": os.getcwd()}
+        # M21 C5a (finding N-1d): this test used to launch the real B2b CLI
+        # WITH the real-order confirmation flag, so only the /tmp/ report-path
+        # check stood between a test run and a real paper order -- and from a
+        # checkout under /tmp that check passed. Now there is no confirmation
+        # flag, the report path can never resolve under /tmp/, and the
+        # environment is deliberately non-paper (port 1, bogus account), so
+        # even a regressed guard cannot reach a broker or write a file.
+        env = {**os.environ, "PYTHONPATH": os.getcwd(), "BROKER": "paper",
+               "IBKR_PORT": "1", "IBKR_ACCOUNT": "NOT-A-PAPER-ACCOUNT"}
+        for k in ("IBKR_LIVE_PORT", "IBKR_LIVE_ACCOUNT", "IBKR_LIVE_CONFIRMED"):
+            env.pop(k, None)
         r = subprocess.run(
             [sys.executable, "-m",
              "tools.paper_loop.m21_1extra_b2b_single_submit",
              "--symbol", "AAPL", "--entry-price", "308.3",
              "--stop-loss", "300", "--target-price", "320",
-             "--i-understand-this-places-a-real-paper-order",
-             "--report", "reports/should_refuse.md"],
-            capture_output=True, text=True, env=env)
+             "--report", "/dev/null/m21_should_refuse.md"],
+            capture_output=True, text=True, env=env, timeout=60)
+        out = r.stderr + r.stdout
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("/tmp/", (r.stderr + r.stdout))
+        self.assertIn("writes only under /tmp/", out)
+        self.assertNotIn("wrote ", out)
+
+    def test_report_guard_runs_before_lifecycle(self):
+        # M21 C5a: the /tmp/ output guard must be evaluated before main()
+        # ever calls run_lifecycle (i.e. before any broker could be touched).
+        with open(_MODULE_PATH, encoding="utf-8") as fh:
+            src = fh.read()
+        main_src = src[src.index("def main():"):]
+        self.assertLess(main_src.index('startswith("/tmp/")'),
+                        main_src.index("run_lifecycle("))
 
     def test_source_guard_bans_unrelated_systems(self):
         with open(_MODULE_PATH, "rb") as fh:

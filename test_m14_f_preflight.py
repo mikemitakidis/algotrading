@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -31,6 +32,11 @@ from typing import Optional
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
+
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
 
 from bot.broker_allocation import DEFAULT_POLICY, save_policy
 from bot.flywheel import init_flywheel_tables
@@ -636,8 +642,10 @@ class TestNoEtoroWriteOnBlock(unittest.TestCase):
             # Block via global kill — earliest gate that fires.
             save_policy(c, _valid_policy(**{"global.kill_switch": True}))
             _seed_fresh_all_scopes(c)
-            audit_path = os.path.join(_REPO, "data",
-                                       "etoro_live_audit_test.jsonl")
+            # M21 C5a: a private temp dir, never <repo>/data/.
+            audit_dir = tempfile.mkdtemp(prefix="m14f_audit_")
+            self.addCleanup(shutil.rmtree, audit_dir, True)
+            audit_path = os.path.join(audit_dir, "etoro_live_audit_test.jsonl")
         # Ensure a clean audit log location for this test run.
         env = dict(os.environ)
         env["SIGNALS_DB_PATH"] = self.fx.path
@@ -871,8 +879,10 @@ class TestAllowPreservesM13_5(unittest.TestCase):
         env.pop("ETORO_REAL_USER_KEY", None)
         env.pop("ETORO_API_KEY", None)
         env.pop("ETORO_USER_KEY", None)
+        audit_dir = tempfile.mkdtemp(prefix="m14f_audit_")   # M21 C5a
+        self.addCleanup(shutil.rmtree, audit_dir, True)
         env["ETORO_LIVE_AUDIT_LOG"] = os.path.join(
-            _REPO, "data", "etoro_live_audit_test_allow.jsonl")
+            audit_dir, "etoro_live_audit_test_allow.jsonl")
         try:
             os.unlink(env["ETORO_LIVE_AUDIT_LOG"])
         except OSError:

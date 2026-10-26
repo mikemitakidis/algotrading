@@ -40,7 +40,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 _env = BASE_DIR / '.env'
-if _env.exists():
+if __name__ == '__main__' and _env.exists():  # M21 C5a: never load the real .env on import
     try:
         from dotenv import load_dotenv
         load_dotenv(_env)
@@ -48,6 +48,13 @@ if _env.exists():
         pass
 
 sys.path.insert(0, str(BASE_DIR))
+
+# M21 C5a: when imported (e.g. by a test runner or loader) this module is
+# fully isolated from production files, secrets and brokers. Run as an
+# operator script it refuses unless explicitly confirmed (see __main__).
+import _test_isolation  # noqa: E402
+if __name__ != '__main__':
+    _test_isolation.install()
 
 
 def _test_price_validation():
@@ -273,6 +280,10 @@ if __name__ == '__main__':
     p.add_argument('--dry-run', action='store_true',
                    help='Pre-flight checks only, no order submitted')
     args = p.parse_args()
+    if not (args.test_price_validation or args.dry_run):
+        # M21 C5a: places a REAL LIVE order; operator-only, explicit opt-in.
+        from _test_isolation import require_operator_confirmation
+        require_operator_confirmation(__file__)
     if args.test_price_validation:
         _test_price_validation()
     else:

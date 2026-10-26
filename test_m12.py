@@ -22,13 +22,23 @@ import argparse, json, os, sys, sqlite3, tempfile
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR))
+
+# M21 C5a: only an operator-confirmed `--live` run may load the real .env and
+# reach the Gateway. Every other run, and any import, is fully isolated: the
+# kill-switch activate/deactivate below never touches the real
+# data/kill_switch.json, .env is never read and no broker port is reachable.
+import _test_isolation  # noqa: E402
+_OPERATOR_LIVE = (__name__ == '__main__' and '--live' in sys.argv
+                  and _test_isolation.operator_run_confirmed(__file__))
 _env = BASE_DIR / '.env'
-if _env.exists():
+if _OPERATOR_LIVE and _env.exists():
     try:
         from dotenv import load_dotenv; load_dotenv(_env)
     except ImportError:
         pass
-sys.path.insert(0, str(BASE_DIR))
+if not _OPERATOR_LIVE:
+    _test_isolation.install()
 
 
 def section(title):
@@ -43,6 +53,10 @@ def run(live_tests=False):
     print('='*60)
 
     from bot.brokers.ibkr_broker import _check_live_safety_config, IBKRBroker
+    # M21 C5a: the redirected (temp) kill switch starts in the production
+    # default state (inactive), as main.py's ensure_default_state() would set.
+    from bot.kill_switch import ensure_default_state
+    ensure_default_state()
     from bot.brokers.base import OrderIntent
 
     passed = []
@@ -271,5 +285,10 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--live', action='store_true',
                    help='Run live Gateway tests (requires port 4001 + live account)')
-    ok = run(live_tests=p.parse_args().live)
+    _args = p.parse_args()
+    if _args.live:
+        # M21 C5a: --live talks to the real live Gateway; operator-only.
+        from _test_isolation import require_operator_confirmation
+        require_operator_confirmation(__file__)
+    ok = run(live_tests=_args.live)
     sys.exit(0 if ok else 1)

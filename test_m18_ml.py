@@ -10613,6 +10613,32 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_c2_d2_b2b_composition.py",
             "test_m21_d2_paper_port_guard.py",
             "test_m21_c3_b2b_killswitch_none.py",
+            # M21 C5a: test isolation from production runtime state
+            # (_test_isolation helper + per-module install, operator-script
+            # opt-in guards, no-network CLI test variants).
+            "_test_isolation.py",
+            "test_m21_c5a_test_isolation.py",
+            "test_m10.py",
+            "test_m11.py",
+            "test_m12.py",
+            "test_m12_live_order.py",
+            "test_m13_3_etoro_paper.py",
+            "test_m14_d_exposure.py",
+            "test_m14_g_dashboard.py",
+            "test_m14_risk.py",
+            "test_m15_0_service.py",
+            "test_m15_2_health.py",
+            "test_m15_3_a_2_totp.py",
+            "test_m15_3_a_dashboard_auth.py",
+            "test_m15_3_b_manual_reset.py",
+            "test_m15_3_c_audit_export.py",
+            "test_m15_4_gateway_health.py",
+            "test_m16_historical_data.py",
+            # M21 C5a (seeded access probe): .env / data/ / kill-switch readers.
+            "test_m13_5_cli_env.py",
+            "test_m14_c_ingest.py",
+            "test_m14_portfolio_ctx.py",
+            "test_m15_5_ibkr_exposure.py",
             "reports/m21_1extra_d1_market_clock.md",
             "reports/m21_1extra_d0_auth_cli.md",
             # M21.1extra-D0: migrated policy-consuming test suites.

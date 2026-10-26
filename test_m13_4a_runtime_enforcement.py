@@ -35,6 +35,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 import bot.runtime_policy as rt
 from bot.etoro.signal_only_broker import (
     REASON_GLOBAL_KILL_SWITCH,

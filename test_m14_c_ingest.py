@@ -27,6 +27,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 from bot.flywheel import init_flywheel_tables
 from bot.risk_authority.reading import (
     BrokerPnLReading,

@@ -19,6 +19,11 @@ import sys
 import unittest
 from unittest import mock
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 
 

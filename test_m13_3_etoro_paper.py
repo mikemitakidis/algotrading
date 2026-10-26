@@ -27,6 +27,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from bot.brokers.base import OrderIntent, OrderResult

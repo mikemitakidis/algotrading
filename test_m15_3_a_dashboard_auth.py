@@ -38,6 +38,11 @@ import time
 import unittest
 from pathlib import Path
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
@@ -1578,6 +1583,9 @@ class TestScriptModeInvocation(unittest.TestCase):
         env["DASHBOARD_PASSWORD"] = "regression-test-pw"
         env["DASHBOARD_SECRET_KEY"] = "regression-test-secret-key-xxxx"
         env["DASHBOARD_PORT"] = "0"  # OS-assigned ephemeral port
+        # M21 C5a: loopback only — a test must never expose a listener on a
+        # public interface (the default bind host is 0.0.0.0).
+        env["DASHBOARD_BIND_HOST"] = "127.0.0.1"
         # Ensure cwd-on-sys.path doesn't mask the bug — clear
         # PYTHONPATH so the test is honest about systemd's regime.
         env.pop("PYTHONPATH", None)

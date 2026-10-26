@@ -22,7 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Load .env
 _env = BASE_DIR / '.env'
-if _env.exists():
+if __name__ == '__main__' and _env.exists():  # M21 C5a: never load the real .env on import
     try:
         from dotenv import load_dotenv
         load_dotenv(_env)
@@ -30,6 +30,13 @@ if _env.exists():
         pass
 
 sys.path.insert(0, str(BASE_DIR))
+
+# M21 C5a: when imported (e.g. by a test runner or loader) this module is
+# fully isolated from production files, secrets and brokers. Run as an
+# operator script it refuses unless explicitly confirmed (see __main__).
+import _test_isolation  # noqa: E402
+if __name__ != '__main__':
+    _test_isolation.install()
 
 from bot.flywheel   import init_flywheel_tables, log_candidate, log_intent
 from bot.brokers    import get_broker
@@ -189,4 +196,7 @@ def run():
     conn.close()
 
 if __name__ == '__main__':
+    # M21 C5a: writes the real signals.db and submits via the configured broker.
+    from _test_isolation import require_operator_confirmation
+    require_operator_confirmation(__file__)
     run()

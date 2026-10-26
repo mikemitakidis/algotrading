@@ -22,6 +22,11 @@ import ast
 import dataclasses
 import unittest
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files, secrets (.env) and brokers. See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 from bot.signal_scoring import (
     ScoringProfile, score_candidate, default_config,
 )

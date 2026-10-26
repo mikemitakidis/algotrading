@@ -46,6 +46,11 @@ import unittest
 import zipfile
 from pathlib import Path
 
+# M21 C5a: keep this test process (and its Python children) off production
+# runtime files (data/*.db, kill switch, eToro paper audit). See _test_isolation.py.
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 _REPO = str(Path(__file__).resolve().parent)
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)

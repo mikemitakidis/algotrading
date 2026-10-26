@@ -9,6 +9,15 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
+# M21 C5a (finding N-1a): this script used to call deactivate_kill_switch()
+# against the REAL data/kill_switch.json on import. Snapshot the real file,
+# then redirect every production runtime path to a private temp dir.
+_REAL_KILL_SWITCH = BASE_DIR / 'data' / 'kill_switch.json'
+_REAL_KS_BEFORE = (_REAL_KILL_SWITCH.read_bytes()
+                   if _REAL_KILL_SWITCH.exists() else None)
+import _test_isolation  # noqa: E402
+_test_isolation.install()
+
 # Use temp DB so tests never touch production data
 _TMP_DB = tempfile.mktemp(suffix='.db')
 os.environ['SIGNALS_DB_PATH'] = _TMP_DB  # flywheel will use this if supported
@@ -281,6 +290,16 @@ check('riskmanager_checks_is_dict', isinstance(checks_rm, dict))
 check('riskmanager_no_portfolio_keys',
       'daily_pnl_available' not in checks_rm,
       'portfolio keys leaked into base risk')
+
+# ── Test 16: production kill switch untouched (M21 C5a) ──────────────────────
+section('16. Production kill-switch file untouched')
+import bot.kill_switch as _ks_mod
+check('kill_switch_path_redirected',
+      Path(_ks_mod.KILL_SWITCH_PATH).resolve() != _REAL_KILL_SWITCH.resolve(),
+      f'path={_ks_mod.KILL_SWITCH_PATH}')
+_REAL_KS_AFTER = (_REAL_KILL_SWITCH.read_bytes()
+                  if _REAL_KILL_SWITCH.exists() else None)
+check('real_kill_switch_file_unchanged', _REAL_KS_AFTER == _REAL_KS_BEFORE)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 import os as _os
