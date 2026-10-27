@@ -382,7 +382,9 @@ def render(o: Dict) -> str:
           "- Static: research code has no broker/network imports (AST boundary lint in the foundation suite).",
           "- In-process runtime: the integration test runs this pipeline with Python's socket connect/resolve and "
           "subprocess/os.system entry points replaced by functions that record and refuse any call, and asserts "
-          "none happened; it also checks no broker/network/messaging module was imported.",
+          "no socket call happened. The only process spawns attempted are joblib/loky's local CPU-topology "
+          "probes (`lscpu --parse=core`, `cat /proc/cpuinfo`, triggered by scikit-learn); the guard refuses them "
+          "and loky falls back to os.cpu_count. It also checks no broker/network/messaging module was imported.",
           "- Not claimed: OS-level network or credential isolation. A C extension or a separate process could "
           "bypass the in-process guard; an OS sandbox is required before any untrusted or networked code runs.", ""]
     return "\n".join(L)

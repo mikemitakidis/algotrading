@@ -41,8 +41,15 @@ BANNED = ("ib_insync", "ibapi", "alpaca", "alpaca_trade_api", "yfinance", "teleg
           "bot.risk_authority", "bot.kill_switch", "dashboard", "main")
 
 
+# Local, read-only CPU-topology probes that joblib/loky (used by scikit-learn) attempts in order to count
+# physical cores. The guard refuses them too (loky then falls back to os.cpu_count); they are listed so the test
+# can tell them apart from anything else.
+KNOWN_LIBRARY_PROBES = (("lscpu", "--parse=core"), ("cat", "/proc/cpuinfo"))
+
+
 class _NoNetwork:
-    """Replace the Python-level network / process entry points with recorders that refuse."""
+    """Replace the Python-level network / process entry points with recorders that refuse. Each call is
+    recorded as (entry point, argv tuple or first argument)."""
     TARGETS = ((socket.socket, "connect"), (socket.socket, "connect_ex"), (socket, "create_connection"),
                (socket, "getaddrinfo"), (socket, "gethostbyname"), (subprocess, "Popen"), (os, "system"))
 
@@ -54,7 +61,10 @@ class _NoNetwork:
             self.saved.append((obj, name, getattr(obj, name)))
 
             def refuse(*a, _n="%s.%s" % (getattr(obj, "__name__", obj), name), **k):
-                self.calls.append(_n)
+                first = a[0] if a else k.get("args")
+                if _n.startswith("socket.socket"):
+                    first = a[1] if len(a) > 1 else None          # (self, address)
+                self.calls.append((_n, tuple(first) if isinstance(first, (list, tuple)) else first))
                 raise PermissionError("network/process access refused in the offline research pipeline: " + _n)
             setattr(obj, name, refuse)
         return self
@@ -106,7 +116,10 @@ class I1_EndToEnd(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_no_network_or_process_calls_at_runtime(self):
-        self.assertEqual(self.guard_calls, [])
+        network = [c for c in self.guard_calls if c[0].startswith("socket")]
+        self.assertEqual(network, [])                                  # no connect / resolve attempted at all
+        other = [c for c in self.guard_calls if not c[0].startswith("socket") and c[1] not in KNOWN_LIBRARY_PROBES]
+        self.assertEqual(other, [])                                    # only loky's CPU probe, and it was refused
 
     def test_runtime_guard_actually_refuses(self):
         with _NoNetwork() as g:

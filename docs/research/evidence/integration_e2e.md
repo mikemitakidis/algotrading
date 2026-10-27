@@ -54,10 +54,10 @@ Engine stages: {'entered': 62, 'rejected_by_rule': 190, 'position_already_open':
 - **D (genome):** 9 grid points, 0 invalid. Plateau-selected `mean_reversion-9619d39fbda8` with {'bb_std': 1.5, 'bb_window': 20, 'rsi_entry': 25.0, 'rsi_exit': 55.0, 'rsi_mode': 'sma_gain_loss', 'rsi_period': 14}. Portfolio: 62 trades, return +72.1 %, Sharpe 3.89; equal-weight buy-and-hold Sharpe 1.60. DSR of the best isolated point: 1.000 with 9 trials. Trades ending after a split quarantine: 0.
 - **C (lab):** meta-labeling the genome's point-in-time candidates on 113 rows. Verdicts vs logistic: {'hgb': 'NO_EVIDENCE'}; vs prior: {'logistic': 'DECISIONS_ONLY', 'hgb': 'DECISIONS_ONLY'}; AUC {'prior': 0.503, 'logistic': 0.685, 'hgb': 0.659}; lab report card INCONCLUSIVE.
 - **B (integrity):** genome report card **INCONCLUSIVE** (provenance {'provenance_verified': 1.0, 'outcomes_verified': 1.0, 'ledger_metadata_reconciled': 1.0}): pipeline canary battery missing or not CALIBRATED. The integrated pipeline has no calibrated canary of its own; lane C's separate canary does not validate it.
-- Ledger: 24 entries, tip `9fde8bc325f33b67`. Runtime 7 s.
+- Ledger: 24 entries, tip `23ccf9bf6d99822c`. Runtime 6 s.
 
 ## Isolation boundary (stated precisely)
 
 - Static: research code has no broker/network imports (AST boundary lint in the foundation suite).
-- In-process runtime: the integration test runs this pipeline with Python's socket connect/resolve and subprocess/os.system entry points replaced by functions that record and refuse any call, and asserts none happened; it also checks no broker/network/messaging module was imported.
+- In-process runtime: the integration test runs this pipeline with Python's socket connect/resolve and subprocess/os.system entry points replaced by functions that record and refuse any call, and asserts no socket call happened. The only process spawns attempted are joblib/loky's local CPU-topology probes (`lscpu --parse=core`, `cat /proc/cpuinfo`, triggered by scikit-learn); the guard refuses them and loky falls back to os.cpu_count. It also checks no broker/network/messaging module was imported.
 - Not claimed: OS-level network or credential isolation. A C extension or a separate process could bypass the in-process guard; an OS sandbox is required before any untrusted or networked code runs.

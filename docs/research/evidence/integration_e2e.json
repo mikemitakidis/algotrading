@@ -306,7 +306,7 @@
  },
  "ledger": {
   "entries": 24,
-  "tip": "9fde8bc325f33b67b53e47d6ec05ecdd9fa261b99ffada8bf98c298c9a5ff8d0"
+  "tip": "23ccf9bf6d99822c16213824cc0c970f0f4349da0dba036b64eb1f35ef8112df"
  },
  "report_card": {
   "provenance": {
@@ -319,5 +319,5 @@
   ],
   "verdict": "INCONCLUSIVE"
  },
- "runtime_seconds": 7.1
+ "runtime_seconds": 6.2
 }
