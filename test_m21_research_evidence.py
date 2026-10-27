@@ -257,6 +257,10 @@ class A1_LabelRules(unittest.TestCase):
         self.assertEqual(f.loc[0, "reasons"], "a|b")
         self.assertEqual(stage_counts([ok, ok]), {"eligible": 2})
         self.assertEqual(make_candidate_id("X", ok.decision_ts_utc, "long", "t"), ok.candidate_id)
+        # backtest entries have their own stage: simulated, never counted as an executed order
+        sim = CandidateEvent(**{**ok.__dict__, "stage": "simulated_entry"})
+        self.assertEqual(stage_counts([sim]), {"simulated_entry": 1})
+        self.assertNotIn("executed", stage_counts([sim]))
 
 
 class A2_EffectiveN(unittest.TestCase):
