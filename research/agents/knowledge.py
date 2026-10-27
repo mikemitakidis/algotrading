@@ -16,6 +16,16 @@ What it holds:
 - **Reviews and reports.**
 
 Guards:
+- *Operator verification is authenticated* (second review, PR #9). A
+  citation becomes ``operator_verified`` only through ``verify_source`` with
+  an operator signature over the source's own content, checked by the
+  operator ``Verifier`` the library was built with (lane B authority model).
+  An identity string proves nothing: without a verifier the library cannot
+  verify at all, and the status is re-derived by re-checking the stored
+  signature whenever it is read. ``add_source`` refuses a self-declared
+  ``operator_verified``. Local-model caveat: the HMAC verifier shares the
+  key, so this is a policy model inside a trusted process, not independent
+  authorisation (``independent`` is recorded as False).
 - *Point-in-time knowledge.* A hypothesis tested on a window may cite only
   sources published BEFORE the window starts. Anything else is look-ahead
   through the literature.
@@ -38,11 +48,13 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from research.agents.roles import Gate
 from research.common.hashing import digest
+from research.integrity.authority import Verifier
 from research.integrity.ledger import Ledger, LedgerError
 
 VERIFICATION = ("unverified", "fixture", "operator_verified")
 COMPARATORS = (">", ">=", "<", "<=")
 DUPLICATE_THRESHOLD = 0.6
+VERIFY_PURPOSE = "kb.verify_source"
 
 
 class KnowledgeError(ValueError):
@@ -109,15 +121,26 @@ def similarity(a: str, b: str) -> float:
     return max(content, _jac(shingles(a), shingles(b)))
 
 
+def verification_payload(src: Mapping) -> Dict:
+    """What the operator signs: the source's identity AND content, so a signature cannot be moved to another
+    source or survive an edited claim or locator."""
+    return {"source_id": src["source_id"], "title": src["title"], "authors": src["authors"],
+            "published": src["published"], "locator": src["locator"], "claim": src["claim"]}
+
+
 class KnowledgeLibrary:
-    def __init__(self, ledger: Ledger, gate: Gate):
+    def __init__(self, ledger: Ledger, gate: Gate, operator_verifier: Optional[Verifier] = None):
         self.ledger, self.gate = ledger, gate
+        self.operator_verifier = operator_verifier
 
     # ── sources ──────────────────────────────────────────────────────────
     def add_source(self, role: str, s: Source) -> str:
         self.gate.require(role, "kb.write.source", s.title)
         if s.verification not in VERIFICATION:
             raise KnowledgeError("verification must be one of %s" % (VERIFICATION,))
+        if s.verification == "operator_verified":
+            raise KnowledgeError("operator_verified cannot be declared; it is granted only by an authenticated "
+                                 "operator signature via verify_source")
         if not s.locator:
             raise KnowledgeError("a source needs a DOI or URL")
         if date.fromisoformat(s.published) > date.fromisoformat(s.retrieved):
@@ -134,12 +157,34 @@ class KnowledgeLibrary:
             raise KnowledgeError("unknown source %s" % sid)
         return rows[0].payload
 
-    def verify_source(self, sid: str, *, operator: str) -> None:
-        """Only the operator can verify a citation; agents cannot."""
-        self.source(sid)
-        if not operator.startswith("operator:"):
-            raise KnowledgeError("only the operator can verify a source")
-        self.ledger.append("kb_source_verification", {"source_id": sid, "by": operator}, ref_id=sid)
+    def verify_source(self, sid: str, *, operator: str, signature: str) -> None:
+        """Record an operator verification. The caller must present the operator's signature over
+        ``verification_payload``; the identity string alone is never trusted (second review, PR #9)."""
+        src = self.source(sid)
+        v = self.operator_verifier
+        if v is None:
+            raise KnowledgeError("this library has no operator verifier: citations cannot be operator-verified "
+                                 "here (offline mock libraries stay unverified)")
+        if operator != v.authority_id:
+            raise KnowledgeError("%r is not the operator authority %r" % (operator, v.authority_id))
+        if not v.verify(VERIFY_PURPOSE, verification_payload(src), signature):
+            raise KnowledgeError("operator signature does not verify for source %s" % sid)
+        self.ledger.append("kb_source_verification", {"source_id": sid, "by": operator, "signature": signature,
+                                                      "authority_model": v.model, "independent": bool(v.independent)},
+                           ref_id=sid)
+
+    def verification_status(self, sid: str) -> str:
+        """Re-derived at every read: ``operator_verified`` only if a stored verification still re-verifies
+        against this library's operator verifier and the source content as recorded."""
+        src = self.source(sid)
+        v = self.operator_verifier
+        if v is not None:
+            for e in self.ledger.entries("kb_source_verification", sid):
+                pl = e.payload
+                if pl.get("by") == v.authority_id and v.verify(VERIFY_PURPOSE, verification_payload(src),
+                                                               pl.get("signature", "")):
+                    return "operator_verified"
+        return src["verification"]
 
     # ── hypotheses ───────────────────────────────────────────────────────
     def hypotheses(self) -> List[Dict]:
@@ -250,11 +295,13 @@ class KnowledgeLibrary:
 
     def summary(self) -> Dict:
         hs = self.hypotheses()
-        return {"sources": len(self.ledger.entries("kb_source")), "hypotheses": len(hs),
+        srcs = [e.payload["source_id"] for e in self.ledger.entries("kb_source")]
+        return {"sources": len(srcs),
+                "operator_verified_sources": sum(self.verification_status(x) == "operator_verified" for x in srcs), "hypotheses": len(hs),
                 "rejected": len(self.graveyard()), "refusals": len(self.ledger.entries("kb_refusal")),
                 "lineage": len(self.ledger.entries("kb_lineage")), "reviews": len(self.ledger.entries("kb_review")),
                 "status": {h["hypothesis_id"]: self.status(h["hypothesis_id"]) for h in hs}}
 
 
-__all__ = ["VERIFICATION", "DUPLICATE_THRESHOLD", "KnowledgeError", "Source", "Prediction", "Proposal",
+__all__ = ["VERIFICATION", "VERIFY_PURPOSE", "verification_payload", "DUPLICATE_THRESHOLD", "KnowledgeError", "Source", "Prediction", "Proposal",
            "normalise", "shingles", "similarity", "KnowledgeLibrary"]
