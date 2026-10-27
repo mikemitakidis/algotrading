@@ -34,6 +34,7 @@ from research.integrity.controls import BatteryPlan, PipelineDecision, run_batte
 from research.integrity.ledger import Hypothesis, Ledger, TrialRecord
 from research.integrity.pbo import pbo
 from research.integrity.authority import Authority
+from research.integrity.provenance import code_identity
 from research.integrity.prereg import (ATTESTATION_PURPOSE, PreRegistration, attest, attestation_payload,
                                        evaluate_once, register)
 from research.integrity.reality_check import hansen_spa, white_reality_check
@@ -41,6 +42,7 @@ from research.integrity.reality_check import hansen_spa, white_reality_check
 VARIANTS: Tuple[Tuple[float, int], ...] = tuple((k, h) for k in (1.5, 2.0, 2.5) for h in (3, 5, 10, 20))
 COST = 0.05          # round-trip cost per trade, in normalised outcome units
 VOL_WINDOW = 60
+CODE_ID = code_identity(["research/integrity", "research/common"])
 
 
 def variant_events(m: SyntheticMarket, k: float, h: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -169,7 +171,7 @@ def run(out_dir: Path, n_nulls: int = 100, n_per_effect: int = 30,
             for j, (k, h) in enumerate(VARIANTS):
                 led.record_trial(TrialRecord(family_id="drop_reversal_v0", kind="research",
                                              spec_digest="k=%s,h=%s" % (k, h), data_digest=mk.spec_digest,
-                                             code_digest="research.integrity.evidence", seed=mk.spec.seed,
+                                             code_digest=CODE_ID, seed=mk.spec.seed,
                                              hypothesis_id=hid, metrics={"sr": S.sharpe(fm[:, j]) if fm[:, j].std() > 0 else 0.0,
                                                                          "dataset": label}))
         a_ = np.asarray(rows)
@@ -199,10 +201,10 @@ def run(out_dir: Path, n_nulls: int = 100, n_per_effect: int = 30,
     attest(led, d, **{k: payload[k] for k in ("server_timestamp_utc", "source", "evidence_url")},
            signature=demo.sign(ATTESTATION_PURPOSE, payload), verifier=demo.verifier())
     first = evaluate_once(led, d, value=0.5, effective_n=40, data_first_ts_utc="2027-01-02T21:00:00+00:00",
-                          data_digest="example")
+                          data_digest="example", attestation_verifier=demo.verifier())
     try:
         evaluate_once(led, d, value=0.99, effective_n=40, data_first_ts_utc="2027-01-02T21:00:00+00:00",
-                      data_digest="example")
+                      data_digest="example", attestation_verifier=demo.verifier())
         second = "ALLOWED (defect)"
     except Exception as exc:                     # expected: one-shot refusal
         second = "refused: %s" % exc

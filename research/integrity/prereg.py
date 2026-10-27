@@ -17,8 +17,17 @@ over the digest, timestamp, source and evidence URL — e.g. an independent CI
 verifier that read the GitHub comment's ``created_at`` through the API.
 Attestations typed in by a caller are recorded as ``untrusted_declared`` and
 can never make an evaluation pass (``require_trusted`` defaults to True).
-Until connected to such an operational authority this module is a local
-policy model, not proof that a research agent could not see future data.
+
+The stored ``trust`` label is NEVER believed on its own (second review, P1):
+``trusted_attestations`` re-verifies every attestation's signature against its
+stored payload with the consumer's verifier at the moment of use, so an entry
+appended directly to the ledger with ``trust='authority_signed'`` and a junk
+or misplaced signature is ignored. Without a verifier nothing is trusted.
+
+Until connected to an operational, independently secured authority this
+module is a local policy model (``authority.LOCAL_POLICY_MODEL``), not proof
+that a research agent could not see future data; outcomes record which
+authority model verified them.
 
 One-shot: a pre-registration can be evaluated exactly once. A second
 evaluation is refused and the refusal is visible in the ledger.
@@ -70,6 +79,8 @@ class PreregOutcome:
     value: float
     effective_n: int
     reason: str
+    authority_model: str = ""          # which verifier re-checked the attestation ("" = none)
+    authority_independent: bool = False
 
 
 def register(ledger: Ledger, p: PreRegistration) -> str:
@@ -109,9 +120,24 @@ def attest(ledger: Ledger, prereg_digest: str, *, server_timestamp_utc: str, sou
     return trust
 
 
-def trusted_attestations(ledger: Ledger, prereg_digest: str):
-    return [a for a in ledger.entries("attestation", prereg_digest)
-            if a.payload.get("trust") == TRUST_AUTHORITY_SIGNED]
+def trusted_attestations(ledger: Ledger, prereg_digest: str, verifier: Optional[Verifier]):
+    """Attestations whose signature RE-VERIFIES now, with this verifier, over
+    the stored payload. The stored ``trust`` label alone counts for nothing."""
+    if verifier is None:
+        return []
+    out = []
+    for a in ledger.entries("attestation", prereg_digest):
+        p = a.payload
+        try:
+            payload = attestation_payload(p["prereg_digest"], p["server_timestamp_utc"], p["source"],
+                                          p["evidence_url"])
+        except KeyError:
+            continue
+        if p.get("prereg_digest") != prereg_digest or p.get("authority") != verifier.authority_id:
+            continue
+        if verifier.verify(ATTESTATION_PURPOSE, payload, p.get("signature", "")):
+            out.append(a)
+    return out
 
 
 def _compare(v: float, op: str, thr: float) -> bool:
@@ -119,10 +145,12 @@ def _compare(v: float, op: str, thr: float) -> bool:
 
 
 def evaluate_once(ledger: Ledger, prereg_digest: str, *, value: float, effective_n: int,
-                  data_first_ts_utc: str, data_digest: str, require_trusted: bool = True) -> PreregOutcome:
-    """Evaluate a pre-registration exactly once, fail-closed. Only
-    authority-signed attestations count unless require_trusted=False (local
-    diagnostics; such an outcome is labelled untrusted and never passes)."""
+                  data_first_ts_utc: str, data_digest: str, require_trusted: bool = True,
+                  attestation_verifier: Optional[Verifier] = None) -> PreregOutcome:
+    """Evaluate a pre-registration exactly once, fail-closed. Only attestations
+    whose signature re-verifies with ``attestation_verifier`` count; without a
+    verifier nothing is trusted. require_trusted=False is a local diagnostic
+    whose outcome never passes."""
     rows = ledger.entries("prereg", prereg_digest)
     if not rows:
         raise LedgerError("unknown pre-registration %s" % prereg_digest[:12])
@@ -130,14 +158,16 @@ def evaluate_once(ledger: Ledger, prereg_digest: str, *, value: float, effective
         raise LedgerError("pre-registration %s was already evaluated (one-shot)" % prereg_digest[:12])
     p = rows[0].payload
     all_att = ledger.entries("attestation", prereg_digest)
-    att = trusted_attestations(ledger, prereg_digest)
+    att = trusted_attestations(ledger, prereg_digest, attestation_verifier)
     window = datetime.fromisoformat(p["forward_window_start_utc"])
     first = datetime.fromisoformat(data_first_ts_utc)
     reason = ""
     if not all_att:
         reason = "no server-side attestation: not provably out-of-sample"
     elif not att and require_trusted:
-        reason = "attestation is declared, not independently verified: local diagnostic only"
+        reason = ("attestation is declared, not independently verified: local diagnostic only"
+                  if attestation_verifier is not None else
+                  "no attestation verifier supplied: attestations cannot be re-verified, local diagnostic only")
     elif not att:
         reason = "untrusted attestation (require_trusted=False): local diagnostic only, cannot pass"
     elif min(datetime.fromisoformat(a.payload["server_timestamp_utc"]) for a in att) >= window:
@@ -150,10 +180,15 @@ def evaluate_once(ledger: Ledger, prereg_digest: str, *, value: float, effective
     if not reason:
         reason = "metric %s %s %s: %s" % (p["metric"], p["comparator"], p["threshold"],
                                           "met" if passed else "not met")
-    out = PreregOutcome(prereg_digest, bool(passed), float(value), int(effective_n), reason)
+    model = getattr(attestation_verifier, "model", "") if att else ""
+    indep = bool(getattr(attestation_verifier, "independent", False)) if att else False
+    if passed and not indep:
+        reason += " (attestation re-verified by %s; not an independent authority)" % model
+    out = PreregOutcome(prereg_digest, bool(passed), float(value), int(effective_n), reason, model, indep)
     ledger.append("prereg_evaluation", {**asdict(out), "data_digest": data_digest,
                                         "data_first_ts_utc": data_first_ts_utc}, ref_id=prereg_digest)
     return out
 
 
-__all__ = ["COMPARATORS", "PreRegistration", "PreregOutcome", "register", "attest", "evaluate_once"]
+__all__ = ["COMPARATORS", "ATTESTATION_PURPOSE", "PreRegistration", "PreregOutcome", "register",
+           "attestation_payload", "attest", "trusted_attestations", "evaluate_once"]

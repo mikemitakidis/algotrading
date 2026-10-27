@@ -23,6 +23,8 @@ from research.common.hashing import canonical_json
 
 TRUST_AUTHORITY_SIGNED = "authority_signed"
 TRUST_UNTRUSTED_DECLARED = "untrusted_declared"
+LOCAL_POLICY_MODEL = "local_hmac_policy_model"      # the only implementation in this repository
+INDEPENDENT_AUTHORITY_AVAILABLE = False             # no separately secured signer is connected
 
 
 class Authority:
@@ -43,7 +45,17 @@ class Authority:
 
 
 class Verifier:
-    """What research code receives: can check, cannot (by policy) be used to sign."""
+    """What research code receives: can check, cannot (by policy) be used to sign.
+
+    ``independent`` is False for this HMAC model: whoever holds the verifier
+    key could also forge signatures, so a pass verified here proves policy
+    compliance inside a trusted process, NOT independent authorisation. An
+    operational verifier (asymmetric public key or authority API, key held
+    outside every research runner) is required before any result may be
+    described as independently attested."""
+
+    model = LOCAL_POLICY_MODEL
+    independent = False
 
     def __init__(self, authority_id: str, key: bytes):
         self.authority_id = authority_id
@@ -57,4 +69,5 @@ class Verifier:
         return hmac.compare_digest(good, signature)
 
 
-__all__ = ["TRUST_AUTHORITY_SIGNED", "TRUST_UNTRUSTED_DECLARED", "Authority", "Verifier"]
+__all__ = ["TRUST_AUTHORITY_SIGNED", "TRUST_UNTRUSTED_DECLARED", "LOCAL_POLICY_MODEL", "INDEPENDENT_AUTHORITY_AVAILABLE",
+           "Authority", "Verifier"]

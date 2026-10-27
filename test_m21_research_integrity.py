@@ -28,12 +28,13 @@ from research.integrity import splits as SP
 from research.integrity import stats as S
 from research.integrity.controls import (BatteryPlan, PipelineDecision, block_permute,
                                          circular_shift, placebo_events, run_battery)
-from research.integrity.authority import Authority
+from research.integrity.authority import LOCAL_POLICY_MODEL, Authority
 from research.integrity.holdout import RELEASE_PURPOSE, HoldoutDenied, HoldoutVault, release_request
 from research.integrity.ledger import Hypothesis, Ledger, LedgerError, TrialRecord, code_digest
 from research.integrity.pbo import pbo
 from research.integrity.prereg import (ATTESTATION_PURPOSE, PreRegistration, attest, attestation_payload,
-                                       evaluate_once, register)
+                                       evaluate_once, register, trusted_attestations)
+from research.integrity.provenance import code_identity, outcome_digest
 from research.integrity.reality_check import hansen_spa, white_reality_check
 from research.integrity.report_card import GauntletConfig, evaluate, unsupported_numbers
 
@@ -219,6 +220,7 @@ class B1_Ledger(unittest.TestCase):
 
 
 AUTH = Authority("operator-authority", b"k" * 32)
+VALID = "2027-03-01T00:00:00+00:00"
 OTHER = Authority("operator-authority", b"z" * 32)          # same name, different key: a forger
 
 
@@ -239,11 +241,13 @@ class B2_PreregAndHoldout(unittest.TestCase):
     def test_one_shot_and_trusted_attestation_out_of_sample(self):
         d = register(self.led, self.p)
         self.assertEqual(_signed_attest(self.led, d, "2026-12-01T00:00:00+00:00"), "authority_signed")
-        out = evaluate_once(self.led, d, value=0.97, effective_n=40,
+        out = evaluate_once(self.led, d, value=0.97, effective_n=40, attestation_verifier=AUTH.verifier(),
                             data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
         self.assertTrue(out.passed)
+        self.assertEqual((out.authority_model, out.authority_independent), (LOCAL_POLICY_MODEL, False))
+        self.assertIn("not an independent authority", out.reason)
         with self.assertRaises(LedgerError):
-            evaluate_once(self.led, d, value=0.97, effective_n=40,
+            evaluate_once(self.led, d, value=0.97, effective_n=40, attestation_verifier=AUTH.verifier(),
                           data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
 
     def test_declared_or_forged_attestations_never_pass(self):
@@ -252,7 +256,7 @@ class B2_PreregAndHoldout(unittest.TestCase):
         trust = attest(self.led, d, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="me",
                        evidence_url="u")
         self.assertEqual(trust, "untrusted_declared")
-        out = evaluate_once(self.led, d, value=0.99, effective_n=40,
+        out = evaluate_once(self.led, d, value=0.99, effective_n=40, attestation_verifier=AUTH.verifier(),
                             data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
         self.assertFalse(out.passed)
         self.assertIn("not independently verified", out.reason)
@@ -278,22 +282,22 @@ class B2_PreregAndHoldout(unittest.TestCase):
     def test_fail_closed_without_proof_of_time(self):
         cases = []
         d = register(self.led, self.p)                              # no attestation
-        cases.append(evaluate_once(self.led, d, value=0.99, effective_n=40,
+        cases.append(evaluate_once(self.led, attestation_verifier=AUTH.verifier(), prereg_digest=d, value=0.99, effective_n=40,
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         p2 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-2"})
         d2 = register(self.led, p2)
         _signed_attest(self.led, d2, "2027-01-02T00:00:00+00:00")
-        cases.append(evaluate_once(self.led, d2, value=0.99, effective_n=40,
+        cases.append(evaluate_once(self.led, attestation_verifier=AUTH.verifier(), prereg_digest=d2, value=0.99, effective_n=40,
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         p3 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-3"})
         d3 = register(self.led, p3)
         _signed_attest(self.led, d3, "2026-12-01T00:00:00+00:00")
-        cases.append(evaluate_once(self.led, d3, value=0.99, effective_n=40,
+        cases.append(evaluate_once(self.led, attestation_verifier=AUTH.verifier(), prereg_digest=d3, value=0.99, effective_n=40,
                                    data_first_ts_utc="2026-12-15T00:00:00+00:00", data_digest="x"))
         p4 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-4"})
         d4 = register(self.led, p4)
         _signed_attest(self.led, d4, "2026-12-01T00:00:00+00:00")
-        cases.append(evaluate_once(self.led, d4, value=0.99, effective_n=10,
+        cases.append(evaluate_once(self.led, attestation_verifier=AUTH.verifier(), prereg_digest=d4, value=0.99, effective_n=10,
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         self.assertEqual([c.passed for c in cases], [False] * 4)
         self.assertIn("attestation", cases[0].reason)
@@ -310,21 +314,21 @@ class B2_PreregAndHoldout(unittest.TestCase):
         with self.assertRaises(ValueError):
             PreRegistration(**{**self.p.__dict__, "max_evaluations": 2})
 
-    def _vault(self):
-        df = pd.DataFrame({"ts_utc": pd.date_range("2026-01-01", periods=10, freq="D", tz="UTC"), "v": range(10)})
-        return HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00", authority=AUTH.verifier(),
-                            clock=lambda: "2027-01-01T00:00:00+00:00"), df
+    def _vault(self, clock="2027-02-01T00:00:00+00:00"):
+        df = pd.DataFrame({"ts_utc": pd.date_range("2027-01-01", periods=10, freq="D", tz="UTC"), "v": range(10)})
+        return HoldoutVault(self.led, "h1", df, "2027-01-08T00:00:00+00:00", authority=AUTH.verifier(),
+                            attestation_verifier=AUTH.verifier(), clock=lambda: clock), df
 
     @staticmethod
-    def _token(family, spec, d, requester, auth=AUTH):
-        return auth.sign(RELEASE_PURPOSE, release_request("h1", family, spec, d, requester))
+    def _token(family, spec, d, requester, auth=AUTH, valid_until=VALID):
+        return auth.sign(RELEASE_PURPOSE, release_request("h1", family, spec, d, requester, valid_until))
 
     def test_holdout_release_requires_authority_family_match_and_trusted_prereg(self):
         vault, df = self._vault()
         self.assertEqual(len(vault.research_view()), 7)
-        self.assertTrue((pd.to_datetime(vault.research_view().ts_utc) < pd.Timestamp("2026-01-08", tz="UTC")).all())
+        self.assertTrue((pd.to_datetime(vault.research_view().ts_utc) < pd.Timestamp("2027-01-08", tz="UTC")).all())
         d = register(self.led, self.p)
-        rel = dict(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice")
+        rel = dict(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice", valid_until=VALID)
         denied = []
         for kw in ({"approval_token": None}, {"approval_token": "deadbeef"},
                    {"approval_token": self._token("fam", "spec-1", d, "alice", auth=OTHER)},
@@ -340,7 +344,7 @@ class B2_PreregAndHoldout(unittest.TestCase):
         _signed_attest(self.led, d, "2026-12-01T00:00:00+00:00")
         with self.assertRaisesRegex(HoldoutDenied, "different spec"):
             vault.release(family_id="fam", spec_digest="other-spec", prereg_digest=d, requester="alice",
-                          approval_token=self._token("fam", "other-spec", d, "alice"))
+                          valid_until=VALID, approval_token=self._token("fam", "other-spec", d, "alice"))
         got = vault.release(**rel, approval_token=self._token("fam", "spec-1", d, "alice"))
         self.assertEqual(list(got.v), [7, 8, 9])
         with self.assertRaisesRegex(HoldoutDenied, "already spent"):
@@ -348,7 +352,8 @@ class B2_PreregAndHoldout(unittest.TestCase):
         self.assertEqual(len(self.led.entries("holdout_release", "h1")), 1)
         self.assertEqual(len(self.led.entries("holdout_access_denied", "h1")), 8)
         with self.assertRaises(LedgerError):
-            HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00", authority=AUTH.verifier())
+            HoldoutVault(self.led, "h1", df, "2027-01-08T00:00:00+00:00", authority=AUTH.verifier(),
+                         attestation_verifier=AUTH.verifier())
 
     def test_cross_family_release_is_refused(self):
         """PR #5 review P1: family A's pre-registration (shared spec) cannot
@@ -357,20 +362,94 @@ class B2_PreregAndHoldout(unittest.TestCase):
         dA = register(self.led, self.p)                              # family 'fam', spec-1
         _signed_attest(self.led, dA, "2026-12-01T00:00:00+00:00")
         with self.assertRaisesRegex(HoldoutDenied, "belongs to family"):
-            vault.release(family_id="famB", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+            vault.release(family_id="famB", spec_digest="spec-1", prereg_digest=dA, requester="alice", valid_until=VALID,
                           approval_token=self._token("famB", "spec-1", dA, "alice"))
         with self.assertRaisesRegex(HoldoutDenied, "authority cannot request"):
             vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA,
-                          requester="operator-authority",
+                          requester="operator-authority", valid_until=VALID,
                           approval_token=self._token("fam", "spec-1", dA, "operator-authority"))
         for bad_token in (None, "deadbeef", self._token("fam", "spec-1", dA, "alice", auth=OTHER),
                           self._token("fam", "spec-1", dA, "bob"), self._token("famB", "spec-1", dA, "alice")):
             with self.assertRaisesRegex(HoldoutDenied, "release-authority approval"):
-                vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+                vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice", valid_until=VALID,
                               approval_token=bad_token)
-        vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+        vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice", valid_until=VALID,
                       approval_token=self._token("fam", "spec-1", dA, "alice"))
         self.assertEqual(set(vault.releases()), {"fam"})
+
+
+    def test_ledger_trust_labels_are_reverified_at_use(self):
+        """Second review P1: a stored 'authority_signed' label is not trusted;
+        the signature is re-verified against the stored payload when consumed."""
+        d = register(self.led, self.p)
+        good_ts = "2026-12-01T00:00:00+00:00"
+        forged = attestation_payload(d, good_ts, "gh", "u")
+        self.led.append("attestation", {**forged, "trust": "authority_signed", "authority": AUTH.authority_id,
+                                        "signature": "deadbeef"}, ref_id=d)           # junk signature
+        p2 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-other"})
+        d2 = register(self.led, p2)
+        sig_other = AUTH.sign(ATTESTATION_PURPOSE, attestation_payload(d2, good_ts, "gh", "u"))
+        self.led.append("attestation", {**forged, "trust": "authority_signed", "authority": AUTH.authority_id,
+                                        "signature": sig_other}, ref_id=d)            # valid sig, wrong payload
+        sig_d = AUTH.sign(ATTESTATION_PURPOSE, forged)
+        self.led.append("attestation", {**attestation_payload(d, "2026-11-01T00:00:00+00:00", "gh", "u"),
+                                        "trust": "authority_signed", "authority": AUTH.authority_id,
+                                        "signature": sig_d}, ref_id=d)                # timestamp edited
+        self.led.append("attestation", {**forged, "trust": "authority_signed", "authority": AUTH.authority_id,
+                                        "signature": OTHER.sign(ATTESTATION_PURPOSE, forged)}, ref_id=d)  # wrong key
+        self.assertEqual(trusted_attestations(self.led, d, AUTH.verifier()), [])
+        self.assertEqual(trusted_attestations(self.led, d, None), [])
+        out = evaluate_once(self.led, d, value=0.99, effective_n=40, attestation_verifier=AUTH.verifier(),
+                            data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
+        self.assertFalse(out.passed)
+        self.assertIn("not independently verified", out.reason)
+        vault, _ = self._vault()
+        with self.assertRaisesRegex(HoldoutDenied, "re-verifies"):
+            vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice",
+                          valid_until=VALID, approval_token=self._token("fam", "spec-1", d, "alice"))
+        _signed_attest(self.led, d, good_ts)                                          # the genuine one
+        self.assertEqual(len(trusted_attestations(self.led, d, AUTH.verifier())), 1)
+        d3 = register(self.led, PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-noverifier"}))
+        _signed_attest(self.led, d3, good_ts)
+        nov = evaluate_once(self.led, d3, value=0.99, effective_n=40,
+                            data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
+        self.assertFalse(nov.passed)
+        self.assertIn("no attestation verifier", nov.reason)
+
+    def test_holdout_release_respects_the_forward_window_and_approval_expiry(self):
+        d = register(self.led, self.p)                           # forward window starts 2027-01-01
+        _signed_attest(self.led, d, "2027-01-02T00:00:00+00:00")  # attested AFTER the window started
+        vault, _ = self._vault()
+        with self.assertRaisesRegex(HoldoutDenied, "not before the forward window"):
+            vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice",
+                          valid_until=VALID, approval_token=self._token("fam", "spec-1", d, "alice"))
+        late = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-late",
+                                  "forward_window_start_utc": "2027-01-09T00:00:00+00:00"})
+        dl = register(self.led, late)
+        _signed_attest(self.led, dl, "2026-12-01T00:00:00+00:00")
+        with self.assertRaisesRegex(HoldoutDenied, "before the pre-registered forward window"):
+            vault.release(family_id="fam", spec_digest="spec-late", prereg_digest=dl, requester="alice",
+                          valid_until=VALID, approval_token=self._token("fam", "spec-late", dl, "alice"))
+        ok = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-ok"})
+        do = register(self.led, ok)
+        _signed_attest(self.led, do, "2026-12-01T00:00:00+00:00")
+        expired_vault = HoldoutVault(self.led, "h2", pd.DataFrame({"ts_utc": pd.date_range(
+            "2027-01-01", periods=10, freq="D", tz="UTC"), "v": range(10)}), "2027-01-08T00:00:00+00:00",
+            authority=AUTH.verifier(), attestation_verifier=AUTH.verifier(), clock=lambda: "2027-04-01T00:00:00+00:00")
+        tok = AUTH.sign(RELEASE_PURPOSE, release_request("h2", "fam", "spec-ok", do, "alice", VALID))
+        with self.assertRaisesRegex(HoldoutDenied, "expired"):
+            expired_vault.release(family_id="fam", spec_digest="spec-ok", prereg_digest=do, requester="alice",
+                                  valid_until=VALID, approval_token=tok)
+        naive = "2027-03-01T00:00:00"
+        tok2 = AUTH.sign(RELEASE_PURPOSE, release_request("h1", "fam", "spec-ok", do, "alice", naive))
+        with self.assertRaisesRegex(HoldoutDenied, "expired or has no valid"):
+            vault.release(family_id="fam", spec_digest="spec-ok", prereg_digest=do, requester="alice",
+                          valid_until=naive, approval_token=tok2)
+        got = vault.release(family_id="fam", spec_digest="spec-ok", prereg_digest=do, requester="alice",
+                            valid_until=VALID, approval_token=self._token("fam", "spec-ok", do, "alice"))
+        self.assertEqual(len(got), 3)
+        rel = self.led.entries("holdout_release", "h1")[0].payload
+        self.assertEqual((rel["authority_model"], rel["authority_independent"]), (LOCAL_POLICY_MODEL, False))
 
 
 def _events(n=200, h=5, seed=0):
@@ -672,9 +751,18 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         return run_battery(BatteryPlan("c", "c", n_nulls=60), never, lambda s: s)
 
     @staticmethod
-    def _ledgered(n, family="f"):
+    def _ledgered(n, family="f", fam=None, gross=None):
+        """Trials that COMMIT their outcome series: column j of `fam` for trial j,
+        and `gross` for trial 0 (the candidate)."""
         led = Ledger(clock=_clock())
-        ids = [led.record_trial(_trial(family_id=family, spec_digest="s%d" % i)) for i in range(n)]
+        ids = []
+        for i in range(n):
+            art = {}
+            if fam is not None and i < np.asarray(fam).shape[1]:
+                art["family_series"] = outcome_digest(np.asarray(fam)[:, i])
+            if gross is not None and i == 0:
+                art["gross"] = outcome_digest(gross)
+            ids.append(led.record_trial(_trial(family_id=family, spec_digest="s%d" % i, artifacts=art)))
         return led, ids
 
     def test_report_card_verdicts_fail_closed(self):
@@ -682,15 +770,16 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         strong = rng.normal(0.6, 1.0, 400)
         fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
         cfg = GauntletConfig(n_boot=300)
-        led, ids = self._ledgered(6)
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
         good = evaluate(candidate_id="c1", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
                         rng=stream(20, "a"), family_matrix=fam, canary=self._calibrated(), cfg=cfg,
-                        ledger=led, trial_ids=ids)
+                        ledger=led, trial_ids=ids, candidate_trial_id=ids[0], expected_tip=led.tip_hash)
         self.assertEqual(good.verdict, "PASS", good.reasons)
         self.assertEqual(good.numbers["provenance_verified"], 1.0)
+        self.assertEqual(good.numbers["ledger_tip_anchored"], 1.0)
         no_canary = evaluate(candidate_id="c2", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
                              rng=stream(20, "b"), family_matrix=fam, canary=None, cfg=cfg,
-                             ledger=led, trial_ids=ids)                 # provenance fine, canary missing
+                             ledger=led, trial_ids=ids, candidate_trial_id=ids[0])  # provenance fine, canary missing
         self.assertEqual(no_canary.verdict, "INCONCLUSIVE")
         self.assertEqual(no_canary.numbers["provenance_verified"], 1.0)
         self.assertTrue(any("canary" in r for r in no_canary.reasons))
@@ -725,7 +814,7 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         canary = self._calibrated()
         common = dict(candidate_id="c", family_id="f", gross=strong, cost_per_obs=0.05, rng=stream(26, "a"),
                       family_matrix=fam, canary=canary, cfg=cfg)
-        led, ids = self._ledgered(6)
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
         cases = {
             "no ledger": evaluate(n_trials=6, **common),
             "no ids": evaluate(n_trials=6, ledger=led, **common),
@@ -739,8 +828,8 @@ class B6_ControlsAndReportCard(unittest.TestCase):
             self.assertEqual(card.verdict, "INCONCLUSIVE", name)
             self.assertEqual(card.numbers["provenance_verified"], 0.0, name)
             self.assertTrue(any("not reconciled" in r for r in card.reasons), name)
-        hi = evaluate(n_trials=6, ledger=led, trial_ids=ids, effective_n=1e9, **common)
-        lo = evaluate(n_trials=6, ledger=led, trial_ids=ids, effective_n=12.0, **common)
+        hi = evaluate(n_trials=6, ledger=led, trial_ids=ids, candidate_trial_id=ids[0], effective_n=1e9, **common)
+        lo = evaluate(n_trials=6, ledger=led, trial_ids=ids, candidate_trial_id=ids[0], effective_n=12.0, **common)
         self.assertLessEqual(hi.numbers["effective_n"], 400)            # a claimed N cannot inflate
         self.assertEqual(lo.numbers["effective_n"], 12.0)
         self.assertEqual(lo.verdict, "INCONCLUSIVE")
@@ -748,6 +837,58 @@ class B6_ControlsAndReportCard(unittest.TestCase):
                     dict(n_trials=6, effective_n=float("nan")), dict(n_trials=6, effective_n=-3.0)):
             with self.assertRaises(ValueError):
                 evaluate(**{**common, **bad})
+
+    def test_substituted_outcomes_with_genuine_ledger_ids_are_not_verified(self):
+        """Second review P1: valid ledger ids are not enough; the evaluated series
+        must be exactly the series the trials committed."""
+        rng = stream(27, "outcomes")
+        strong = rng.normal(0.6, 1.0, 400)
+        fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
+        cfg = GauntletConfig(n_boot=200)
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        base = dict(candidate_id="c", family_id="f", cost_per_obs=0.05, rng=stream(28, "a"), n_trials=6,
+                    canary=self._calibrated(), cfg=cfg, ledger=led, trial_ids=ids)
+        ok = evaluate(gross=strong, family_matrix=fam, candidate_trial_id=ids[0], **base)
+        self.assertEqual((ok.verdict, ok.numbers["outcomes_verified"]), ("PASS", 1.0))
+        better = strong.copy()
+        better[:50] += 2.0                                                  # edited outcomes
+        swapped = fam.copy()
+        swapped[:, 3] = rng.normal(0, 1, 400)                               # one rival's series replaced
+        cases = {
+            "edited gross": dict(gross=better, family_matrix=fam, candidate_trial_id=ids[0]),
+            "rival matrix column replaced": dict(gross=strong, family_matrix=swapped, candidate_trial_id=ids[0]),
+            "columns reordered": dict(gross=strong, family_matrix=fam[:, ::-1], candidate_trial_id=ids[0]),
+            "fewer columns than trials": dict(gross=strong, family_matrix=fam[:, :5], candidate_trial_id=ids[0]),
+            "no candidate trial id": dict(gross=strong, family_matrix=fam),
+            "candidate is another trial": dict(gross=strong, family_matrix=fam, candidate_trial_id=ids[1]),
+        }
+        for name, kw in cases.items():
+            card = evaluate(**base, **kw)
+            self.assertEqual(card.numbers["ledger_metadata_reconciled"], 1.0, name)
+            self.assertEqual(card.numbers["outcomes_verified"], 0.0, name)
+            self.assertEqual(card.numbers["provenance_verified"], 0.0, name)
+            self.assertNotEqual(card.verdict, "PASS", name)
+            self.assertTrue(any("outcomes not tied" in r for r in card.reasons), name)
+        wrong_tip = evaluate(gross=strong, family_matrix=fam, candidate_trial_id=ids[0], expected_tip="0" * 64,
+                             **base)
+        self.assertEqual(wrong_tip.numbers["ledger_metadata_reconciled"], 0.0)
+        with self.assertRaises(ValueError):
+            _trial(artifacts={"gross": "not-a-digest"})
+
+    def test_code_identity_tracks_source_edits(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            for root in (a, b):
+                shutil.copytree(Path(__file__).resolve().parent / "research" / "integrity",
+                                Path(root) / "research" / "integrity", ignore=shutil.ignore_patterns("__pycache__"))
+            ia, ib = code_identity(["research/integrity"], root=a), code_identity(["research/integrity"], root=b)
+            self.assertEqual(ia, ib)
+            self.assertTrue(ia.startswith("src-"))
+            f = Path(b) / "research" / "integrity" / "stats.py"
+            f.write_text(f.read_text() + "\n# edit\n")
+            self.assertNotEqual(code_identity(["research/integrity"], root=b), ia)
+            with self.assertRaises(FileNotFoundError):
+                code_identity(["research/nope"], root=a)
 
     def test_unsupported_numbers_checker(self):
         rng = stream(21, "u")
