@@ -188,6 +188,28 @@ class I2_PointInTime(unittest.TestCase):
         self.assertNotIn(self.sym, self.P.retrospective_exclusions(self.raw))
         self.assertIn(self.sym, self.P.retrospective_exclusions(self.mod))   # whole history dropped
 
+    def test_quarantined_symbol_does_not_pollute_market_context(self):
+        """Comprehensive audit P1 (PR #11): after its split is knowable, a quarantined symbol's unadjusted
+        returns must not enter the market return, volatility, breadth or dispersion other symbols see; and a
+        future split must not change any earlier context value."""
+        b0, m0, _ = self.P.point_in_time_universe(self.raw)
+        b1, m1, _ = self.P.point_in_time_universe(self.mod)
+        c0, c1 = self.P.context_frame(b0, m0), self.P.context_frame(b1, m1)
+        early0, early1 = c0.loc[:self.cut_ts], c1.loc[:self.cut_ts]
+        pd.testing.assert_frame_equal(early0, early1, check_freq=False)  # the future changes nothing earlier
+        split_ts = pd.Timestamp(self.raw[self.sym]["ts_utc"].iloc[self.cut + 1])
+        others = [s for s in b1 if s != self.sym]
+        rets = {s: self.feat(b1[s]).set_index(pd.to_datetime(b1[s]["ts_utc"], utc=True))["price_return.log_ret_1"]
+                for s in b1}
+        expect = np.mean([rets[s].loc[split_ts] for s in others])
+        self.assertAlmostEqual(c1.loc[split_ts, "ctx.mkt_ret_1"], expect, places=12)
+        self.assertLess(rets[self.sym].loc[split_ts], -0.6)              # the unadjusted 2:1 split return
+        leaky = self.P.context_frame(b1, None)                           # the old, unmasked aggregation
+        self.assertGreater(abs(leaky.loc[split_ts, "ctx.mkt_ret_1"] - expect), 0.1)
+        self.assertGreater(abs(leaky.loc[split_ts, "ctx.dispersion"] - c1.loc[split_ts, "ctx.dispersion"]), 0.1)
+        thin = self.P.context_frame(b1, m1, min_symbols=len(b1))         # too few eligible symbols: unavailable
+        self.assertTrue(np.isnan(thin.loc[split_ts, "ctx.mkt_ret_1"]))
+
     def test_nonfinite_volume_never_reaches_research(self):
         """Third review (PR #8 -> #11): NaN, infinite and non-numeric volume bars are excluded before any lane."""
         raw = {s: b.copy() for s, b in self.raw.items()}

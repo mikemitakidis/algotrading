@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -82,7 +82,7 @@ from research.integrity.provenance import code_identity
 from research.integrity.report_card import GauntletConfig, evaluate as gauntlet
 from research.mllab import evaluate as LAB
 from research.mllab import models as MD
-from research.mllab.datasets import build_dataset
+from research.mllab.datasets import build_dataset, market_context, symbol_features
 from research.mllab.labels import BarrierSpec
 
 DAY_NS = int(86400e9)
@@ -93,6 +93,7 @@ STAGE_MAP = {"entered": "simulated_entry", "rejected_by_rule": "rejected", "posi
              "reentry_same_bar": "blocked_gate", "not_in_universe": "blocked_gate",
              "blocked_capacity": "skipped_capacity", "blocked_risk": "blocked_risk", "unfillable": "unfillable",
              "no_next_bar": "unfillable"}
+MIN_CONTEXT_SYMBOLS = 3     # fewer eligible symbols at a bar -> market context unavailable there (not thin)
 CORPORATE_ACTION_POLICY = ("unadjusted bars, no validated split/share-count adjustment: any holding window that "
                            "contains a suspected split invalidates its economics (fail closed, no hindsight pre-close)")
 ENGINE_CFG = E.EngineConfig(bar_minutes=TF_MINUTES[TF])     # synthetic bar-open convention, same as lane A
@@ -167,6 +168,13 @@ def economics_verdict(card_verdict: str, selected_contaminated: int, family_cont
     if reasons:
         return "INCONCLUSIVE", reasons + ["no validated corporate-action adjustment: economics invalid"]
     return card_verdict, []
+
+
+def context_frame(bars: Mapping[str, pd.DataFrame], member: Optional[Mapping[str, np.ndarray]],
+                  min_symbols: int = MIN_CONTEXT_SYMBOLS) -> pd.DataFrame:
+    """The market-context features the lab sees: computed over point-in-time eligible cells only."""
+    per = {s: symbol_features(b) for s, b in bars.items()}
+    return market_context(per, dict(bars), None if member is None else dict(member), min_symbols)
 
 
 def decide(genome: G.Genome, bars: Mapping[str, pd.DataFrame], member: Mapping[str, np.ndarray],
@@ -309,9 +317,12 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
         return m
     spec = BarrierSpec(tp_mult=best.exits.target_atr or 3.0, sl_mult=best.exits.stop_atr,
                        horizon=best.exits.time_stop_bars)
-    ds_all = build_dataset(bars, spec=spec, sampler=sampler, extra_meta={"snapshot_digest": data_digest,
-                                                                          "genome_id": best.genome_id,
-                                                                          "universe": "point_in_time"})
+    # market context is built only from point-in-time ELIGIBLE (symbol, bar) cells: a symbol quarantined after an
+    # unadjusted split no longer feeds its returns into other symbols' features (comprehensive audit, PR #11)
+    ds_all = build_dataset(bars, spec=spec, sampler=sampler, context_eligible=member,
+                           min_context_symbols=MIN_CONTEXT_SYMBOLS,
+                           extra_meta={"snapshot_digest": data_digest, "genome_id": best.genome_id,
+                                       "universe": "point_in_time"})
     # a lab label whose barrier window (decision bar, resolution bar] holds a suspected split is invalid
     lab_bad = np.zeros(len(ds_all), dtype=bool)
     for s in bars:
@@ -375,6 +386,8 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
                                                  t.payload["code_digest"] == code_identity(LAB.CODE_PATHS)
                                                  for t in lab_trials) and bool(lab_trials),
         "lab_rows_are_point_in_time_eligible": lab_rows_ok,
+        "lab_context_uses_point_in_time_eligibility": ds_all.meta.get("context_eligibility") == "point-in-time mask"
+                                                      and ds_all.meta.get("min_context_symbols") == MIN_CONTEXT_SYMBOLS,
         "every_decision_is_one_candidate": len(cands) == len(port.decisions) == len(lab)
                                            and lab["candidate_id"].is_unique,
         "candidate_ids_use_lane_a_formula": all(
@@ -421,7 +434,10 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
         "lab": {"rows": len(ds), "verdicts": {x["model"]: x["verdict"] for x in labres.comparisons},
                 "vs_prior": {x["model"]: x["verdict"] for x in labres.vs_prior},
                 "auc": {k: v.metrics["auc"] for k, v in labres.runs.items()},
-                "card": labres.card.verdict if labres.card else None, "dataset_digest": ds.digest},
+                "card": labres.card.verdict if labres.card else None, "dataset_digest": ds.digest,
+                "context": {k: ds.meta.get(k) for k in ("context_eligibility", "min_context_symbols",
+                                                         "context_unavailable_ts")},
+                "unobserved_path_labels_excluded": ds.meta.get("unobserved_path_labels_excluded")},
         "corporate_actions": {"policy": CORPORATE_ACTION_POLICY,
                               "suspect_rows": {s: [int(j) for j in v] for s, v in suspects.items() if len(v)},
                               "selected_run_contaminated_trades": sel_contam,
@@ -538,7 +554,8 @@ def main(argv=None) -> int:
     return 0 if all(o["checks"].values()) else 1
 
 
-__all__ = ["AXES", "STAGE_MAP", "ENGINE_CFG", "CORPORATE_ACTION_POLICY", "point_in_time_universe",
+__all__ = ["AXES", "STAGE_MAP", "ENGINE_CFG", "CORPORATE_ACTION_POLICY", "MIN_CONTEXT_SYMBOLS", "context_frame",
+           "point_in_time_universe",
            "retrospective_exclusions", "split_suspect_rows", "contaminated_trades", "economics_verdict", "decide",
            "decisions_to_candidates", "run", "render", "main"]
 
