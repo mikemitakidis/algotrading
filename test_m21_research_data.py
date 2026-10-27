@@ -128,6 +128,23 @@ class F1b_FlagsAndKnowledgeTiming(unittest.TestCase):
         self.assertEqual(counts["excluded"], 3)
         self.assertTrue(Q.admissible_mask(view).all())
 
+    def test_nonfinite_or_nonnumeric_volume_is_inadmissible(self):
+        """Third review (PR #8): ~(v < 0) admitted NaN and +inf. Missing, infinite and non-numeric volume on an
+        otherwise valid bar is excluded; zero volume stays admissible (warning only)."""
+        b = self.base.copy()
+        b["volume"] = b["volume"].astype(object)
+        b.loc[11, "volume"] = np.nan
+        b.loc[12, "volume"] = np.inf
+        b.loc[13, "volume"] = "n/a"
+        b.loc[14, "volume"] = -np.inf
+        b.loc[15, "volume"] = 0
+        m = Q.admissible_mask(b)
+        self.assertEqual(list(np.flatnonzero(~m)), [11, 12, 13, 14])
+        view, counts = Q.research_view(b)
+        self.assertEqual(counts["excluded"], 4)
+        self.assertTrue(np.isfinite(view["volume"].astype(float)).all())
+        self.assertIn(b["ts_utc"].iloc[15], set(view["ts_utc"]))
+
     def test_point_in_time_audit_and_split_flags_ignore_the_future(self):
         m = _corrupt_market(seed=21)
         sy = m.symbols.set_index("symbol")
