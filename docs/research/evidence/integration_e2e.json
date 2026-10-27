@@ -1,0 +1,381 @@
+{
+ "checks": {
+  "ambiguous_bars_not_resolved_into_fills": true,
+  "candidate_ids_use_lane_a_formula": true,
+  "card_cannot_pass_without_integrated_canary": true,
+  "card_charged_for_all_genome_trials": true,
+  "card_computed_pbo_and_spa": true,
+  "card_outcomes_verified": true,
+  "card_provenance_verified": true,
+  "engine_skips_match_decisions": true,
+  "every_decision_is_one_candidate": true,
+  "genome_trials_carry_code_identity": true,
+  "genome_trials_carry_research_seed": true,
+  "genome_trials_carry_snapshot_digest": true,
+  "inadmissible_bars_excluded": true,
+  "lab_context_uses_point_in_time_eligibility": true,
+  "lab_dataset_traces_to_snapshot": true,
+  "lab_rows_are_point_in_time_eligible": true,
+  "lab_trials_carry_dataset_and_code": true,
+  "ledger_verifies": true,
+  "no_candidate_labelled_executed": true,
+  "snapshot_verifies": true,
+  "split_crossings_fail_closed": true,
+  "stages_conserved": true,
+  "trades_join_simulated_entries_on_id_and_fill_time": true,
+  "universe_is_point_in_time": true
+ },
+ "corporate_actions": {
+  "buy_and_hold_contaminated_symbols": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
+  "family_trials_contaminated": {
+   "mean_reversion-24659b18ea2b": 2,
+   "mean_reversion-2f0e650247ad": 1,
+   "mean_reversion-36b38dce1a7a": 3,
+   "mean_reversion-498dfb5dffa2": 2,
+   "mean_reversion-6831feec7ff9": 3,
+   "mean_reversion-b737e909b7a2": 4
+  },
+  "lab_rows_excluded": 0,
+  "labels_contaminated": 2,
+  "policy": "unadjusted bars, no validated split/share-count adjustment: any holding window that contains a suspected split invalidates its economics (fail closed, no hindsight pre-close)",
+  "selected_run_contaminated_trades": [],
+  "suspect_rows": {
+   "S000": [
+    275
+   ],
+   "S002": [
+    276
+   ],
+   "S010": [
+    187
+   ],
+   "S013": [
+    328
+   ]
+  }
+ },
+ "data": {
+  "files": 16,
+  "inadmissible_rows_removed": 0,
+  "point_in_time": {
+   "S000": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-01-22 21:00:00+00:00",
+    "rows": 700
+   },
+   "S001": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S002": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-01-28 21:00:00+00:00",
+    "rows": 697
+   },
+   "S003": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S004": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S005": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 695
+   },
+   "S006": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S007": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 693
+   },
+   "S008": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S009": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S010": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2018-09-24 21:00:00+00:00",
+    "rows": 695
+   },
+   "S011": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 700
+   },
+   "S012": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 698
+   },
+   "S013": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-04-08 21:00:00+00:00",
+    "rows": 698
+   },
+   "S014": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 698
+   },
+   "S015": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 699
+   }
+  },
+  "quarantined_symbols": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
+  "retrospective_grades": {
+   "clean": 4,
+   "unusable": 0,
+   "usable_with_warnings": 12
+  },
+  "retrospective_note": "full-sample audit: reported only, not used for any decision",
+  "retrospective_rule_would_exclude": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
+  "snapshot_digest": "f8eb3290d2384af3ed3e09d212ab36e2a5542aa5203c87fa31c8f2418f7267d3",
+  "symbols": 16
+ },
+ "decisions": {
+  "candidate_stages": {
+   "blocked_gate": 107,
+   "rejected": 190,
+   "simulated_entry": 62
+  },
+  "effective_n_all_definitive": {
+   "n_effective": 63.47670129719982,
+   "n_raw": 357.0,
+   "status": "ok"
+  },
+  "effective_n_simulated_entries": {
+   "n_effective": 39.339388491182234,
+   "n_raw": 62.0,
+   "status": "ok"
+  },
+  "engine_stages": {
+   "blocked_capacity": 0,
+   "blocked_risk": 0,
+   "entered": 62,
+   "no_next_bar": 0,
+   "not_in_universe": 50,
+   "position_already_open": 57,
+   "reentry_same_bar": 0,
+   "rejected_by_rule": 190,
+   "unfillable": 0
+  },
+  "note": "labels of non-entered candidates are counterfactual brackets that were never traded; overlapping candidates are serially dependent (see effective N)",
+  "per_stage": {
+   "blocked_gate": {
+    "definitive": 107,
+    "definitive_used": 107,
+    "mean_r_net_definitive": 0.9263977941164927,
+    "n": 107,
+    "split_contaminated": 0,
+    "status": {
+     "definitive": 107
+    }
+   },
+   "rejected": {
+    "definitive": 188,
+    "definitive_used": 188,
+    "mean_r_net_definitive": 0.7147894424932798,
+    "n": 190,
+    "split_contaminated": 2,
+    "status": {
+     "definitive": 188,
+     "unobserved": 2
+    }
+   },
+   "simulated_entry": {
+    "definitive": 62,
+    "definitive_used": 62,
+    "mean_r_net_definitive": 0.9931593772680097,
+    "n": 62,
+    "split_contaminated": 0,
+    "status": {
+     "definitive": 62
+    }
+   }
+  }
+ },
+ "genome": {
+  "baselines": {
+   "buy_and_hold_equal_weight": {
+    "invalid_reason": "held across suspected unadjusted splits in ['S000', 'S002', 'S010', 'S013']",
+    "max_drawdown": -0.1497683677603957,
+    "sharpe_ann": 1.5986691797052013,
+    "total_return": 1.6500084036634046,
+    "valid": false
+   },
+   "no_trade": {
+    "max_drawdown": 0.0,
+    "sharpe_ann": 0.0,
+    "total_return": 0.0
+   }
+  },
+  "costs": {
+   "engine_fee_bps": 5.0,
+   "engine_slippage_bps": 5.0,
+   "label_cost_model": "base"
+  },
+  "dsr_best_isolated": {
+   "dsr": 0.9999998975719512,
+   "n_obs": 699,
+   "n_trials": 9.0,
+   "psr0": 1.0,
+   "sr0": 0.1492586544465456,
+   "sr_per_period": 0.32645351657772137
+  },
+  "fill_time_basis": "synthetic convention: open = close - 390 min",
+  "grid_points": 9,
+  "invalid": 0,
+  "portfolio": {
+   "max_drawdown": -0.02116503876856468,
+   "mean_bars_held": 6.774193548387097,
+   "mean_r": 0.9123665815125366,
+   "n_trades": 62.0,
+   "profit_factor": 10.723213851126486,
+   "sharpe_ann": 3.8891369290940068,
+   "signals_seen": 169.0,
+   "skipped": 50.0,
+   "total_return": 0.7212371367534038,
+   "win_rate": 0.8709677419354839
+  },
+  "selected": "mean_reversion-9619d39fbda8",
+  "selected_params": {
+   "bb_std": 1.5,
+   "bb_window": 20,
+   "rsi_entry": 25.0,
+   "rsi_exit": 55.0,
+   "rsi_mode": "sma_gain_loss",
+   "rsi_period": 14
+  },
+  "selected_trial": "T000008-1a428b30",
+  "selection": {
+   "best_isolated": {
+    "genome_id": "mean_reversion-2f0e650247ad",
+    "plateau": 3.082759995808644,
+    "sharpe_ann": 5.182288916922914
+   },
+   "best_plateau": {
+    "genome_id": "mean_reversion-9619d39fbda8",
+    "plateau": 3.8891369290940068,
+    "sharpe_ann": 3.8891369290940068
+   },
+   "median": 2.051873504176228,
+   "n_points": 9,
+   "n_trials_family": 9,
+   "share_positive": 1.0
+  },
+  "trades_ending_after_a_split_quarantine": 0,
+  "trades_with_pending_bracket_labels": 0
+ },
+ "hypothesis": {
+  "id": "KH-4089d49af8",
+  "status": "rejected"
+ },
+ "integrated_verdict": {
+  "economics_valid": false,
+  "reasons": [
+   "6 of 9 search trials hold positions across a suspected unadjusted split (selection, DSR, PBO and SPA used invalid economics)",
+   "no validated corporate-action adjustment: economics invalid"
+  ],
+  "verdict": "INCONCLUSIVE"
+ },
+ "knowledge": {
+  "hypotheses": 1,
+  "lineage": 1,
+  "operator_verified_sources": 0,
+  "refusals": 0,
+  "rejected": 1,
+  "reviews": 0,
+  "sources": 2,
+  "status": {
+   "KH-4089d49af8": "rejected"
+  }
+ },
+ "lab": {
+  "auc": {
+   "hgb": 0.4642857142857143,
+   "logistic": 0.6114718614718615,
+   "prior": 0.3430735930735931
+  },
+  "card": "FAIL",
+  "context": {
+   "context_eligibility": "point-in-time mask",
+   "context_unavailable_ts": 1,
+   "min_context_symbols": 3
+  },
+  "dataset_digest": "2113a4b1dad1f9eae9ab167afda917fb53ecf691c048f8ac1de99d967ce378ef",
+  "rows": 99,
+  "unobserved_path_labels_excluded": 14,
+  "verdicts": {
+   "hgb": "WORSE"
+  },
+  "vs_prior": {
+   "hgb": "NO_EVIDENCE",
+   "logistic": "PROBABILITIES_ONLY"
+  }
+ },
+ "ledger": {
+  "entries": 24,
+  "tip": "4bcae3e48cbc77e53247700d91301f96380c2efb3ababc24c2da5f0d55b221bb"
+ },
+ "report_card": {
+  "provenance": {
+   "ledger_metadata_reconciled": 1.0,
+   "outcomes_verified": 1.0,
+   "provenance_verified": 1.0
+  },
+  "reasons": [
+   "pipeline canary battery missing or not CALIBRATED"
+  ],
+  "verdict": "INCONCLUSIVE"
+ },
+ "runtime_seconds": 8.6
+}

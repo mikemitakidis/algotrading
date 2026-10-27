@@ -1,0 +1,46 @@
+# INACTIVE EXAMPLE — not in .github/workflows, so GitHub never runs it.
+# Enabling it is an E09 governance decision that needs the operator's explicit approval.
+#
+# Purpose: run the offline research test suites and guards on every PR that touches
+# research code, with NO secrets, NO network access beyond package installation,
+# read-only repository permissions and no deployment steps.
+name: research-offline-ci
+on:
+  pull_request:
+    paths:
+      - "research/**"
+      - "test_m21_research_*.py"
+      - "docs/research/**"
+permissions:
+  contents: read          # nothing else: no write, no packages, no id-token
+concurrency:
+  group: research-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Belt and braces: broker/secret variables are explicitly empty.
+      IBKR_PORT: ""
+      BROKER: ""
+      IBKR_ACCOUNT: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned requirements plus research extras
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install scipy lightgbm catboost
+      - name: Research suites and guards (isolated runner)
+        run: |
+          python _test_isolation.py \
+            test_m21_research_foundation test_m21_research_integrity test_m21_research_evidence \
+            test_m21_research_mllab test_m21_research_genome test_m21_research_data \
+            test_m21_research_agents test_m21_research_integration \
+            test_m17_backtesting.G10_Hygiene test_m18_ml.G10_Hygiene test_hygiene_suite \
+            test_quarantine_guard test_m21_c5b_protected_baselines test_m21_c5a_test_isolation
