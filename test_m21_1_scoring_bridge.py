@@ -15,6 +15,11 @@ Plus:
   - no-fake guard: the bridge never sets model_readiness_passed True and never
     invents a calibrated probability (prediction_calibrated stays None).
   - ranking spread: stronger signals outrank weaker ones.
+
+A01 (truthful contract): the bridge no longer assumes freshness, schema,
+timeframe availability, Risk Authority 'ok', raw-price safety or production
+thinness. Tests that need a scoring (non-BLOCKED) outcome therefore supply
+complete fixture evidence via ``_evidence``; without it M19 blocks.
 """
 import ast
 import os
@@ -29,10 +34,31 @@ _test_isolation.install()
 
 from bot.signal_scoring import ScoringProfile
 from bot.signal_scoring import keys as K
+from bot.scoring_truth import CorporateActionRecord, RiskDecisionRef
 from tools.signal_scoring.scanner_bridge import enrich_signal, score_signal
 from tools.signal_scoring import score_rank_harness as H
 
 _TS = "2026-06-26T15:00:00+00:00"
+
+
+def _evidence(symbol="AAA", side="long", **over):
+    """Complete fixture evidence (simulated calendar; after-close bars; a
+    validated M14 approval; raw prices with a verified clean record)."""
+    kw = dict(
+        evaluated_at_utc="2026-06-26T20:30:00+00:00",
+        calendar=H.FIXTURE_CALENDAR,
+        bar_asof={"1D": "2026-06-26T04:00:00+00:00", "4H": "2026-06-26T16:00:00+00:00",
+                  "1H": "2026-06-26T19:30:00+00:00", "15m": "2026-06-26T19:45:00+00:00"},
+        risk_decision=RiskDecisionRef("m14_risk_authority", "fixture-1", "approved",
+                                      symbol, side, "2026-06-26T20:20:00+00:00"),
+        price_basis="raw", detector_suspected=False,
+        corporate_action_record=CorporateActionRecord(
+            symbol, "2026-06-01T00:00:00+00:00", "2026-06-27T00:00:00+00:00", (),
+            "fixture", True),
+        lookback_start_utc="2026-06-02T00:00:00+00:00",
+        production_thinness_status="ok")
+    kw.update(over)
+    return kw
 
 
 def _sig(symbol="AAA", rsi=62.0, macd=0.9, vc=4, atr=2.0, entry=100.0, vr=1.4):
@@ -52,7 +78,7 @@ class TestModelReadinessGateByProfile(unittest.TestCase):
         self.assertFalse(sc.execution_eligible)
 
     def test_2_research_downgrades_model_readiness_to_review(self):
-        sc = score_signal(_sig(), profile=ScoringProfile.RESEARCH)
+        sc = score_signal(_sig(), profile=ScoringProfile.RESEARCH, **_evidence())
         # no longer a blocking failure
         self.assertNotIn("model_readiness_failed", sc.hard_gate_failures)
         # and it actually scores (real composite, not 0)
@@ -60,7 +86,7 @@ class TestModelReadinessGateByProfile(unittest.TestCase):
         self.assertFalse(sc.execution_eligible)
 
     def test_3_calibration_unavailable_remains_review_in_research(self):
-        sc = score_signal(_sig(), profile=ScoringProfile.RESEARCH)
+        sc = score_signal(_sig(), profile=ScoringProfile.RESEARCH, **_evidence())
         # calibration is honestly unavailable; under research it must NOT block
         self.assertNotIn("calibration_unavailable", sc.hard_gate_failures)
         # and the uncalibrated state is surfaced honestly in reason codes
@@ -94,10 +120,25 @@ class TestNoFakeReadiness(unittest.TestCase):
         self.assertIsNone(ci.ml_context[K.ML_PRED_CALIBRATED])
         self.assertIs(ci.ml_context[K.ML_CALIBRATION_APPLIED], False)
 
-    def test_price_mode_is_honest_raw(self):
+    def test_price_mode_never_claimed_without_evidence(self):
+        # A01: the pre-A01 bridge claimed 'raw' / no PIT risk unconditionally
+        # (yfinance actually serves auto-adjusted prices). Now: unknown -> absent.
         ci = enrich_signal(_sig())
+        self.assertNotIn(K.ML_PRICE_ADJUSTMENT_MODE, ci.ml_context)
+        self.assertNotIn("adjusted_price_pit_risk", ci.advisory_context)
+        ci = enrich_signal(_sig(), **_evidence())
         self.assertEqual(ci.ml_context[K.ML_PRICE_ADJUSTMENT_MODE], "raw")
         self.assertIs(ci.advisory_context["adjusted_price_pit_risk"], False)
+        ci = enrich_signal(_sig(), **_evidence(price_basis="total_return_adjusted"))
+        self.assertEqual(ci.ml_context[K.ML_PRICE_ADJUSTMENT_MODE], "adjusted")
+        self.assertIs(ci.advisory_context["adjusted_price_pit_risk"], True)
+
+    def test_risk_authority_never_ok_by_default(self):
+        ci = enrich_signal(_sig())
+        self.assertNotIn("risk_authority_status", ci.risk_preview)
+        sc = score_signal(_sig())
+        self.assertEqual(sc.decision_bucket.value, "BLOCKED")
+        self.assertIn("missing_context_key", sc.hard_gate_failures)
 
 
 class TestRankingSpread(unittest.TestCase):
@@ -110,8 +151,10 @@ class TestRankingSpread(unittest.TestCase):
         ranked = result["ranked"]
         self.assertEqual(ranked[0]["symbol"], "STRONG")
         self.assertEqual(ranked[-1]["symbol"], "WEAK")
-        self.assertGreater(ranked[0]["final_score_100"],
-                           ranked[-1]["final_score_100"])
+        self.assertGreater(ranked[0]["research_rank_score"],
+                           ranked[-1]["research_rank_score"])
+        # without evidence both are M19-BLOCKED (final 0); order is research-only
+        self.assertEqual({r["decision_bucket"] for r in ranked}, {"BLOCKED"})
         self.assertFalse(result["execution_eligible_any"])
         self.assertFalse(result["any_hard_gate_passed"])
 
@@ -186,7 +229,8 @@ class TestRealScannerShapedSignal(unittest.TestCase):
         # it in. Simulate that here with an explicit value (price * avg vol).
         sc = score_signal(self._scanner_shaped(),
                           profile=ScoringProfile.RESEARCH,
-                          avg_dollar_volume=100.0 * 500000)
+                          avg_dollar_volume=100.0 * 500000,
+                          **_evidence("REAL"))
         self.assertNotIn("model_readiness_failed", sc.hard_gate_failures)
         self.assertGreater(sc.final_score_100, 0.0)
         self.assertFalse(sc.execution_eligible)
