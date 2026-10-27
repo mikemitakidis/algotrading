@@ -44,8 +44,10 @@ def render(r: MK.MockRun, seconds: float) -> str:
           "- Operator approval for any model or API usage, any scheduled or paid agent, and any write beyond "
           "an isolated branch.",
           "- A separately held authority for pre-registration attestations and holdout releases (lane B).",
-          "- Operator verification of every citation an agent records (`verify_source` accepts only "
-          "`operator:` identities).", ""]
+          "- Operator verification of every citation an agent records. `verify_source` requires the operator's "
+          "signature over the source's content, checked by an operator verifier the library is built with; the "
+          "mock library has none, so its citations stay unverified. The verifier is the lane B local HMAC model, "
+          "not an independent authority.", ""]
     return "\n".join(L)
 
 

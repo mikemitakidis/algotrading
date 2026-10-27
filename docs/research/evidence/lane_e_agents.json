@@ -169,7 +169,7 @@
    "role": "reporter"
   }
  ],
- "digest": "2ea69b8b02a30190de2545093fb1e0e3b24ee6a33a7136df6ac3f426c97fbffc",
+ "digest": "a0658bb12fb0161e32ba6ac080f8015816a15c668065c0117b211478b6d820d4",
  "evaluation": {
   "mean_diff": 0.6011338019941659,
   "n_markets": 3,
@@ -181,17 +181,18 @@
   "positive_markets": 3,
   "trades_r_multiples": 182,
   "trial_ids": [
-   "T000033-7c285d36",
-   "T000034-1462a311",
-   "T000036-2d589bb1",
-   "T000037-4b79bad5",
-   "T000039-8360d6da",
-   "T000040-ecc36575"
+   "T000033-cf5c3d85",
+   "T000034-a5b901c6",
+   "T000036-bc69d772",
+   "T000037-f7800576",
+   "T000039-1c568631",
+   "T000040-9ed8a420"
   ]
  },
  "kb": {
   "hypotheses": 1,
   "lineage": 1,
+  "operator_verified_sources": 0,
   "refusals": 2,
   "rejected": 1,
   "reviews": 1,
@@ -203,10 +204,12 @@
  "ledger_entries": 48,
  "ledger_ok": true,
  "prereg": {
+  "authority_independent": false,
+  "authority_model": "",
   "effective_n": 3,
   "passed": false,
   "prereg_digest": "d555d84301baa1ecfd53ebea9a6b26385edc8c590f7a23536eabcc90dfd9ac59",
-  "reason": "attestation is declared, not independently verified: local diagnostic only",
+  "reason": "no attestation verifier supplied: attestations cannot be re-verified, local diagnostic only",
   "value": 0.6011338019941659
  },
  "refusals": [
@@ -219,7 +222,8 @@
  "report_card": {
   "reasons": [
    "pipeline canary battery missing or not CALIBRATED",
-   "no family matrix: PBO / SPA not computed"
+   "no family matrix: PBO / SPA not computed",
+   "outcomes not tied to ledgered trial artifacts (no candidate trial id: the evaluated series cannot be traced to a trial): local diagnostic only"
   ],
   "verdict": "INCONCLUSIVE"
  }

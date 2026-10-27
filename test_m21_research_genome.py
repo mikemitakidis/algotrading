@@ -146,7 +146,14 @@ class D2_Templates(unittest.TestCase):
             n = sum(int(T.signals(g, b)["entry"].sum()) for b in self.m.bars.values())
             self.assertGreater(n, 5, t)
             out = T.signals(g, next(iter(self.m.bars.values())))
-            self.assertEqual(tuple(out.columns), T.SIGNAL_COLUMNS)
+            self.assertEqual(tuple(out.columns), T.SIGNAL_COLUMNS + T.DIAGNOSTIC_COLUMNS)
+            # setups the rule rejected carry a reason; entries always imply a setup
+            allv = pd.concat([T.signals(g, b) for b in self.m.bars.values()])
+            self.assertFalse((allv["entry"] & ~allv["setup"]).any(), t)
+            rej = allv["setup"] & ~allv["entry"]
+            self.assertTrue(rej.any(), t)
+            self.assertTrue((allv.loc[rej, "reject_reason"] != "").all(), t)
+            self.assertTrue((allv.loc[~rej, "reject_reason"] == "").all(), t)
         g = G.seed("mean_reversion")
         g = G.Genome(g.template, g.params, G.ExitSpec(signal_exit=False))
         self.assertFalse(T.signals(g, next(iter(self.m.bars.values())))["exit"].any())
@@ -192,11 +199,91 @@ class D3_Engine(unittest.TestCase):
         res = E.run({"A": b}, {"A": _sig(15, entries=[4], exits=[9])}, G.ExitSpec(stop_atr=50), G.RiskSpec(),
                     E.EngineConfig(fee_bps=5, slippage_bps=5))
         t = res.trades[0]
-        self.assertEqual(t.entry_ts, pd.Timestamp(b["ts_utc"].iloc[5]))
         self.assertAlmostEqual(t.entry_price, 101 * 1.0005)
-        self.assertEqual(t.exit_ts, pd.Timestamp(b["ts_utc"].iloc[10]))
         self.assertEqual(t.exit_reason, "signal")
         self.assertAlmostEqual(res.equity.iloc[-1], 100_000 + sum(x.pnl_absolute for x in res.trades), places=6)
+        # Second review (PR #10): ts_utc is the bar CLOSE. Without a bar-open source the fill times are unknown
+        # (NaT), never the close; the legacy entry_ts / exit_ts stay the M17 close labels.
+        self.assertEqual(t.entry_ts, pd.Timestamp(b["ts_utc"].iloc[5]))
+        self.assertEqual(t.entry_bar_close_ts, t.entry_ts)
+        self.assertTrue(pd.isna(t.entry_fill_ts) and pd.isna(t.exit_fill_ts))
+        self.assertEqual(t.decision_ts, pd.Timestamp(b["ts_utc"].iloc[4]))
+        self.assertIn("unknown", res.meta["fill_time_basis"])
+
+    def test_fill_events_are_bar_opens_not_closes(self):
+        """Second review P1/P2 (PR #10): an open fill is timestamped at the bar's OPEN; an intrabar stop is an
+        unobservable window; the EOD mark is at the close. The economics are unchanged by the labels."""
+        rows = [FLAT] * 5 + [(101, 103, 100, 102)] * 5 + [FLAT] * 5
+        b = _bars(rows)
+        b["bar_open_ts"] = b["ts_utc"] - pd.Timedelta(390, unit="m")
+        sig = _sig(15, entries=[4], exits=[9])
+        res = E.run({"A": b}, {"A": sig}, G.ExitSpec(stop_atr=50), G.RiskSpec(), E.EngineConfig())
+        res_legacy = E.run({"A": b.drop(columns="bar_open_ts")}, {"A": sig}, G.ExitSpec(stop_atr=50), G.RiskSpec(),
+                           E.EngineConfig())
+        t = res.trades[0]
+        self.assertEqual(t.entry_fill_ts, b["bar_open_ts"].iloc[5])
+        self.assertLess(t.entry_fill_ts, t.entry_bar_close_ts)
+        self.assertEqual(t.exit_fill_ts, b["bar_open_ts"].iloc[10])
+        self.assertEqual(t.exit_fill_basis, "bar_open")
+        self.assertEqual((t.entry_price, t.exit_price, t.pnl_absolute),
+                         (res_legacy.trades[0].entry_price, res_legacy.trades[0].exit_price,
+                          res_legacy.trades[0].pnl_absolute))
+        self.assertEqual(res.meta["fill_time_basis"], "bar_open_ts column")
+        # synthetic convention gives the same opens
+        res_syn = E.run({"A": b.drop(columns="bar_open_ts")}, {"A": sig}, G.ExitSpec(stop_atr=50), G.RiskSpec(),
+                        E.EngineConfig(bar_minutes=390))
+        self.assertEqual(res_syn.trades[0].entry_fill_ts, t.entry_fill_ts)
+        # intrabar stop: unobservable inside [open, close]
+        rows = [FLAT] * 3 + [(100, 101, 85, 95), FLAT]
+        b2 = _bars(rows)
+        r2 = E.run({"A": b2}, {"A": _sig(5, entries=[2], atr=5.0)}, G.ExitSpec(stop_atr=2, target_atr=None),
+                   G.RiskSpec(), E.EngineConfig(bar_minutes=390, fee_bps=0, slippage_bps=0))
+        x = r2.trades[0]
+        self.assertEqual(x.exit_reason, "stop_loss")
+        self.assertEqual(x.exit_fill_basis, "intrabar_unobservable")
+        self.assertTrue(pd.isna(x.exit_fill_ts))
+        self.assertEqual((x.exit_fill_window_start, x.exit_fill_window_end),
+                         (b2["ts_utc"].iloc[3] - pd.Timedelta(390, unit="m"), b2["ts_utc"].iloc[3]))
+        # end-of-data mark at the close
+        r3 = E.run({"A": b2}, {"A": _sig(5, entries=[3], atr=1.0)}, G.ExitSpec(stop_atr=50, target_atr=None),
+                   G.RiskSpec(), E.EngineConfig(bar_minutes=390))
+        self.assertEqual((r3.trades[0].exit_reason, r3.trades[0].exit_fill_basis), ("eod", "bar_close"))
+        self.assertEqual(r3.trades[0].exit_fill_ts, b2["ts_utc"].iloc[4])
+        with self.assertRaises(ValueError):
+            bad = b.copy()
+            bad["bar_open_ts"] = bad["ts_utc"]
+            E.run({"A": bad}, {"A": sig}, G.ExitSpec(stop_atr=50), G.RiskSpec(), E.EngineConfig())
+
+    def test_every_candidate_gets_one_decision_record(self):
+        """Second review (PR #11): entered, capacity-blocked, risk-blocked, open-position, no-next-bar and
+        rule-rejected candidates are all recorded, with stable lane-A-format candidate ids."""
+        n = 8
+        bars = {s: _bars([FLAT] * n) for s in ("A", "B", "C", "D")}
+        sigs = {s: _sig(n, entries=[2, 4, n - 1], score=sc) for s, sc in zip("ABCD", (0.1, 0.9, 0.5, 0.7))}
+        sigs["A"]["setup"] = False
+        sigs["A"].loc[5, "setup"] = True
+        sigs["A"]["reject_reason"] = ""
+        sigs["A"].loc[5, "reject_reason"] = "volume_below_min"
+        res = E.run(bars, sigs, G.ExitSpec(stop_atr=5, target_atr=None), G.RiskSpec(0.01, 0.2),
+                    E.EngineConfig(max_positions=2), genome_id="GX")
+        cnt = res.decision_counts()
+        self.assertEqual(len(res.decisions), 4 * 3 + 1)
+        self.assertEqual(cnt["entered"], len(res.trades))
+        self.assertEqual(cnt["blocked_capacity"], res.skipped["max_positions"])
+        self.assertEqual(cnt["no_next_bar"], 4)
+        self.assertEqual(cnt["rejected_by_rule"], 1)
+        self.assertGreater(cnt["position_already_open"], 0)
+        ids = [d["candidate_id"] for d in res.decisions]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids[0], E.candidate_id(res.decisions[0]["symbol"], res.decisions[0]["decision_ts"], "long",
+                                                "GX"))
+        for t in res.trades:
+            d = [x for x in res.decisions if x["candidate_id"] == t.candidate_id]
+            self.assertEqual(len(d), 1)
+            self.assertEqual(d[0]["stage"], "entered")
+            self.assertIs(res.trades[d[0]["trade_index"]], t)
+            self.assertEqual(d[0]["decision_ts"], t.decision_ts)
+        self.assertTrue(all(d["trade_index"] == -1 for d in res.decisions if d["stage"] != "entered"))
 
     def test_stop_first_on_ties_and_gap_fills_at_open(self):
         rows = [FLAT] * 3 + [(100, 120, 80, 100), FLAT]
@@ -281,15 +368,29 @@ class D4_Search(unittest.TestCase):
         gs, bad = SR.grid("mean_reversion", axes)
         self.assertEqual((len(gs), bad), (5, 1))                  # rsi_entry=45 would need rsi_exit > 45
         L = Ledger()
-        df = SR.evaluate(gs, m.bars, ledger=L, family_id="d:test", data_digest=SR.data_digest(m.bars),
+        df = SR.evaluate(gs, m.bars, ledger=L, family_id="d:test", data_digest=SR.data_digest(m.bars), seed=4,
                          keep_equity=True)
         self.assertEqual(L.family_trial_count("d:test"), 5)
+        # Second review (PR #10): real code identity, the market seed and outcome artifacts on every trial.
+        from research.integrity.provenance import code_identity, outcome_digest
+        tr = {e.ref_id: e.payload for e in L.entries("trial")}
+        for _, row in df.iterrows():
+            p = tr[row["trial_id"]]
+            self.assertEqual(p["code_digest"], code_identity(SR.CODE_PATHS))
+            self.assertEqual(p["seed"], 4)
+            self.assertEqual(p["artifacts"]["family_series"], outcome_digest(row["_returns"]))
+        with self.assertRaises(ValueError):
+            SR.evaluate(gs[:1], m.bars, ledger=L, family_id="d:x", data_digest="x", seed=None)
+        # the as-of universe mask reaches the engine
+        none = {s: np.zeros(len(b), bool) for s, b in m.bars.items()}
+        d0 = SR.evaluate(gs[:1], m.bars, ledger=Ledger(), family_id="d:m", data_digest="x", seed=4, membership=none)
+        self.assertEqual(d0["n_trades"].iloc[0], 0.0)
         L.assert_ledgered(df["trial_id"])
         sel = SR.select(df, {k: v for k, v in axes.items()}, ledger=L, family_id="d:test")
         self.assertEqual(sel["n_trials_family"], 5)
         self.assertEqual(sel["dsr_best_isolated"]["n_trials"], 5.0)
         self.assertLessEqual(sel["best_isolated"]["plateau"], sel["best_isolated"]["sharpe_ann"] + 1e-12)
-        df2 = SR.evaluate(gs, m.bars, ledger=L, family_id="d:test", data_digest=SR.data_digest(m.bars),
+        df2 = SR.evaluate(gs, m.bars, ledger=L, family_id="d:test", data_digest=SR.data_digest(m.bars), seed=4,
                           keep_equity=True)
         sel2 = SR.select(df2, axes, ledger=L, family_id="d:test")
         self.assertEqual((sel2["n_trials_family"], sel2["dsr_best_isolated"]["n_trials"]), (10, 10.0))

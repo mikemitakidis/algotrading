@@ -140,6 +140,8 @@
   "prereg": {
     "digest": "86dd105c860294953402dd7a1bef2fad6573fafa24f024c61b4d3e48d599a8c4",
     "first_evaluation": {
+      "authority_independent": false,
+      "authority_model": "local_hmac_policy_model",
       "effective_n": 40,
       "passed": false,
       "prereg_digest": "86dd105c860294953402dd7a1bef2fad6573fafa24f024c61b4d3e48d599a8c4",
@@ -148,6 +150,8 @@
     },
     "second_evaluation": "refused: pre-registration 86dd105c8602 was already evaluated (one-shot)",
     "untrusted_attestation_evaluation": {
+      "authority_independent": false,
+      "authority_model": "",
       "effective_n": 40,
       "passed": false,
       "prereg_digest": "3ab044f9c76417c27e1a890eeafccd6c60fe23ed8343a0b78b99aece977f6ec5",
@@ -155,7 +159,7 @@
       "value": 0.99
     }
   },
-  "runtime_seconds": 62.1,
+  "runtime_seconds": 41.1,
   "snooping": {
     "null": {
       "mean_eff_trials_cluster": 3.6,

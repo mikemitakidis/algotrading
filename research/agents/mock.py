@@ -44,7 +44,11 @@ from research.genome import engine as E
 from research.genome import schema as G
 from research.integrity import prereg as PR
 from research.integrity.ledger import Hypothesis, Ledger, TrialRecord
+from research.integrity.provenance import code_identity, outcome_digest
 from research.integrity.report_card import GauntletConfig, evaluate as gauntlet
+
+CODE_PATHS = ("research/agents", "research/genome", "research/integrity", "research/common", "bot/backtesting")
+CODE_ID = code_identity(CODE_PATHS)
 
 FIXTURE_NOTE = "offline fixture; bibliographic details recorded from the published article, not re-verified online"
 FIXTURE_SOURCES = (
@@ -179,11 +183,13 @@ def run(seed: int = 3, n_symbols: int = 12, n_sessions: int = 600, n_markets: in
         diffs.append(mp["total_return"] - mn["total_return"])
         r_all += [t.r_multiple for t in rp.trades if np.isfinite(t.r_multiple)]
         gate.require("auditor", "ledger.trial", genome.genome_id)
-        for tag, m, mk in (("planted", mp, planted), ("null", mn, null)):
+        for tag, m, mk, rr in (("planted", mp, planted, rp), ("null", mn, null, rn)):
             trial_ids.append(L.record_trial(TrialRecord(
                 family_id="agents:mock", kind="research" if tag == "planted" else "control_null",
-                spec_digest=genome.genome_id, data_digest=mk.spec_digest, code_digest="research.genome", seed=sd,
+                spec_digest=genome.genome_id, data_digest=mk.spec_digest, code_digest=CODE_ID, seed=sd,
                 metrics={k: v for k, v in m.items() if np.isfinite(v)}, hypothesis_id=lh,
+                artifacts={"gross": outcome_digest([t.r_multiple for t in rr.trades]),
+                           "family_series": outcome_digest(rr.equity.pct_change().dropna().to_numpy())},
                 notes="mock auditor %s market %d" % (tag, i))))
     attempt(gate.require, "auditor", "holdout.open", "agents:mock")
     research_ids = [t for t in trial_ids if L.entries("trial", t)[0].payload["kind"] == "research"]
@@ -218,9 +224,11 @@ def run(seed: int = 3, n_symbols: int = 12, n_sessions: int = 600, n_markets: in
     ])
     decisions = [e.payload for e in L.entries("agent_decision")]
     out = MockRun(decisions, refusals, kb.summary(), evaluation, {"verdict": card.verdict, "reasons": list(card.reasons)},
-                  asdict(pre_out), report, len(L.entries()), L.verify().ok, {"lint": lint, "genome": spec})
+                  asdict(pre_out), report, len(L.entries()), L.verify().ok,
+                  {"lint": lint, "genome": spec,
+                   "trial_code_digests": sorted({e.payload["code_digest"] for e in L.entries("trial")})})
     L.close()
     return out
 
 
-__all__ = ["FIXTURE_SOURCES", "GENERATED_CODE", "MockRun", "run"]
+__all__ = ["CODE_PATHS", "CODE_ID", "FIXTURE_SOURCES", "GENERATED_CODE", "MockRun", "run"]

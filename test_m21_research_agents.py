@@ -90,9 +90,48 @@ class E2_Knowledge(unittest.TestCase):
         with self.assertRaises(R.PermissionDenied):
             kb.add_source("hypothesist", replace(s, title="z"))
         with self.assertRaises(K.KnowledgeError):
-            kb.verify_source(sid, operator="scout")
-        kb.verify_source(sid, operator="operator:mike")
-        self.assertEqual(len(L.entries("kb_source_verification")), 1)
+            kb.verify_source(sid, operator="scout", signature="")
+        with self.assertRaises(K.KnowledgeError):                 # mock library: nobody can verify
+            kb.verify_source(sid, operator="operator:mike", signature="x" * 64)
+        self.assertEqual(len(L.entries("kb_source_verification")), 0)
+        self.assertEqual(kb.verification_status(sid), s.verification)
+
+    def test_operator_verification_cannot_be_impersonated(self):
+        """Second review P2 (PR #9): an identity string is not authentication. Only the operator's signature over
+        this source's content verifies; forged, replayed, self-declared and directly appended claims fail."""
+        from research.integrity.authority import Authority
+        op = Authority("operator:mike", b"operator-key-held-outside-agents")
+        L = Ledger()
+        g = R.Gate(L)
+        kb = K.KnowledgeLibrary(L, g, operator_verifier=op.verifier())
+        s0, s1 = MK.FIXTURE_SOURCES[0], MK.FIXTURE_SOURCES[1]
+        sid, sid1 = kb.add_source("scout", s0), kb.add_source("scout", s1)
+        with self.assertRaises(K.KnowledgeError):                 # self-declared status
+            kb.add_source("scout", replace(s0, title="t2", verification="operator_verified"))
+        with self.assertRaises(K.KnowledgeError):                 # identity string only
+            kb.verify_source(sid, operator="operator:mike", signature="0" * 64)
+        with self.assertRaises(K.KnowledgeError):                 # another "operator:" identity
+            kb.verify_source(sid, operator="operator:agent", signature="0" * 64)
+        agent = Authority("operator:mike", b"agent-guessed-key-0000000000")
+        with self.assertRaises(K.KnowledgeError):                 # signed with a key the agent made up
+            kb.verify_source(sid, operator="operator:mike",
+                             signature=agent.sign(K.VERIFY_PURPOSE, K.verification_payload(kb.source(sid))))
+        good1 = op.sign(K.VERIFY_PURPOSE, K.verification_payload(kb.source(sid1)))
+        with self.assertRaises(K.KnowledgeError):                 # replay of a genuine signature for another source
+            kb.verify_source(sid, operator="operator:mike", signature=good1)
+        L.append("kb_source_verification", {"source_id": sid, "by": "operator:mike", "signature": "f" * 64},
+                 ref_id=sid)                                       # forged entry appended straight to the ledger
+        self.assertEqual(kb.verification_status(sid), s0.verification)
+        good = op.sign(K.VERIFY_PURPOSE, K.verification_payload(kb.source(sid)))
+        kb.verify_source(sid, operator="operator:mike", signature=good)
+        self.assertEqual(kb.verification_status(sid), "operator_verified")
+        self.assertEqual(kb.verification_status(sid1), s1.verification)
+        rec = L.entries("kb_source_verification", sid)[-1].payload
+        self.assertFalse(rec["independent"])
+        self.assertEqual(kb.summary()["operator_verified_sources"], 1)
+        # a different operator verifier (key rotation / another library) does not inherit the status
+        kb2 = K.KnowledgeLibrary(L, g, operator_verifier=Authority("operator:mike", b"x" * 32).verifier())
+        self.assertEqual(kb2.verification_status(sid), s0.verification)
 
     def test_proposals_must_be_falsifiable_sourced_and_point_in_time(self):
         L, g, kb = _lib()
@@ -195,7 +234,11 @@ class E3_MockWorkflow(unittest.TestCase):
     def test_governance_outcome(self):
         self.assertNotEqual(self.r.report_card["verdict"], "PASS")
         self.assertFalse(self.r.prereg_outcome["passed"])
-        self.assertIn("not independently verified", self.r.prereg_outcome["reason"])
+        # lane B second review: without an attestation verifier the outcome is a local diagnostic only
+        self.assertIn("local diagnostic only", self.r.prereg_outcome["reason"])
+        self.assertEqual(self.r.kb["operator_verified_sources"], 0)        # no operator verifier in the mock
+        from research.integrity.provenance import code_identity
+        self.assertEqual(self.r.extra["trial_code_digests"], [code_identity(MK.CODE_PATHS)])
         self.assertEqual(list(self.r.kb["status"].values()), ["rejected"])
         self.assertTrue(self.r.ledger_ok)
         self.assertEqual(self.r.evaluation["n_markets"], 3)
