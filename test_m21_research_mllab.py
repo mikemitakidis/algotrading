@@ -251,6 +251,16 @@ class C3_Harness(unittest.TestCase):
             self.assertAlmostEqual(r["logloss_gain_per_day"], float(daily.mean()), places=10)
         raw = [r["p_logloss"] for r in res.comparisons]
         np.testing.assert_allclose([r["holm_p_logloss"] for r in res.comparisons], MTT.adjust(raw, "holm"))
+        # A comparison with an intermediate p-value, so that Holm visibly changes it (raw p = 1.0 cannot).
+        ws = _event_ds(n_days=150, per_day=10, strength=0.35, seed=4)
+        ws.X[:, 4] = 0.0
+        r2 = EV.run(ws, {"prior": lambda: MD.make("prior"), "logistic": lambda: MD.make("logistic"),
+                         "a": lambda: _Noise(1), "b": lambda: _Noise(2)},
+                    EV.LabConfig(n_folds=4, min_trades=20, baseline="prior"))
+        raw2 = [r["p_logloss"] for r in r2.comparisons]
+        self.assertTrue(any(1e-12 < p < 0.3 for p in raw2), raw2)
+        np.testing.assert_allclose([r["holm_p_logloss"] for r in r2.comparisons], MTT.adjust(raw2, "holm"))
+        self.assertTrue(any(h > p for h, p in zip([r["holm_p_logloss"] for r in r2.comparisons], raw2)))
         raw_w = [r["p_logloss_worse"] for r in res.comparisons]
         np.testing.assert_allclose([r["holm_p_worse"] for r in res.comparisons], MTT.adjust(raw_w, "holm"))
 
