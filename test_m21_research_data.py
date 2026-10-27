@@ -19,6 +19,7 @@ from research.common.synthetic import MarketSpec, generate
 from research.dataqa import inventory as INV
 from research.dataqa import quality as Q
 from research.dataqa import snapshot as SN
+from bot.historical.quality import QF_BACKFILLED_GAP, QF_ZERO_VOLUME
 
 
 def _corrupt_market(seed=21):
@@ -94,6 +95,62 @@ class F1_QualityAudit(unittest.TestCase):
         self.assertGreaterEqual(qo.outliers, 1)
         self.assertEqual(qo.grade, "usable_with_warnings")
         self.assertEqual(Q.audit_symbol(base.drop(columns=["volume"]), "X").grade, "unusable")
+
+
+class F1b_FlagsAndKnowledgeTiming(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.base = generate(MarketSpec(n_symbols=1, n_sessions=300, seed=3)).bars["S000"]
+
+    def test_a_single_flagged_bar_is_never_graded_clean(self):
+        """Second review P1/P2: non-zero quality flags must affect the grade and admissibility."""
+        self.assertEqual(Q.audit_symbol(self.base, "X").grade, "clean")
+        for bit, kind, excluded in ((QF_ZERO_VOLUME, "zero_volume (warning bit)", 0),
+                                    (QF_BACKFILLED_GAP, "backfilled_gap (BLOCKING bit", 1),
+                                    (1 << 9, "unknown_bits (BLOCKING bit", 1)):
+            b = self.base.copy()
+            b.loc[100, "quality_flags"] = bit
+            q = Q.audit_symbol(b, "X")
+            self.assertEqual(q.grade, "usable_with_warnings", bit)
+            self.assertTrue(any(kind in r for r in q.reasons), (bit, q.reasons))
+            view, counts = Q.research_view(b)
+            self.assertEqual(counts["excluded"], excluded, bit)
+            self.assertEqual(len(view), len(b) - excluded)
+            if excluded:
+                self.assertNotIn(b["ts_utc"].iloc[100], set(view["ts_utc"]))
+
+    def test_research_view_excludes_hard_invalid_rows(self):
+        b = self.base.copy()
+        b.loc[10, "high"] = b.loc[10, "low"] - 1.0
+        b.loc[20, "close"] = np.nan
+        b.loc[30, "volume"] = -5
+        view, counts = Q.research_view(b)
+        self.assertEqual(counts["excluded"], 3)
+        self.assertTrue(Q.admissible_mask(view).all())
+
+    def test_point_in_time_audit_and_split_flags_ignore_the_future(self):
+        m = _corrupt_market(seed=21)
+        sy = m.symbols.set_index("symbol")
+        split_syms = [s for s in m.bars if pd.notna(sy.loc[s, "split_at"]) and pd.isna(sy.loc[s, "delisted_at"])]
+        self.assertTrue(split_syms)
+        hits = 0
+        for s in split_syms:
+            b = m.bars[s]
+            t_split = pd.Timestamp(sy.loc[s, "split_at"])
+            before = Q.audit_symbol_asof(b, s, t_split - pd.Timedelta(1, unit="D"))
+            self.assertEqual(before.suspected_splits, [], s)
+            self.assertTrue(before.knowledge.startswith("as_of:"))
+            flags = Q.causal_split_flags(b)
+            i = int(np.flatnonzero(pd.to_datetime(b["ts_utc"], utc=True) == t_split)[0])
+            hits += bool(flags[i])
+            fut = b.copy()
+            fut.loc[i + 1:, ["open", "high", "low", "close"]] *= 0.37            # rewrite the future
+            fut.loc[i + 1:, "volume"] *= 9.0
+            np.testing.assert_array_equal(Q.causal_split_flags(fut)[:i + 1], flags[:i + 1])
+        self.assertGreaterEqual(hits / len(split_syms), 0.75)          # causal recall is lower than retrospective
+        others = [s for s in m.bars if pd.isna(sy.loc[s, "split_at"])]
+        self.assertLessEqual(sum(int(Q.causal_split_flags(m.bars[s]).sum()) for s in others), 1)
+        self.assertEqual(Q.audit_panel(m.bars)["knowledge"], "retrospective_full_sample")
 
 
 class F2_Snapshots(unittest.TestCase):

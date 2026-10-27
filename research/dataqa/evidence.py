@@ -33,6 +33,7 @@ from research.dataqa import snapshot as SN
 
 def calibrate(seeds: Sequence[int] = (21, 22, 23, 24, 25), n_symbols: int = 40, n_sessions: int = 750) -> Dict:
     tp = fn = fp = 0
+    ctp = cfn = cfp = 0
     miss_exact = miss_sym = 0
     delist_ok = delist_n = 0
     clean_syms = clean_clean = 0
@@ -52,6 +53,12 @@ def calibrate(seeds: Sequence[int] = (21, 22, 23, 24, 25), n_symbols: int = 40, 
                 tp += int(pd.Timestamp(truth) in found)
                 fn += int(pd.Timestamp(truth) not in found)
             fp += len(found - ({pd.Timestamp(truth)} if has else set()))
+            cflags = Q.causal_split_flags(m.bars[s])
+            cts = set(pd.to_datetime(m.bars[s]["ts_utc"], utc=True)[cflags])
+            if has:
+                ctp += int(pd.Timestamp(truth) in cts)
+                cfn += int(pd.Timestamp(truth) not in cts)
+            cfp += len(cts - ({pd.Timestamp(truth)} if has else set()))
             tr = m.truth[s]
             obs = tr["observed"].to_numpy()
             idx = np.flatnonzero(obs)
@@ -69,6 +76,9 @@ def calibrate(seeds: Sequence[int] = (21, 22, 23, 24, 25), n_symbols: int = 40, 
             "splits": {"true_positive": tp, "false_negative": fn, "false_positive": fp,
                        "recall": tp / (tp + fn) if tp + fn else float("nan"),
                        "precision": tp / (tp + fp) if tp + fp else float("nan")},
+            "causal_splits": {"true_positive": ctp, "false_negative": cfn, "false_positive": cfp,
+                              "recall": ctp / (ctp + cfn) if ctp + cfn else float("nan"),
+                              "precision": ctp / (ctp + cfp) if ctp + cfp else float("nan")},
             "missing_bars": {"symbols_exact": miss_exact, "symbols": miss_sym},
             "delistings": {"symbols_correct": delist_ok, "symbols": delist_n},
             "clean_markets": {"symbols": clean_syms, "graded_clean": clean_clean}}
@@ -138,15 +148,27 @@ def render(j: Dict) -> str:
          "splits, 1 %% missing bars and delistings after a decline. The audit was scored against the truth. "
          "Paired clean markets measure its false alarms." % (len(c["seeds"]), c["n_symbols"], c["n_sessions"]),
          "", "| defect | result |", "|---|---|",
-         "| unadjusted splits | recall %s, precision %s (%d found, %d missed, %d false alarms) |" % (
+         "| unadjusted splits, RETROSPECTIVE audit (uses the following bars' volume) | recall %s, precision %s "
+         "(%d found, %d missed, %d false alarms) |" % (
              _pct(c["splits"]["recall"]), _pct(c["splits"]["precision"]), c["splits"]["true_positive"],
              c["splits"]["false_negative"], c["splits"]["false_positive"]),
+         "| unadjusted splits, POINT-IN-TIME flags (bar i uses bars <= i only) | recall %s, precision %s "
+         "(%d found, %d missed, %d false alarms) |" % (
+             _pct(c["causal_splits"]["recall"]), _pct(c["causal_splits"]["precision"]),
+             c["causal_splits"]["true_positive"], c["causal_splits"]["false_negative"],
+             c["causal_splits"]["false_positive"]),
          "| missing bars (count per symbol exact) | %d / %d symbols |" % (c["missing_bars"]["symbols_exact"],
                                                                        c["missing_bars"]["symbols"]),
          "| delistings flagged as ended early | %d / %d symbols correct |" % (c["delistings"]["symbols_correct"],
                                                                            c["delistings"]["symbols"]),
          "| clean markets graded clean | %d / %d symbols |" % (c["clean_markets"]["graded_clean"],
                                                               c["clean_markets"]["symbols"]), "",
+         "**Knowledge timing.** The retrospective audit sees the whole sample. It may describe a dataset, "
+         "but it must never select a historical universe, because that would be look-ahead. Point-in-time "
+         "eligibility uses `causal_split_flags` or `audit_symbol_asof`, at the lower recall shown.", "",
+         "**Provider quality flags.** Warning bits (zero volume, outlier warned, duplicate kept) grade a symbol "
+         "`usable_with_warnings`, reported per bit. Blocking bits (backfilled gap, and any unknown bit, which "
+         "fails closed) also remove the row from `research_view`, the only bar view the other lanes consume.", "",
          "Limits: synthetic splits are exact ratios (2, 3, 4) with clean volume inversion. Real feeds mix "
          "splits with news gaps, reverse splits and partial adjustments, so expect lower precision on real "
          "data. A detected split is a flag for review, never an automatic adjustment.", "",

@@ -1,5 +1,12 @@
 {
  "calibration": {
+  "causal_splits": {
+   "false_negative": 8,
+   "false_positive": 1,
+   "precision": 0.9824561403508771,
+   "recall": 0.875,
+   "true_positive": 56
+  },
   "clean_markets": {
    "graded_clean": 191,
    "symbols": 200
@@ -75,8 +82,8 @@
    "symbols": 10
   }
  },
- "report_digest": "4a7270fa2fec6a78119379457f054ce776ab5851f7bfb53047e28f7063c80847",
- "runtime_seconds": 17.1,
+ "report_digest": "65fd913edff200f1bf5c77b0abaf57f410701e9b99b5cc43c1d376b61048c7e4",
+ "runtime_seconds": 12.6,
  "snapshot": {
   "clean_verify": [],
   "example_entry": {
