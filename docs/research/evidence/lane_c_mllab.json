@@ -1,0 +1,5085 @@
+{
+ "battery": {
+  "null_any_claim_upper95": 0.04950760988822693,
+  "null_runs_with_any_claim_vs_baseline": 0,
+  "null_runs_with_any_claim_vs_prior": 1,
+  "null_runs_with_decisions_only": 0,
+  "null_vs_prior_upper95": 0.0778979215188183,
+  "plan": {
+   "alpha": 0.05,
+   "base_seed": 7,
+   "effect_sizes": [
+    1.0,
+    1.5,
+    2.0
+   ],
+   "false_pass_target": 0.05,
+   "min_power": 0.8,
+   "n_nulls": 59,
+   "n_per_effect": 20,
+   "name": "mllab:interaction:challenger-beats-logistic",
+   "pipeline_id": "research.mllab.evaluate.run models=prior,logistic,hgb,xgb size=40x1500 claim=PROBABILITIES_ONLY|IMPROVES",
+   "required_effects": [
+    1.5
+   ]
+  },
+  "plan_digest": "ab76ad0e5e870c897cdc7e6aec4e79cfcfe23e8136c7c0634010479fcf049948",
+  "result": {
+   "false_pass_rate": 0.0,
+   "false_pass_upper": 0.04950760988822693,
+   "n_nulls": 59,
+   "notes": "",
+   "null_calibrated": true,
+   "null_passes": 0,
+   "plan_digest": "ab76ad0e5e870c897cdc7e6aec4e79cfcfe23e8136c7c0634010479fcf049948",
+   "power": [
+    {
+     "detections": 14,
+     "effect": 1.0,
+     "hi": 0.8810684095942722,
+     "lo": 0.45721081772371086,
+     "n": 20,
+     "rate": 0.7
+    },
+    {
+     "detections": 20,
+     "effect": 1.5,
+     "hi": 1.0,
+     "lo": 0.8315665290169146,
+     "n": 20,
+     "rate": 1.0
+    },
+    {
+     "detections": 20,
+     "effect": 2.0,
+     "hi": 1.0,
+     "lo": 0.8315665290169146,
+     "n": 20,
+     "rate": 1.0
+    }
+   ],
+   "power_ok": true,
+   "power_rule": "cp_lower_bound_at_every_required_effect",
+   "verdict": "CALIBRATED"
+  }
+ },
+ "benchmarks": {
+  "_asof": {
+   "clean": {
+    "cells_checked": 5200228.0,
+    "probes": 3.0,
+    "violations": 0.0
+   },
+   "leaky_control": {
+    "cells_checked": 5329748.0,
+    "probes": 3.0,
+    "violations": 120.0
+   }
+  },
+  "interaction": {
+   "expected": "at least one non-linear challenger beats logistic on probabilities",
+   "leakage": {
+    "clean": true,
+    "folds": [
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 0,
+      "overlapping_pairs": 0,
+      "purged": 15,
+      "shared_indices": 0,
+      "test": 1362,
+      "train": 2709,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 1,
+      "overlapping_pairs": 0,
+      "purged": 28,
+      "shared_indices": 0,
+      "test": 1362,
+      "train": 4058,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 2,
+      "overlapping_pairs": 0,
+      "purged": 23,
+      "shared_indices": 0,
+      "test": 1362,
+      "train": 5425,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 3,
+      "overlapping_pairs": 0,
+      "purged": 31,
+      "shared_indices": 0,
+      "test": 1362,
+      "train": 6779,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 4,
+      "overlapping_pairs": 0,
+      "purged": 15,
+      "shared_indices": 0,
+      "test": 1361,
+      "train": 8157,
+      "train_resolves_before_test": true
+     }
+    ]
+   },
+   "matched": true,
+   "model_cards": [
+    {
+     "dataset_digest": "a4760d9bcf14c0381934dceea0f2f2531f85ebd531410ae86868e1485b844a9a",
+     "digest": "dc8e7e7a4c138e82342b0f15f8fbc0bc7ceafb75d916542c223df2ead0b111e4",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L."
+     ],
+     "markdown": "#### Model card: `logistic` (baseline, scenario `interaction`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `a4760d9bcf14`, 9533 labelled rows (6809 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000024-b68f3c28`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.596 \u00b7 log loss 0.6478 \u00b7 Brier 0.2275 \u00b7 ECE 0.030 \u00b7 trades 762 \u00b7 mean net R/trade 0.089 \u00b7 conformal coverage 0.84\n- **vs `prior`:** PROBABILITIES_ONLY (Holm p: probabilities 0.015, decisions 0.259; daily net-R diff +0.070 [-0.013, +0.150])\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `dc8e7e7a4c138e82`",
+     "metrics": {
+      "auc": 0.5963017265786084,
+      "brier": 0.22749480894119753,
+      "conformal_coverage": 0.8382595924362034,
+      "conformal_mean_net_r": 0.0198564732551515,
+      "conformal_singleton_share": 0.4286763355975767,
+      "conformal_trades": 1026.0,
+      "coverage": 0.11191070641797621,
+      "ece": 0.03004705465646134,
+      "fit_seconds": 1.1124567985534668,
+      "log_loss": 0.6477752403241832,
+      "mean_net_r_per_trade": 0.08895947096742604,
+      "n_trades": 762.0,
+      "total_net_r": 67.78711687717865,
+      "win_rate_taken": 0.5393700787401575
+     },
+     "model": "logistic",
+     "n_features": 75,
+     "n_oof_rows": 6809,
+     "n_rows": 9533,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": null,
+     "role": "baseline",
+     "sampler": "drop_1.00",
+     "scenario": "interaction",
+     "trial_id": "T000024-b68f3c28",
+     "versus": [
+      {
+       "daily_r_diff": 0.0698116548683611,
+       "daily_r_diff_hi": 0.15002559360068818,
+       "daily_r_diff_lo": -0.012662323688978155,
+       "holm_p_decision": 0.25891745392946164,
+       "holm_p_logloss": 0.014903025032190195,
+       "verdict": "PROBABILITIES_ONLY",
+       "vs": "prior"
+      }
+     ]
+    },
+    {
+     "dataset_digest": "a4760d9bcf14c0381934dceea0f2f2531f85ebd531410ae86868e1485b844a9a",
+     "digest": "dd6663f03f34c8962c1c61768b7b37199995f4ad84065d185ce825180ab57a61",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.",
+      "Integrity report card verdict INCONCLUSIVE."
+     ],
+     "markdown": "#### Model card: `rf` (challenger, scenario `interaction`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** candidate for pre-registered forward testing\n- **Data:** dataset `a4760d9bcf14`, 9533 labelled rows (6809 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000028-ff45d5be`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.651 \u00b7 log loss 0.6273 \u00b7 Brier 0.2180 \u00b7 ECE 0.023 \u00b7 trades 1075 \u00b7 mean net R/trade 0.244 \u00b7 conformal coverage 0.78\n- **vs `logistic`:** IMPROVES (Holm p: probabilities 0.000, decisions 0.000; daily net-R diff +0.200 [+0.139, +0.270])\n- **vs `prior`:** IMPROVES (Holm p: probabilities 0.000, decisions 0.000; daily net-R diff +0.270 [+0.171, +0.372])\n- **Integrity report card:** INCONCLUSIVE (pipeline canary battery missing or not CALIBRATED)\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L. Integrity report card verdict INCONCLUSIVE.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `dd6663f03f34c896`",
+     "metrics": {
+      "auc": 0.650969829343239,
+      "brier": 0.21801626161106682,
+      "conformal_coverage": 0.7820818799339085,
+      "conformal_mean_net_r": 0.07053860731480162,
+      "conformal_singleton_share": 0.6207086469616303,
+      "conformal_trades": 1601.0,
+      "coverage": 0.15787927742693494,
+      "ece": 0.02269248856239939,
+      "fit_seconds": 16.5852153301239,
+      "log_loss": 0.6272693108138384,
+      "mean_net_r_per_trade": 0.24359366753451653,
+      "n_trades": 1075.0,
+      "total_net_r": 261.86319259960527,
+      "win_rate_taken": 0.5962790697674418
+     },
+     "model": "rf",
+     "n_features": 75,
+     "n_oof_rows": 6809,
+     "n_rows": 9533,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "candidate for pre-registered forward testing",
+     "report_card": {
+      "reasons": [
+       "pipeline canary battery missing or not CALIBRATED"
+      ],
+      "verdict": "INCONCLUSIVE"
+     },
+     "role": "challenger",
+     "sampler": "drop_1.00",
+     "scenario": "interaction",
+     "trial_id": "T000028-ff45d5be",
+     "versus": [
+      {
+       "daily_r_diff": 0.1998723745854033,
+       "daily_r_diff_hi": 0.26984366675482285,
+       "daily_r_diff_lo": 0.13918679459386638,
+       "holm_p_decision": 8.934488906734325e-09,
+       "holm_p_logloss": 3.6641163332699338e-06,
+       "verdict": "IMPROVES",
+       "vs": "logistic"
+      },
+      {
+       "daily_r_diff": 0.2696840294537644,
+       "daily_r_diff_hi": 0.3724080923891967,
+       "daily_r_diff_lo": 0.17102945969515493,
+       "holm_p_decision": 4.377027813408751e-07,
+       "holm_p_logloss": 6.405999434034576e-09,
+       "verdict": "IMPROVES",
+       "vs": "prior"
+      }
+     ]
+    }
+   ],
+   "observed": "challengers better than logistic: ['hgb', 'xgb', 'rf', 'mean_ens', 'stack', 'bag_hgb']",
+   "run": {
+    "best_challenger": "rf",
+    "comparisons": [
+     {
+      "daily_r_diff": 0.03562279556200164,
+      "daily_r_diff_hi": 0.14299928192110806,
+      "daily_r_diff_lo": -0.06461285118822725,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.036473406891228036,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.07320845385376505,
+      "model": "hgb",
+      "p_decision": 0.26044574480055616,
+      "p_logloss": 0.009118351722807009,
+      "p_logloss_worse": 0.9908816482771929,
+      "skill_gate": "",
+      "t_decision": 0.6419718055254086,
+      "t_logloss": 2.360776790533983,
+      "verdict": "PROBABILITIES_ONLY",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.07025206171924168,
+      "daily_r_diff_hi": 0.17430512205576112,
+      "daily_r_diff_lo": -0.036359620962205456,
+      "holm_p_decision": 0.625893928572069,
+      "holm_p_logloss": 0.009113293979045938,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.08927614567493729,
+      "model": "xgb",
+      "p_decision": 0.07823674107150863,
+      "p_logloss": 0.0018226587958091874,
+      "p_logloss_worse": 0.9981773412041908,
+      "skill_gate": "",
+      "t_decision": 1.4170323068469894,
+      "t_logloss": 2.9073271343557425,
+      "verdict": "PROBABILITIES_ONLY",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.026886957560952694,
+      "daily_r_diff_hi": 0.12587696452029343,
+      "daily_r_diff_lo": -0.07720011082777764,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.09835666773819778,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.05849591909297049,
+      "model": "lgbm",
+      "p_decision": 0.30146097310976605,
+      "p_logloss": 0.03278555591273259,
+      "p_logloss_worse": 0.9672144440872674,
+      "skill_gate": "",
+      "t_decision": 0.5202032129146733,
+      "t_logloss": 1.8413443538259338,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.1998723745854033,
+      "daily_r_diff_hi": 0.26984366675482285,
+      "daily_r_diff_lo": 0.13918679459386638,
+      "holm_p_decision": 8.934488906734325e-09,
+      "holm_p_logloss": 3.6641163332699338e-06,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.14379492691651755,
+      "model": "rf",
+      "p_decision": 9.927209896371472e-10,
+      "p_logloss": 4.0712403702999263e-07,
+      "p_logloss_worse": 0.999999592875963,
+      "skill_gate": "",
+      "t_decision": 5.998993587205064,
+      "t_logloss": 4.931921100947046,
+      "verdict": "IMPROVES",
+      "verdict_raw": "IMPROVES",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.11439518538893255,
+      "daily_r_diff_hi": -0.006682254302360715,
+      "daily_r_diff_lo": -0.2561838380354414,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": -0.013538264446302064,
+      "model": "mlp",
+      "p_decision": 0.9776723597951551,
+      "p_logloss": 0.7066730767273608,
+      "p_logloss_worse": 0.29332692327263915,
+      "skill_gate": "",
+      "t_decision": -2.0078871930459004,
+      "t_logloss": -0.5436914071170444,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.045609327394954366,
+      "daily_r_diff_hi": 0.12467200855093767,
+      "daily_r_diff_lo": -0.030876660874521553,
+      "holm_p_decision": 0.6883585817141059,
+      "holm_p_logloss": 5.954436247594866e-05,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.11015156188428643,
+      "model": "mean_ens",
+      "p_decision": 0.11154472866167914,
+      "p_logloss": 7.443045309493583e-06,
+      "p_logloss_worse": 0.9999925569546905,
+      "skill_gate": "",
+      "t_decision": 1.2183540534307804,
+      "t_logloss": 4.330367190090318,
+      "verdict": "PROBABILITIES_ONLY",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.06767842252685724,
+      "daily_r_diff_hi": 0.16084507497567632,
+      "daily_r_diff_lo": -0.03394383432407348,
+      "holm_p_decision": 0.6883585817141059,
+      "holm_p_logloss": 0.004854322342987149,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.0804701000892416,
+      "model": "stack",
+      "p_decision": 0.09833694024487227,
+      "p_logloss": 0.0006934746204267356,
+      "p_logloss_worse": 0.9993065253795733,
+      "skill_gate": "",
+      "t_decision": 1.291085935400151,
+      "t_logloss": 3.197353330301426,
+      "verdict": "PROBABILITIES_ONLY",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.007903210508710656,
+      "daily_r_diff_hi": 0.09443792909212144,
+      "daily_r_diff_lo": -0.07058722949435822,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.8602125118524,
+      "logloss_gain_per_day": -0.06678241395958237,
+      "model": "regime_hgb",
+      "p_decision": 0.4287176878439094,
+      "p_logloss": 0.9044208320164,
+      "p_logloss_worse": 0.0955791679836,
+      "skill_gate": "",
+      "t_decision": 0.1796397762480991,
+      "t_logloss": -1.3071601217552138,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.019392016956249623,
+      "daily_r_diff_hi": 0.11368731527247943,
+      "daily_r_diff_lo": -0.06998520113497206,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.00529131136960731,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.09243149320792633,
+      "model": "bag_hgb",
+      "p_decision": 0.3504948919791833,
+      "p_logloss": 0.000881885228267885,
+      "p_logloss_worse": 0.9991181147717321,
+      "skill_gate": "",
+      "t_decision": 0.3839847047779498,
+      "t_logloss": 3.127371261746817,
+      "verdict": "PROBABILITIES_ONLY",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic"
+     }
+    ],
+    "dataset_digest": "a4760d9bcf14c0381934dceea0f2f2531f85ebd531410ae86868e1485b844a9a",
+    "fold_sizes": [
+     {
+      "embargoed": 0,
+      "purged": 15,
+      "test": 1362,
+      "train": 2709
+     },
+     {
+      "embargoed": 0,
+      "purged": 28,
+      "test": 1362,
+      "train": 4058
+     },
+     {
+      "embargoed": 0,
+      "purged": 23,
+      "test": 1362,
+      "train": 5425
+     },
+     {
+      "embargoed": 0,
+      "purged": 31,
+      "test": 1362,
+      "train": 6779
+     },
+     {
+      "embargoed": 0,
+      "purged": 15,
+      "test": 1361,
+      "train": 8157
+     }
+    ],
+    "market_digest": "283979b7dca6ca5edf58cb6bfa85b8331a3599a5e50ee1baf78689044ec8b6f8",
+    "metrics": {
+     "bag_hgb": {
+      "auc": 0.6376672863900011,
+      "brier": 0.2210800900662542,
+      "conformal_coverage": 0.7312281990086286,
+      "conformal_mean_net_r": 0.05007220493944724,
+      "conformal_singleton_share": 0.747016706443914,
+      "conformal_trades": 1702.0,
+      "coverage": 0.21515641063298577,
+      "ece": 0.02925300034473523,
+      "fit_seconds": 16.80511236190796,
+      "log_loss": 0.6345940125513977,
+      "mean_net_r_per_trade": 0.05912407190559527,
+      "n_trades": 1465.0,
+      "total_net_r": 86.61676534169708,
+      "win_rate_taken": 0.5071672354948805
+     },
+     "hgb": {
+      "auc": 0.6337971963108611,
+      "brier": 0.22191795072841722,
+      "conformal_coverage": 0.7147053423903066,
+      "conformal_mean_net_r": 0.021105021168394807,
+      "conformal_singleton_share": 0.7646410868367909,
+      "conformal_trades": 1903.0,
+      "coverage": 0.269496254956675,
+      "ece": 0.020948265262237312,
+      "fit_seconds": 3.969226360321045,
+      "log_loss": 0.6373353212917254,
+      "mean_net_r_per_trade": 0.05579119965552168,
+      "n_trades": 1835.0,
+      "total_net_r": 102.37685136788228,
+      "win_rate_taken": 0.5095367847411444
+     },
+     "lgbm": {
+      "auc": 0.6265105061448588,
+      "brier": 0.22330153098022296,
+      "conformal_coverage": 0.7187442628970075,
+      "conformal_mean_net_r": 0.05357657507269038,
+      "conformal_singleton_share": 0.7883238479897191,
+      "conformal_trades": 1614.0,
+      "coverage": 0.19371420179174623,
+      "ece": 0.02695215141957534,
+      "fit_seconds": 2.3523716926574707,
+      "log_loss": 0.6394334078320002,
+      "mean_net_r_per_trade": 0.07118601415380119,
+      "n_trades": 1319.0,
+      "total_net_r": 93.89435266886376,
+      "win_rate_taken": 0.5155420773313116
+     },
+     "logistic": {
+      "auc": 0.5963017265786084,
+      "brier": 0.22749480894119753,
+      "conformal_coverage": 0.8382595924362034,
+      "conformal_mean_net_r": 0.0198564732551515,
+      "conformal_singleton_share": 0.4286763355975767,
+      "conformal_trades": 1026.0,
+      "coverage": 0.11191070641797621,
+      "ece": 0.03004705465646134,
+      "fit_seconds": 1.1124567985534668,
+      "log_loss": 0.6477752403241832,
+      "mean_net_r_per_trade": 0.08895947096742604,
+      "n_trades": 762.0,
+      "total_net_r": 67.78711687717865,
+      "win_rate_taken": 0.5393700787401575
+     },
+     "mean_ens": {
+      "auc": 0.636262532814332,
+      "brier": 0.22072340384108133,
+      "conformal_coverage": 0.7875894988066826,
+      "conformal_mean_net_r": 0.10241760538018166,
+      "conformal_singleton_share": 0.6374150908757114,
+      "conformal_trades": 1203.0,
+      "coverage": 0.1581730063151711,
+      "ece": 0.01826948818355639,
+      "fit_seconds": 5.362907886505127,
+      "log_loss": 0.6320670355085507,
+      "mean_net_r_per_trade": 0.10406107128846737,
+      "n_trades": 1077.0,
+      "total_net_r": 112.07377377767935,
+      "win_rate_taken": 0.5366759517177344
+     },
+     "mlp": {
+      "auc": 0.5928054067494875,
+      "brier": 0.2281730740570152,
+      "conformal_coverage": 0.817147053423903,
+      "conformal_mean_net_r": 0.008585065517817155,
+      "conformal_singleton_share": 0.5235909675050486,
+      "conformal_trades": 861.0,
+      "coverage": 0.1882802173593773,
+      "ece": 0.026081048856894298,
+      "fit_seconds": 2.6765477657318115,
+      "log_loss": 0.6497058696056283,
+      "mean_net_r_per_trade": -0.03376802506667302,
+      "n_trades": 1282.0,
+      "total_net_r": -43.29060813547481,
+      "win_rate_taken": 0.4656786271450858
+     },
+     "prior": {
+      "auc": 0.5047012876707049,
+      "brier": 0.23288026603788653,
+      "conformal_coverage": 0.5687534422617955,
+      "conformal_mean_net_r": -0.23367473552427528,
+      "conformal_singleton_share": 1.0,
+      "conformal_trades": 1362.0,
+      "coverage": 0.0,
+      "ece": 0.008287042727256222,
+      "fit_seconds": 0.004151582717895508,
+      "log_loss": 0.6585109424207899,
+      "mean_net_r_per_trade": 0.0,
+      "n_trades": 0.0,
+      "total_net_r": 0.0,
+      "win_rate_taken": null
+     },
+     "regime_hgb": {
+      "auc": 0.6118265557810293,
+      "brier": 0.22901055211993146,
+      "conformal_coverage": 0.8784652102074536,
+      "conformal_mean_net_r": 0.08415961819005564,
+      "conformal_singleton_share": 0.37066275013769046,
+      "conformal_trades": 847.0,
+      "coverage": 0.10118960199735644,
+      "ece": 0.05543333569586038,
+      "fit_seconds": 9.30818486213684,
+      "log_loss": 0.6572987715262326,
+      "mean_net_r_per_trade": 0.10952269126434935,
+      "n_trades": 689.0,
+      "total_net_r": 75.46113428113671,
+      "win_rate_taken": 0.5399129172714079
+     },
+     "rf": {
+      "auc": 0.650969829343239,
+      "brier": 0.21801626161106682,
+      "conformal_coverage": 0.7820818799339085,
+      "conformal_mean_net_r": 0.07053860731480162,
+      "conformal_singleton_share": 0.6207086469616303,
+      "conformal_trades": 1601.0,
+      "coverage": 0.15787927742693494,
+      "ece": 0.02269248856239939,
+      "fit_seconds": 16.5852153301239,
+      "log_loss": 0.6272693108138384,
+      "mean_net_r_per_trade": 0.24359366753451653,
+      "n_trades": 1075.0,
+      "total_net_r": 261.86319259960527,
+      "win_rate_taken": 0.5962790697674418
+     },
+     "stack": {
+      "auc": 0.6281860103849671,
+      "brier": 0.22255693105137703,
+      "conformal_coverage": 0.7398568019093079,
+      "conformal_mean_net_r": 0.05677065237579625,
+      "conformal_singleton_share": 0.706994675968423,
+      "conformal_trades": 1608.0,
+      "coverage": 0.20516962843295639,
+      "ece": 0.023887731226129305,
+      "fit_seconds": 20.00357675552368,
+      "log_loss": 0.6362997715054649,
+      "mean_net_r_per_trade": 0.0955639693276715,
+      "n_trades": 1397.0,
+      "total_net_r": 133.5028651507571,
+      "win_rate_taken": 0.5261274158911954
+     },
+     "xgb": {
+      "auc": 0.6373346498594042,
+      "brier": 0.22154724718666177,
+      "conformal_coverage": 0.7804295942720764,
+      "conformal_mean_net_r": 0.1175232143541665,
+      "conformal_singleton_share": 0.6546722966770699,
+      "conformal_trades": 1340.0,
+      "coverage": 0.16404758407989425,
+      "ece": 0.02598522025924944,
+      "fit_seconds": 1.8168094158172607,
+      "log_loss": 0.6350439820703481,
+      "mean_net_r_per_trade": 0.12175637314822055,
+      "n_trades": 1117.0,
+      "total_net_r": 136.00186880656236,
+      "win_rate_taken": 0.540734109221128
+     }
+    },
+    "n_features": 75,
+    "n_rows": 9533,
+    "n_trials_charged": 11,
+    "oof_rows": 6809,
+    "pairs": [],
+    "report_card": {
+     "candidate_id": "interaction:rf",
+     "config": {
+      "ci_level": 0.95,
+      "cost_multipliers": [
+       1.0,
+       2.0
+      ],
+      "dsr_min": 0.95,
+      "hac_lags": 5,
+      "min_effective_n": 30,
+      "n_boot": 300,
+      "pbo_blocks": 10,
+      "pbo_max": 0.25,
+      "require_canary": true,
+      "snooping_alpha": 0.05
+     },
+     "disclaimer": "PASS means the candidate survived this offline gauntlet on this data. It is not a validated, realised or tradable edge, and synthetic results never describe markets.",
+     "family_id": "mllab:interaction",
+     "inputs": {
+      "canary_plan_digest": null,
+      "family_matrix_digest": "d15d3ccbba6faeefa05d2bb8961e3a0ed555c41f7b858ae7c87dbeb15ed72d3c",
+      "gross_digest": "eea42935dd8990d3ef41cff7d5c11d97666f69ac9dd4fe857cf9e4eb1c6051b9"
+     },
+     "numbers": {
+      "ci_hi_net_1x": 0.2933643376671408,
+      "ci_hi_net_2x": 0.24723365306459782,
+      "ci_lo_net_1x": 0.1845993932676304,
+      "ci_lo_net_2x": 0.12912401990117417,
+      "cost_per_obs": 0.05,
+      "dsr": 0.9999999996121759,
+      "effective_n": 745.8200423931809,
+      "expected_shortfall_95": -1.3276123198857988,
+      "kurtosis": 1.5468137586628627,
+      "max_drawdown": 22.14433369115023,
+      "mean_gross": 0.29359366753451654,
+      "mean_net_1x": 0.24359366753451653,
+      "mean_net_2x": 0.19359366753451648,
+      "n_obs": 1075.0,
+      "n_trials": 11.0,
+      "p_hac_net_1x": 3.3898946985242614e-12,
+      "p_hac_net_2x": 2.4668585165282013e-08,
+      "payoff_ratio_diagnostic": 0.917081410319386,
+      "pbo": 0.07539682539682539,
+      "provenance_verified": 1.0,
+      "psr_vs_0": 0.9999999999999906,
+      "reality_check_p": 0.0,
+      "skew": -0.5870372730651762,
+      "spa_p": 0.0,
+      "sr0_expected_max": 0.049499675278167524,
+      "sr_net_per_obs": 0.25127408398458156,
+      "t_hac_net_1x": 6.862221361737523,
+      "t_hac_net_2x": 5.453682824756637,
+      "win_rate_diagnostic": 0.6455813953488372
+     },
+     "reasons": [
+      "pipeline canary battery missing or not CALIBRATED"
+     ],
+     "verdict": "INCONCLUSIVE"
+    },
+    "runtime_seconds": 83.8,
+    "scenario": "interaction",
+    "take_all_mean_net_r": -0.22384612404321172,
+    "thresholds": {
+     "bag_hgb": [
+      0.48320577067282616,
+      0.5,
+      0.4645669291338583,
+      0.5813953488372093,
+      0.47863247863247865
+     ],
+     "hgb": [
+      0.48320577067282616,
+      0.44285714285714284,
+      0.44285714285714284,
+      0.44285714285714284,
+      0.45041322314049587
+     ],
+     "lgbm": [
+      0.48320577067282616,
+      0.4407894736842105,
+      0.4407894736842105,
+      0.5737704918032787,
+      0.4410480349344978
+     ],
+     "logistic": [
+      0.48320577067282616,
+      0.5293483355680817,
+      0.5426752611898661,
+      0.5609661366612007,
+      0.5518207604871921
+     ],
+     "mean_ens": [
+      0.48320577067282616,
+      0.5180695124707889,
+      0.47274841973216536,
+      0.5658369575810229,
+      0.47274841973216536
+     ],
+     "mlp": [
+      0.48320577067282616,
+      0.4835164835164836,
+      0.5151515151515151,
+      0.5555555555555556,
+      0.5555555555555556
+     ],
+     "prior": [
+      0.48320577067282616,
+      null,
+      null,
+      null,
+      null
+     ],
+     "regime_hgb": [
+      0.48320577067282616,
+      0.627906976744186,
+      0.627906976744186,
+      0.627906976744186,
+      0.5952380952380952
+     ],
+     "rf": [
+      0.48320577067282616,
+      0.5161290322580645,
+      0.5584458653181082,
+      0.5172413793103449,
+      0.5161290322580645
+     ],
+     "stack": [
+      0.48320577067282616,
+      0.4561753858412521,
+      0.4234222370283515,
+      0.43544319209629095,
+      0.4267266838242406
+     ],
+     "xgb": [
+      0.48320577067282616,
+      0.7013515007801544,
+      0.4669811725616455,
+      0.47999995946884155,
+      0.47999998927116394
+     ]
+    },
+    "trial_ids": {
+     "bag_hgb": "T000033-d8b737fd",
+     "hgb": "T000025-04d1c793",
+     "lgbm": "T000027-2ee705e5",
+     "logistic": "T000024-b68f3c28",
+     "mean_ens": "T000030-e248d618",
+     "mlp": "T000029-892425d0",
+     "prior": "T000023-0b6a8c51",
+     "regime_hgb": "T000032-35047ef8",
+     "rf": "T000028-ff45d5be",
+     "stack": "T000031-a9653d47",
+     "xgb": "T000026-cf22beb6"
+    },
+    "vs_prior": [
+     {
+      "daily_r_diff": 0.0698116548683611,
+      "daily_r_diff_hi": 0.15002559360068818,
+      "daily_r_diff_lo": -0.012662323688978155,
+      "holm_p_decision": 0.25891745392946164,
+      "holm_p_logloss": 0.014903025032190195,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.0752825907062768,
+      "model": "logistic",
+      "p_decision": 0.04791624624512477,
+      "p_logloss": 0.004967675010730065,
+      "p_logloss_worse": 0.99503232498927,
+      "t_decision": 1.665402442322492,
+      "t_logloss": 2.578071282805293,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.10543445043036276,
+      "daily_r_diff_hi": 0.23546959583983706,
+      "daily_r_diff_lo": -0.023375585468498092,
+      "holm_p_decision": 0.25891745392946164,
+      "holm_p_logloss": 0.0002903708284884622,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.14849104456004186,
+      "model": "hgb",
+      "p_decision": 0.06562849220492795,
+      "p_logloss": 5.8074165697692444e-05,
+      "p_logloss_worse": 0.9999419258343023,
+      "t_decision": 1.509163581724838,
+      "t_logloss": 3.8541163994621503,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.14006371658760275,
+      "daily_r_diff_hi": 0.23833589655421594,
+      "daily_r_diff_lo": 0.046516685235876,
+      "holm_p_decision": 0.017515670704927218,
+      "holm_p_logloss": 7.863717976644388e-06,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.1645587363812141,
+      "model": "xgb",
+      "p_decision": 0.001946185633880802,
+      "p_logloss": 1.1233882823777697e-06,
+      "p_logloss_worse": 0.9999988766117176,
+      "t_decision": 2.886755052836112,
+      "t_logloss": 4.729857344909812,
+      "verdict": "IMPROVES",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.0966986124293138,
+      "daily_r_diff_hi": 0.21431017809271327,
+      "daily_r_diff_lo": -0.016999042725142476,
+      "holm_p_decision": 0.25891745392946164,
+      "holm_p_logloss": 0.0003230714567148415,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.1337785097992473,
+      "model": "lgbm",
+      "p_decision": 0.05968201530924432,
+      "p_logloss": 8.076786417871037e-05,
+      "p_logloss_worse": 0.9999192321358212,
+      "t_decision": 1.5574485344420794,
+      "t_logloss": 3.77263003543628,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.2696840294537644,
+      "daily_r_diff_hi": 0.3724080923891967,
+      "daily_r_diff_lo": 0.17102945969515493,
+      "holm_p_decision": 4.377027813408751e-07,
+      "holm_p_logloss": 6.405999434034576e-09,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.21907751762279434,
+      "model": "rf",
+      "p_decision": 4.377027813408751e-08,
+      "p_logloss": 7.36995281551661e-10,
+      "p_logloss_worse": 0.9999999992630048,
+      "t_decision": 5.35085311490975,
+      "t_logloss": 6.047184362465218,
+      "verdict": "IMPROVES",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": -0.044583530520571395,
+      "daily_r_diff_hi": 0.09776646807896752,
+      "daily_r_diff_lo": -0.20188509074845196,
+      "holm_p_decision": 0.7236232779424814,
+      "holm_p_logloss": 0.04502850637864305,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.061744326259974724,
+      "model": "mlp",
+      "p_decision": 0.7236232779424814,
+      "p_logloss": 0.022514253189321525,
+      "p_logloss_worse": 0.9774857468106785,
+      "t_decision": -0.5936392185986096,
+      "t_logloss": 2.0043880689495515,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.11542098226331547,
+      "daily_r_diff_hi": 0.21901978725334617,
+      "daily_r_diff_lo": 0.0063225201993633885,
+      "holm_p_decision": 0.11973899359013492,
+      "holm_p_logloss": 6.405999434034576e-09,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.18543415259056323,
+      "model": "mean_ens",
+      "p_decision": 0.016094683831740567,
+      "p_logloss": 7.117777148927307e-10,
+      "p_logloss_worse": 0.9999999992882223,
+      "t_decision": 2.142051132148229,
+      "t_logloss": 6.052793231447813,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.13749007739521837,
+      "daily_r_diff_hi": 0.26686987007126606,
+      "daily_r_diff_lo": 0.011319356016890273,
+      "holm_p_decision": 0.11973899359013492,
+      "holm_p_logloss": 4.339699654105489e-11,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.1557526907955184,
+      "model": "stack",
+      "p_decision": 0.014967374198766864,
+      "p_logloss": 4.339699654105489e-12,
+      "p_logloss_worse": 0.9999999999956602,
+      "t_decision": 2.1709526952398934,
+      "t_logloss": 6.826858886051434,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.07771486537707174,
+      "daily_r_diff_hi": 0.16783796652856048,
+      "daily_r_diff_lo": -0.009777867767946778,
+      "holm_p_decision": 0.25891745392946164,
+      "holm_p_logloss": 0.43592296716467066,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.008500176746694451,
+      "model": "regime_hgb",
+      "p_decision": 0.04315290898824361,
+      "p_logloss": 0.43592296716467066,
+      "p_logloss_worse": 0.5640770328353293,
+      "t_decision": 1.7152149877858536,
+      "t_logloss": 0.1613142068793095,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.08920367182461071,
+      "daily_r_diff_hi": 0.21768222175612661,
+      "daily_r_diff_lo": -0.0326129576849881,
+      "holm_p_decision": 0.25891745392946164,
+      "holm_p_logloss": 1.3891681735307945e-05,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.16771408391420314,
+      "model": "bag_hgb",
+      "p_decision": 0.07350142019702993,
+      "p_logloss": 2.3152802892179908e-06,
+      "p_logloss_worse": 0.9999976847197107,
+      "t_decision": 1.4501996939713142,
+      "t_logloss": 4.580865286559674,
+      "verdict": "PROBABILITIES_ONLY",
+      "vs": "prior"
+     }
+    ],
+    "vs_take_all": [
+     {
+      "daily_r_diff": 1.569689246766456,
+      "holm_p": 9.7023126049938e-18,
+      "model": "prior",
+      "p": 9.7023126049938e-18,
+      "t": 8.497303110191194
+     },
+     {
+      "daily_r_diff": 1.6395009016348174,
+      "holm_p": 1.5975172996155222e-22,
+      "model": "logistic",
+      "p": 3.9937932490388056e-23,
+      "t": 9.834610783186996
+     },
+     {
+      "daily_r_diff": 1.6751236971968189,
+      "holm_p": 5.060358943816494e-29,
+      "model": "hgb",
+      "p": 4.600326312560449e-30,
+      "t": 11.331133267377263
+     },
+     {
+      "daily_r_diff": 1.709752963354059,
+      "holm_p": 1.2866172240815375e-25,
+      "model": "xgb",
+      "p": 2.573234448163075e-26,
+      "t": 10.548773154964731
+     },
+     {
+      "daily_r_diff": 1.6663878591957697,
+      "holm_p": 3.766761305571227e-27,
+      "model": "lgbm",
+      "p": 4.708451631964034e-28,
+      "t": 10.918371551423846
+     },
+     {
+      "daily_r_diff": 1.8393732762202206,
+      "holm_p": 3.087495167701438e-28,
+      "model": "rf",
+      "p": 3.430550186334931e-29,
+      "t": 11.153801636162038
+     },
+     {
+      "daily_r_diff": 1.5251057162458848,
+      "holm_p": 1.652850584119069e-21,
+      "model": "mlp",
+      "p": 8.264252920595345e-22,
+      "t": 9.524847098125965
+     },
+     {
+      "daily_r_diff": 1.6851102290297717,
+      "holm_p": 1.44468021398256e-26,
+      "model": "mean_ens",
+      "p": 2.4078003566376e-27,
+      "t": 10.76912419769503
+     },
+     {
+      "daily_r_diff": 1.7071793241616746,
+      "holm_p": 1.0338321841657538e-28,
+      "model": "stack",
+      "p": 1.0338321841657537e-29,
+      "t": 11.259996709081335
+     },
+     {
+      "daily_r_diff": 1.6474041121435279,
+      "holm_p": 1.4715425729192403e-21,
+      "model": "regime_hgb",
+      "p": 4.905141909730801e-22,
+      "t": 9.578880134950694
+     },
+     {
+      "daily_r_diff": 1.6588929185910668,
+      "holm_p": 6.535527914394013e-27,
+      "model": "bag_hgb",
+      "p": 9.336468449134306e-28,
+      "t": 10.856010761047875
+     }
+    ]
+   },
+   "seconds": 90.9,
+   "uncertainty": {
+    "dispersion": {
+     "bag_hgb": {
+      "by_tercile": [
+       {
+        "log_loss": 0.593101682561881,
+        "mean_dispersion": 0.04068600652228553,
+        "n": 2270,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6487797092811186,
+        "mean_dispersion": 0.07080888624244745,
+        "n": 2269,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6619068950168012,
+        "mean_dispersion": 0.11476752206711069,
+        "n": 2270,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.0754214822708243,
+      "members": 5,
+      "n": 6809,
+      "spearman_dispersion_vs_logloss": 0.2026001272826802,
+      "spearman_p": 5.3064653032486805e-64,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.14416666215665624,
+        293
+       ],
+       [
+        0.5,
+        0.06414214042705865,
+        732
+       ],
+       [
+        1.0,
+        0.059124071905595266,
+        1465
+       ]
+      ]
+     },
+     "mean_ens": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6516432173641217,
+        "mean_dispersion": 0.019283067567005447,
+        "n": 2270,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6289681593534178,
+        "mean_dispersion": 0.04314249184914595,
+        "n": 2271,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6155765659036833,
+        "mean_dispersion": 0.0882780694811956,
+        "n": 2268,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.05022232691288948,
+      "members": 3,
+      "n": 6809,
+      "spearman_dispersion_vs_logloss": -0.05889144903461623,
+      "spearman_p": 1.1570493175295503e-06,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.1516286111074292,
+        215
+       ],
+       [
+        0.5,
+        0.15122086198170823,
+        538
+       ],
+       [
+        1.0,
+        0.10406107128846737,
+        1077
+       ]
+      ]
+     },
+     "stack": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6499245860612762,
+        "mean_dispersion": 0.02091454554090853,
+        "n": 2270,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6377809562023388,
+        "mean_dispersion": 0.04595360371053326,
+        "n": 2269,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6211944247570512,
+        "mean_dispersion": 0.08978290945260219,
+        "n": 2270,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.05221793944110286,
+      "members": 3,
+      "n": 6809,
+      "spearman_dispersion_vs_logloss": -0.0797461817603231,
+      "spearman_p": 4.407840309971226e-11,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.09156818198998387,
+        279
+       ],
+       [
+        0.5,
+        0.10048759547302144,
+        698
+       ],
+       [
+        1.0,
+        0.09556396932767149,
+        1397
+       ]
+      ]
+     }
+    },
+    "online": {
+     "logistic": {
+      "aci_coverage": 0.7986047365522306,
+      "aci_final_alpha": 0.12399999999999994,
+      "aci_mean_set_size": 1.3638700201946026,
+      "n": 5447,
+      "per_block": [
+       {
+        "aci": 0.8002936857562408,
+        "block": 1,
+        "n": 1362,
+        "static": 0.7944199706314243
+       },
+       {
+        "aci": 0.8002936857562408,
+        "block": 2,
+        "n": 1362,
+        "static": 0.8245227606461086
+       },
+       {
+        "aci": 0.7980910425844346,
+        "block": 3,
+        "n": 1362,
+        "static": 0.8186490455212923
+       },
+       {
+        "aci": 0.7957384276267451,
+        "block": 4,
+        "n": 1361,
+        "static": 0.8273328434974284
+       }
+      ],
+      "static_coverage": 0.8162291169451074,
+      "static_mean_set_size": 1.4130714154580504,
+      "static_q": 0.6152962545838785,
+      "target": 0.8
+     },
+     "rf": {
+      "aci_coverage": 0.8002570222140628,
+      "aci_final_alpha": 0.21400000000000002,
+      "aci_mean_set_size": 1.3187075454378556,
+      "n": 5447,
+      "per_block": [
+       {
+        "aci": 0.8032305433186491,
+        "block": 1,
+        "n": 1362,
+        "static": 0.8384728340675477
+       },
+       {
+        "aci": 0.7988252569750367,
+        "block": 2,
+        "n": 1362,
+        "static": 0.8458149779735683
+       },
+       {
+        "aci": 0.7951541850220264,
+        "block": 3,
+        "n": 1362,
+        "static": 0.8509544787077826
+       },
+       {
+        "aci": 0.8038207200587804,
+        "block": 4,
+        "n": 1361,
+        "static": 0.8699485672299779
+       }
+      ],
+      "static_coverage": 0.8512942904351019,
+      "static_mean_set_size": 1.4440976684413438,
+      "static_q": 0.6290322580645161,
+      "target": 0.8
+     }
+    }
+   }
+  },
+  "linear": {
+   "expected": "logistic beats the prior; no challenger beats logistic on probabilities",
+   "leakage": {
+    "clean": true,
+    "folds": [
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 0,
+      "overlapping_pairs": 0,
+      "purged": 22,
+      "shared_indices": 0,
+      "test": 1150,
+      "train": 2280,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 1,
+      "overlapping_pairs": 0,
+      "purged": 25,
+      "shared_indices": 0,
+      "test": 1150,
+      "train": 3427,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 2,
+      "overlapping_pairs": 0,
+      "purged": 21,
+      "shared_indices": 0,
+      "test": 1150,
+      "train": 4581,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 3,
+      "overlapping_pairs": 0,
+      "purged": 45,
+      "shared_indices": 0,
+      "test": 1150,
+      "train": 5707,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 4,
+      "overlapping_pairs": 0,
+      "purged": 16,
+      "shared_indices": 0,
+      "test": 1150,
+      "train": 6886,
+      "train_resolves_before_test": true
+     }
+    ]
+   },
+   "matched": false,
+   "model_cards": [
+    {
+     "dataset_digest": "adb565673f07b4fc26139fceba68cef02082acba39ac95c4927710976c36c82d",
+     "digest": "a789fb4dc7f68e9f92a71b1609bb4d3fea6fb8d6347ede63102654d716007a2c",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L."
+     ],
+     "markdown": "#### Model card: `logistic` (baseline, scenario `linear`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `adb565673f07`, 8052 labelled rows (5750 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000013-06239396`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.557 \u00b7 log loss 0.6918 \u00b7 Brier 0.2488 \u00b7 ECE 0.036 \u00b7 trades 5617 \u00b7 mean net R/trade 0.095 \u00b7 conformal coverage 0.81\n- **vs `prior`:** DECISIONS_ONLY (Holm p: probabilities 1.000, decisions 0.021; daily net-R diff +0.356 [+0.065, +0.591])\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `a789fb4dc7f68e9f`",
+     "metrics": {
+      "auc": 0.5568777250145025,
+      "brier": 0.2488409629052857,
+      "conformal_coverage": 0.8067391304347826,
+      "conformal_mean_net_r": 0.4023001633493421,
+      "conformal_singleton_share": 0.4523913043478261,
+      "conformal_trades": 476.0,
+      "coverage": 0.9768695652173913,
+      "ece": 0.03637699144887909,
+      "fit_seconds": 0.6663663387298584,
+      "log_loss": 0.6918159810314474,
+      "mean_net_r_per_trade": 0.09489902818048475,
+      "n_trades": 5617.0,
+      "total_net_r": 533.0478412897828,
+      "win_rate_taken": 0.5166458963859711
+     },
+     "model": "logistic",
+     "n_features": 75,
+     "n_oof_rows": 5750,
+     "n_rows": 8052,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": null,
+     "role": "baseline",
+     "sampler": "drop_1.00",
+     "scenario": "linear",
+     "trial_id": "T000013-06239396",
+     "versus": [
+      {
+       "daily_r_diff": 0.3555474811099354,
+       "daily_r_diff_hi": 0.5905797746371388,
+       "daily_r_diff_lo": 0.06542374348740763,
+       "holm_p_decision": 0.020503008396439686,
+       "holm_p_logloss": 1.0,
+       "verdict": "DECISIONS_ONLY",
+       "vs": "prior"
+      }
+     ]
+    },
+    {
+     "dataset_digest": "adb565673f07b4fc26139fceba68cef02082acba39ac95c4927710976c36c82d",
+     "digest": "58b28c58072e8ea7477f17439cca121edd00eadadb4c58ee4bbbd2770648fcf0",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.",
+      "Did not show IMPROVES against the logistic baseline: do not prefer it.",
+      "Integrity report card verdict INCONCLUSIVE."
+     ],
+     "markdown": "#### Model card: `xgb` (challenger, scenario `linear`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `adb565673f07`, 8052 labelled rows (5750 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000015-6a6e1c63`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.530 \u00b7 log loss 0.7144 \u00b7 Brier 0.2561 \u00b7 ECE 0.048 \u00b7 trades 5679 \u00b7 mean net R/trade 0.091 \u00b7 conformal coverage 0.81\n- **vs `logistic`:** WORSE (Holm p: probabilities 1.000, decisions 1.000; daily net-R diff -0.018 [-0.046, +0.008])\n- **vs `prior`:** DECISIONS_ONLY (Holm p: probabilities 1.000, decisions 0.024; daily net-R diff +0.338 [+0.065, +0.565])\n- **Integrity report card:** INCONCLUSIVE (pipeline canary battery missing or not CALIBRATED)\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L. Did not show IMPROVES against the logistic baseline: do not prefer it. Integrity report card verdict INCONCLUSIVE.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `58b28c58072e8ea7`",
+     "metrics": {
+      "auc": 0.5296421400377604,
+      "brier": 0.2561161601343618,
+      "conformal_coverage": 0.8121739130434783,
+      "conformal_mean_net_r": 0.22583897339933728,
+      "conformal_singleton_share": 0.38021739130434784,
+      "conformal_trades": 271.0,
+      "coverage": 0.9876521739130435,
+      "ece": 0.04771458135156534,
+      "fit_seconds": 1.5692832469940186,
+      "log_loss": 0.7144308210326996,
+      "mean_net_r_per_trade": 0.09090767328144118,
+      "n_trades": 5679.0,
+      "total_net_r": 516.2646765653045,
+      "win_rate_taken": 0.5148793801725656
+     },
+     "model": "xgb",
+     "n_features": 75,
+     "n_oof_rows": 5750,
+     "n_rows": 8052,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": {
+      "reasons": [
+       "pipeline canary battery missing or not CALIBRATED"
+      ],
+      "verdict": "INCONCLUSIVE"
+     },
+     "role": "challenger",
+     "sampler": "drop_1.00",
+     "scenario": "linear",
+     "trial_id": "T000015-6a6e1c63",
+     "versus": [
+      {
+       "daily_r_diff": -0.017911595223562865,
+       "daily_r_diff_hi": 0.008097384177248531,
+       "daily_r_diff_lo": -0.046013477310948146,
+       "holm_p_decision": 1.0,
+       "holm_p_logloss": 1.0,
+       "verdict": "WORSE",
+       "vs": "logistic"
+      },
+      {
+       "daily_r_diff": 0.3376358858863726,
+       "daily_r_diff_hi": 0.56549516536942,
+       "daily_r_diff_lo": 0.0646980280819356,
+       "holm_p_decision": 0.024287660517824744,
+       "holm_p_logloss": 1.0,
+       "verdict": "DECISIONS_ONLY",
+       "vs": "prior"
+      }
+     ]
+    }
+   ],
+   "observed": "logistic vs prior: DECISIONS_ONLY; challengers better than logistic: none",
+   "run": {
+    "best_challenger": "xgb",
+    "comparisons": [
+     {
+      "daily_r_diff": -0.018217252758184876,
+      "daily_r_diff_hi": 0.10505020401229856,
+      "daily_r_diff_lo": -0.1341037810817355,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.008382000907146352,
+      "logloss_gain_per_day": -0.09510276785977106,
+      "model": "hgb",
+      "p_decision": 0.6159562037385347,
+      "p_logloss": 0.9988025712989791,
+      "p_logloss_worse": 0.0011974287010209075,
+      "skill_gate": "",
+      "t_decision": -0.2948773271916618,
+      "t_logloss": -3.0363191327154895,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.017911595223562865,
+      "daily_r_diff_hi": 0.008097384177248531,
+      "daily_r_diff_lo": -0.046013477310948146,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.00017588469446184942,
+      "logloss_gain_per_day": -0.13877836713682096,
+      "model": "xgb",
+      "p_decision": 0.9034546194828175,
+      "p_logloss": 0.9999804572561709,
+      "p_logloss_worse": 1.954274382909438e-05,
+      "skill_gate": "",
+      "t_decision": -1.3014900707277306,
+      "t_logloss": -4.112820153012553,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.03570852186529622,
+      "daily_r_diff_hi": 0.09694741003511778,
+      "daily_r_diff_lo": -0.16640985962720137,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.015922418903898786,
+      "logloss_gain_per_day": -0.075251749670395,
+      "model": "lgbm",
+      "p_decision": 0.7118150520602826,
+      "p_logloss": 0.9960193952740253,
+      "p_logloss_worse": 0.003980604725974697,
+      "skill_gate": "",
+      "t_decision": -0.558694994735816,
+      "t_logloss": -2.6537105113903072,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.03969829963151037,
+      "daily_r_diff_hi": 0.004979010079201555,
+      "daily_r_diff_lo": -0.08007237948664822,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0061361744919717345,
+      "logloss_gain_per_day": -0.11149524749234378,
+      "model": "rf",
+      "p_decision": 0.9617837080442426,
+      "p_logloss": 0.9992329781885035,
+      "p_logloss_worse": 0.0007670218114964668,
+      "skill_gate": "",
+      "t_decision": -1.7717709664134949,
+      "t_logloss": -3.168165127749342,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.028605690418706253,
+      "daily_r_diff_hi": 0.0047845705744916445,
+      "daily_r_diff_lo": -0.062369923976113864,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.015432410017264246,
+      "logloss_gain_per_day": -0.08376464700660545,
+      "model": "mlp",
+      "p_decision": 0.9334951809328149,
+      "p_logloss": 0.9969135179965471,
+      "p_logloss_worse": 0.0030864820034528493,
+      "skill_gate": "",
+      "t_decision": -1.502338780227382,
+      "t_logloss": -2.7384494999372744,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.13989892219796699,
+      "daily_r_diff_hi": 0.02256781034300794,
+      "daily_r_diff_lo": -0.2946792653333572,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.04761999582626434,
+      "logloss_gain_per_day": -0.05008997874425337,
+      "model": "mean_ens",
+      "p_decision": 0.9491740606739337,
+      "p_logloss": 0.9761900020868678,
+      "p_logloss_worse": 0.02380999791313217,
+      "skill_gate": "",
+      "t_decision": -1.6368975466686315,
+      "t_logloss": -1.9807439455964357,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.03749743941972221,
+      "daily_r_diff_hi": 0.1400125962031713,
+      "daily_r_diff_lo": -0.18505763202085088,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.28391339131866633,
+      "logloss_gain_per_day": -0.009878292852960805,
+      "model": "stack",
+      "p_decision": 0.6692898998921788,
+      "p_logloss": 0.7160866086813337,
+      "p_logloss_worse": 0.28391339131866633,
+      "skill_gate": "",
+      "t_decision": -0.4379532126352515,
+      "t_logloss": -0.5712550266075249,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.09579200308155016,
+      "daily_r_diff_hi": 0.007377896224398796,
+      "daily_r_diff_lo": -0.20567273376802298,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.015922418903898786,
+      "logloss_gain_per_day": -0.10835319413733013,
+      "model": "regime_hgb",
+      "p_decision": 0.9584356284175596,
+      "p_logloss": 0.9949014623679872,
+      "p_logloss_worse": 0.0050985376320129,
+      "skill_gate": "",
+      "t_decision": -1.7328139466686825,
+      "t_logloss": -2.5690737525948886,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": -0.03963922263761148,
+      "daily_r_diff_hi": -0.005796131983156882,
+      "daily_r_diff_lo": -0.07749275700389624,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.008586651954795736,
+      "logloss_gain_per_day": -0.09276107957590506,
+      "model": "bag_hgb",
+      "p_decision": 0.977746099880175,
+      "p_logloss": 0.9985688913408673,
+      "p_logloss_worse": 0.0014311086591326228,
+      "skill_gate": "",
+      "t_decision": -2.009276673978634,
+      "t_logloss": -2.9821606835459145,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     }
+    ],
+    "dataset_digest": "adb565673f07b4fc26139fceba68cef02082acba39ac95c4927710976c36c82d",
+    "fold_sizes": [
+     {
+      "embargoed": 0,
+      "purged": 22,
+      "test": 1150,
+      "train": 2280
+     },
+     {
+      "embargoed": 0,
+      "purged": 25,
+      "test": 1150,
+      "train": 3427
+     },
+     {
+      "embargoed": 0,
+      "purged": 21,
+      "test": 1150,
+      "train": 4581
+     },
+     {
+      "embargoed": 0,
+      "purged": 45,
+      "test": 1150,
+      "train": 5707
+     },
+     {
+      "embargoed": 0,
+      "purged": 16,
+      "test": 1150,
+      "train": 6886
+     }
+    ],
+    "market_digest": "5453fb9ad5dc76fa5f80e88d3b74ffc1cf28e2ff7cdbc3d4ebd543e5452481e0",
+    "metrics": {
+     "bag_hgb": {
+      "auc": 0.5289811562095248,
+      "brier": 0.25501031051579376,
+      "conformal_coverage": 0.8321739130434782,
+      "conformal_mean_net_r": 0.36606537722944416,
+      "conformal_singleton_share": 0.34130434782608693,
+      "conformal_trades": 192.0,
+      "coverage": 0.9542608695652174,
+      "ece": 0.053691692919620546,
+      "fit_seconds": 14.58742618560791,
+      "log_loss": 0.7069320039119035,
+      "mean_net_r_per_trade": 0.0903783287184875,
+      "n_trades": 5487.0,
+      "total_net_r": 495.9058896783409,
+      "win_rate_taken": 0.5141242937853108
+     },
+     "hgb": {
+      "auc": 0.5265780519708373,
+      "brier": 0.255053799463847,
+      "conformal_coverage": 0.8084782608695652,
+      "conformal_mean_net_r": 0.1659711849528171,
+      "conformal_singleton_share": 0.38804347826086955,
+      "conformal_trades": 141.0,
+      "coverage": 0.8184347826086956,
+      "ece": 0.0508909031061404,
+      "fit_seconds": 3.056304931640625,
+      "log_loss": 0.7073135972896396,
+      "mean_net_r_per_trade": 0.10964264246820303,
+      "n_trades": 4706.0,
+      "total_net_r": 515.9782754553635,
+      "win_rate_taken": 0.5244368890777731
+     },
+     "lgbm": {
+      "auc": 0.5208380025381101,
+      "brier": 0.2547328714870948,
+      "conformal_coverage": 0.8445652173913043,
+      "conformal_mean_net_r": 0.262931300722695,
+      "conformal_singleton_share": 0.3193478260869565,
+      "conformal_trades": 162.0,
+      "coverage": 0.8643478260869565,
+      "ece": 0.051248347185647886,
+      "fit_seconds": 1.5856642723083496,
+      "log_loss": 0.7040787444125186,
+      "mean_net_r_per_trade": 0.10052091676096585,
+      "n_trades": 4970.0,
+      "total_net_r": 499.58895630200027,
+      "win_rate_taken": 0.5195171026156942
+     },
+     "logistic": {
+      "auc": 0.5568777250145025,
+      "brier": 0.2488409629052857,
+      "conformal_coverage": 0.8067391304347826,
+      "conformal_mean_net_r": 0.4023001633493421,
+      "conformal_singleton_share": 0.4523913043478261,
+      "conformal_trades": 476.0,
+      "coverage": 0.9768695652173913,
+      "ece": 0.03637699144887909,
+      "fit_seconds": 0.6663663387298584,
+      "log_loss": 0.6918159810314474,
+      "mean_net_r_per_trade": 0.09489902818048475,
+      "n_trades": 5617.0,
+      "total_net_r": 533.0478412897828,
+      "win_rate_taken": 0.5166458963859711
+     },
+     "mean_ens": {
+      "auc": 0.5371792808752641,
+      "brier": 0.252794241275894,
+      "conformal_coverage": 0.8267391304347826,
+      "conformal_mean_net_r": 0.4065473708755746,
+      "conformal_singleton_share": 0.35391304347826086,
+      "conformal_trades": 181.0,
+      "coverage": 0.7116521739130435,
+      "ece": 0.04414937253194636,
+      "fit_seconds": 4.287397146224976,
+      "log_loss": 0.6999784697415978,
+      "mean_net_r_per_trade": 0.09823131749518274,
+      "n_trades": 4092.0,
+      "total_net_r": 401.9625511902878,
+      "win_rate_taken": 0.5185728250244379
+     },
+     "mlp": {
+      "auc": 0.5343798163944573,
+      "brier": 0.25365434487423755,
+      "conformal_coverage": 0.8091304347826087,
+      "conformal_mean_net_r": 0.3841202697787789,
+      "conformal_singleton_share": 0.4023913043478261,
+      "conformal_trades": 122.0,
+      "coverage": 0.9824347826086957,
+      "ece": 0.041974230353861275,
+      "fit_seconds": 1.5322751998901367,
+      "log_loss": 0.7054659765523499,
+      "mean_net_r_per_trade": 0.08961662406929635,
+      "n_trades": 5649.0,
+      "total_net_r": 506.2443093674551,
+      "win_rate_taken": 0.514073287307488
+     },
+     "prior": {
+      "auc": 0.5015316807890057,
+      "brier": 0.25056968415447023,
+      "conformal_coverage": 0.6110869565217392,
+      "conformal_mean_net_r": 0.0,
+      "conformal_singleton_share": 0.75,
+      "conformal_trades": 0.0,
+      "coverage": 0.4,
+      "ece": 0.0287524636823816,
+      "fit_seconds": 0.004696369171142578,
+      "log_loss": 0.6942948425308042,
+      "mean_net_r_per_trade": 0.08691297890859705,
+      "n_trades": 2300.0,
+      "total_net_r": 199.8998514897732,
+      "win_rate_taken": 0.5078260869565218
+     },
+     "regime_hgb": {
+      "auc": 0.5302242392783252,
+      "brier": 0.25626531562213883,
+      "conformal_coverage": 0.8269565217391305,
+      "conformal_mean_net_r": 0.2148909252236978,
+      "conformal_singleton_share": 0.3626086956521739,
+      "conformal_trades": 223.0,
+      "coverage": 0.9057391304347826,
+      "ece": 0.07132373806658988,
+      "fit_seconds": 7.971395015716553,
+      "log_loss": 0.7094728406673914,
+      "mean_net_r_per_trade": 0.08511726851043978,
+      "n_trades": 5208.0,
+      "total_net_r": 443.2907344023704,
+      "win_rate_taken": 0.5128648233486943
+     },
+     "rf": {
+      "auc": 0.534671743855508,
+      "brier": 0.2552583893345444,
+      "conformal_coverage": 0.8445652173913043,
+      "conformal_mean_net_r": 0.38601324389586944,
+      "conformal_singleton_share": 0.3339130434782609,
+      "conformal_trades": 222.0,
+      "coverage": 0.9426086956521739,
+      "ece": 0.054573022482554266,
+      "fit_seconds": 12.946345329284668,
+      "log_loss": 0.7099848587532431,
+      "mean_net_r_per_trade": 0.09148533847510287,
+      "n_trades": 5420.0,
+      "total_net_r": 495.8505345350576,
+      "win_rate_taken": 0.514760147601476
+     },
+     "stack": {
+      "auc": 0.5337753776198553,
+      "brier": 0.2501275988346473,
+      "conformal_coverage": 0.578695652173913,
+      "conformal_mean_net_r": 0.2577654311656875,
+      "conformal_singleton_share": 0.8656521739130435,
+      "conformal_trades": 340.0,
+      "coverage": 0.7295652173913043,
+      "ece": 0.035960933044565914,
+      "fit_seconds": 16.215985536575317,
+      "log_loss": 0.6934257132754863,
+      "mean_net_r_per_trade": 0.11869195245613899,
+      "n_trades": 4195.0,
+      "total_net_r": 497.91274055350306,
+      "win_rate_taken": 0.5277711561382599
+     },
+     "xgb": {
+      "auc": 0.5296421400377604,
+      "brier": 0.2561161601343618,
+      "conformal_coverage": 0.8121739130434783,
+      "conformal_mean_net_r": 0.22583897339933728,
+      "conformal_singleton_share": 0.38021739130434784,
+      "conformal_trades": 271.0,
+      "coverage": 0.9876521739130435,
+      "ece": 0.04771458135156534,
+      "fit_seconds": 1.5692832469940186,
+      "log_loss": 0.7144308210326996,
+      "mean_net_r_per_trade": 0.09090767328144118,
+      "n_trades": 5679.0,
+      "total_net_r": 516.2646765653045,
+      "win_rate_taken": 0.5148793801725656
+     }
+    },
+    "n_features": 75,
+    "n_rows": 8052,
+    "n_trials_charged": 11,
+    "oof_rows": 5750,
+    "pairs": [],
+    "report_card": {
+     "candidate_id": "linear:xgb",
+     "config": {
+      "ci_level": 0.95,
+      "cost_multipliers": [
+       1.0,
+       2.0
+      ],
+      "dsr_min": 0.95,
+      "hac_lags": 5,
+      "min_effective_n": 30,
+      "n_boot": 300,
+      "pbo_blocks": 10,
+      "pbo_max": 0.25,
+      "require_canary": true,
+      "snooping_alpha": 0.05
+     },
+     "disclaimer": "PASS means the candidate survived this offline gauntlet on this data. It is not a validated, realised or tradable edge, and synthetic results never describe markets.",
+     "family_id": "mllab:linear",
+     "inputs": {
+      "canary_plan_digest": null,
+      "family_matrix_digest": "beca4a5950650de6a8fdb93f46b7fc14cb448db4519a5d31b8d7e26db15dcc8a",
+      "gross_digest": "8d77a48c078cd54391045a5241f20208434f44f1f1a11a3ca36febcf3318ee5a"
+     },
+     "numbers": {
+      "ci_hi_net_1x": 0.11931198360517757,
+      "ci_hi_net_2x": 0.0689891093497358,
+      "ci_lo_net_1x": 0.06309579507334333,
+      "ci_lo_net_2x": 0.011400320966244657,
+      "cost_per_obs": 0.05,
+      "dsr": 0.9999999057101732,
+      "effective_n": 3566.3208100024362,
+      "expected_shortfall_95": -1.3262831585714474,
+      "kurtosis": 1.2549983935880233,
+      "max_drawdown": 63.80995722541252,
+      "mean_gross": 0.1409076732814412,
+      "mean_net_1x": 0.09090767328144118,
+      "mean_net_2x": 0.04090767328144117,
+      "n_obs": 5679.0,
+      "n_trials": 11.0,
+      "p_hac_net_1x": 2.3119849723847417e-08,
+      "p_hac_net_2x": 0.006960584709469435,
+      "payoff_ratio_diagnostic": 0.9314874923928109,
+      "pbo": 0.15476190476190477,
+      "provenance_verified": 1.0,
+      "psr_vs_0": 0.9999999999952185,
+      "reality_check_p": 0.0,
+      "skew": -0.26204571089064543,
+      "spa_p": 0.0,
+      "sr0_expected_max": 0.021528154251028848,
+      "sr_net_per_obs": 0.09151567669644266,
+      "t_hac_net_1x": 5.465195464533719,
+      "t_hac_net_2x": 2.4592910852554066,
+      "win_rate_diagnostic": 0.564536009860891
+     },
+     "reasons": [
+      "pipeline canary battery missing or not CALIBRATED"
+     ],
+     "verdict": "INCONCLUSIVE"
+    },
+    "runtime_seconds": 67.7,
+    "scenario": "linear",
+    "take_all_mean_net_r": 0.09037996019221073,
+    "thresholds": {
+     "bag_hgb": [
+      0.47216363382229337,
+      0.02,
+      0.47453703703703703,
+      0.02,
+      0.02
+     ],
+     "hgb": [
+      0.47216363382229337,
+      0.4666666666666667,
+      0.4639423076923077,
+      0.02,
+      0.02
+     ],
+     "lgbm": [
+      0.47216363382229337,
+      0.5,
+      0.3333333333333333,
+      0.3333333333333333,
+      0.3333333333333333
+     ],
+     "logistic": [
+      0.47216363382229337,
+      0.38386979058787324,
+      0.33866645118302147,
+      0.33866645118302147,
+      0.456321941897519
+     ],
+     "mean_ens": [
+      0.47216363382229337,
+      0.5573733520156728,
+      0.48726065812964303,
+      0.45908917419693324,
+      0.44627538595211963
+     ],
+     "mlp": [
+      0.47216363382229337,
+      0.02,
+      0.02,
+      0.02,
+      0.48148148148148145
+     ],
+     "prior": [
+      0.47216363382229337,
+      null,
+      0.5477093667931136,
+      0.5400567561667758,
+      0.5342561766251971
+     ],
+     "regime_hgb": [
+      0.47216363382229337,
+      0.4937058354448356,
+      0.33376583248431213,
+      0.3333333333333333,
+      0.3333333333333333
+     ],
+     "rf": [
+      0.47216363382229337,
+      0.02,
+      0.46938775510204084,
+      0.02,
+      0.02
+     ],
+     "stack": [
+      0.47216363382229337,
+      0.5561180133561437,
+      0.4529083729952051,
+      0.4529083729952051,
+      0.5312269301893207
+     ],
+     "xgb": [
+      0.47216363382229337,
+      0.2857142984867096,
+      0.2857142985249177,
+      0.45045045018196106,
+      0.45045045018196106
+     ]
+    },
+    "trial_ids": {
+     "bag_hgb": "T000022-43ecf328",
+     "hgb": "T000014-e48b067e",
+     "lgbm": "T000016-c0f8be65",
+     "logistic": "T000013-06239396",
+     "mean_ens": "T000019-1a16dd08",
+     "mlp": "T000018-0313d30b",
+     "prior": "T000012-783f3b98",
+     "regime_hgb": "T000021-80a8955a",
+     "rf": "T000017-7a10a3b0",
+     "stack": "T000020-9eb75bf4",
+     "xgb": "T000015-6a6e1c63"
+    },
+    "vs_prior": [
+     {
+      "daily_r_diff": 0.3555474811099354,
+      "daily_r_diff_hi": 0.5905797746371388,
+      "daily_r_diff_lo": 0.06542374348740763,
+      "holm_p_decision": 0.020503008396439686,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.015211796821026505,
+      "model": "logistic",
+      "p_decision": 0.0029290011994913836,
+      "p_logloss": 0.2151021108472167,
+      "p_logloss_worse": 0.7848978891527834,
+      "t_decision": 2.755625514227596,
+      "t_logloss": 0.7888422338018505,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.3373302283517505,
+      "daily_r_diff_hi": 0.5271848650227616,
+      "daily_r_diff_lo": 0.15453767270844151,
+      "holm_p_decision": 0.0032189656337338756,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.04083007395232889,
+      "logloss_gain_per_day": -0.07989097103874455,
+      "model": "hgb",
+      "p_decision": 0.00032189656337338756,
+      "p_logloss": 0.9954633251164079,
+      "p_logloss_worse": 0.004536674883592099,
+      "t_decision": 3.4124602615119013,
+      "t_logloss": -2.6092779992078707,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.3376358858863726,
+      "daily_r_diff_hi": 0.56549516536942,
+      "daily_r_diff_lo": 0.0646980280819356,
+      "holm_p_decision": 0.024287660517824744,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.004736287347293639,
+      "logloss_gain_per_day": -0.12356657031579443,
+      "model": "xgb",
+      "p_decision": 0.004047943419637458,
+      "p_logloss": 0.9995263712652707,
+      "p_logloss_worse": 0.00047362873472936386,
+      "t_decision": 2.648044496795456,
+      "t_logloss": -3.3057405750349536,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.3198389592446392,
+      "daily_r_diff_hi": 0.5330948313857033,
+      "daily_r_diff_lo": 0.12146837912494436,
+      "holm_p_decision": 0.010377057324277808,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.10558798050256735,
+      "logloss_gain_per_day": -0.0600399528493685,
+      "model": "lgbm",
+      "p_decision": 0.001153006369364201,
+      "p_logloss": 0.9788824038994866,
+      "p_logloss_worse": 0.021117596100513468,
+      "t_decision": 3.0476983613051805,
+      "t_logloss": -2.0311952485416787,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.315849181478425,
+      "daily_r_diff_hi": 0.5507513996200643,
+      "daily_r_diff_lo": 0.07202397250556862,
+      "holm_p_decision": 0.02639980580739847,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.07080766116536659,
+      "logloss_gain_per_day": -0.0962834506713173,
+      "model": "rf",
+      "p_decision": 0.005279961161479694,
+      "p_logloss": 0.989884619833519,
+      "p_logloss_worse": 0.010115380166480942,
+      "t_decision": 2.5569340917205934,
+      "t_logloss": -2.322040400628971,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.3269417906912292,
+      "daily_r_diff_hi": 0.5908823285134434,
+      "daily_r_diff_lo": 0.026006740575794485,
+      "holm_p_decision": 0.02639980580739847,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.1224453985901403,
+      "logloss_gain_per_day": -0.06855285018557891,
+      "model": "mlp",
+      "p_decision": 0.005951671237719377,
+      "p_logloss": 0.9693886503524649,
+      "p_logloss_worse": 0.030611349647535074,
+      "t_decision": 2.514996916818551,
+      "t_logloss": -1.8718836699042138,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.21564855891196844,
+      "daily_r_diff_hi": 0.3891409848007834,
+      "daily_r_diff_lo": 0.05074287232136827,
+      "holm_p_decision": 0.02639980580739847,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.3248882442121392,
+      "logloss_gain_per_day": -0.03487818192322687,
+      "model": "mean_ens",
+      "p_decision": 0.006209394085779514,
+      "p_logloss": 0.8917039185959537,
+      "p_logloss_worse": 0.1082960814040464,
+      "t_decision": 2.50001547470295,
+      "t_logloss": -1.2356406628327106,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.31805004169021317,
+      "daily_r_diff_hi": 0.5496114485458837,
+      "daily_r_diff_lo": 0.13300126592341965,
+      "holm_p_decision": 0.014058652160798848,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.005333503968065704,
+      "model": "stack",
+      "p_decision": 0.001757331520099856,
+      "p_logloss": 0.1829294095273502,
+      "p_logloss_worse": 0.8170705904726498,
+      "t_decision": 2.918724845894438,
+      "t_logloss": 0.9042576091251349,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.2597554780283853,
+      "daily_r_diff_hi": 0.4809193058328853,
+      "daily_r_diff_lo": 0.0349717416945995,
+      "holm_p_decision": 0.02639980580739847,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.07026743604128681,
+      "logloss_gain_per_day": -0.09314139731630361,
+      "model": "regime_hgb",
+      "p_decision": 0.009846213732517112,
+      "p_logloss": 0.9912165704948391,
+      "p_logloss_worse": 0.008783429505160851,
+      "t_decision": 2.3321571118977484,
+      "t_logloss": -2.374623487969838,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.315908258472324,
+      "daily_r_diff_hi": 0.5530567248477923,
+      "daily_r_diff_lo": 0.06429384683970026,
+      "holm_p_decision": 0.02639980580739847,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.08320328044170873,
+      "logloss_gain_per_day": -0.07754928275487855,
+      "model": "bag_hgb",
+      "p_decision": 0.00589215451648975,
+      "p_logloss": 0.9861327865930486,
+      "p_logloss_worse": 0.013867213406951455,
+      "t_decision": 2.5185382288076466,
+      "t_logloss": -2.201022559582005,
+      "verdict": "DECISIONS_ONLY",
+      "vs": "prior"
+     }
+    ],
+    "vs_take_all": [
+     {
+      "daily_r_diff": -0.3412859334209587,
+      "holm_p": 1.0,
+      "model": "prior",
+      "p": 0.9959734729919252,
+      "t": -2.6498373062585445
+     },
+     {
+      "daily_r_diff": 0.01426154768897673,
+      "holm_p": 1.0,
+      "model": "logistic",
+      "p": 0.09860817998600263,
+      "t": 1.2895229010694456
+     },
+     {
+      "daily_r_diff": -0.0039557050692081526,
+      "holm_p": 1.0,
+      "model": "hgb",
+      "p": 0.5259178999150649,
+      "t": -0.06501230856612415
+     },
+     {
+      "daily_r_diff": -0.003650047534586134,
+      "holm_p": 1.0,
+      "model": "xgb",
+      "p": 0.6406409794974486,
+      "t": -0.36017263026120805
+     },
+     {
+      "daily_r_diff": -0.021446974176319508,
+      "holm_p": 1.0,
+      "model": "lgbm",
+      "p": 0.6330678183626228,
+      "t": -0.3399895955383081
+     },
+     {
+      "daily_r_diff": -0.025436751942533642,
+      "holm_p": 1.0,
+      "model": "rf",
+      "p": 0.9025291845318659,
+      "t": -1.2960982700051784
+     },
+     {
+      "daily_r_diff": -0.014344142729729524,
+      "holm_p": 1.0,
+      "model": "mlp",
+      "p": 0.8227129657743122,
+      "t": -0.925753556105636
+     },
+     {
+      "daily_r_diff": -0.12563737450899026,
+      "holm_p": 1.0,
+      "model": "mean_ens",
+      "p": 0.9302179797611503,
+      "t": -1.4774164455751841
+     },
+     {
+      "daily_r_diff": -0.023235891730745483,
+      "holm_p": 1.0,
+      "model": "stack",
+      "p": 0.6050402082439074,
+      "t": -0.266415039879905
+     },
+     {
+      "daily_r_diff": -0.0815304553925734,
+      "holm_p": 1.0,
+      "model": "regime_hgb",
+      "p": 0.9325347720913127,
+      "t": -1.4949386435046876
+     },
+     {
+      "daily_r_diff": -0.025377674948634743,
+      "holm_p": 1.0,
+      "model": "bag_hgb",
+      "p": 0.9350925435970293,
+      "t": -1.5148321643486071
+     }
+    ]
+   },
+   "seconds": 74.3,
+   "uncertainty": {
+    "dispersion": {
+     "bag_hgb": {
+      "by_tercile": [
+       {
+        "log_loss": 0.7106305082200832,
+        "mean_dispersion": 0.04874470586961394,
+        "n": 1917,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6939185189400807,
+        "mean_dispersion": 0.08110275681669109,
+        "n": 1916,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.7162401961118159,
+        "mean_dispersion": 0.1253052905300999,
+        "n": 1917,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.08505160437548374,
+      "members": 5,
+      "n": 5750,
+      "spearman_dispersion_vs_logloss": 0.008396656248245553,
+      "spearman_p": 0.524397949847613,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.055904407129221075,
+        1097
+       ],
+       [
+        0.5,
+        0.09550363170666969,
+        2744
+       ],
+       [
+        1.0,
+        0.09037832871848749,
+        5487
+       ]
+      ]
+     },
+     "mean_ens": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6897662597093697,
+        "mean_dispersion": 0.004972795395244993,
+        "n": 1928,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6978805790545636,
+        "mean_dispersion": 0.018732551155346045,
+        "n": 1966,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.7128090699748116,
+        "mean_dispersion": 0.05967628191710143,
+        "n": 1856,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.027334769448970946,
+      "members": 3,
+      "n": 5750,
+      "spearman_dispersion_vs_logloss": -0.0398468466202561,
+      "spearman_p": 0.0025104419797475105,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.09343889439324117,
+        818
+       ],
+       [
+        0.5,
+        0.0762772676617372,
+        2046
+       ],
+       [
+        1.0,
+        0.09823131749518273,
+        4092
+       ]
+      ]
+     },
+     "stack": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6944637375745727,
+        "mean_dispersion": 0.0120614457462679,
+        "n": 1917,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6933802971699621,
+        "mean_dispersion": 0.030009639213167853,
+        "n": 1916,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6924330813906852,
+        "mean_dispersion": 0.06833748150999726,
+        "n": 1917,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.03680403691872868,
+      "members": 3,
+      "n": 5750,
+      "spearman_dispersion_vs_logloss": -0.036228625139157894,
+      "spearman_p": 0.0060055879941629565,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.1345542627560812,
+        839
+       ],
+       [
+        0.5,
+        0.10128836669528417,
+        2098
+       ],
+       [
+        1.0,
+        0.11869195245613899,
+        4195
+       ]
+      ]
+     }
+    },
+    "online": {
+     "logistic": {
+      "aci_coverage": 0.7993478260869565,
+      "aci_final_alpha": 0.16999999999999998,
+      "aci_mean_set_size": 1.5321739130434782,
+      "n": 4600,
+      "per_block": [
+       {
+        "aci": 0.7991304347826087,
+        "block": 1,
+        "n": 1150,
+        "static": 0.8895652173913043
+       },
+       {
+        "aci": 0.7921739130434783,
+        "block": 2,
+        "n": 1150,
+        "static": 0.922608695652174
+       },
+       {
+        "aci": 0.8060869565217391,
+        "block": 3,
+        "n": 1150,
+        "static": 0.9634782608695652
+       },
+       {
+        "aci": 0.8,
+        "block": 4,
+        "n": 1150,
+        "static": 0.9686956521739131
+       }
+      ],
+      "static_coverage": 0.9360869565217391,
+      "static_mean_set_size": 1.8293478260869565,
+      "static_q": 0.5975393478797104,
+      "target": 0.8
+     },
+     "xgb": {
+      "aci_coverage": 0.8032608695652174,
+      "aci_final_alpha": 0.3500000000000002,
+      "aci_mean_set_size": 1.5508695652173914,
+      "n": 4600,
+      "per_block": [
+       {
+        "aci": 0.8173913043478261,
+        "block": 1,
+        "n": 1150,
+        "static": 0.9721739130434782
+       },
+       {
+        "aci": 0.7765217391304348,
+        "block": 2,
+        "n": 1150,
+        "static": 0.9347826086956522
+       },
+       {
+        "aci": 0.8252173913043478,
+        "block": 3,
+        "n": 1150,
+        "static": 1.0
+       },
+       {
+        "aci": 0.7939130434782609,
+        "block": 4,
+        "n": 1150,
+        "static": 0.9608695652173913
+       }
+      ],
+      "static_coverage": 0.9669565217391304,
+      "static_mean_set_size": 1.9241304347826087,
+      "static_q": 0.6283783912658691,
+      "target": 0.8
+     }
+    }
+   }
+  },
+  "null": {
+   "expected": "no challenger and no model improves on anything",
+   "leakage": {
+    "clean": true,
+    "folds": [
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 0,
+      "overlapping_pairs": 0,
+      "purged": 12,
+      "shared_indices": 0,
+      "test": 1239,
+      "train": 2466,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 1,
+      "overlapping_pairs": 0,
+      "purged": 26,
+      "shared_indices": 0,
+      "test": 1239,
+      "train": 3691,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 2,
+      "overlapping_pairs": 0,
+      "purged": 20,
+      "shared_indices": 0,
+      "test": 1239,
+      "train": 4936,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 3,
+      "overlapping_pairs": 0,
+      "purged": 25,
+      "shared_indices": 0,
+      "test": 1238,
+      "train": 6170,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 4,
+      "overlapping_pairs": 0,
+      "purged": 16,
+      "shared_indices": 0,
+      "test": 1238,
+      "train": 7417,
+      "train_resolves_before_test": true
+     }
+    ]
+   },
+   "matched": true,
+   "model_cards": [
+    {
+     "dataset_digest": "b53516da3354490572becd576817ed5e1ebacc9f0187307793e93f46b36f706e",
+     "digest": "cbed52457c679253c0a690e282c6175838eb371452b4915866a9355c28771fd4",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L."
+     ],
+     "markdown": "#### Model card: `logistic` (baseline, scenario `null`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `b53516da3354`, 8671 labelled rows (6193 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000002-154938a0`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.519 \u00b7 log loss 0.6926 \u00b7 Brier 0.2496 \u00b7 ECE 0.035 \u00b7 trades 1611 \u00b7 mean net R/trade -0.043 \u00b7 conformal coverage 0.85\n- **vs `prior`:** NO_EVIDENCE (Holm p: probabilities 1.000, decisions 1.000; daily net-R diff -0.037 [-0.194, +0.094])\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `cbed52457c679253`",
+     "metrics": {
+      "auc": 0.5191717330883858,
+      "brier": 0.24963278922998902,
+      "conformal_coverage": 0.8544610415825595,
+      "conformal_mean_net_r": -0.09117786218600432,
+      "conformal_singleton_share": 0.31832862333467904,
+      "conformal_trades": 366.0,
+      "coverage": 0.2601324075569191,
+      "ece": 0.03542468763642364,
+      "fit_seconds": 1.0549547672271729,
+      "log_loss": 0.6925554685348319,
+      "mean_net_r_per_trade": -0.0432478969300444,
+      "n_trades": 1611.0,
+      "total_net_r": -69.67236195430152,
+      "win_rate_taken": 0.4475481067659839
+     },
+     "model": "logistic",
+     "n_features": 75,
+     "n_oof_rows": 6193,
+     "n_rows": 8671,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": null,
+     "role": "baseline",
+     "sampler": "drop_1.00",
+     "scenario": "null",
+     "trial_id": "T000002-154938a0",
+     "versus": [
+      {
+       "daily_r_diff": -0.03654282369364071,
+       "daily_r_diff_hi": 0.0943472922648342,
+       "daily_r_diff_lo": -0.1938759608784876,
+       "holm_p_decision": 1.0,
+       "holm_p_logloss": 1.0,
+       "verdict": "NO_EVIDENCE",
+       "vs": "prior"
+      }
+     ]
+    },
+    {
+     "dataset_digest": "b53516da3354490572becd576817ed5e1ebacc9f0187307793e93f46b36f706e",
+     "digest": "ee19871b89e9a15c6af6a21cedaa306e50ee3fc691ee13f9a87c46f119eabdd2",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.",
+      "Did not show IMPROVES against the logistic baseline: do not prefer it.",
+      "Integrity report card verdict FAIL."
+     ],
+     "markdown": "#### Model card: `mlp` (challenger, scenario `null`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `b53516da3354`, 8671 labelled rows (6193 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `drop_1.00`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000007-59d33665`; this family has been charged for 11 trials\n- **Out-of-fold metrics:** AUC 0.517 \u00b7 log loss 0.6944 \u00b7 Brier 0.2498 \u00b7 ECE 0.032 \u00b7 trades 1131 \u00b7 mean net R/trade -0.015 \u00b7 conformal coverage 0.87\n- **vs `logistic`:** NO_EVIDENCE (Holm p: probabilities 1.000, decisions 1.000; daily net-R diff +0.056 [-0.072, +0.225])\n- **vs `prior`:** NO_EVIDENCE (Holm p: probabilities 1.000, decisions 1.000; daily net-R diff +0.019 [-0.041, +0.088])\n- **Integrity report card:** FAIL (net mean CI lower bound <= 0 at 2x costs; deflated Sharpe 0.017 < 0.95 with 11 trials; PBO 0.40 > 0.25; SPA p-value 1.000 > 0.05; pipeline canary battery missing or not CALIBRATED)\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L. Did not show IMPROVES against the logistic baseline: do not prefer it. Integrity report card verdict FAIL.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `ee19871b89e9a15c`",
+     "metrics": {
+      "auc": 0.5174616043048514,
+      "brier": 0.2497617594327417,
+      "conformal_coverage": 0.8702058942268873,
+      "conformal_mean_net_r": -0.003327370015926439,
+      "conformal_singleton_share": 0.2920872022607994,
+      "conformal_trades": 139.0,
+      "coverage": 0.18262554497012756,
+      "ece": 0.03212201422662098,
+      "fit_seconds": 1.708514928817749,
+      "log_loss": 0.694356558145385,
+      "mean_net_r_per_trade": -0.014686914932003952,
+      "n_trades": 1131.0,
+      "total_net_r": -16.61090078809647,
+      "win_rate_taken": 0.4526967285587975
+     },
+     "model": "mlp",
+     "n_features": 75,
+     "n_oof_rows": 6193,
+     "n_rows": 8671,
+     "n_trials_charged": 11,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": {
+      "reasons": [
+       "net mean CI lower bound <= 0 at 2x costs",
+       "deflated Sharpe 0.017 < 0.95 with 11 trials",
+       "PBO 0.40 > 0.25",
+       "SPA p-value 1.000 > 0.05",
+       "pipeline canary battery missing or not CALIBRATED"
+      ],
+      "verdict": "FAIL"
+     },
+     "role": "challenger",
+     "sampler": "drop_1.00",
+     "scenario": "null",
+     "trial_id": "T000007-59d33665",
+     "versus": [
+      {
+       "daily_r_diff": 0.0556199802580766,
+       "daily_r_diff_hi": 0.22490782298145154,
+       "daily_r_diff_lo": -0.07240296292752532,
+       "holm_p_decision": 1.0,
+       "holm_p_logloss": 1.0,
+       "verdict": "NO_EVIDENCE",
+       "vs": "logistic"
+      },
+      {
+       "daily_r_diff": 0.0190771565644359,
+       "daily_r_diff_hi": 0.08754080918211486,
+       "daily_r_diff_lo": -0.040679313750195206,
+       "holm_p_decision": 1.0,
+       "holm_p_logloss": 1.0,
+       "verdict": "NO_EVIDENCE",
+       "vs": "prior"
+      }
+     ]
+    }
+   ],
+   "observed": "0 claims across 19 comparisons",
+   "run": {
+    "best_challenger": "mlp",
+    "comparisons": [
+     {
+      "daily_r_diff": 0.036109049721567955,
+      "daily_r_diff_hi": 0.1909281226952635,
+      "daily_r_diff_lo": -0.11243407411710171,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": -0.008712212531737587,
+      "model": "hgb",
+      "p_decision": 0.3147991827878882,
+      "p_logloss": 0.6576834346518692,
+      "p_logloss_worse": 0.3423165653481308,
+      "skill_gate": "",
+      "t_decision": 0.4822922308128703,
+      "t_logloss": -0.4061489912466464,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.03654282369364071,
+      "daily_r_diff_hi": 0.2040881734868259,
+      "daily_r_diff_lo": -0.10974796548096208,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": -0.0023622223920214225,
+      "model": "xgb",
+      "p_decision": 0.31566293296012576,
+      "p_logloss": 0.5413933492659164,
+      "p_logloss_worse": 0.4586066507340836,
+      "skill_gate": "",
+      "t_decision": 0.47986151813483724,
+      "t_logloss": -0.10394461465610366,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.03538141202023719,
+      "daily_r_diff_hi": 0.18521588009720683,
+      "daily_r_diff_lo": -0.11653478611281282,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.309180479944154,
+      "logloss_gain_per_day": -0.04262811599228139,
+      "model": "lgbm",
+      "p_decision": 0.32117808687782656,
+      "p_logloss": 0.9613524400069807,
+      "p_logloss_worse": 0.03864755999301925,
+      "skill_gate": "",
+      "t_decision": 0.46440700291631887,
+      "t_logloss": -1.7666007220631554,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.037381958814452554,
+      "daily_r_diff_hi": 0.19325399109827607,
+      "daily_r_diff_lo": -0.09429594332764042,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.8296628945075484,
+      "logloss_gain_per_day": -0.032327874254408376,
+      "model": "rf",
+      "p_decision": 0.31177932860278273,
+      "p_logloss": 0.8814767293560646,
+      "p_logloss_worse": 0.11852327064393547,
+      "skill_gate": "",
+      "t_decision": 0.4908130810835344,
+      "t_logloss": -1.1824012151327412,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.0556199802580766,
+      "daily_r_diff_hi": 0.22490782298145154,
+      "daily_r_diff_lo": -0.07240296292752532,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": -0.011691978991777282,
+      "model": "mlp",
+      "p_decision": 0.21239255474297475,
+      "p_logloss": 0.6886671333724053,
+      "p_logloss_worse": 0.31133286662759474,
+      "skill_gate": "",
+      "t_decision": 0.7981471380522892,
+      "t_logloss": -0.49207583674708966,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.03932342352534216,
+      "daily_r_diff_hi": 0.19960461029413798,
+      "daily_r_diff_lo": -0.10722500849271978,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.004430441684467722,
+      "model": "mean_ens",
+      "p_decision": 0.30239966857804457,
+      "p_logloss": 0.4148716355581592,
+      "p_logloss_worse": 0.5851283644418408,
+      "skill_gate": "",
+      "t_decision": 0.5175112221189803,
+      "t_logloss": 0.2150308438028869,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.044067569613054816,
+      "daily_r_diff_hi": 0.22516955121943613,
+      "daily_r_diff_lo": -0.09628910705532015,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.01971752384811154,
+      "model": "stack",
+      "p_decision": 0.29215084185880835,
+      "p_logloss": 0.16595297832079342,
+      "p_logloss_worse": 0.8340470216792066,
+      "skill_gate": "",
+      "t_decision": 0.5471121525938594,
+      "t_logloss": 0.9702819805638024,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.012526980690886128,
+      "daily_r_diff_hi": 0.09975188028246242,
+      "daily_r_diff_lo": -0.06187082217399752,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0005410979723895014,
+      "logloss_gain_per_day": -0.20903544655183737,
+      "model": "regime_hgb",
+      "p_decision": 0.38113951925982986,
+      "p_logloss": 0.9999398780030678,
+      "p_logloss_worse": 6.0121996932166827e-05,
+      "skill_gate": "",
+      "t_decision": 0.302489366257609,
+      "t_logloss": -3.8456281622351067,
+      "verdict": "WORSE",
+      "verdict_raw": "WORSE",
+      "vs": "logistic"
+     },
+     {
+      "daily_r_diff": 0.04683248424370626,
+      "daily_r_diff_hi": 0.20998778254585004,
+      "daily_r_diff_lo": -0.11374679800995033,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.8331920960488456,
+      "logloss_gain_per_day": -0.02291870296466338,
+      "model": "bag_hgb",
+      "p_decision": 0.2692113477161613,
+      "p_logloss": 0.8611346506585258,
+      "p_logloss_worse": 0.13886534934147426,
+      "skill_gate": "",
+      "t_decision": 0.6151999278567022,
+      "t_logloss": -1.085431248256128,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic"
+     }
+    ],
+    "dataset_digest": "b53516da3354490572becd576817ed5e1ebacc9f0187307793e93f46b36f706e",
+    "fold_sizes": [
+     {
+      "embargoed": 0,
+      "purged": 12,
+      "test": 1239,
+      "train": 2466
+     },
+     {
+      "embargoed": 0,
+      "purged": 26,
+      "test": 1239,
+      "train": 3691
+     },
+     {
+      "embargoed": 0,
+      "purged": 20,
+      "test": 1239,
+      "train": 4936
+     },
+     {
+      "embargoed": 0,
+      "purged": 25,
+      "test": 1238,
+      "train": 6170
+     },
+     {
+      "embargoed": 0,
+      "purged": 16,
+      "test": 1238,
+      "train": 7417
+     }
+    ],
+    "market_digest": "0f4ef4e46b2ca2af871359139fe4214effa7b6e2c6eac27c3a74889f284585cc",
+    "metrics": {
+     "bag_hgb": {
+      "auc": 0.49598936474345634,
+      "brier": 0.25103140024929466,
+      "conformal_coverage": 0.8655631812676625,
+      "conformal_mean_net_r": 0.1394050526533091,
+      "conformal_singleton_share": 0.30863948324586193,
+      "conformal_trades": 9.0,
+      "coverage": 0.18924592281608268,
+      "ece": 0.034183477476472456,
+      "fit_seconds": 15.158547401428223,
+      "log_loss": 0.6960859775980143,
+      "mean_net_r_per_trade": -0.02132608531212098,
+      "n_trades": 1172.0,
+      "total_net_r": -24.99417198580579,
+      "win_rate_taken": 0.4522184300341297
+     },
+     "hgb": {
+      "auc": 0.4905044240265112,
+      "brier": 0.24997104530312692,
+      "conformal_coverage": 0.8738393217601937,
+      "conformal_mean_net_r": -0.06002870216788386,
+      "conformal_singleton_share": 0.28179249091643116,
+      "conformal_trades": 20.0,
+      "coverage": 0.19618924592281609,
+      "ece": 0.03598654069929732,
+      "fit_seconds": 3.0135555267333984,
+      "log_loss": 0.6938975403506364,
+      "mean_net_r_per_trade": -0.028991216888827755,
+      "n_trades": 1215.0,
+      "total_net_r": -35.22432851992572,
+      "win_rate_taken": 0.4469135802469136
+     },
+     "lgbm": {
+      "auc": 0.49929432738388235,
+      "brier": 0.250853364582935,
+      "conformal_coverage": 0.8798950343157045,
+      "conformal_mean_net_r": 0.21338197224193753,
+      "conformal_singleton_share": 0.27815906338312474,
+      "conformal_trades": 14.0,
+      "coverage": 0.19796544485709672,
+      "ece": 0.0364674764888151,
+      "fit_seconds": 2.1957931518554688,
+      "log_loss": 0.69912211194782,
+      "mean_net_r_per_trade": -0.029297304149262047,
+      "n_trades": 1226.0,
+      "total_net_r": -35.91849488699527,
+      "win_rate_taken": 0.4461663947797716
+     },
+     "logistic": {
+      "auc": 0.5191717330883858,
+      "brier": 0.24963278922998902,
+      "conformal_coverage": 0.8544610415825595,
+      "conformal_mean_net_r": -0.09117786218600432,
+      "conformal_singleton_share": 0.31832862333467904,
+      "conformal_trades": 366.0,
+      "coverage": 0.2601324075569191,
+      "ece": 0.03542468763642364,
+      "fit_seconds": 1.0549547672271729,
+      "log_loss": 0.6925554685348319,
+      "mean_net_r_per_trade": -0.0432478969300444,
+      "n_trades": 1611.0,
+      "total_net_r": -69.67236195430152,
+      "win_rate_taken": 0.4475481067659839
+     },
+     "mean_ens": {
+      "auc": 0.4967720592339976,
+      "brier": 0.2493174682584228,
+      "conformal_coverage": 0.8778764634638676,
+      "conformal_mean_net_r": 0.40801878500936023,
+      "conformal_singleton_share": 0.2811869196608801,
+      "conformal_trades": 16.0,
+      "coverage": 0.1976424995963184,
+      "ece": 0.034835957191502454,
+      "fit_seconds": 4.862661600112915,
+      "log_loss": 0.6918729816355936,
+      "mean_net_r_per_trade": -0.026272725417585893,
+      "n_trades": 1224.0,
+      "total_net_r": -32.157815911125134,
+      "win_rate_taken": 0.4485294117647059
+     },
+     "mlp": {
+      "auc": 0.5174616043048514,
+      "brier": 0.2497617594327417,
+      "conformal_coverage": 0.8702058942268873,
+      "conformal_mean_net_r": -0.003327370015926439,
+      "conformal_singleton_share": 0.2920872022607994,
+      "conformal_trades": 139.0,
+      "coverage": 0.18262554497012756,
+      "ece": 0.03212201422662098,
+      "fit_seconds": 1.708514928817749,
+      "log_loss": 0.694356558145385,
+      "mean_net_r_per_trade": -0.014686914932003952,
+      "n_trades": 1131.0,
+      "total_net_r": -16.61090078809647,
+      "win_rate_taken": 0.4526967285587975
+     },
+     "prior": {
+      "auc": 0.5004810034559932,
+      "brier": 0.2469277140721184,
+      "conformal_coverage": 0.5595478401291886,
+      "conformal_mean_net_r": 0.0,
+      "conformal_singleton_share": 1.0,
+      "conformal_trades": 0.0,
+      "coverage": 0.20006458905215566,
+      "ece": 0.016679000231943353,
+      "fit_seconds": 0.005925893783569336,
+      "log_loss": 0.6869922388501762,
+      "mean_net_r_per_trade": -0.02809564822483318,
+      "n_trades": 1239.0,
+      "total_net_r": -34.81050815056831,
+      "win_rate_taken": 0.44713478611783697
+     },
+     "regime_hgb": {
+      "auc": 0.5079890238806931,
+      "brier": 0.2580206089287426,
+      "conformal_coverage": 0.899071457408155,
+      "conformal_mean_net_r": -0.30445497583550535,
+      "conformal_singleton_share": 0.21780379491320145,
+      "conformal_trades": 49.0,
+      "coverage": 0.2360729856289359,
+      "ece": 0.059436429573083094,
+      "fit_seconds": 7.2214035987854,
+      "log_loss": 0.7247563107777597,
+      "mean_net_r_per_trade": -0.03948127385444335,
+      "n_trades": 1462.0,
+      "total_net_r": -57.72162237519617,
+      "win_rate_taken": 0.4521203830369357
+     },
+     "rf": {
+      "auc": 0.49440246038633373,
+      "brier": 0.25075778645170266,
+      "conformal_coverage": 0.864553895841744,
+      "conformal_mean_net_r": -0.03459795993898379,
+      "conformal_singleton_share": 0.30440048445700446,
+      "conformal_trades": 98.0,
+      "coverage": 0.19715808170515098,
+      "ece": 0.03719123801133463,
+      "fit_seconds": 15.182527780532837,
+      "log_loss": 0.6975354123486064,
+      "mean_net_r_per_trade": -0.027854195942107956,
+      "n_trades": 1221.0,
+      "total_net_r": -34.009973245313816,
+      "win_rate_taken": 0.44717444717444715
+     },
+     "stack": {
+      "auc": 0.4826617787115557,
+      "brier": 0.24812728295265257,
+      "conformal_coverage": 0.8859507468712152,
+      "conformal_mean_net_r": -0.12795423540368886,
+      "conformal_singleton_share": 0.24243035930561163,
+      "conformal_trades": 153.0,
+      "coverage": 0.10576457290489262,
+      "ece": 0.021514665044419776,
+      "fit_seconds": 17.89961290359497,
+      "log_loss": 0.6895180847545802,
+      "mean_net_r_per_trade": -0.042186107699919526,
+      "n_trades": 655.0,
+      "total_net_r": -27.631900543447287,
+      "win_rate_taken": 0.42900763358778626
+     },
+     "xgb": {
+      "auc": 0.4938917477378723,
+      "brier": 0.24974461359100208,
+      "conformal_coverage": 0.8811061768268066,
+      "conformal_mean_net_r": 0.1556927593854003,
+      "conformal_singleton_share": 0.2731126362535325,
+      "conformal_trades": 14.0,
+      "coverage": 0.20006458905215566,
+      "ece": 0.04203436805132942,
+      "fit_seconds": 1.7982075214385986,
+      "log_loss": 0.6929193568219283,
+      "mean_net_r_per_trade": -0.02809564822483318,
+      "n_trades": 1239.0,
+      "total_net_r": -34.81050815056831,
+      "win_rate_taken": 0.44713478611783697
+     }
+    },
+    "n_features": 75,
+    "n_rows": 8671,
+    "n_trials_charged": 11,
+    "oof_rows": 6193,
+    "pairs": [],
+    "report_card": {
+     "candidate_id": "null:mlp",
+     "config": {
+      "ci_level": 0.95,
+      "cost_multipliers": [
+       1.0,
+       2.0
+      ],
+      "dsr_min": 0.95,
+      "hac_lags": 5,
+      "min_effective_n": 30,
+      "n_boot": 300,
+      "pbo_blocks": 10,
+      "pbo_max": 0.25,
+      "require_canary": true,
+      "snooping_alpha": 0.05
+     },
+     "disclaimer": "PASS means the candidate survived this offline gauntlet on this data. It is not a validated, realised or tradable edge, and synthetic results never describe markets.",
+     "family_id": "mllab:null",
+     "inputs": {
+      "canary_plan_digest": null,
+      "family_matrix_digest": "ded99e1b2a70db063c79815a270c3f4a51193d31f862628bfde43599d25d42ca",
+      "gross_digest": "c01afab0f17200ee26c8bc303b09dfe18d1ecba5ad356f9a6a7055ded04e0c92"
+     },
+     "numbers": {
+      "ci_hi_net_1x": 0.04104844783788651,
+      "ci_hi_net_2x": 0.002799255345337905,
+      "ci_lo_net_1x": -0.0805072964290333,
+      "ci_lo_net_2x": -0.11196286465702845,
+      "cost_per_obs": 0.05,
+      "dsr": 0.016941519995239743,
+      "effective_n": 759.4806405702525,
+      "expected_shortfall_95": -1.3156488601657959,
+      "kurtosis": 1.188330467089972,
+      "max_drawdown": 74.15746336762302,
+      "mean_gross": 0.03531308506799606,
+      "mean_net_1x": -0.014686914932003952,
+      "mean_net_2x": -0.06468691493200396,
+      "n_obs": 1131.0,
+      "n_trials": 11.0,
+      "p_hac_net_1x": 0.6586571639897978,
+      "p_hac_net_2x": 0.9641106858526317,
+      "payoff_ratio_diagnostic": 0.9542768840357492,
+      "pbo": 0.4007936507936508,
+      "provenance_verified": 1.0,
+      "psr_vs_0": 0.308963335495705,
+      "reality_check_p": 0.8466666666666667,
+      "skew": -0.03970756035572759,
+      "spa_p": 1.0,
+      "sr0_expected_max": 0.04825754995027475,
+      "sr_net_per_obs": -0.014833841854825301,
+      "t_hac_net_1x": -0.4088010462752724,
+      "t_hac_net_2x": -1.8005196208292198,
+      "win_rate_diagnostic": 0.5039787798408488
+     },
+     "reasons": [
+      "net mean CI lower bound <= 0 at 2x costs",
+      "deflated Sharpe 0.017 < 0.95 with 11 trials",
+      "PBO 0.40 > 0.25",
+      "SPA p-value 1.000 > 0.05",
+      "pipeline canary battery missing or not CALIBRATED"
+     ],
+     "verdict": "FAIL"
+    },
+    "runtime_seconds": 73.9,
+    "scenario": "null",
+    "take_all_mean_net_r": -0.0428287180876903,
+    "thresholds": {
+     "bag_hgb": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "hgb": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "lgbm": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "logistic": [
+      0.4645543096485108,
+      0.45482479878432386,
+      null,
+      null,
+      null
+     ],
+     "mean_ens": [
+      0.4645543096485108,
+      0.5437665398076005,
+      0.5437665398076005,
+      0.5437665398076005,
+      0.5437665398076005
+     ],
+     "mlp": [
+      0.4645543096485108,
+      0.5495495495495496,
+      0.5495495495495496,
+      0.5495495495495496,
+      0.5495495495495496
+     ],
+     "prior": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "regime_hgb": [
+      0.4645543096485108,
+      0.4661016949152542,
+      0.5555555555555556,
+      0.527027027027027,
+      0.527027027027027
+     ],
+     "rf": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "stack": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ],
+     "xgb": [
+      0.4645543096485108,
+      null,
+      null,
+      null,
+      null
+     ]
+    },
+    "trial_ids": {
+     "bag_hgb": "T000011-68f0f79c",
+     "hgb": "T000003-0c4fa5d2",
+     "lgbm": "T000005-44b2f08e",
+     "logistic": "T000002-154938a0",
+     "mean_ens": "T000008-cf7e03b9",
+     "mlp": "T000007-59d33665",
+     "prior": "T000001-ebd690ae",
+     "regime_hgb": "T000010-d485c009",
+     "rf": "T000006-81afabcc",
+     "stack": "T000009-2888996a",
+     "xgb": "T000004-2a5d03e7"
+    },
+    "vs_prior": [
+     {
+      "daily_r_diff": -0.03654282369364071,
+      "daily_r_diff_hi": 0.0943472922648342,
+      "daily_r_diff_lo": -0.1938759608784876,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0656214535347154,
+      "logloss_gain_per_day": -0.036114341129006564,
+      "model": "logistic",
+      "p_decision": 0.6843370670398743,
+      "p_logloss": 0.9835946366163212,
+      "p_logloss_worse": 0.01640536338367885,
+      "t_decision": -0.47986151813483724,
+      "t_logloss": -2.1343917449198457,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": -0.00043377397207275897,
+      "daily_r_diff_hi": 0.009723073294465796,
+      "daily_r_diff_lo": -0.010155110637212354,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.01756123739583771,
+      "logloss_gain_per_day": -0.04482655366074415,
+      "model": "hgb",
+      "p_decision": 0.5350972928633173,
+      "p_logloss": 0.9966454956652653,
+      "p_logloss_worse": 0.0033545043347347086,
+      "t_decision": -0.08808966035554054,
+      "t_logloss": -2.7109532402595464,
+      "verdict": "WORSE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.0,
+      "daily_r_diff_hi": 0.0,
+      "daily_r_diff_lo": 0.0,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0656214535347154,
+      "logloss_gain_per_day": -0.03847656352102798,
+      "model": "xgb",
+      "p_decision": 1.0,
+      "p_logloss": 0.9827168902400779,
+      "p_logloss_worse": 0.017283109759922095,
+      "t_decision": 0.0,
+      "t_logloss": -2.113403817320958,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": -0.0011614116734035304,
+      "daily_r_diff_hi": 0.004797716229642686,
+      "daily_r_diff_lo": -0.00646139372863523,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.00020843621200593724,
+      "logloss_gain_per_day": -0.07874245712128795,
+      "model": "lgbm",
+      "p_decision": 0.6719115151279923,
+      "p_logloss": 0.9999768404208882,
+      "p_logloss_worse": 2.3159579111770805e-05,
+      "t_decision": -0.44519758788849373,
+      "t_logloss": -4.0734632751411715,
+      "verdict": "WORSE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.0008391351208118328,
+      "daily_r_diff_hi": 0.00914354087532573,
+      "daily_r_diff_lo": -0.005967742326700581,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.01756123739583771,
+      "logloss_gain_per_day": -0.06844221538341494,
+      "model": "rf",
+      "p_decision": 0.41843524642933705,
+      "p_logloss": 0.9970731271006937,
+      "p_logloss_worse": 0.0029268728993062853,
+      "t_decision": 0.20589812147355177,
+      "t_logloss": -2.755863289441446,
+      "verdict": "WORSE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.0190771565644359,
+      "daily_r_diff_hi": 0.08754080918211486,
+      "daily_r_diff_lo": -0.040679313750195206,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0656214535347154,
+      "logloss_gain_per_day": -0.04780632012078385,
+      "model": "mlp",
+      "p_decision": 0.28084448093025255,
+      "p_logloss": 0.9663232522589413,
+      "p_logloss_worse": 0.033676747741058714,
+      "t_decision": 0.5803346549009956,
+      "t_logloss": -1.829307902505652,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.002780599831701458,
+      "daily_r_diff_hi": 0.014905801869210398,
+      "daily_r_diff_lo": -0.00899458653239112,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0656214535347154,
+      "logloss_gain_per_day": -0.031683899444538845,
+      "model": "mean_ens",
+      "p_decision": 0.330123500912162,
+      "p_logloss": 0.9725786994565095,
+      "p_logloss_worse": 0.02742130054349044,
+      "t_decision": 0.4395721686029402,
+      "t_logloss": -1.9201211283466777,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.007524745919414106,
+      "daily_r_diff_hi": 0.08541365013941762,
+      "daily_r_diff_lo": -0.058309462706058315,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.0034370354736001536,
+      "logloss_gain_per_day": -0.01639681728089503,
+      "model": "stack",
+      "p_decision": 0.42204279921903,
+      "p_logloss": 0.9995703705658,
+      "p_logloss_worse": 0.0004296294342000192,
+      "t_decision": 0.1966702423316114,
+      "t_logloss": -3.3329645600393834,
+      "verdict": "WORSE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": -0.024015843002754583,
+      "daily_r_diff_hi": 0.08463732318975674,
+      "daily_r_diff_lo": -0.13478816355490972,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 7.796860074807936e-05,
+      "logloss_gain_per_day": -0.24514978768084392,
+      "model": "regime_hgb",
+      "p_decision": 0.6636944667177687,
+      "p_logloss": 0.9999922031399252,
+      "p_logloss_worse": 7.796860074807936e-06,
+      "t_decision": -0.4225671934413466,
+      "t_logloss": -4.320130153262543,
+      "verdict": "WORSE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.010289660550065548,
+      "daily_r_diff_hi": 0.026166603640963775,
+      "daily_r_diff_lo": -0.005278632078890246,
+      "holm_p_decision": 0.7639041658061824,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.007424056736352146,
+      "logloss_gain_per_day": -0.05903304409366995,
+      "model": "bag_hgb",
+      "p_decision": 0.07639041658061824,
+      "p_logloss": 0.9989394204662354,
+      "p_logloss_worse": 0.0010605795337645923,
+      "t_decision": 1.4297776936501552,
+      "t_logloss": -3.0727221206070627,
+      "verdict": "WORSE",
+      "vs": "prior"
+     }
+    ],
+    "vs_take_all": [
+     {
+      "daily_r_diff": 0.24153851463993495,
+      "holm_p": 0.5760056030535989,
+      "model": "prior",
+      "p": 0.06529876603300545,
+      "t": 1.5117497700689806
+     },
+     {
+      "daily_r_diff": 0.20499569094629422,
+      "holm_p": 0.5760056030535989,
+      "model": "logistic",
+      "p": 0.07368861471073258,
+      "t": 1.4488580463848308
+     },
+     {
+      "daily_r_diff": 0.24110474066786214,
+      "holm_p": 0.5760056030535989,
+      "model": "hgb",
+      "p": 0.06574152546293205,
+      "t": 1.5082793308636566
+     },
+     {
+      "daily_r_diff": 0.24153851463993495,
+      "holm_p": 0.5760056030535989,
+      "model": "xgb",
+      "p": 0.06529876603300545,
+      "t": 1.5117497700689806
+     },
+     {
+      "daily_r_diff": 0.24037710296653145,
+      "holm_p": 0.5760056030535989,
+      "model": "lgbm",
+      "p": 0.06626814650567954,
+      "t": 1.5041750778141774
+     },
+     {
+      "daily_r_diff": 0.24237764976074677,
+      "holm_p": 0.5760056030535989,
+      "model": "rf",
+      "p": 0.06468574205310418,
+      "t": 1.5165850427097536
+     },
+     {
+      "daily_r_diff": 0.26061567120437085,
+      "holm_p": 0.5760056030535989,
+      "model": "mlp",
+      "p": 0.05236414573214536,
+      "t": 1.6223506403850891
+     },
+     {
+      "daily_r_diff": 0.2443191144716364,
+      "holm_p": 0.5760056030535989,
+      "model": "mean_ens",
+      "p": 0.0626727635625118,
+      "t": 1.5327172902473123
+     },
+     {
+      "daily_r_diff": 0.24906326055934902,
+      "holm_p": 0.5760056030535989,
+      "model": "stack",
+      "p": 0.06464040343514012,
+      "t": 1.5169440652042536
+     },
+     {
+      "daily_r_diff": 0.21752267163718034,
+      "holm_p": 0.5760056030535989,
+      "model": "regime_hgb",
+      "p": 0.06749017625330361,
+      "t": 1.4947475001092267
+     },
+     {
+      "daily_r_diff": 0.2518281751900005,
+      "holm_p": 0.5760056030535989,
+      "model": "bag_hgb",
+      "p": 0.057570548075709944,
+      "t": 1.5754999232963902
+     }
+    ]
+   },
+   "seconds": 81.2,
+   "uncertainty": {
+    "dispersion": {
+     "bag_hgb": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6933912153461955,
+        "mean_dispersion": 0.04918845539205655,
+        "n": 2065,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6990202100302596,
+        "mean_dispersion": 0.08143280493376329,
+        "n": 2064,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6958478130194542,
+        "mean_dispersion": 0.12354658825361779,
+        "n": 2064,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.08471687839873267,
+      "members": 5,
+      "n": 6193,
+      "spearman_dispersion_vs_logloss": 0.009758004518906859,
+      "spearman_p": 0.4426206051340923,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.00032015799007992967,
+        234
+       ],
+       [
+        0.5,
+        -0.021961745201280306,
+        586
+       ],
+       [
+        1.0,
+        -0.021326085312120973,
+        1172
+       ]
+      ]
+     },
+     "mean_ens": {
+      "by_tercile": [
+       {
+        "log_loss": 0.690418731410306,
+        "mean_dispersion": 0.0022133451206567743,
+        "n": 2317,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6960261971936067,
+        "mean_dispersion": 0.005779830109654259,
+        "n": 1854,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6897312586521294,
+        "mean_dispersion": 0.03167264962127501,
+        "n": 2022,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.012899438592294334,
+      "members": 3,
+      "n": 6193,
+      "spearman_dispersion_vs_logloss": -0.050200840697042726,
+      "spearman_p": 7.740990819997167e-05,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        -0.02232340143248292,
+        245
+       ],
+       [
+        0.5,
+        0.033482558630718647,
+        612
+       ],
+       [
+        1.0,
+        -0.026272725417585886,
+        1224
+       ]
+      ]
+     },
+     "stack": {
+      "by_tercile": [
+       {
+        "log_loss": 0.6902579812278908,
+        "mean_dispersion": 0.007710053602641762,
+        "n": 2065,
+        "tercile": 1
+       },
+       {
+        "log_loss": 0.6878419800614648,
+        "mean_dispersion": 0.02247691590087736,
+        "n": 2064,
+        "tercile": 2
+       },
+       {
+        "log_loss": 0.6904539344974113,
+        "mean_dispersion": 0.05206412175837273,
+        "n": 2064,
+        "tercile": 3
+       }
+      ],
+      "mean_dispersion": 0.02741384828324679,
+      "members": 3,
+      "n": 6193,
+      "spearman_dispersion_vs_logloss": -0.011478295378070238,
+      "spearman_p": 0.3664521605524084,
+      "taken_trades_low_dispersion_first": [
+       [
+        0.2,
+        0.14837016968052932,
+        131
+       ],
+       [
+        0.5,
+        0.06433446082796307,
+        328
+       ],
+       [
+        1.0,
+        -0.04218610769991951,
+        655
+       ]
+      ]
+     }
+    },
+    "online": {
+     "logistic": {
+      "aci_coverage": 0.7973354864755753,
+      "aci_final_alpha": 0.06799999999999991,
+      "aci_mean_set_size": 1.5454178441663302,
+      "n": 4954,
+      "per_block": [
+       {
+        "aci": 0.7998385794995965,
+        "block": 1,
+        "n": 1239,
+        "static": 0.8563357546408394
+       },
+       {
+        "aci": 0.7982243744955609,
+        "block": 2,
+        "n": 1239,
+        "static": 0.8813559322033898
+       },
+       {
+        "aci": 0.8069466882067852,
+        "block": 3,
+        "n": 1238,
+        "static": 0.8578352180936996
+       },
+       {
+        "aci": 0.784329563812601,
+        "block": 4,
+        "n": 1238,
+        "static": 0.9151857835218093
+       }
+      ],
+      "static_coverage": 0.8776746063786839,
+      "static_mean_set_size": 1.718005651998385,
+      "static_q": 0.5628850289439439,
+      "target": 0.8
+     },
+     "mlp": {
+      "aci_coverage": 0.7993540573274122,
+      "aci_final_alpha": 0.16799999999999998,
+      "aci_mean_set_size": 1.5125151392813887,
+      "n": 4954,
+      "per_block": [
+       {
+        "aci": 0.8062953995157385,
+        "block": 1,
+        "n": 1239,
+        "static": 0.8757062146892656
+       },
+       {
+        "aci": 0.8103309120258273,
+        "block": 2,
+        "n": 1239,
+        "static": 0.8789346246973365
+       },
+       {
+        "aci": 0.7940226171243941,
+        "block": 3,
+        "n": 1238,
+        "static": 0.9054927302100162
+       },
+       {
+        "aci": 0.7867528271405493,
+        "block": 4,
+        "n": 1238,
+        "static": 0.9991922455573505
+       }
+      ],
+      "static_coverage": 0.9148163100524829,
+      "static_mean_set_size": 1.7971336293903917,
+      "static_q": 0.585858585858586,
+      "target": 0.8
+     }
+    }
+   }
+  },
+  "regime": {
+   "expected": "market-context models beat their regime-blind twins",
+   "leakage": {
+    "clean": true,
+    "folds": [
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 0,
+      "overlapping_pairs": 0,
+      "purged": 5,
+      "shared_indices": 0,
+      "test": 2019,
+      "train": 4033,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 1,
+      "overlapping_pairs": 0,
+      "purged": 45,
+      "shared_indices": 0,
+      "test": 2019,
+      "train": 6012,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 2,
+      "overlapping_pairs": 0,
+      "purged": 16,
+      "shared_indices": 0,
+      "test": 2019,
+      "train": 8060,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 3,
+      "overlapping_pairs": 0,
+      "purged": 21,
+      "shared_indices": 0,
+      "test": 2018,
+      "train": 10074,
+      "train_resolves_before_test": true
+     },
+     {
+      "embargo_violations": 0,
+      "embargoed": 0,
+      "fold": 4,
+      "overlapping_pairs": 0,
+      "purged": 13,
+      "shared_indices": 0,
+      "test": 2018,
+      "train": 12100,
+      "train_resolves_before_test": true
+     }
+    ]
+   },
+   "matched": false,
+   "model_cards": [
+    {
+     "dataset_digest": "93dde77c8956b0fc214de4afca597b462281d7083cab45fd01cc882531df3898",
+     "digest": "1b5c34b620ffcc98c24d69d4407218f96de67e4f454c6302710903d1d62fcafa",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L."
+     ],
+     "markdown": "#### Model card: `logistic_noctx` (baseline, scenario `regime`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `93dde77c8956`, 14131 labelled rows (10093 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `rsi_below_40`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000035-1c75e3d0`; this family has been charged for 7 trials\n- **Out-of-fold metrics:** AUC 0.539 \u00b7 log loss 0.6969 \u00b7 Brier 0.2515 \u00b7 ECE 0.045 \u00b7 trades 4878 \u00b7 mean net R/trade 0.108 \u00b7 conformal coverage 0.84\n- **vs `prior`:** NO_EVIDENCE (Holm p: probabilities 1.000, decisions 0.068; daily net-R diff +0.350 [+0.026, +0.729])\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `1b5c34b620ffcc98`",
+     "metrics": {
+      "auc": 0.5386194681640787,
+      "brier": 0.2514854008130959,
+      "conformal_coverage": 0.8389893485261333,
+      "conformal_mean_net_r": 0.33748189960671704,
+      "conformal_singleton_share": 0.3762695070596978,
+      "conformal_trades": 950.0,
+      "coverage": 0.48330526107203015,
+      "ece": 0.04496407574651021,
+      "fit_seconds": 1.4262471199035645,
+      "log_loss": 0.6968605830927882,
+      "mean_net_r_per_trade": 0.10792891992041038,
+      "n_trades": 4878.0,
+      "total_net_r": 526.4772713717618,
+      "win_rate_taken": 0.511890118901189
+     },
+     "model": "logistic_noctx",
+     "n_features": 75,
+     "n_oof_rows": 10093,
+     "n_rows": 14131,
+     "n_trials_charged": 7,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": null,
+     "role": "baseline",
+     "sampler": "rsi_below_40",
+     "scenario": "regime",
+     "trial_id": "T000035-1c75e3d0",
+     "versus": [
+      {
+       "daily_r_diff": 0.35005506434935446,
+       "daily_r_diff_hi": 0.7287977831559536,
+       "daily_r_diff_lo": 0.025645810668215255,
+       "holm_p_decision": 0.0681064538645319,
+       "holm_p_logloss": 1.0,
+       "verdict": "NO_EVIDENCE",
+       "vs": "prior"
+      }
+     ]
+    },
+    {
+     "dataset_digest": "93dde77c8956b0fc214de4afca597b462281d7083cab45fd01cc882531df3898",
+     "digest": "711f1d0a9b390c319ac414d5860427648a2b9da6d10ae6e6d8104860729b39ee",
+     "extra": {},
+     "feature_digest": "5a7d04f9d7a397b5c9d1e11478f545da4d7f6975c04b04698ca9cc5a31f9ec2f",
+     "intended_use": "Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.",
+     "label": {
+      "horizon": 5,
+      "sl_mult": 1.0,
+      "tp_mult": 1.0
+     },
+     "library_versions": {
+      "catboost": "1.2.10",
+      "lightgbm": "4.7.0",
+      "numpy": "2.5.4",
+      "pandas": "2.2.3",
+      "scikit-learn": "1.8.0",
+      "scipy": "1.18.1",
+      "xgboost": "3.4.1"
+     },
+     "limitations": [
+      "Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees.",
+      "Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed.",
+      "Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L.",
+      "Did not show IMPROVES against the logistic_noctx baseline: do not prefer it.",
+      "Integrity report card verdict INCONCLUSIVE."
+     ],
+     "markdown": "#### Model card: `logistic` (challenger, scenario `regime`)\n\n- **Intended use:** Offline research on synthetic or approved historical data only. Not approved for live or paper trading, order generation or production scoring.\n- **Recommendation:** keep the baseline\n- **Data:** dataset `93dde77c8956`, 14131 labelled rows (10093 out-of-fold), 75 features (digest `5a7d04f9d7a3`)\n- **Label:** barrier {'tp_mult': 1.0, 'sl_mult': 1.0, 'horizon': 5}, sampler `rsi_below_40`\n- **Protocol:** {'walk_forward_folds': 5, 'embargo_days': 6, 'cost_R': 0.05, 'threshold': 'chosen on past folds only', 'conformal_alpha': 0.2}\n- **Trial:** `T000036-6b19a30e`; this family has been charged for 7 trials\n- **Out-of-fold metrics:** AUC 0.553 \u00b7 log loss 0.6893 \u00b7 Brier 0.2478 \u00b7 ECE 0.033 \u00b7 trades 4520 \u00b7 mean net R/trade 0.114 \u00b7 conformal coverage 0.82\n- **vs `logistic_noctx`:** NO_EVIDENCE (Holm p: probabilities 0.018, decisions 1.000; daily net-R diff -0.012 [-0.172, +0.164])\n- **vs `prior`:** NO_EVIDENCE (Holm p: probabilities 0.908, decisions 0.092; daily net-R diff +0.338 [+0.020, +0.665])\n- **vs `logistic_noctx`:** NO_EVIDENCE (Holm p: probabilities 0.004, decisions 0.967; daily net-R diff -0.012 [-0.172, +0.164])\n- **Integrity report card:** INCONCLUSIVE (pipeline canary battery missing or not CALIBRATED)\n- **Limitations:** Out-of-fold metrics come from one walk-forward path; they are estimates with the uncertainty shown, not guarantees. Conformal coverage assumes exchangeability, which markets violate; coverage is measured, not assumed. Synthetic results describe the machinery, never the market. Net R is a counterfactual outcome, not P&L. Did not show IMPROVES against the logistic_noctx baseline: do not prefer it. Integrity report card verdict INCONCLUSIVE.\n- **Libraries:** catboost 1.2.10, lightgbm 4.7.0, numpy 2.5.4, pandas 2.2.3, scikit-learn 1.8.0, scipy 1.18.1, xgboost 3.4.1\n- **Card digest:** `711f1d0a9b390c31`",
+     "metrics": {
+      "auc": 0.553226387682112,
+      "brier": 0.24776964995117726,
+      "conformal_coverage": 0.8204111964329948,
+      "conformal_mean_net_r": 0.24645881509107584,
+      "conformal_singleton_share": 0.41305424820411196,
+      "conformal_trades": 1434.0,
+      "coverage": 0.4478351332606757,
+      "ece": 0.0333900814432527,
+      "fit_seconds": 1.5991017818450928,
+      "log_loss": 0.6893498482176401,
+      "mean_net_r_per_trade": 0.1138611861980239,
+      "n_trades": 4520.0,
+      "total_net_r": 514.6525616150681,
+      "win_rate_taken": 0.5221238938053098
+     },
+     "model": "logistic",
+     "n_features": 75,
+     "n_oof_rows": 10093,
+     "n_rows": 14131,
+     "n_trials_charged": 7,
+     "protocol": {
+      "conformal_alpha": 0.2,
+      "cost_R": 0.05,
+      "embargo_days": 6,
+      "threshold": "chosen on past folds only",
+      "walk_forward_folds": 5
+     },
+     "recommendation": "keep the baseline",
+     "report_card": {
+      "reasons": [
+       "pipeline canary battery missing or not CALIBRATED"
+      ],
+      "verdict": "INCONCLUSIVE"
+     },
+     "role": "challenger",
+     "sampler": "rsi_below_40",
+     "scenario": "regime",
+     "trial_id": "T000036-6b19a30e",
+     "versus": [
+      {
+       "daily_r_diff": -0.011992606244111416,
+       "daily_r_diff_hi": 0.16412699960910446,
+       "daily_r_diff_lo": -0.17227608528554963,
+       "holm_p_decision": 1.0,
+       "holm_p_logloss": 0.017769337951403723,
+       "verdict": "NO_EVIDENCE",
+       "vs": "logistic_noctx"
+      },
+      {
+       "daily_r_diff": 0.338062458105243,
+       "daily_r_diff_hi": 0.665380013124987,
+       "daily_r_diff_lo": 0.019614283115647422,
+       "holm_p_decision": 0.09152293039649136,
+       "holm_p_logloss": 0.908475855913244,
+       "verdict": "NO_EVIDENCE",
+       "vs": "prior"
+      },
+      {
+       "daily_r_diff": -0.011992606244111416,
+       "daily_r_diff_hi": 0.16412699960910446,
+       "daily_r_diff_lo": -0.17227608528554963,
+       "holm_p_decision": 0.9671756006239512,
+       "holm_p_logloss": 0.003553867590280745,
+       "verdict": "NO_EVIDENCE",
+       "vs": "logistic_noctx"
+      }
+     ]
+    }
+   ],
+   "observed": "context pairs better: none",
+   "run": {
+    "best_challenger": "logistic",
+    "comparisons": [
+     {
+      "daily_r_diff": -0.011992606244111416,
+      "daily_r_diff_hi": 0.16412699960910446,
+      "daily_r_diff_lo": -0.17227608528554963,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.017769337951403723,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.07688219786497981,
+      "model": "logistic",
+      "p_decision": 0.5537032259872322,
+      "p_logloss": 0.003553867590280745,
+      "p_logloss_worse": 0.9964461324097192,
+      "skill_gate": "downgraded from PROBABILITIES_ONLY: no matching significant gain over the base-rate prior",
+      "t_decision": -0.13502317891235224,
+      "t_logloss": 2.6917539983819254,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic_noctx"
+     },
+     {
+      "daily_r_diff": -0.0635937782119427,
+      "daily_r_diff_hi": 0.25495271946682097,
+      "daily_r_diff_lo": -0.3964606727451665,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.671218313296714,
+      "logloss_gain_per_day": -0.03732845693658796,
+      "model": "hgb_noctx",
+      "p_decision": 0.6516985297524074,
+      "p_logloss": 0.8321954216758215,
+      "p_logloss_worse": 0.1678045783241785,
+      "skill_gate": "",
+      "t_decision": -0.3899102144528685,
+      "t_logloss": -0.9628771922248374,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic_noctx"
+     },
+     {
+      "daily_r_diff": -0.059116308303473926,
+      "daily_r_diff_hi": 0.20904406451045207,
+      "daily_r_diff_lo": -0.3721021603467277,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.2507489472812347,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.060570460387927086,
+      "model": "hgb",
+      "p_decision": 0.6551382890543269,
+      "p_logloss": 0.06268723682030868,
+      "p_logloss_worse": 0.9373127631796914,
+      "skill_gate": "",
+      "t_decision": -0.39923043188142165,
+      "t_logloss": 1.532599869648481,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic_noctx"
+     },
+     {
+      "daily_r_diff": -0.15060296949297744,
+      "daily_r_diff_hi": 0.12384986885532266,
+      "daily_r_diff_lo": -0.46874818897488907,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 0.28924322429053795,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.05301972211759519,
+      "model": "xgb",
+      "p_decision": 0.8480826508909534,
+      "p_logloss": 0.09641440809684598,
+      "p_logloss_worse": 0.903585591903154,
+      "skill_gate": "",
+      "t_decision": -1.0282447816330966,
+      "t_logloss": 1.3022562085830611,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic_noctx"
+     },
+     {
+      "daily_r_diff": -0.05812281707381441,
+      "daily_r_diff_hi": 0.2289105396111609,
+      "daily_r_diff_lo": -0.3741948659473371,
+      "holm_p_decision": 1.0,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.4405423961563282,
+      "logloss_gain_per_day": -0.06401648960189477,
+      "model": "regime_hgb",
+      "p_decision": 0.6482051793355147,
+      "p_logloss": 0.9118915207687344,
+      "p_logloss_worse": 0.08810847923126564,
+      "skill_gate": "",
+      "t_decision": -0.38047932442310867,
+      "t_logloss": -1.3524951837793442,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "NO_EVIDENCE",
+      "vs": "logistic_noctx"
+     }
+    ],
+    "dataset_digest": "93dde77c8956b0fc214de4afca597b462281d7083cab45fd01cc882531df3898",
+    "fold_sizes": [
+     {
+      "embargoed": 0,
+      "purged": 5,
+      "test": 2019,
+      "train": 4033
+     },
+     {
+      "embargoed": 0,
+      "purged": 45,
+      "test": 2019,
+      "train": 6012
+     },
+     {
+      "embargoed": 0,
+      "purged": 16,
+      "test": 2019,
+      "train": 8060
+     },
+     {
+      "embargoed": 0,
+      "purged": 21,
+      "test": 2018,
+      "train": 10074
+     },
+     {
+      "embargoed": 0,
+      "purged": 13,
+      "test": 2018,
+      "train": 12100
+     }
+    ],
+    "market_digest": "f1f1e296ad25f8638218c2b8e8c4582484cf09864c01934e5c763c39e99492e9",
+    "metrics": {
+     "hgb": {
+      "auc": 0.5374043535140491,
+      "brier": 0.24835946913884405,
+      "conformal_coverage": 0.841466435471885,
+      "conformal_mean_net_r": 0.4500396131013014,
+      "conformal_singleton_share": 0.3739162744612336,
+      "conformal_trades": 683.0,
+      "coverage": 0.8078866541167146,
+      "ece": 0.01864752436619954,
+      "fit_seconds": 3.9507522583007812,
+      "log_loss": 0.690943365819183,
+      "mean_net_r_per_trade": 0.05741827218353407,
+      "n_trades": 8154.0,
+      "total_net_r": 468.1885913845368,
+      "win_rate_taken": 0.49350012263919546
+     },
+     "hgb_noctx": {
+      "auc": 0.5199737724966469,
+      "brier": 0.25236436839442483,
+      "conformal_coverage": 0.8211543225167204,
+      "conformal_mean_net_r": 0.23599787998797375,
+      "conformal_singleton_share": 0.36859053752786725,
+      "conformal_trades": 312.0,
+      "coverage": 0.9975230357673636,
+      "ece": 0.035350455868474635,
+      "fit_seconds": 3.9952392578125,
+      "log_loss": 0.7005072548989386,
+      "mean_net_r_per_trade": 0.04606414442339955,
+      "n_trades": 10068.0,
+      "total_net_r": 463.7738060547867,
+      "win_rate_taken": 0.48470401271354785
+     },
+     "logistic": {
+      "auc": 0.553226387682112,
+      "brier": 0.24776964995117726,
+      "conformal_coverage": 0.8204111964329948,
+      "conformal_mean_net_r": 0.24645881509107584,
+      "conformal_singleton_share": 0.41305424820411196,
+      "conformal_trades": 1434.0,
+      "coverage": 0.4478351332606757,
+      "ece": 0.0333900814432527,
+      "fit_seconds": 1.5991017818450928,
+      "log_loss": 0.6893498482176401,
+      "mean_net_r_per_trade": 0.1138611861980239,
+      "n_trades": 4520.0,
+      "total_net_r": 514.6525616150681,
+      "win_rate_taken": 0.5221238938053098
+     },
+     "logistic_noctx": {
+      "auc": 0.5386194681640787,
+      "brier": 0.2514854008130959,
+      "conformal_coverage": 0.8389893485261333,
+      "conformal_mean_net_r": 0.33748189960671704,
+      "conformal_singleton_share": 0.3762695070596978,
+      "conformal_trades": 950.0,
+      "coverage": 0.48330526107203015,
+      "ece": 0.04496407574651021,
+      "fit_seconds": 1.4262471199035645,
+      "log_loss": 0.6968605830927882,
+      "mean_net_r_per_trade": 0.10792891992041038,
+      "n_trades": 4878.0,
+      "total_net_r": 526.4772713717618,
+      "win_rate_taken": 0.511890118901189
+     },
+     "prior": {
+      "auc": 0.49520385262139455,
+      "brier": 0.2500520355016595,
+      "conformal_coverage": 0.7511766162992322,
+      "conformal_mean_net_r": 0.0,
+      "conformal_singleton_share": 0.5,
+      "conformal_trades": 0.0,
+      "coverage": 0.6000198157138611,
+      "ece": 0.014039716686195525,
+      "fit_seconds": 0.007340669631958008,
+      "log_loss": 0.6932512744757742,
+      "mean_net_r_per_trade": 0.02994104655272432,
+      "n_trades": 6056.0,
+      "total_net_r": 181.32297792329848,
+      "win_rate_taken": 0.47787318361955083
+     },
+     "regime_hgb": {
+      "auc": 0.532424291368149,
+      "brier": 0.2521934508576386,
+      "conformal_coverage": 0.7188506316571711,
+      "conformal_mean_net_r": 0.28126285833486275,
+      "conformal_singleton_share": 0.6054000495417389,
+      "conformal_trades": 385.0,
+      "coverage": 0.9072624591300902,
+      "ece": 0.04251839437054851,
+      "fit_seconds": 9.553487539291382,
+      "log_loss": 0.7031144480236778,
+      "mean_net_r_per_trade": 0.0512360132944175,
+      "n_trades": 9157.0,
+      "total_net_r": 469.1681737369811,
+      "win_rate_taken": 0.4906628808561756
+     },
+     "xgb": {
+      "auc": 0.5311731207781638,
+      "brier": 0.24901389479862018,
+      "conformal_coverage": 0.7634381966807035,
+      "conformal_mean_net_r": 0.2955695954274636,
+      "conformal_singleton_share": 0.5221699281644786,
+      "conformal_trades": 722.0,
+      "coverage": 0.7769741404934113,
+      "ece": 0.030434524351992096,
+      "fit_seconds": 1.8187003135681152,
+      "log_loss": 0.6916810085353772,
+      "mean_net_r_per_trade": 0.04819978875946012,
+      "n_trades": 7842.0,
+      "total_net_r": 377.98274345168625,
+      "win_rate_taken": 0.4892884468247896
+     }
+    },
+    "n_features": 75,
+    "n_rows": 14131,
+    "n_trials_charged": 7,
+    "oof_rows": 10093,
+    "pairs": [
+     {
+      "daily_r_diff": -0.011992606244111416,
+      "daily_r_diff_hi": 0.16412699960910446,
+      "daily_r_diff_lo": -0.17227608528554963,
+      "holm_p_decision": 0.9671756006239512,
+      "holm_p_logloss": 0.003553867590280745,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.07688219786497981,
+      "model": "logistic",
+      "p_decision": 0.5537032259872322,
+      "p_logloss": 0.003553867590280745,
+      "p_logloss_worse": 0.9964461324097192,
+      "skill_gate": "downgraded from PROBABILITIES_ONLY: no matching significant gain over the base-rate prior",
+      "t_decision": -0.13502317891235224,
+      "t_logloss": 2.6917539983819254,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "logistic_noctx"
+     },
+     {
+      "daily_r_diff": 0.004477469908468743,
+      "daily_r_diff_hi": 0.19519364589544555,
+      "daily_r_diff_lo": -0.2063678376109139,
+      "holm_p_decision": 0.9671756006239512,
+      "holm_p_logloss": 5.689864351260516e-05,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.09789891732451504,
+      "model": "hgb",
+      "p_decision": 0.4835878003119756,
+      "p_logloss": 2.844932175630258e-05,
+      "p_logloss_worse": 0.9999715506782437,
+      "skill_gate": "downgraded from PROBABILITIES_ONLY: no matching significant gain over the base-rate prior",
+      "t_decision": 0.04115089496528338,
+      "t_logloss": 4.02531687976587,
+      "verdict": "NO_EVIDENCE",
+      "verdict_raw": "PROBABILITIES_ONLY",
+      "vs": "hgb_noctx"
+     }
+    ],
+    "report_card": {
+     "candidate_id": "regime:logistic",
+     "config": {
+      "ci_level": 0.95,
+      "cost_multipliers": [
+       1.0,
+       2.0
+      ],
+      "dsr_min": 0.95,
+      "hac_lags": 5,
+      "min_effective_n": 30,
+      "n_boot": 300,
+      "pbo_blocks": 10,
+      "pbo_max": 0.25,
+      "require_canary": true,
+      "snooping_alpha": 0.05
+     },
+     "disclaimer": "PASS means the candidate survived this offline gauntlet on this data. It is not a validated, realised or tradable edge, and synthetic results never describe markets.",
+     "family_id": "mllab:regime",
+     "inputs": {
+      "canary_plan_digest": null,
+      "family_matrix_digest": "8135e5462e31947d7fc97fcb8995045e7380f53a51a82693545749655b050d91",
+      "gross_digest": "5f24723d0fb33fe7099ec9729e48a87a6e7cd4b787c683127e5456fea8169e43"
+     },
+     "numbers": {
+      "ci_hi_net_1x": 0.14860601506035656,
+      "ci_hi_net_2x": 0.09072795411990116,
+      "ci_lo_net_1x": 0.08380024604339015,
+      "ci_lo_net_2x": 0.030392157683687773,
+      "cost_per_obs": 0.05,
+      "dsr": 0.9999999998415683,
+      "effective_n": 2473.417023878998,
+      "expected_shortfall_95": -1.3367055112242086,
+      "kurtosis": 1.2833459681569208,
+      "max_drawdown": 82.87595896884005,
+      "mean_gross": 0.1638611861980239,
+      "mean_net_1x": 0.1138611861980239,
+      "mean_net_2x": 0.06386118619802389,
+      "n_obs": 4520.0,
+      "n_trials": 7.0,
+      "p_hac_net_1x": 3.9795708088710575e-09,
+      "p_hac_net_2x": 0.0006064431076153497,
+      "payoff_ratio_diagnostic": 0.9305137694938309,
+      "pbo": 0.09126984126984126,
+      "provenance_verified": 1.0,
+      "psr_vs_0": 0.99999999999999,
+      "reality_check_p": 0.006666666666666667,
+      "skew": -0.32712173685871754,
+      "spa_p": 0.0,
+      "sr0_expected_max": 0.020629308211998418,
+      "sr_net_per_obs": 0.116004825454201,
+      "t_hac_net_1x": 5.769321323566687,
+      "t_hac_net_2x": 3.235832293541626,
+      "win_rate_diagnostic": 0.577212389380531
+     },
+     "reasons": [
+      "pipeline canary battery missing or not CALIBRATED"
+     ],
+     "verdict": "INCONCLUSIVE"
+    },
+    "runtime_seconds": 24.1,
+    "scenario": "regime",
+    "take_all_mean_net_r": 0.04794346791806903,
+    "thresholds": {
+     "hgb": [
+      0.4684196737473641,
+      0.5,
+      0.420863309352518,
+      0.420863309352518,
+      0.420863309352518
+     ],
+     "hgb_noctx": [
+      0.4684196737473641,
+      0.02,
+      0.02,
+      0.4447653429602888,
+      0.45643153526970953
+     ],
+     "logistic": [
+      0.4684196737473641,
+      0.48528260890361596,
+      0.49799825015446214,
+      0.5350175639495277,
+      0.5003076438013034
+     ],
+     "logistic_noctx": [
+      0.4684196737473641,
+      0.536596177300648,
+      0.535211605551047,
+      0.535063579441635,
+      0.4770274531379235
+     ],
+     "prior": [
+      0.4684196737473641,
+      null,
+      0.49883566200931473,
+      0.49883566200931473,
+      0.4949374627754616
+     ],
+     "regime_hgb": [
+      0.4684196737473641,
+      0.5,
+      0.3939393939393939,
+      0.28205128205128205,
+      0.35195530726256985
+     ],
+     "xgb": [
+      0.4684196737473641,
+      0.5172412991523743,
+      0.44186046719551086,
+      0.46067413687705994,
+      0.019999999552965164
+     ]
+    },
+    "trial_ids": {
+     "hgb": "T000038-59f9f09c",
+     "hgb_noctx": "T000037-5754d808",
+     "logistic": "T000036-6b19a30e",
+     "logistic_noctx": "T000035-1c75e3d0",
+     "prior": "T000034-647ba95c",
+     "regime_hgb": "T000040-7a139ebf",
+     "xgb": "T000039-fac8ff8b"
+    },
+    "vs_prior": [
+     {
+      "daily_r_diff": 0.35005506434935446,
+      "daily_r_diff_hi": 0.7287977831559536,
+      "daily_r_diff_lo": 0.025645810668215255,
+      "holm_p_decision": 0.0681064538645319,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.6279017523464876,
+      "logloss_gain_per_day": -0.036945995812903504,
+      "model": "logistic_noctx",
+      "p_decision": 0.013621290772906379,
+      "p_logloss": 0.843024561913378,
+      "p_logloss_worse": 0.1569754380866219,
+      "t_decision": 2.208024267452692,
+      "t_logloss": -1.0069664934304547,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.338062458105243,
+      "daily_r_diff_hi": 0.665380013124987,
+      "daily_r_diff_lo": 0.019614283115647422,
+      "holm_p_decision": 0.09152293039649136,
+      "holm_p_logloss": 0.908475855913244,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.03993620205207628,
+      "model": "logistic",
+      "p_decision": 0.024584547609345742,
+      "p_logloss": 0.15141264265220733,
+      "p_logloss_worse": 0.8485873573477927,
+      "t_decision": 1.967122453806845,
+      "t_logloss": 1.0303935809264615,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.28646128613741173,
+      "daily_r_diff_hi": 0.5974511900101577,
+      "daily_r_diff_lo": -0.037683401172464645,
+      "holm_p_decision": 0.0955511594908918,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.06999823642042516,
+      "logloss_gain_per_day": -0.07427445274949145,
+      "model": "hgb_noctx",
+      "p_decision": 0.0477755797454459,
+      "p_logloss": 0.9883336272632625,
+      "p_logloss_worse": 0.011666372736737526,
+      "t_decision": 1.6668151867791838,
+      "t_logloss": -2.2679419430541823,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.29093875604588043,
+      "daily_r_diff_hi": 0.5467115498587544,
+      "daily_r_diff_lo": 0.05293290712968854,
+      "holm_p_decision": 0.05334626934875378,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.02362446457502357,
+      "model": "hgb",
+      "p_decision": 0.008891044891458963,
+      "p_logloss": 0.26164188509797814,
+      "p_logloss_worse": 0.7383581149020219,
+      "t_decision": 2.3701246356302414,
+      "t_logloss": 0.638291767178824,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.19945209485637697,
+      "daily_r_diff_hi": 0.4456216829091636,
+      "daily_r_diff_lo": -0.0372821221968149,
+      "holm_p_decision": 0.0955511594908918,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 1.0,
+      "logloss_gain_per_day": 0.016073726304691695,
+      "model": "xgb",
+      "p_decision": 0.05014162427162194,
+      "p_logloss": 0.3369605073298063,
+      "p_logloss_worse": 0.6630394926701937,
+      "t_decision": 1.6434819904020046,
+      "t_logloss": 0.4207727735940333,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     },
+     {
+      "daily_r_diff": 0.29193224727554,
+      "daily_r_diff_hi": 0.6077229854268444,
+      "daily_r_diff_lo": 0.013329369314422603,
+      "holm_p_decision": 0.09152293039649136,
+      "holm_p_logloss": 1.0,
+      "holm_p_worse": 0.08065314629250622,
+      "logloss_gain_per_day": -0.10096248541479828,
+      "model": "regime_hgb",
+      "p_decision": 0.02288073259912284,
+      "p_logloss": 0.9838693707414987,
+      "p_logloss_worse": 0.016130629258501245,
+      "t_decision": 1.9975868948760622,
+      "t_logloss": -2.141158498835975,
+      "verdict": "NO_EVIDENCE",
+      "vs": "prior"
+     }
+    ],
+    "vs_take_all": [
+     {
+      "daily_r_diff": -0.30686657583546856,
+      "holm_p": 1.0,
+      "model": "prior",
+      "p": 0.9631757521313332,
+      "t": -1.7887909079838304
+     },
+     {
+      "daily_r_diff": 0.04318848851388584,
+      "holm_p": 1.0,
+      "model": "logistic_noctx",
+      "p": 0.3961611123867034,
+      "t": 0.26329628249677095
+     },
+     {
+      "daily_r_diff": 0.0311958822697744,
+      "holm_p": 1.0,
+      "model": "logistic",
+      "p": 0.42505891540257,
+      "t": 0.18896808471303794
+     },
+     {
+      "daily_r_diff": -0.020405289698056817,
+      "holm_p": 1.0,
+      "model": "hgb_noctx",
+      "p": 0.999337131044029,
+      "t": -3.210349240293164
+     },
+     {
+      "daily_r_diff": -0.015927819789588078,
+      "holm_p": 1.0,
+      "model": "hgb",
+      "p": 0.5582129568550033,
+      "t": -0.14643995683294567
+     },
+     {
+      "daily_r_diff": -0.10741448097909158,
+      "holm_p": 1.0,
+      "model": "xgb",
+      "p": 0.8221375147778291,
+      "t": -0.9235417177937075
+     },
+     {
+      "daily_r_diff": -0.014934328559928572,
+      "holm_p": 1.0,
+      "model": "regime_hgb",
+      "p": 0.5868483784219212,
+      "t": -0.21944522607033146
+     }
+    ]
+   },
+   "seconds": 32.2,
+   "uncertainty": {
+    "dispersion": {},
+    "online": {
+     "logistic": {
+      "aci_coverage": 0.7997275204359673,
+      "aci_final_alpha": 0.178,
+      "aci_mean_set_size": 1.542234332425068,
+      "n": 8074,
+      "per_block": [
+       {
+        "aci": 0.8003962357602774,
+        "block": 1,
+        "n": 2019,
+        "static": 0.8028727092620109
+       },
+       {
+        "aci": 0.7974244675581972,
+        "block": 2,
+        "n": 2019,
+        "static": 0.7716691431401684
+       },
+       {
+        "aci": 0.8047571853320119,
+        "block": 3,
+        "n": 2018,
+        "static": 0.8097125867195243
+       },
+       {
+        "aci": 0.7963330029732408,
+        "block": 4,
+        "n": 2018,
+        "static": 0.88800792864222
+       }
+      ],
+      "static_coverage": 0.8180579638345306,
+      "static_mean_set_size": 1.5788952192221948,
+      "static_q": 0.5592096408876951,
+      "target": 0.8
+     },
+     "logistic_noctx": {
+      "aci_coverage": 0.7993559573941046,
+      "aci_final_alpha": 0.14799999999999996,
+      "aci_mean_set_size": 1.5516472628189248,
+      "n": 8074,
+      "per_block": [
+       {
+        "aci": 0.8003962357602774,
+        "block": 1,
+        "n": 2019,
+        "static": 0.8424962852897474
+       },
+       {
+        "aci": 0.7989103516592373,
+        "block": 2,
+        "n": 2019,
+        "static": 0.8662704309063893
+       },
+       {
+        "aci": 0.8012884043607532,
+        "block": 3,
+        "n": 2018,
+        "static": 0.9103072348860257
+       },
+       {
+        "aci": 0.796828543111992,
+        "block": 4,
+        "n": 2018,
+        "static": 0.9400396432111001
+       }
+      ],
+      "static_coverage": 0.889769630914045,
+      "static_mean_set_size": 1.745479316324003,
+      "static_q": 0.5810714062769357,
+      "target": 0.8
+     }
+    }
+   }
+  }
+ },
+ "calibrated_run": {
+  "best_challenger": "xgb",
+  "comparisons": [
+   {
+    "daily_r_diff": 0.03562279556200164,
+    "daily_r_diff_hi": 0.14299928192110806,
+    "daily_r_diff_lo": -0.06461285118822725,
+    "holm_p_decision": 0.26044574480055616,
+    "holm_p_logloss": 0.009118351722807009,
+    "holm_p_worse": 1.0,
+    "logloss_gain_per_day": 0.07320845385376505,
+    "model": "hgb",
+    "p_decision": 0.26044574480055616,
+    "p_logloss": 0.009118351722807009,
+    "p_logloss_worse": 0.9908816482771929,
+    "skill_gate": "",
+    "t_decision": 0.6419718055254086,
+    "t_logloss": 2.360776790533983,
+    "verdict": "PROBABILITIES_ONLY",
+    "verdict_raw": "PROBABILITIES_ONLY",
+    "vs": "logistic"
+   },
+   {
+    "daily_r_diff": 0.07025206171924168,
+    "daily_r_diff_hi": 0.17430512205576112,
+    "daily_r_diff_lo": -0.036359620962205456,
+    "holm_p_decision": 0.15647348214301726,
+    "holm_p_logloss": 0.003645317591618375,
+    "holm_p_worse": 1.0,
+    "logloss_gain_per_day": 0.08927614567493729,
+    "model": "xgb",
+    "p_decision": 0.07823674107150863,
+    "p_logloss": 0.0018226587958091874,
+    "p_logloss_worse": 0.9981773412041908,
+    "skill_gate": "",
+    "t_decision": 1.4170323068469894,
+    "t_logloss": 2.9073271343557425,
+    "verdict": "PROBABILITIES_ONLY",
+    "verdict_raw": "PROBABILITIES_ONLY",
+    "vs": "logistic"
+   }
+  ],
+  "dataset_digest": "a4760d9bcf14c0381934dceea0f2f2531f85ebd531410ae86868e1485b844a9a",
+  "fold_sizes": [
+   {
+    "embargoed": 0,
+    "purged": 15,
+    "test": 1362,
+    "train": 2709
+   },
+   {
+    "embargoed": 0,
+    "purged": 28,
+    "test": 1362,
+    "train": 4058
+   },
+   {
+    "embargoed": 0,
+    "purged": 23,
+    "test": 1362,
+    "train": 5425
+   },
+   {
+    "embargoed": 0,
+    "purged": 31,
+    "test": 1362,
+    "train": 6779
+   },
+   {
+    "embargoed": 0,
+    "purged": 15,
+    "test": 1361,
+    "train": 8157
+   }
+  ],
+  "market_digest": "283979b7dca6ca5edf58cb6bfa85b8331a3599a5e50ee1baf78689044ec8b6f8",
+  "metrics": {
+   "hgb": {
+    "auc": 0.6337971963108611,
+    "brier": 0.22191795072841722,
+    "conformal_coverage": 0.7147053423903066,
+    "conformal_mean_net_r": 0.021105021168394807,
+    "conformal_singleton_share": 0.7646410868367909,
+    "conformal_trades": 1903.0,
+    "coverage": 0.269496254956675,
+    "ece": 0.020948265262237312,
+    "fit_seconds": 3.3065757751464844,
+    "log_loss": 0.6373353212917254,
+    "mean_net_r_per_trade": 0.05579119965552168,
+    "n_trades": 1835.0,
+    "total_net_r": 102.37685136788228,
+    "win_rate_taken": 0.5095367847411444
+   },
+   "logistic": {
+    "auc": 0.5963017265786084,
+    "brier": 0.22749480894119753,
+    "conformal_coverage": 0.8382595924362034,
+    "conformal_mean_net_r": 0.0198564732551515,
+    "conformal_singleton_share": 0.4286763355975767,
+    "conformal_trades": 1026.0,
+    "coverage": 0.11191070641797621,
+    "ece": 0.03004705465646134,
+    "fit_seconds": 1.0620908737182617,
+    "log_loss": 0.6477752403241832,
+    "mean_net_r_per_trade": 0.08895947096742604,
+    "n_trades": 762.0,
+    "total_net_r": 67.78711687717865,
+    "win_rate_taken": 0.5393700787401575
+   },
+   "prior": {
+    "auc": 0.5047012876707049,
+    "brier": 0.23288026603788653,
+    "conformal_coverage": 0.5687534422617955,
+    "conformal_mean_net_r": -0.23367473552427528,
+    "conformal_singleton_share": 1.0,
+    "conformal_trades": 1362.0,
+    "coverage": 0.0,
+    "ece": 0.008287042727256222,
+    "fit_seconds": 0.005452871322631836,
+    "log_loss": 0.6585109424207899,
+    "mean_net_r_per_trade": 0.0,
+    "n_trades": 0.0,
+    "total_net_r": 0.0,
+    "win_rate_taken": null
+   },
+   "xgb": {
+    "auc": 0.6373346498594042,
+    "brier": 0.22154724718666177,
+    "conformal_coverage": 0.7804295942720764,
+    "conformal_mean_net_r": 0.1175232143541665,
+    "conformal_singleton_share": 0.6546722966770699,
+    "conformal_trades": 1340.0,
+    "coverage": 0.16404758407989425,
+    "ece": 0.02598522025924944,
+    "fit_seconds": 1.5391814708709717,
+    "log_loss": 0.6350439820703481,
+    "mean_net_r_per_trade": 0.12175637314822055,
+    "n_trades": 1117.0,
+    "total_net_r": 136.00186880656236,
+    "win_rate_taken": 0.540734109221128
+   }
+  },
+  "n_features": 75,
+  "n_rows": 9533,
+  "n_trials_charged": 4,
+  "oof_rows": 6809,
+  "pairs": [],
+  "report_card": {
+   "candidate_id": "interaction_calibrated:xgb",
+   "config": {
+    "ci_level": 0.95,
+    "cost_multipliers": [
+     1.0,
+     2.0
+    ],
+    "dsr_min": 0.95,
+    "hac_lags": 5,
+    "min_effective_n": 30,
+    "n_boot": 300,
+    "pbo_blocks": 10,
+    "pbo_max": 0.25,
+    "require_canary": true,
+    "snooping_alpha": 0.05
+   },
+   "disclaimer": "PASS means the candidate survived this offline gauntlet on this data. It is not a validated, realised or tradable edge, and synthetic results never describe markets.",
+   "family_id": "mllab:interaction_calibrated",
+   "inputs": {
+    "canary_plan_digest": "ab76ad0e5e870c897cdc7e6aec4e79cfcfe23e8136c7c0634010479fcf049948",
+    "family_matrix_digest": "3f377cf10172fdb5f930dcb3bb84de0f171d80bbdca302fd33c8eab49c156707",
+    "gross_digest": "17108f9166bf98521c92cbb15f9011a50f642bfb93056018d074f4e9b93757fb"
+   },
+   "numbers": {
+    "canary_false_pass_upper": 0.04950760988822693,
+    "canary_power_at_max_effect": 1.0,
+    "ci_hi_net_1x": 0.18594171896462777,
+    "ci_hi_net_2x": 0.1336184186915193,
+    "ci_lo_net_1x": 0.06740821205496654,
+    "ci_lo_net_2x": -0.0001955944587344067,
+    "cost_per_obs": 0.05,
+    "dsr": 0.9983830223326757,
+    "effective_n": 770.483608478217,
+    "expected_shortfall_95": -1.3816350679715745,
+    "kurtosis": 1.2906796018799072,
+    "max_drawdown": 37.12183620608662,
+    "mean_gross": 0.17175637314822054,
+    "mean_net_1x": 0.12175637314822055,
+    "mean_net_2x": 0.07175637314822052,
+    "n_obs": 1117.0,
+    "n_trials": 4.0,
+    "p_hac_net_1x": 0.00037401728168741393,
+    "p_hac_net_2x": 0.023467923999339852,
+    "payoff_ratio_diagnostic": 0.9017195485378119,
+    "pbo": 0.25396825396825395,
+    "provenance_verified": 1.0,
+    "psr_vs_0": 0.9999648744792967,
+    "reality_check_p": 0.02,
+    "skew": -0.3343913241865664,
+    "spa_p": 0.0033333333333333335,
+    "sr0_expected_max": 0.03149447293463045,
+    "sr_net_per_obs": 0.1214565276318646,
+    "t_hac_net_1x": 3.371340072110126,
+    "t_hac_net_2x": 1.986878632869481,
+    "win_rate_diagnostic": 0.5872873769024172
+   },
+   "reasons": [
+    "net mean CI lower bound <= 0 at 2x costs",
+    "PBO 0.25 > 0.25"
+   ],
+   "verdict": "FAIL"
+  },
+  "runtime_seconds": 6.5,
+  "scenario": "interaction_calibrated",
+  "take_all_mean_net_r": -0.22384612404321172,
+  "thresholds": {
+   "hgb": [
+    0.48320577067282616,
+    0.44285714285714284,
+    0.44285714285714284,
+    0.44285714285714284,
+    0.45041322314049587
+   ],
+   "logistic": [
+    0.48320577067282616,
+    0.5293483355680817,
+    0.5426752611898661,
+    0.5609661366612007,
+    0.5518207604871921
+   ],
+   "prior": [
+    0.48320577067282616,
+    null,
+    null,
+    null,
+    null
+   ],
+   "xgb": [
+    0.48320577067282616,
+    0.7013515007801544,
+    0.4669811725616455,
+    0.47999995946884155,
+    0.47999998927116394
+   ]
+  },
+  "trial_ids": {
+   "hgb": "T000045-994d6be1",
+   "logistic": "T000044-c91727aa",
+   "prior": "T000043-d9c390d7",
+   "xgb": "T000046-80257761"
+  },
+  "vs_prior": [
+   {
+    "daily_r_diff": 0.0698116548683611,
+    "daily_r_diff_hi": 0.15002559360068818,
+    "daily_r_diff_lo": -0.012662323688978155,
+    "holm_p_decision": 0.09583249249024954,
+    "holm_p_logloss": 0.004967675010730065,
+    "holm_p_worse": 1.0,
+    "logloss_gain_per_day": 0.0752825907062768,
+    "model": "logistic",
+    "p_decision": 0.04791624624512477,
+    "p_logloss": 0.004967675010730065,
+    "p_logloss_worse": 0.99503232498927,
+    "t_decision": 1.665402442322492,
+    "t_logloss": 2.578071282805293,
+    "verdict": "PROBABILITIES_ONLY",
+    "vs": "prior"
+   },
+   {
+    "daily_r_diff": 0.10543445043036276,
+    "daily_r_diff_hi": 0.23546959583983706,
+    "daily_r_diff_lo": -0.023375585468498092,
+    "holm_p_decision": 0.09583249249024954,
+    "holm_p_logloss": 0.00011614833139538489,
+    "holm_p_worse": 1.0,
+    "logloss_gain_per_day": 0.14849104456004186,
+    "model": "hgb",
+    "p_decision": 0.06562849220492795,
+    "p_logloss": 5.8074165697692444e-05,
+    "p_logloss_worse": 0.9999419258343023,
+    "t_decision": 1.509163581724838,
+    "t_logloss": 3.8541163994621503,
+    "verdict": "PROBABILITIES_ONLY",
+    "vs": "prior"
+   },
+   {
+    "daily_r_diff": 0.14006371658760275,
+    "daily_r_diff_hi": 0.23833589655421594,
+    "daily_r_diff_lo": 0.046516685235876,
+    "holm_p_decision": 0.0058385569016424065,
+    "holm_p_logloss": 3.370164847133309e-06,
+    "holm_p_worse": 1.0,
+    "logloss_gain_per_day": 0.1645587363812141,
+    "model": "xgb",
+    "p_decision": 0.001946185633880802,
+    "p_logloss": 1.1233882823777697e-06,
+    "p_logloss_worse": 0.9999988766117176,
+    "t_decision": 2.886755052836112,
+    "t_logloss": 4.729857344909812,
+    "verdict": "IMPROVES",
+    "vs": "prior"
+   }
+  ],
+  "vs_take_all": [
+   {
+    "daily_r_diff": 1.569689246766456,
+    "holm_p": 9.7023126049938e-18,
+    "model": "prior",
+    "p": 9.7023126049938e-18,
+    "t": 8.497303110191194
+   },
+   {
+    "daily_r_diff": 1.6395009016348174,
+    "holm_p": 7.987586498077611e-23,
+    "model": "logistic",
+    "p": 3.9937932490388056e-23,
+    "t": 9.834610783186996
+   },
+   {
+    "daily_r_diff": 1.6751236971968189,
+    "holm_p": 1.8401305250241795e-29,
+    "model": "hgb",
+    "p": 4.600326312560449e-30,
+    "t": 11.331133267377263
+   },
+   {
+    "daily_r_diff": 1.709752963354059,
+    "holm_p": 7.719703344489225e-26,
+    "model": "xgb",
+    "p": 2.573234448163075e-26,
+    "t": 10.548773154964731
+   }
+  ]
+ },
+ "config": {
+  "aci_gamma": 0.01,
+  "asof_probes": 3,
+  "battery_models": [
+   "prior",
+   "logistic",
+   "hgb",
+   "xgb"
+  ],
+  "battery_scenario": "interaction",
+  "battery_sessions": 1500,
+  "battery_symbols": 40,
+  "bench_models": null,
+  "bench_sessions": 1500,
+  "bench_symbols": 40,
+  "conformal_alpha": 0.2,
+  "effect_sizes": [
+   1.0,
+   1.5,
+   2.0
+  ],
+  "n_nulls": 59,
+  "n_per_effect": 20,
+  "parity_sessions": 1500,
+  "parity_symbols": 10,
+  "profile": "full",
+  "required_effects": [
+   1.5
+  ],
+  "scenarios": [
+   "null",
+   "linear",
+   "interaction",
+   "regime"
+  ],
+  "seed": 7
+ },
+ "lane": "C",
+ "ledger": {
+  "entries": 46,
+  "tip": "4b81d2e44c3bc430336d95908b6e25b5b899d0212e47eec2a964c4f1a89a9ed9",
+  "verified": true
+ },
+ "parity": {
+  "ambiguous": 0,
+  "ambiguous_booked_as_stop_by_m18": 0,
+  "compared": 11646,
+  "gap_rows": 2724,
+  "gap_rows_outcome_differs": 0,
+  "gap_rows_same_resolution_bar": 2724,
+  "m18_resolved_research_unlabelled": 0,
+  "market_digest": "ef1a1801ed7777e387d522c99ddc2b9dd2644b17f311f94d0260f3b4d76d25cc",
+  "outcome_mismatch": 0,
+  "research_resolved_m18_pending": 439,
+  "resolution_bar_mismatch": 0,
+  "rows": 15000,
+  "symbols": 10
+ },
+ "report_digest": "45454b83d59dd9c0a491102b7f17a78381cc3b2db6cbf8a68af7f420fc577b65",
+ "runtime_seconds": 1998.8,
+ "title": "Model laboratory evidence (synthetic, known truth)",
+ "versions": {
+  "catboost": "1.2.10",
+  "lightgbm": "4.7.0",
+  "numpy": "2.5.4",
+  "pandas": "2.2.3",
+  "scikit-learn": "1.8.0",
+  "scipy": "1.18.1",
+  "xgboost": "3.4.1"
+ }
+}
