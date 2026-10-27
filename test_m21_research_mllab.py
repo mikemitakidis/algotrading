@@ -222,6 +222,38 @@ class C3_Harness(unittest.TestCase):
             self.assertEqual(base.runs["logistic"].thresholds[:k + 1], alt.runs["logistic"].thresholds[:k + 1])
             np.testing.assert_array_equal(base.runs["logistic"].p, alt.runs["logistic"].p)
 
+    def test_conformal_sets_are_calibrated_on_past_folds_only(self):
+        ds = _event_ds(n_days=200, per_day=10, strength=1.0)
+        ds.X[:, 4] = 0.0
+        cfg = EV.LabConfig(n_folds=5, min_trades=10)
+        fac = {"logistic": lambda: MD.make("logistic")}
+        base = EV.run(ds, fac, cfg)
+        last = base.fold_of == 4
+        ds2 = ds.subset(np.arange(len(ds)))
+        ds2.y = ds.y.copy()
+        ds2.y[last] = 1.0 - ds2.y[last]               # flip the outcomes of the LAST fold only
+        alt = EV.run(ds2, fac, cfg)
+        np.testing.assert_array_equal(base.runs["logistic"].p, alt.runs["logistic"].p)
+        np.testing.assert_array_equal(base.runs["logistic"].take_conformal, alt.runs["logistic"].take_conformal)
+        self.assertTrue(base.runs["logistic"].take_conformal[base.fold_of >= 2].any())
+
+    def test_paired_tests_use_daily_aggregates_and_holm(self):
+        from research.integrity import multiple_testing as MTT
+        ds = _event_ds(n_days=150, per_day=10, kind="null", seed=2)
+        ds.X[:, 4] = 0.0
+        res = EV.run(ds, {"logistic": lambda: MD.make("logistic"), "a": lambda: _Noise(1), "b": lambda: _Noise(2),
+                          "c": lambda: _Noise(3)}, EV.LabConfig(n_folds=4, min_trades=20))
+        oof = res.oof
+        y, d = ds.y[oof], ds.day[oof]
+        for r in res.comparisons:
+            gain = EV._ll(y, res.runs["logistic"].p[oof]) - EV._ll(y, res.runs[r["model"]].p[oof])
+            daily = pd.Series(gain).groupby(d).sum()
+            self.assertAlmostEqual(r["logloss_gain_per_day"], float(daily.mean()), places=10)
+        raw = [r["p_logloss"] for r in res.comparisons]
+        np.testing.assert_allclose([r["holm_p_logloss"] for r in res.comparisons], MTT.adjust(raw, "holm"))
+        raw_w = [r["p_logloss_worse"] for r in res.comparisons]
+        np.testing.assert_allclose([r["holm_p_worse"] for r in res.comparisons], MTT.adjust(raw_w, "holm"))
+
     def test_conformal_needs_enough_past(self):
         ds = _event_ds(n_days=60, per_day=10)
         res = EV.run(ds, {"logistic": lambda: MD.make("logistic")}, EV.LabConfig(n_folds=5, min_trades=5))
@@ -244,6 +276,7 @@ class C4_Uncertainty(unittest.TestCase):
             self.assertLessEqual(c, 1 - alpha + 0.03)
 
     def test_conformal_edge_cases_and_decisions(self):
+        self.assertEqual(U._q(np.arange(1.0, 11.0), 0.2), 9.0)        # ceil((n + 1)(1 - alpha))-th smallest
         self.assertEqual(U._q(np.array([]), 0.2), 1.0)
         self.assertEqual(U._q(np.array([0.1, 0.2]), 0.2), 1.0)        # too few scores: full set, abstain
         cf = U.SplitConformal(0.2).fit(np.r_[np.full(50, 0.8), np.full(50, 0.2)], np.r_[np.ones(50), np.zeros(50)])
