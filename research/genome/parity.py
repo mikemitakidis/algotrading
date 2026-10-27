@@ -60,8 +60,12 @@ def compare(bars: pd.DataFrame, symbol: str = "S", *, fast: int = 10, slow: int 
         mism.append("trade count %d (M17) vs %d (research)" % (len(m), len(r)))
     max_abs = 0.0
     for i, (a, x) in enumerate(zip(m, r)):
+        # M17 labels fills with the fill bar's CLOSE timestamp; the research engine keeps that label in the
+        # legacy entry_ts / exit_ts fields (== *_bar_close_ts) and reports the fill events separately.
         if pd.Timestamp(a.entry_ts_utc) != x.entry_ts or pd.Timestamp(a.exit_ts_utc) != x.exit_ts:
             mism.append("trade %d timestamps differ" % i)
+        if x.entry_bar_close_ts != x.entry_ts or x.exit_bar_close_ts != x.exit_ts:
+            mism.append("trade %d legacy labels are not the bar-close timestamps" % i)
         if a.exit_reason != x.exit_reason or int(a.bars_held) != int(x.bars_held):
             mism.append("trade %d exit reason / bars held differ (%s/%d vs %s/%d)" % (
                 i, a.exit_reason, a.bars_held, x.exit_reason, x.bars_held))
