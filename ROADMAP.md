@@ -11,7 +11,13 @@ For the live state of every milestone (✅ closed / ⚠ partial / ⏳ pending /
 narrative snapshot of where the project is right now, see
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> **Current state (post-M18 merge, read-only/shadow-only foundation).**
+> **Current state (2026-10-27).** `main` = `80b4343`. The M21 offline research lanes (Issue #2) are merged:
+> CODE_MERGED and TESTED_OFFLINE on synthetic data only, with no data, runtime or trading verification yet.
+> M21.1, M21.1extra, M21.2–M21.7, M22 and M23 are **not complete**. M22 is hard-blocked on C01, scanner-path
+> M14 Risk Authority parity. Authoritative per-task status: canonical handoff v3.6 and
+> [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md). The note below is the earlier post-M18 state, kept for history.
+>
+> **Earlier state (post-M18 merge, read-only/shadow-only foundation).**
 > `main` is at `264fba84`; M1–M17 are on main
 > (M17 backtesting CLOSED, `test_m17_backtesting` 200 OK). **M18 — the ML
 > strategy/criteria foundation — is CLOSED and merged to `main`**

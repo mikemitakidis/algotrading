@@ -5,7 +5,25 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state (updated 2026-07-06, A1 docs realignment)
+> ## Current state (updated 2026-10-27, after the M21 research merge)
+>
+> `main` = `80b4343` (27 Oct 2026). The M21 offline research lanes are **CODE_MERGED** (PRs #4–#11: foundation,
+> integrity, counterfactual evidence, data QA, model lab, strategy genome/backtester, offline agents, six-lane
+> integration) and **TESTED_OFFLINE on synthetic data only**. They are not DATA_VERIFIED, RUNTIME_VERIFIED or
+> TRADING_VERIFIED. The integrated research verdict is INCONCLUSIVE, and no trading edge is claimed. The full
+> per-task status (71 tasks, M21.1 → M23.5) lives in the canonical handoff
+> (`docs/handoffs/Algo_Trading_Full_Canonical_Handoff_2026-10-26.md`, v3.6, documentation branch) and Issue #3.
+>
+> - **M21.1 is NOT complete.** A01 (scanner → M19 scoring reality check) has not started, and A02 (candidate
+>   decision audit) is partial.
+> - **M21.1extra is NOT complete.** WS1/D3 metrics and WS3 alert code are merged, but runtime acceptance is not
+>   approved. WS2 (draft PR #1) is pending refresh and review. IBKR paper acceptance is blocked on approval.
+> - **M22 is NOT started.** C01 (M14 Risk Authority parity on the scanner submission path) is a hard blocker.
+> - **M23 is NOT started**, apart from offline research foundations.
+>
+> The sections below are kept as the historical record of earlier operating states.
+>
+> ## Operating state (2026-07-06, A1 docs realignment) — historical
 >
 > **Active milestone:** M21.1extra. **IBKR paper only** (port 4002, account
 > `DUP623346`); no IBKR live, no eToro real orders.
@@ -88,8 +106,9 @@ project-wide reconciliation narrative lives in
 | 18 | ML strategy/criteria foundation (read-only / shadow-only) | **CLOSED — merged to `main` at `264fba84`** | sklearn/RandomForest foundation; `test_m18_ml` loader 669 (668 + duplicate-class guard added in pre-M19 cleanup); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
 | 19 | Signal scoring engine (M19) | CLOSED | `bot/signal_scoring/` — pure scoring/explainability layer; see `bot/signal_scoring/M19_STATUS.md`. Not execution |
 | 20 | Paper decision/orchestration (M20) | CLOSED | `bot/paper/`; see `docs/ROADMAP_M20.md` |
-| 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (M21.1extra D0/D1/D2 done; D3 not started) | `bot/paper_loop_d2/`; D0 auth gate, D1 market-clock, D2 supervised paper lifecycle proven; **D3 dashboard metrics not started** |
-| 21.2 | Parameter optimisation | NOT STARTED | Blocked on D3 + the PnL/backtest debt (debt register pending on branch `m21-docs-debt-register`) |
+| 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (2026-10-27): M21.1 A01 not started, A02 partial; M21.1extra D0/D1/D2 done, D3/WS1 and WS3 code merged (runtime acceptance not approved), WS2 draft PR #1 pending | See canonical handoff v3.6 §3b/§4 |
+| 21 research lanes (Issue #2) | Integrity, counterfactual evidence, data QA, model lab, genome/backtester, offline agents, integration | **CODE_MERGED** at `80b4343` (2026-10-27) · TESTED_OFFLINE (synthetic) · not data/runtime/trading verified | `research/`, `docs/research/`; integrated verdict INCONCLUSIVE |
+| 21.2–21.7 | Optimisation, walk-forward/promotion, meta-labeling, regime, context, learned weights | NOT COMPLETE — research foundations merged for 21.2–21.5 and 21.7 (synthetic); 21.6 market context not started; promotion model (B13) not started | Canonical handoff v3.6 §3b |
 | 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later** |
 
 ---
