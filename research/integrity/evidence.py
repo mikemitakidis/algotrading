@@ -33,7 +33,9 @@ from research.integrity import stats as S
 from research.integrity.controls import BatteryPlan, PipelineDecision, run_battery
 from research.integrity.ledger import Hypothesis, Ledger, TrialRecord
 from research.integrity.pbo import pbo
-from research.integrity.prereg import PreRegistration, attest, evaluate_once, register
+from research.integrity.authority import Authority
+from research.integrity.prereg import (ATTESTATION_PURPOSE, PreRegistration, attest, attestation_payload,
+                                       evaluate_once, register)
 from research.integrity.reality_check import hansen_spa, white_reality_check
 
 VARIANTS: Tuple[Tuple[float, int], ...] = tuple((k, h) for k in (1.5, 2.0, 2.5) for h in (3, 5, 10, 20))
@@ -183,8 +185,19 @@ def run(out_dir: Path, n_nulls: int = 100, n_per_effect: int = 30,
                         forward_window_start_utc="2027-01-01T00:00:00+00:00",
                         analysis_plan="DSR of net outcomes with n_trials=12 on forward data only")
     d = register(led, p)
-    attest(led, d, server_timestamp_utc="2026-10-26T23:59:00+00:00", source="example: github comment created_at",
-           evidence_url="(illustrative; a real run uses the actual comment URL)")
+    # 1) A caller-declared timestamp is recorded as untrusted and cannot make an evaluation pass.
+    p_unt = PreRegistration(**{**p.__dict__, "spec_digest": "k=2.0,h=5/untrusted-demo"})
+    d_unt = register(led, p_unt)
+    attest(led, d_unt, server_timestamp_utc="2026-10-26T23:59:00+00:00", source="declared by caller",
+           evidence_url="(none)")
+    untrusted = evaluate_once(led, d_unt, value=0.99, effective_n=40,
+                              data_first_ts_utc="2027-01-02T21:00:00+00:00", data_digest="example")
+    # 2) An authority-signed attestation (local demo authority; in operation a separately held key).
+    demo = Authority("local-demo-authority", stream(7, "lane_b", "demo-key").bytes(32))
+    payload = attestation_payload(d, "2026-10-26T23:59:00+00:00", "example: github comment created_at",
+                                  "(illustrative; a real run uses the actual comment URL)")
+    attest(led, d, **{k: payload[k] for k in ("server_timestamp_utc", "source", "evidence_url")},
+           signature=demo.sign(ATTESTATION_PURPOSE, payload), verifier=demo.verifier())
     first = evaluate_once(led, d, value=0.5, effective_n=40, data_first_ts_utc="2027-01-02T21:00:00+00:00",
                           data_digest="example")
     try:
@@ -211,7 +224,8 @@ def run(out_dir: Path, n_nulls: int = 100, n_per_effect: int = 30,
     tver = Ledger(tam).verify()
     tam.unlink()
     summary = {"batteries": results, "snooping": snoop, "family_variants": len(VARIANTS),
-               "prereg": {"digest": d, "first_evaluation": asdict(first), "second_evaluation": second},
+               "prereg": {"digest": d, "first_evaluation": asdict(first), "second_evaluation": second,
+                          "untrusted_attestation_evaluation": asdict(untrusted)},
                "ledger": {"entries": ver.n_entries, "verified": ver.ok, "jsonl": jsonl.name,
                           "jsonl_verified": Ledger.verify_jsonl(jsonl).ok,
                           "tampered_copy_verified": tver.ok, "tamper_detected_at_seq": tver.first_bad_seq,
@@ -244,6 +258,9 @@ def render_markdown(s: Dict) -> str:
     for pn, ph in zip(s["batteries"]["naive"]["power"], s["batteries"]["honest"]["power"]):
         L.append("| %.2f | %d/%d | %d/%d (%.0f–%.0f %%) |" % (ph["effect"], pn["detections"], pn["n"],
                  ph["detections"], ph["n"], 100 * ph["lo"], 100 * ph["hi"]))
+    L += ["", "Verdict rule: CALIBRATED needs the one-sided 95 % upper bound on the null false-pass rate at or "
+          "below 5 % **and** the exact lower bound of the detection rate at every required effect (by default "
+          "the largest) at or above 80 %. Each battery plan is ledgered before it runs and can be used only once." ]
     L += ["", "## 2. Data-snooping tests across %d null and %d planted (strength %.1f) markets" % (
               s["config"]["n_snoop"], s["config"]["n_snoop"], s["config"]["snoop_effect"]), "",
           "| datasets | Hansen SPA rejections at 5 % (95 % CI) | White RC rejections at 5 % (95 % CI) | mean PBO | mean effective trials (eigen / cluster) |",
@@ -267,8 +284,11 @@ def render_markdown(s: Dict) -> str:
                                                                                    lg["jsonl_verified"]),
           "- Tampered copy (one payload edited after dropping the UPDATE trigger): verified = **%s**, detected at "
           "entry %s (%s)." % (lg["tampered_copy_verified"], lg["tamper_detected_at_seq"], lg["tamper_reason"]),
-          "", "## 4. Pre-registration is one-shot", "",
-          "- First evaluation: %s." % s["prereg"]["first_evaluation"]["reason"],
+          "", "## 4. Pre-registration needs a trusted timestamp and is one-shot", "",
+          "- Caller-declared (untrusted) timestamp, metric value far above threshold: passed = %s (%s)." % (
+              s["prereg"]["untrusted_attestation_evaluation"]["passed"],
+              s["prereg"]["untrusted_attestation_evaluation"]["reason"]),
+          "- Authority-signed timestamp, first evaluation: %s." % s["prereg"]["first_evaluation"]["reason"],
           "- Second evaluation: %s." % s["prereg"]["second_evaluation"], "",
           "_Runtime %.1f s. Reproduce with the command above; all randomness is seeded._" % s["runtime_seconds"]]
     return "\n".join(L) + "\n"

@@ -28,10 +28,12 @@ from research.integrity import splits as SP
 from research.integrity import stats as S
 from research.integrity.controls import (BatteryPlan, PipelineDecision, block_permute,
                                          circular_shift, placebo_events, run_battery)
-from research.integrity.holdout import HoldoutDenied, HoldoutVault
+from research.integrity.authority import Authority
+from research.integrity.holdout import RELEASE_PURPOSE, HoldoutDenied, HoldoutVault, release_request
 from research.integrity.ledger import Hypothesis, Ledger, LedgerError, TrialRecord, code_digest
 from research.integrity.pbo import pbo
-from research.integrity.prereg import PreRegistration, attest, evaluate_once, register
+from research.integrity.prereg import (ATTESTATION_PURPOSE, PreRegistration, attest, attestation_payload,
+                                       evaluate_once, register)
 from research.integrity.reality_check import hansen_spa, white_reality_check
 from research.integrity.report_card import GauntletConfig, evaluate, unsupported_numbers
 
@@ -216,6 +218,16 @@ class B1_Ledger(unittest.TestCase):
         self.assertNotEqual(d1, code_digest([d / "a.py", d / "b.py"]))
 
 
+AUTH = Authority("operator-authority", b"k" * 32)
+OTHER = Authority("operator-authority", b"z" * 32)          # same name, different key: a forger
+
+
+def _signed_attest(led, d, ts, auth=AUTH):
+    pl = attestation_payload(d, ts, "github_comment.created_at", "https://example.invalid/c/1")
+    return attest(led, d, server_timestamp_utc=ts, source=pl["source"], evidence_url=pl["evidence_url"],
+                  signature=auth.sign(ATTESTATION_PURPOSE, pl), verifier=AUTH.verifier())
+
+
 class B2_PreregAndHoldout(unittest.TestCase):
     def setUp(self):
         self.led = Ledger(clock=_clock())
@@ -224,15 +236,44 @@ class B2_PreregAndHoldout(unittest.TestCase):
                                  comparator=">=", threshold=0.95, min_effective_n=30,
                                  forward_window_start_utc="2027-01-01T00:00:00+00:00", analysis_plan="plan")
 
-    def test_one_shot_and_attested_out_of_sample(self):
+    def test_one_shot_and_trusted_attestation_out_of_sample(self):
         d = register(self.led, self.p)
-        attest(self.led, d, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="gh", evidence_url="u")
+        self.assertEqual(_signed_attest(self.led, d, "2026-12-01T00:00:00+00:00"), "authority_signed")
         out = evaluate_once(self.led, d, value=0.97, effective_n=40,
                             data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
         self.assertTrue(out.passed)
         with self.assertRaises(LedgerError):
             evaluate_once(self.led, d, value=0.97, effective_n=40,
                           data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
+
+    def test_declared_or_forged_attestations_never_pass(self):
+        """PR #5 review P1: a caller-typed timestamp is not proof of time."""
+        d = register(self.led, self.p)
+        trust = attest(self.led, d, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="me",
+                       evidence_url="u")
+        self.assertEqual(trust, "untrusted_declared")
+        out = evaluate_once(self.led, d, value=0.99, effective_n=40,
+                            data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
+        self.assertFalse(out.passed)
+        self.assertIn("not independently verified", out.reason)
+        p2 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-forged"})
+        d2 = register(self.led, p2)
+        with self.assertRaises(LedgerError):                       # forged signature refused outright
+            _signed_attest(self.led, d2, "2026-12-01T00:00:00+00:00", auth=OTHER)
+        pl = attestation_payload(d2, "2026-12-01T00:00:00+00:00", "gh", "u")
+        sig = AUTH.sign(ATTESTATION_PURPOSE, pl)
+        with self.assertRaises(LedgerError):                       # valid signature, altered timestamp
+            attest(self.led, d2, server_timestamp_utc="2026-11-01T00:00:00+00:00", source="gh", evidence_url="u",
+                   signature=sig, verifier=AUTH.verifier())
+        with self.assertRaises(LedgerError):                       # signature without a verifier
+            attest(self.led, d2, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="gh", evidence_url="u",
+                   signature=sig)
+        p3 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-diag"})
+        d3 = register(self.led, p3)
+        attest(self.led, d3, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="me", evidence_url="u")
+        diag = evaluate_once(self.led, d3, value=0.99, effective_n=40, require_trusted=False,
+                             data_first_ts_utc="2027-01-05T21:00:00+00:00", data_digest="x")
+        self.assertFalse(diag.passed)
 
     def test_fail_closed_without_proof_of_time(self):
         cases = []
@@ -241,17 +282,17 @@ class B2_PreregAndHoldout(unittest.TestCase):
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         p2 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-2"})
         d2 = register(self.led, p2)
-        attest(self.led, d2, server_timestamp_utc="2027-01-02T00:00:00+00:00", source="gh", evidence_url="u")
+        _signed_attest(self.led, d2, "2027-01-02T00:00:00+00:00")
         cases.append(evaluate_once(self.led, d2, value=0.99, effective_n=40,
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         p3 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-3"})
         d3 = register(self.led, p3)
-        attest(self.led, d3, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="gh", evidence_url="u")
+        _signed_attest(self.led, d3, "2026-12-01T00:00:00+00:00")
         cases.append(evaluate_once(self.led, d3, value=0.99, effective_n=40,
                                    data_first_ts_utc="2026-12-15T00:00:00+00:00", data_digest="x"))
         p4 = PreRegistration(**{**self.p.__dict__, "spec_digest": "spec-4"})
         d4 = register(self.led, p4)
-        attest(self.led, d4, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="gh", evidence_url="u")
+        _signed_attest(self.led, d4, "2026-12-01T00:00:00+00:00")
         cases.append(evaluate_once(self.led, d4, value=0.99, effective_n=10,
                                    data_first_ts_utc="2027-02-01T00:00:00+00:00", data_digest="x"))
         self.assertEqual([c.passed for c in cases], [False] * 4)
@@ -269,27 +310,67 @@ class B2_PreregAndHoldout(unittest.TestCase):
         with self.assertRaises(ValueError):
             PreRegistration(**{**self.p.__dict__, "max_evaluations": 2})
 
-    def test_holdout_seal_release_once_two_person(self):
+    def _vault(self):
         df = pd.DataFrame({"ts_utc": pd.date_range("2026-01-01", periods=10, freq="D", tz="UTC"), "v": range(10)})
-        vault = HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00")
+        return HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00", authority=AUTH.verifier(),
+                            clock=lambda: "2027-01-01T00:00:00+00:00"), df
+
+    @staticmethod
+    def _token(family, spec, d, requester, auth=AUTH):
+        return auth.sign(RELEASE_PURPOSE, release_request("h1", family, spec, d, requester))
+
+    def test_holdout_release_requires_authority_family_match_and_trusted_prereg(self):
+        vault, df = self._vault()
         self.assertEqual(len(vault.research_view()), 7)
         self.assertTrue((pd.to_datetime(vault.research_view().ts_utc) < pd.Timestamp("2026-01-08", tz="UTC")).all())
         d = register(self.led, self.p)
-        for kw in ({"approver": None}, {"approver": "alice"}):
+        rel = dict(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice")
+        denied = []
+        for kw in ({"approval_token": None}, {"approval_token": "deadbeef"},
+                   {"approval_token": self._token("fam", "spec-1", d, "alice", auth=OTHER)},
+                   {"approval_token": self._token("fam", "spec-1", d, "bob")}):              # token for someone else
             with self.assertRaises(HoldoutDenied):
-                vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice", **kw)
-        with self.assertRaises(HoldoutDenied):
+                vault.release(**rel, **kw)
+            denied.append(kw)
+        with self.assertRaisesRegex(HoldoutDenied, "trusted attestation"):              # prereg not attested yet
+            vault.release(**rel, approval_token=self._token("fam", "spec-1", d, "alice"))
+        attest(self.led, d, server_timestamp_utc="2026-12-01T00:00:00+00:00", source="me", evidence_url="u")
+        with self.assertRaisesRegex(HoldoutDenied, "trusted attestation"):              # declared only
+            vault.release(**rel, approval_token=self._token("fam", "spec-1", d, "alice"))
+        _signed_attest(self.led, d, "2026-12-01T00:00:00+00:00")
+        with self.assertRaisesRegex(HoldoutDenied, "different spec"):
             vault.release(family_id="fam", spec_digest="other-spec", prereg_digest=d, requester="alice",
-                          approver="mike")
-        got = vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="alice",
-                            approver="mike")
+                          approval_token=self._token("fam", "other-spec", d, "alice"))
+        got = vault.release(**rel, approval_token=self._token("fam", "spec-1", d, "alice"))
         self.assertEqual(list(got.v), [7, 8, 9])
-        with self.assertRaises(HoldoutDenied):
-            vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=d, requester="bob", approver="mike")
-        self.assertEqual(len(self.led.entries("holdout_access_denied", "h1")), 4)
+        with self.assertRaisesRegex(HoldoutDenied, "already spent"):
+            vault.release(**{**rel, "requester": "bob"}, approval_token=self._token("fam", "spec-1", d, "bob"))
         self.assertEqual(len(self.led.entries("holdout_release", "h1")), 1)
+        self.assertEqual(len(self.led.entries("holdout_access_denied", "h1")), 8)
         with self.assertRaises(LedgerError):
-            HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00")
+            HoldoutVault(self.led, "h1", df, "2026-01-08T00:00:00+00:00", authority=AUTH.verifier())
+
+    def test_cross_family_release_is_refused(self):
+        """PR #5 review P1: family A's pre-registration (shared spec) cannot
+        open the holdout under family B's name, even with a signed token."""
+        vault, _ = self._vault()
+        dA = register(self.led, self.p)                              # family 'fam', spec-1
+        _signed_attest(self.led, dA, "2026-12-01T00:00:00+00:00")
+        with self.assertRaisesRegex(HoldoutDenied, "belongs to family"):
+            vault.release(family_id="famB", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+                          approval_token=self._token("famB", "spec-1", dA, "alice"))
+        with self.assertRaisesRegex(HoldoutDenied, "authority cannot request"):
+            vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA,
+                          requester="operator-authority",
+                          approval_token=self._token("fam", "spec-1", dA, "operator-authority"))
+        for bad_token in (None, "deadbeef", self._token("fam", "spec-1", dA, "alice", auth=OTHER),
+                          self._token("fam", "spec-1", dA, "bob"), self._token("famB", "spec-1", dA, "alice")):
+            with self.assertRaisesRegex(HoldoutDenied, "release-authority approval"):
+                vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+                              approval_token=bad_token)
+        vault.release(family_id="fam", spec_digest="spec-1", prereg_digest=dA, requester="alice",
+                      approval_token=self._token("fam", "spec-1", dA, "alice"))
+        self.assertEqual(set(vault.releases()), {"fam"})
 
 
 def _events(n=200, h=5, seed=0):
@@ -525,13 +606,41 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         r = run_battery(weak, never, lambda s: s, lambda e, s: s)
         self.assertEqual(r.verdict, "UNDERPOWERED")
 
-    def test_battery_is_ledgered_plan_first(self):
+    def test_power_uses_lower_bound_at_every_required_effect(self):
+        """PR #5 review P2: power is not the last effect's point estimate."""
+        never = lambda d: PipelineDecision(False)               # noqa: E731
+        hit_big = lambda d: PipelineDecision(d >= 2.0)          # noqa: E731  detects only the large effect
+        mk = lambda e, s: e                                     # noqa: E731
+        fine = BatteryPlan("p1", "x", n_nulls=60, effect_sizes=(1.0, 2.0), n_per_effect=40)
+        self.assertEqual(run_battery(fine, hit_big, lambda s: 0.0, mk).verdict, "CALIBRATED")
+        both = BatteryPlan("p2", "x", n_nulls=60, effect_sizes=(1.0, 2.0), n_per_effect=40, required_effects=(1.0, 2.0))
+        self.assertEqual(run_battery(both, hit_big, lambda s: 0.0, mk).verdict, "UNDERPOWERED")
+        # 9/10 detections: point estimate 0.9 >= 0.8 but the exact lower bound is < 0.8.
+        calls = []
+
+        def mk_counted(e, s):
+            calls.append(s)
+            return len(calls)                                   # 1..10
+        nine = lambda d: PipelineDecision(d != 0.0 and d % 10 != 0)   # noqa: E731  misses the 10th
+        small = BatteryPlan("p3", "x", n_nulls=60, effect_sizes=(1.0,), n_per_effect=10)
+        r = run_battery(small, nine, lambda s: 0.0, mk_counted)
+        self.assertEqual((r.power[0].detections, r.power[0].rate), (9, 0.9))
+        self.assertLess(r.power[0].lo, 0.8)
+        self.assertEqual(r.verdict, "UNDERPOWERED")
+        del never
+        with self.assertRaises(ValueError):
+            BatteryPlan("p4", "x", n_nulls=5, effect_sizes=(1.0,), n_per_effect=5, required_effects=(3.0,))
+
+    def test_battery_is_ledgered_plan_first_and_one_use(self):
         led = Ledger(clock=_clock())
         plan = BatteryPlan("x", "pipe", n_nulls=3)
         run_battery(plan, lambda d: PipelineDecision(False), lambda s: s, ledger=led)
         kinds = [e.kind for e in led.entries()]
         self.assertEqual(kinds, ["control_battery_plan", "control_battery_result"])
         self.assertEqual(led.entries()[0].ref_id, plan.digest)
+        with self.assertRaisesRegex(LedgerError, "already used"):          # PR #5 review P2
+            run_battery(plan, lambda d: PipelineDecision(True), lambda s: s, ledger=led)
+        self.assertEqual(len(led.entries("control_battery_plan")), 1)
 
     def test_naive_search_fails_battery_honest_search_does_not_pass_noise(self):
         """The integrity stack catches a pipeline that picks the best of 12
@@ -562,14 +671,23 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         never = lambda d: PipelineDecision(False)               # noqa: E731
         return run_battery(BatteryPlan("c", "c", n_nulls=60), never, lambda s: s)
 
+    @staticmethod
+    def _ledgered(n, family="f"):
+        led = Ledger(clock=_clock())
+        ids = [led.record_trial(_trial(family_id=family, spec_digest="s%d" % i)) for i in range(n)]
+        return led, ids
+
     def test_report_card_verdicts_fail_closed(self):
         rng = stream(19, "rc")
         strong = rng.normal(0.6, 1.0, 400)
         fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
         cfg = GauntletConfig(n_boot=300)
+        led, ids = self._ledgered(6)
         good = evaluate(candidate_id="c1", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
-                        rng=stream(20, "a"), family_matrix=fam, canary=self._calibrated(), cfg=cfg)
+                        rng=stream(20, "a"), family_matrix=fam, canary=self._calibrated(), cfg=cfg,
+                        ledger=led, trial_ids=ids)
         self.assertEqual(good.verdict, "PASS", good.reasons)
+        self.assertEqual(good.numbers["provenance_verified"], 1.0)
         no_canary = evaluate(candidate_id="c2", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
                              rng=stream(20, "b"), family_matrix=fam, canary=None, cfg=cfg)
         self.assertEqual(no_canary.verdict, "INCONCLUSIVE")
@@ -593,6 +711,40 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         self.assertEqual(tiny.verdict, "INCONCLUSIVE")
         self.assertIn("Report card", good.to_markdown())
         self.assertEqual(good.digest, good.digest)
+
+    def test_report_card_requires_ledger_provenance_for_pass(self):
+        """PR #5 review P2: unverified n_trials / effective N / family inputs
+        can never yield PASS."""
+        rng = stream(25, "prov")
+        strong = rng.normal(0.6, 1.0, 400)
+        fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
+        cfg = GauntletConfig(n_boot=200)
+        canary = self._calibrated()
+        common = dict(candidate_id="c", family_id="f", gross=strong, cost_per_obs=0.05, rng=stream(26, "a"),
+                      family_matrix=fam, canary=canary, cfg=cfg)
+        led, ids = self._ledgered(6)
+        cases = {
+            "no ledger": evaluate(n_trials=6, **common),
+            "no ids": evaluate(n_trials=6, ledger=led, **common),
+            "unknown id": evaluate(n_trials=6, ledger=led, trial_ids=ids + ["T999999-x"], **common),
+            "understated trials": evaluate(n_trials=6, ledger=self._ledgered(9)[0],
+                                           trial_ids=self._ledgered(9)[1], **common),
+        }
+        other_led, other_ids = self._ledgered(6, family="g")
+        cases["other family"] = evaluate(n_trials=6, ledger=other_led, trial_ids=other_ids, **common)
+        for name, card in cases.items():
+            self.assertEqual(card.verdict, "INCONCLUSIVE", name)
+            self.assertEqual(card.numbers["provenance_verified"], 0.0, name)
+            self.assertTrue(any("not reconciled" in r for r in card.reasons), name)
+        hi = evaluate(n_trials=6, ledger=led, trial_ids=ids, effective_n=1e9, **common)
+        lo = evaluate(n_trials=6, ledger=led, trial_ids=ids, effective_n=12.0, **common)
+        self.assertLessEqual(hi.numbers["effective_n"], 400)            # a claimed N cannot inflate
+        self.assertEqual(lo.numbers["effective_n"], 12.0)
+        self.assertEqual(lo.verdict, "INCONCLUSIVE")
+        for bad in (dict(n_trials=0), dict(n_trials=2.5), dict(n_trials=True),
+                    dict(n_trials=6, effective_n=float("nan")), dict(n_trials=6, effective_n=-3.0)):
+            with self.assertRaises(ValueError):
+                evaluate(**{**common, **bad})
 
     def test_unsupported_numbers_checker(self):
         rng = stream(21, "u")

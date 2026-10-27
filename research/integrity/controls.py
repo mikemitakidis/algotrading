@@ -11,7 +11,10 @@ found") is only trustworthy if, at the trial counts it actually uses:
   reported as a power curve with intervals.
 
 The battery plan is written to the ledger BEFORE any result exists, and the
-result after, so a battery cannot be silently re-run until it looks good.
+result after. A plan digest can be used ONCE: re-running the same plan is
+refused (PR #5 review, P2), so a battery cannot be silently repeated until it
+looks good. Power is judged on the exact Clopper–Pearson LOWER bound of the
+detection rate at EVERY required effect size, not on a point estimate.
 
 Negative-control helpers (label block-permutation, placebo events, circular
 shifts) build nulls from real data, where synthetic nulls are not enough.
@@ -25,7 +28,7 @@ import numpy as np
 
 from research.common.hashing import digest
 from research.common.rng import child_seed
-from research.integrity.ledger import Ledger
+from research.integrity.ledger import Ledger, LedgerError
 from research.integrity.stats import clopper_pearson
 
 VERDICTS = ("CALIBRATED", "NOT_CALIBRATED", "UNDERPOWERED")
@@ -49,12 +52,21 @@ class BatteryPlan:
     n_per_effect: int = 0
     min_power: float = 0.8
     base_seed: int = 1000
+    required_effects: Tuple[float, ...] = ()     # default: the largest declared effect
 
     def __post_init__(self):
         if self.n_nulls < 1:
             raise ValueError("n_nulls must be >= 1")
         if self.effect_sizes and self.n_per_effect < 1:
             raise ValueError("n_per_effect must be >= 1 when effect sizes are given")
+        if any(e not in self.effect_sizes for e in self.required_effects):
+            raise ValueError("required_effects must be among effect_sizes")
+
+    @property
+    def required(self) -> Tuple[float, ...]:
+        if self.required_effects:
+            return tuple(self.required_effects)
+        return (max(self.effect_sizes),) if self.effect_sizes else ()
 
     @property
     def digest(self) -> str:
@@ -90,6 +102,7 @@ class BatteryResult:
     power_ok: bool
     verdict: str
     notes: str = ""
+    power_rule: str = "cp_lower_bound_at_every_required_effect"
 
 
 def run_battery(plan: BatteryPlan, pipeline: Callable[[Any], PipelineDecision],
@@ -97,6 +110,9 @@ def run_battery(plan: BatteryPlan, pipeline: Callable[[Any], PipelineDecision],
                 make_positive: Optional[Callable[[float, int], Any]] = None,
                 ledger: Optional[Ledger] = None) -> BatteryResult:
     if ledger is not None:
+        if ledger.entries("control_battery_plan", plan.digest) or ledger.entries("control_battery_result", plan.digest):
+            raise LedgerError("battery plan %s was already used; register a new plan (new name or seed)"
+                              % plan.digest[:12])
         ledger.append("control_battery_plan", {**asdict(plan), "plan_digest": plan.digest}, ref_id=plan.digest)
     passes = 0
     for i in range(plan.n_nulls):
@@ -115,7 +131,8 @@ def run_battery(plan: BatteryPlan, pipeline: Callable[[Any], PipelineDecision],
                 det += bool(d.passed)
             lo, hi = clopper_pearson(det, plan.n_per_effect, plan.alpha)
             pts.append(PowerPoint(eff, plan.n_per_effect, det, det / plan.n_per_effect, lo, hi))
-    power_ok = (not pts) or pts[-1].rate >= plan.min_power
+    by_eff = {p.effect: p for p in pts}
+    power_ok = all(by_eff[e].lo >= plan.min_power for e in plan.required)
     verdict = "NOT_CALIBRATED" if not null_ok else ("CALIBRATED" if power_ok else "UNDERPOWERED")
     notes = ""
     if passes == 0 and not null_ok:

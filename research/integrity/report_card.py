@@ -15,18 +15,27 @@ verdict:
 Every number in the card is computed here from the inputs. ``unsupported_numbers``
 lets reviewers (and the lane E Reporter) check that narrative text quotes only
 numbers that are in the card.
+
+Input provenance (PR #5 review, P2): ``n_trials``, ``effective_n`` and the
+family matrix are claims. PASS is only possible when they are reconciled with
+the immutable ledger: a ledger and the ledgered trial ids must be supplied,
+every id must belong to the family, and ``n_trials`` may not understate the
+ledger's family count. Without that the card is a local diagnostic and can be
+at best INCONCLUSIVE. A caller-supplied effective N can only LOWER the
+internally estimated one, never raise it.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
 from research.common.hashing import array_digest, digest
 from research.integrity import stats as S
 from research.integrity.controls import BatteryResult
+from research.integrity.ledger import Ledger
 from research.integrity.pbo import pbo as _pbo
 from research.integrity.reality_check import hansen_spa, white_reality_check
 
@@ -91,9 +100,15 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
              rng: np.random.Generator, trial_sr_variance: Optional[float] = None,
              effective_n: Optional[float] = None, family_matrix=None,
              canary: Optional[BatteryResult] = None,
-             cfg: GauntletConfig = GauntletConfig()) -> ReportCard:
+             cfg: GauntletConfig = GauntletConfig(), ledger: Optional[Ledger] = None,
+             trial_ids: Sequence[str] = ()) -> ReportCard:
     x = np.asarray(gross, dtype=float).ravel()
     reasons_fail, reasons_inc = [], []
+    if isinstance(n_trials, bool) or not isinstance(n_trials, (int, np.integer)) or n_trials < 1:
+        raise ValueError("n_trials must be an integer >= 1, got %r" % (n_trials,))
+    if effective_n is not None and not (np.isfinite(effective_n) and effective_n > 0):
+        raise ValueError("effective_n must be finite and > 0 when given, got %r" % (effective_n,))
+    prov_ok, prov_why = _provenance(ledger, family_id, n_trials, trial_ids, family_matrix)
     nums: Dict[str, float] = {"n_obs": float(len(x)), "n_trials": float(n_trials),
                               "cost_per_obs": float(cost_per_obs)}
     if len(x) < 10 or not np.isfinite(x).all():
@@ -101,7 +116,8 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
                           ("fewer than 10 finite observations",), nums,
                           {"gross_digest": array_digest(x)}, asdict(cfg))
     lags = cfg.hac_lags
-    neff = float(effective_n) if effective_n is not None else _effective_n(x, lags)
+    neff_internal = _effective_n(x, lags)
+    neff = min(neff_internal, float(effective_n)) if effective_n is not None else neff_internal
     nums["effective_n"] = neff
     nums["mean_gross"] = float(x.mean())
     block = max(1.0, len(x) / max(neff, 1.0))       # mean bootstrap block ~ design effect
@@ -156,6 +172,9 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
         reasons_inc.append("pipeline canary battery missing or not CALIBRATED")
     if family_matrix is None:
         reasons_inc.append("no family matrix: PBO / SPA not computed")
+    nums["provenance_verified"] = 1.0 if prov_ok else 0.0
+    if not prov_ok:
+        reasons_inc.append("inputs not reconciled with the immutable ledger (%s): local diagnostic only" % prov_why)
     if reasons_fail:
         verdict, reasons = "FAIL", reasons_fail + reasons_inc
     elif reasons_inc:
@@ -166,6 +185,29 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
               "family_matrix_digest": array_digest(np.asarray(family_matrix, dtype=float)) if family_matrix is not None else None,
               "canary_plan_digest": canary.plan_digest if canary is not None else None}
     return ReportCard(candidate_id, family_id, verdict, tuple(reasons), nums, inputs, asdict(cfg))
+
+
+def _provenance(ledger: Optional[Ledger], family_id: str, n_trials: int, trial_ids: Sequence[str],
+                family_matrix) -> Tuple[bool, str]:
+    if ledger is None:
+        return False, "no ledger supplied"
+    if not trial_ids:
+        return False, "no ledgered trial ids supplied"
+    entries = {e.ref_id: e for e in ledger.entries("trial")}
+    missing = [t for t in trial_ids if t not in entries]
+    if missing:
+        return False, "trial ids not in the ledger: %s" % missing[:3]
+    foreign = [t for t in trial_ids if entries[t].payload["family_id"] != family_id]
+    if foreign:
+        return False, "trial ids from another family: %s" % foreign[:3]
+    counted = ledger.family_trial_count(family_id)
+    if n_trials < counted:
+        return False, "n_trials %d understates the ledger's %d family trials" % (n_trials, counted)
+    if family_matrix is not None and np.asarray(family_matrix).shape[1] > n_trials:
+        return False, "family matrix has more columns than n_trials"
+    if not ledger.verify().ok:
+        return False, "ledger chain does not verify"
+    return True, "reconciled"
 
 
 _NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
