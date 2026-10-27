@@ -193,6 +193,36 @@ class C2_Datasets(unittest.TestCase):
         self.assertFalse(any(f.startswith("ctx.") for f in no_ctx.feature_names))
         self.assertEqual(ds.digest, build_dataset(self.m.bars, sampler=every_k(3), truth=self.m.truth).digest)
 
+    def test_unobserved_paths_never_become_definitive_labels(self):
+        """Comprehensive audit P1/P2 (PR #7): a removed or blocked bar hiding a stop must not let the barrier
+        scan jump to the next row and book a definitive label."""
+        from bot.historical.quality import QF_BACKFILLED_GAP
+        from research.mllab.datasets import every_k
+        m = _market(n_symbols=1, n_sessions=300, seed=4)
+        b = m.bars["S000"].reset_index(drop=True)
+        spec = BarrierSpec(tp_mult=2.0, sl_mult=1.0, horizon=8)
+        full = build_dataset({"S000": b}, spec=spec, sampler=every_k(1), include_context=False)
+        self.assertEqual(full.meta["unobserved_path_labels_excluded"], 0)
+        ts = pd.to_datetime(b["ts_utc"], utc=True).astype("int64").to_numpy()
+        # an anchor stopped out two or more bars after entry
+        pos = {t: i for i, t in enumerate(ts)}
+        cand = [(pos[s0], pos[e0]) for s0, e0, y0 in zip(full.start, full.end, full.y)
+                if y0 == 0 and pos[e0] - pos[s0] >= 3 and pos[e0] < len(b) - 2]
+        self.assertTrue(cand)
+        i, j = cand[len(cand) // 2]
+        dropped = b.drop(index=j).reset_index(drop=True)                      # the stop bar is missing
+        ds_gap = build_dataset({"S000": dropped}, spec=spec, sampler=every_k(1), include_context=False)
+        self.assertNotIn(ts[i], set(ds_gap.start))
+        self.assertGreater(ds_gap.meta["unobserved_path_labels_excluded"], 0)
+        flagged = b.copy()
+        flagged.loc[j, "quality_flags"] = QF_BACKFILLED_GAP                    # kept but blocked
+        ds_flag = build_dataset({"S000": flagged}, spec=spec, sampler=every_k(1), include_context=False)
+        self.assertNotIn(ts[i], set(ds_flag.start))
+        # labels whose paths avoid the damage are unchanged
+        keep = [k for k, s0 in enumerate(full.start) if pos[full.end[k]] < i - 10]
+        same = {s0: y0 for s0, y0 in zip(ds_gap.start, ds_gap.y)}
+        self.assertTrue(keep and all(same.get(full.start[k]) == full.y[k] for k in keep))
+
     def test_digest_covers_every_field(self):
         """Second review P1 (#7): every field that drives training, purging, grouping or analysis is hashed."""
         import copy
@@ -243,6 +273,36 @@ class C3_Harness(unittest.TestCase):
             alt = EV.run(ds2, fac, cfg)
             self.assertEqual(base.runs["logistic"].thresholds[:k + 1], alt.runs["logistic"].thresholds[:k + 1])
             np.testing.assert_array_equal(base.runs["logistic"].p, alt.runs["logistic"].p)
+
+    def test_fold_policy_uses_only_outcomes_resolved_before_the_fold(self):
+        """Comprehensive audit P1 (PR #7): an earlier fold's event whose barrier resolves AFTER the next fold's
+        first decision is unknowable when that fold's threshold and conformal sets are frozen. Rewriting those
+        outcomes must leave the next fold's threshold, conformal decisions and trades unchanged."""
+        ds = _event_ds(n_days=240, per_day=10, strength=1.0, hold_days=15)
+        cfg = EV.LabConfig(n_folds=5, min_trades=10)
+        fac = {"logistic": lambda: MD.make("logistic")}
+        base = EV.run(ds, fac, cfg)
+        b = base.runs["logistic"]
+        checked = 0
+        for k in range(1, 4):
+            te_k = np.flatnonzero(base.fold_of == k)
+            te_n = np.flatnonzero(base.fold_of == k + 1)
+            late = te_k[ds.end[te_k] >= ds.start[te_n].min()]     # resolve after fold k+1 starts
+            self.assertGreater(len(late), 0)
+            ds2 = ds.subset(np.arange(len(ds)))
+            ds2.r, ds2.y = ds.r.copy(), ds.y.copy()
+            ds2.r[late] *= -3.0
+            ds2.y[late] = 1.0 - ds2.y[late]
+            alt = EV.run(ds2, fac, cfg).runs["logistic"]
+            np.testing.assert_array_equal(b.p[te_n], alt.p[te_n])                 # purged training: unchanged
+            self.assertEqual(b.thresholds[k + 1], alt.thresholds[k + 1])
+            np.testing.assert_array_equal(b.take[te_n], alt.take[te_n])
+            np.testing.assert_array_equal(b.take_conformal[te_n], alt.take_conformal[te_n])
+            checked += 1
+        self.assertEqual(checked, 3)
+        raw = [int((np.isin(base.fold_of, np.arange(j))).sum()) for j in range(5)]
+        self.assertTrue(all(c <= r for c, r in zip(b.calibration_rows, raw)))
+        self.assertTrue(any(c < r for c, r in zip(b.calibration_rows, raw)))
 
     def test_conformal_sets_are_calibrated_on_past_folds_only(self):
         ds = _event_ds(n_days=200, per_day=10, strength=1.0)

@@ -12,6 +12,19 @@ share in spirit:
   training and evaluation by default.
 
 Parity with ``bot.ml.labels.triple_barrier`` is tested on unambiguous rows.
+
+Observability (comprehensive audit, PR #7, P1/P2). ``barrier_outcomes`` works
+on ROW positions. If an expected bar is missing (a vendor gap, or a bar the
+data-quality filter removed) the next row is silently treated as the next
+bar, and a stop or target hit in the missing bar is never seen. So
+``path_observability`` marks, per row, an invalid observation (non-finite or
+inconsistent OHLC, a blocking or unknown quality bit) and a gap step (one or
+more expected bars missing before the row). ``build_dataset`` drops every
+label whose path (entry bar .. resolution bar) touches either, and every
+anchor that is itself invalid. Without an exchange calendar the expectation
+is every business day (1D) or contiguous same-day bars (intraday), so a
+holiday is treated as a gap: conservative, and stated. Pass the calendar to
+distinguish genuine closures.
 """
 from __future__ import annotations
 
@@ -85,4 +98,56 @@ def barrier_outcomes(o, h, l, c, atr, spec: BarrierSpec) -> Dict[str, np.ndarray
     return {"y": y, "r": r, "resolve_idx": res, "ambiguous": amb, "pending": pend, "gap": gap}
 
 
-__all__ = ["BarrierSpec", "barrier_outcomes"]
+def path_observability(ts, *, flags=None, ohlc=None, timeframe: str = "1D", tf_minutes: int = 390,
+                       calendar=None) -> Dict[str, np.ndarray]:
+    """Per-row ``bad_bar`` (invalid or blocked observation) and ``gap_before`` (expected bars missing between
+    row k-1 and row k). Only the observation itself and the expected calendar are used, so the mask is
+    knowable at each bar."""
+    import pandas as pd
+    from bot.historical.quality import QF_DUPLICATE_KEPT, QF_OUTLIER_WARNED, QF_ZERO_VOLUME
+    t = pd.DatetimeIndex(pd.to_datetime(ts, utc=True))
+    n = len(t)
+    bad = np.zeros(n, dtype=bool)
+    if ohlc is not None:
+        o, h, l, c = (np.asarray(x, dtype=float) for x in ohlc)
+        with np.errstate(invalid="ignore"):
+            ok = (np.isfinite(o) & np.isfinite(h) & np.isfinite(l) & np.isfinite(c) & (o > 0) & (l > 0)
+                  & (h >= np.maximum(o, c)) & (l <= np.minimum(o, c)))
+        bad |= ~ok
+    if flags is not None:
+        warn = np.int64(QF_ZERO_VOLUME | QF_OUTLIER_WARNED | QF_DUPLICATE_KEPT)
+        f = np.nan_to_num(np.asarray(flags, dtype=float), nan=0.0).astype(np.int64)
+        bad |= (f & ~warn) != 0
+    gap = np.zeros(n, dtype=bool)
+    if n > 1:
+        if calendar is not None:
+            cal = pd.DatetimeIndex(pd.to_datetime(calendar, utc=True))
+            pos = cal.get_indexer(t)
+            gap[1:] = (np.diff(pos) != 1) | (pos[1:] < 0)
+            bad |= pos < 0
+        else:
+            d = t.tz_convert("UTC").normalize().tz_localize(None).values.astype("datetime64[D]")
+            skipped = np.busday_count(d[:-1] + np.timedelta64(1, "D"), d[1:])
+            if timeframe == "1D":
+                gap[1:] = skipped > 0
+            else:
+                same = d[1:] == d[:-1]
+                step = np.diff(t.asi8) / 6e10
+                gap[1:] = (same & (step > tf_minutes)) | (~same & (skipped > 0))
+    return {"bad_bar": bad, "gap_before": gap}
+
+
+def unobserved_paths(out: Dict[str, np.ndarray], obs: Dict[str, np.ndarray]) -> np.ndarray:
+    """True for anchor i when the anchor bar is invalid or its path i+1 .. resolve_idx[i] holds an invalid bar
+    or a missing expected bar. Rows without a resolution are left to the pending / NaN rules."""
+    bad = obs["bad_bar"] | obs["gap_before"]
+    cb = np.concatenate([[0], np.cumsum(bad)])
+    res = np.asarray(out["resolve_idx"])
+    n = len(res)
+    i = np.arange(n)
+    j = np.where(res >= 0, res, i)
+    window_bad = (cb[j + 1] - cb[np.minimum(i + 1, n)]) > 0
+    return obs["bad_bar"] | ((res >= 0) & window_bad)
+
+
+__all__ = ["BarrierSpec", "barrier_outcomes", "path_observability", "unobserved_paths"]
