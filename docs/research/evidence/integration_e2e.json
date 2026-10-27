@@ -19,9 +19,44 @@
   "ledger_verifies": true,
   "no_candidate_labelled_executed": true,
   "snapshot_verifies": true,
+  "split_crossings_fail_closed": true,
   "stages_conserved": true,
   "trades_join_simulated_entries_on_id_and_fill_time": true,
   "universe_is_point_in_time": true
+ },
+ "corporate_actions": {
+  "buy_and_hold_contaminated_symbols": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
+  "family_trials_contaminated": {
+   "mean_reversion-24659b18ea2b": 2,
+   "mean_reversion-2f0e650247ad": 1,
+   "mean_reversion-36b38dce1a7a": 3,
+   "mean_reversion-498dfb5dffa2": 2,
+   "mean_reversion-6831feec7ff9": 3,
+   "mean_reversion-b737e909b7a2": 4
+  },
+  "lab_rows_excluded": 0,
+  "labels_contaminated": 2,
+  "policy": "unadjusted bars, no validated split/share-count adjustment: any holding window that contains a suspected split invalidates its economics (fail closed, no hindsight pre-close)",
+  "selected_run_contaminated_trades": [],
+  "suspect_rows": {
+   "S000": [
+    275
+   ],
+   "S002": [
+    276
+   ],
+   "S010": [
+    187
+   ],
+   "S013": [
+    328
+   ]
+  }
  },
  "data": {
   "files": 16,
@@ -176,16 +211,20 @@
   "per_stage": {
    "blocked_gate": {
     "definitive": 107,
+    "definitive_used": 107,
     "mean_r_net_definitive": 0.9263977941164927,
     "n": 107,
+    "split_contaminated": 0,
     "status": {
      "definitive": 107
     }
    },
    "rejected": {
     "definitive": 188,
+    "definitive_used": 188,
     "mean_r_net_definitive": 0.7147894424932798,
     "n": 190,
+    "split_contaminated": 2,
     "status": {
      "definitive": 188,
      "unobserved": 2
@@ -193,8 +232,10 @@
    },
    "simulated_entry": {
     "definitive": 62,
+    "definitive_used": 62,
     "mean_r_net_definitive": 0.9931593772680097,
     "n": 62,
+    "split_contaminated": 0,
     "status": {
      "definitive": 62
     }
@@ -204,9 +245,11 @@
  "genome": {
   "baselines": {
    "buy_and_hold_equal_weight": {
+    "invalid_reason": "held across suspected unadjusted splits in ['S000', 'S002', 'S010', 'S013']",
     "max_drawdown": -0.1497683677603957,
     "sharpe_ann": 1.5986691797052013,
-    "total_return": 1.6500084036634046
+    "total_return": 1.6500084036634046,
+    "valid": false
    },
    "no_trade": {
     "max_drawdown": 0.0,
@@ -275,6 +318,14 @@
   "id": "KH-4089d49af8",
   "status": "rejected"
  },
+ "integrated_verdict": {
+  "economics_valid": false,
+  "reasons": [
+   "6 of 9 search trials hold positions across a suspected unadjusted split (selection, DSR, PBO and SPA used invalid economics)",
+   "no validated corporate-action adjustment: economics invalid"
+  ],
+  "verdict": "INCONCLUSIVE"
+ },
  "knowledge": {
   "hypotheses": 1,
   "lineage": 1,
@@ -294,7 +345,7 @@
    "prior": 0.5032991202346041
   },
   "card": "INCONCLUSIVE",
-  "dataset_digest": "086e361609abcb18602c5b7b4e7d319ab6ac5dd012a6b6dd68879d7ec6adbe23",
+  "dataset_digest": "4a3f0472cbcfbde905bff5ef38dfe81e62110c127832d68770d846b47e63a571",
   "rows": 113,
   "verdicts": {
    "hgb": "NO_EVIDENCE"
@@ -306,7 +357,7 @@
  },
  "ledger": {
   "entries": 24,
-  "tip": "23ccf9bf6d99822c16213824cc0c970f0f4349da0dba036b64eb1f35ef8112df"
+  "tip": "f7e51a2a0b1a84372338a864624178d45d6c9ea29a5f0c5309ef4dfca5346272"
  },
  "report_card": {
   "provenance": {
@@ -319,5 +370,5 @@
   ],
   "verdict": "INCONCLUSIVE"
  },
- "runtime_seconds": 6.2
+ "runtime_seconds": 9.4
 }
