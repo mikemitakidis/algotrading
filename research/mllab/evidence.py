@@ -41,7 +41,7 @@ import numpy as np
 
 from research.common.hashing import digest
 from research.common.synthetic import MarketSpec, generate
-from research.integrity.controls import BatteryPlan, PipelineDecision, run_battery
+from research.integrity.controls import BatteryPlan, PipelineDecision, pipeline_identity, run_battery
 from research.integrity.ledger import Ledger
 from research.integrity.provenance import code_identity
 from research.integrity.stats import clopper_pearson
@@ -142,9 +142,13 @@ def canary_battery(cfg: EvidenceConfig, ledger: Ledger):
         _log("battery %s effect=%g passed=%s (%d done)" % (kind, eff, d.passed, len(log)))
         return d
 
-    plan = BatteryPlan(name="mllab:%s:challenger-beats-logistic" % cfg.battery_scenario,
-                       pipeline_id="research.mllab.evaluate.run models=%s size=%dx%d claim=PROBABILITIES_ONLY|IMPROVES"
-                                   % (",".join(cfg.battery_models), cfg.battery_symbols, cfg.battery_sessions),
+    # The battery calibrates exactly the pipeline the calibrated run evaluates: its search family and the
+    # content hash of the lab code (comprehensive audit, PR #5: the report card verifies this identity).
+    plan = BatteryPlan(name="mllab:%s:challenger-beats-logistic models=%s size=%dx%d claim=PROBABILITIES_ONLY|IMPROVES"
+                            % (cfg.battery_scenario, ",".join(cfg.battery_models), cfg.battery_symbols,
+                               cfg.battery_sessions),
+                       pipeline_id=pipeline_identity("mllab:%s_calibrated" % cfg.battery_scenario,
+                                                     code_identity(EV.CODE_PATHS)),
                        n_nulls=cfg.n_nulls, effect_sizes=tuple(cfg.effect_sizes), n_per_effect=cfg.n_per_effect,
                        required_effects=tuple(cfg.required_effects), base_seed=cfg.seed)
     res = run_battery(plan, pipeline, make_null=lambda s: ("null", 0.0, s),
