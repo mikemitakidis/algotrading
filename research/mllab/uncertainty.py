@@ -12,8 +12,10 @@
 * ``risk_coverage`` — selective-prediction curve: performance of the most
   confident fraction of decisions, and its area (AURC-style summary).
 * ``online_coverage`` — static split conformal (calibrated once on a warm-up
-  block) versus ACI on the same time-ordered stream: coverage and mean set
-  size after the warm-up, overall and per block.
+  block) versus ACI on the same stream, CAUSALLY: a label enters calibration
+  only once it has resolved strictly before the decision being made
+  (second review, P1: barrier labels resolve days after the decision, and
+  feeding them back at decision time leaks future outcomes).
 * ``dispersion_report`` — does ensemble disagreement carry information?
   Rank correlation with per-row log loss, log loss by dispersion tercile, and
   the net R of taken trades kept at low dispersion.
@@ -84,8 +86,19 @@ class AdaptiveConformal:
         a = float(np.clip(self.alpha_t, 1e-3, 0.999))
         return _q(np.asarray(self.scores[-self.window:]), a) if self.scores else 1.0
 
+    def resolve(self, score: float, q_at_decision: float) -> bool:
+        """Delayed feedback: the label of a past prediction has just become known. Its error is judged against
+        the quantile that was actually used at ITS decision time."""
+        covered = score <= q_at_decision
+        err = 0 if covered else 1
+        self.errs.append(err)
+        self.alpha_t += self.gamma * (self.target - err)
+        self.scores.append(float(score))
+        return covered
+
     def update(self, score: float) -> bool:
-        """Feed the realised nonconformity score of one prediction; returns whether it was covered."""
+        """Label-INSTANT feedback (the label is known before the next decision). For overlapping or delayed
+        labels use ``resolve`` via ``online_coverage``; calling this at decision time leaks the future."""
         covered = score <= self.interval_q()
         err = 0 if covered else 1
         self.errs.append(err)
@@ -120,25 +133,53 @@ def _set_size(p, q):
     return (1.0 - p <= q).astype(int) + (p <= q).astype(int)
 
 
-def online_coverage(p, y, block, *, alpha: float = 0.2, gamma: float = 0.01, window: int = 500,
-                    warmup_block: int = 0) -> Dict:
-    """Rows must be in time order. ``block`` labels each row (e.g. the walk-
-    forward fold); rows of ``warmup_block`` calibrate both methods, every
-    later row is scored online. Score = 1 - P(true class) (binary)."""
+def online_coverage(p, y, block, decision_ts, resolve_ts, *, alpha: float = 0.2, gamma: float = 0.01,
+                    window: int = 500, warmup_block: int = 0, return_q: bool = False) -> Dict:
+    """Causal static-vs-ACI coverage. Rows are processed in decision order. A row's label (and so its
+    nonconformity score) becomes usable only when ``resolve_ts < decision_ts`` of the decision being made.
+
+    * Static split conformal is calibrated once, on warm-up rows whose labels resolved strictly before the
+      first evaluated decision.
+    * ACI starts from the same resolved scores; afterwards each pending label is released when it resolves,
+      and its coverage error is judged against the quantile used at its own decision time.
+    * Coverage is scored after the fact for every evaluated row (evaluation only, never fed back early).
+    Score = 1 - P(true class) (binary)."""
     p, y, block = np.asarray(p, float), np.asarray(y).astype(int), np.asarray(block)
+    dts, rts = np.asarray(decision_ts, dtype=np.int64), np.asarray(resolve_ts, dtype=np.int64)
+    if not (len(p) == len(y) == len(block) == len(dts) == len(rts)):
+        raise ValueError("p, y, block, decision_ts and resolve_ts must have equal length")
+    if (rts < dts).any():
+        raise ValueError("a label cannot resolve before its decision")
+    order = np.argsort(dts, kind="mergesort")
+    p, y, block, dts, rts = p[order], y[order], block[order], dts[order], rts[order]
     s = _binary_scores(p, y)
-    warm = block == warmup_block
+    warm = np.flatnonzero(block == warmup_block)
     later = np.flatnonzero(block > warmup_block)
-    if not warm.any() or not len(later):
+    if not len(warm) or not len(later):
         raise ValueError("need warm-up rows and later rows")
-    q_static = _q(s[warm], alpha)
+    t0 = dts[later[0]]
+    known = warm[rts[warm] < t0]
+    if not len(known):
+        raise ValueError("no warm-up label resolved before the first evaluated decision")
+    q_static = _q(s[known], alpha)
     aci = AdaptiveConformal(alpha=alpha, gamma=gamma, window=window)
-    aci.scores = list(s[warm])
-    cov_a = np.zeros(len(later), dtype=bool)
-    size_a = np.zeros(len(later), dtype=int)
-    for k, i in enumerate(later):
-        size_a[k] = _set_size(p[i:i + 1], aci.interval_q())[0]
-        cov_a[k] = aci.update(s[i])
+    aci.scores = list(s[known])
+    pending = [(int(rts[j]), 0, int(j), float("nan")) for j in warm if rts[j] >= t0]   # warm: score only
+    import heapq
+    heapq.heapify(pending)
+    q_used = np.full(len(p), np.nan)
+    lags = rts[later] - dts[later]
+    for i in later:
+        while pending and pending[0][0] < dts[i]:
+            _, kind, j, qj = heapq.heappop(pending)
+            if kind == 0:
+                aci.scores.append(float(s[j]))
+            else:
+                aci.resolve(float(s[j]), qj)
+        q_used[i] = aci.interval_q()
+        heapq.heappush(pending, (int(rts[i]), 1, int(i), float(q_used[i])))
+    cov_a = s[later] <= q_used[later]
+    size_a = _set_size(p[later], q_used[later])
     cov_s = s[later] <= q_static
     size_s = _set_size(p[later], q_static)
     per = []
@@ -146,10 +187,17 @@ def online_coverage(p, y, block, *, alpha: float = 0.2, gamma: float = 0.01, win
         m = block[later] == b
         per.append({"block": int(b), "n": int(m.sum()), "static": float(cov_s[m].mean()),
                     "aci": float(cov_a[m].mean())})
-    return {"target": 1.0 - alpha, "n": int(len(later)), "static_coverage": float(cov_s.mean()),
-            "aci_coverage": float(cov_a.mean()), "static_mean_set_size": float(size_s.mean()),
-            "aci_mean_set_size": float(size_a.mean()), "static_q": float(q_static),
-            "aci_final_alpha": float(aci.alpha_t), "per_block": per}
+    out = {"target": 1.0 - alpha, "n": int(len(later)), "static_coverage": float(cov_s.mean()),
+           "aci_coverage": float(cov_a.mean()), "static_mean_set_size": float(size_s.mean()),
+           "aci_mean_set_size": float(size_a.mean()), "static_q": float(q_static),
+           "aci_final_alpha": float(aci.alpha_t), "warmup_labels_resolved": int(len(known)),
+           "warmup_labels_pending": int(len(warm) - len(known)), "median_label_lag_ns": float(np.median(lags)),
+           "feedback": "causal: labels used only after resolve_ts < decision_ts", "per_block": per}
+    if return_q:
+        inv = np.empty_like(order)
+        inv[order] = np.arange(len(order))
+        out["q_used"] = q_used[inv]                      # in the caller's original row order
+    return out
 
 
 def dispersion_report(member_p, p, y, r_net, take) -> Dict:
