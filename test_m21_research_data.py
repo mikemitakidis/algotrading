@@ -158,7 +158,8 @@ class F1c_CausalSplitFlagUnit(unittest.TestCase):
         ts = pd.date_range("2024-01-02", periods=8, freq="D", tz="UTC") + pd.Timedelta(21, unit="h")
         close = [100.0] * 5 + [50.0, 50.0, 50.0]
         open_ = [100.0] * 5 + [50.2, 50.0, 50.0]                       # 2:1 split at bar 5
-        vol = [100.0] * 5 + [160.0, 10000.0, 10000.0]                   # bar 5 volume vs PRIOR median: 1.6x
+        vol = [50.0, 60.0, 200.0, 210.0, 220.0, 300.0, 10000.0, 10000.0]  # bar 5: 1.5x the PRIOR median (200);
+        # a detector that peeked at bar 6 would see a median of 215 -> 1.395x < sqrt(2) and miss the split
         df = pd.DataFrame({"ts_utc": ts, "open": open_, "high": [max(a, b) for a, b in zip(open_, close)],
                            "low": [min(a, b) for a, b in zip(open_, close)], "close": close, "volume": vol})
         full = Q.causal_split_flags(df)
