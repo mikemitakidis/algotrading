@@ -153,6 +153,20 @@ class F1b_FlagsAndKnowledgeTiming(unittest.TestCase):
         self.assertEqual(Q.audit_panel(m.bars)["knowledge"], "retrospective_full_sample")
 
 
+class F1c_CausalSplitFlagUnit(unittest.TestCase):
+    def test_flag_at_bar_i_uses_only_bars_up_to_i(self):
+        ts = pd.date_range("2024-01-02", periods=8, freq="D", tz="UTC") + pd.Timedelta(21, unit="h")
+        close = [100.0] * 5 + [50.0, 50.0, 50.0]
+        open_ = [100.0] * 5 + [50.2, 50.0, 50.0]                       # 2:1 split at bar 5
+        vol = [100.0] * 5 + [160.0, 10000.0, 10000.0]                   # bar 5 volume vs PRIOR median: 1.6x
+        df = pd.DataFrame({"ts_utc": ts, "open": open_, "high": [max(a, b) for a, b in zip(open_, close)],
+                           "low": [min(a, b) for a, b in zip(open_, close)], "close": close, "volume": vol})
+        full = Q.causal_split_flags(df)
+        self.assertTrue(full[5])
+        for j in range(len(df)):
+            np.testing.assert_array_equal(Q.causal_split_flags(df.iloc[:j + 1]), full[:j + 1])
+
+
 class F2_Snapshots(unittest.TestCase):
     def _store(self, d):
         m = generate(MarketSpec(n_symbols=3, n_sessions=100, seed=4))
