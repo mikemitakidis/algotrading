@@ -381,6 +381,10 @@ class D4_Search(unittest.TestCase):
             self.assertEqual(p["artifacts"]["family_series"], outcome_digest(row["_returns"]))
         with self.assertRaises(ValueError):
             SR.evaluate(gs[:1], m.bars, ledger=L, family_id="d:x", data_digest="x", seed=None)
+        # the as-of universe mask reaches the engine
+        none = {s: np.zeros(len(b), bool) for s, b in m.bars.items()}
+        d0 = SR.evaluate(gs[:1], m.bars, ledger=Ledger(), family_id="d:m", data_digest="x", seed=4, membership=none)
+        self.assertEqual(d0["n_trades"].iloc[0], 0.0)
         L.assert_ledgered(df["trial_id"])
         sel = SR.select(df, {k: v for k, v in axes.items()}, ledger=L, family_id="d:test")
         self.assertEqual(sel["n_trials_family"], 5)

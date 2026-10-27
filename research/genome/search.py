@@ -55,19 +55,20 @@ def grid(template: str, axes: Mapping[str, Sequence], base: Optional[Genome] = N
 
 def evaluate(genomes: Sequence[Genome], bars: Mapping[str, pd.DataFrame], *, ledger: Ledger, family_id: str,
              data_digest: str, seed: int, cfg: EngineConfig = EngineConfig(),
-             keep_equity: bool = False) -> pd.DataFrame:
+             membership: Optional[Mapping[str, np.ndarray]] = None, keep_equity: bool = False) -> pd.DataFrame:
     """``seed`` is the research seed of the market (synthetic generator seed or the manifest's seed); it is
-    required so no trial is recorded with a placeholder."""
+    required so no trial is recorded with a placeholder. ``membership`` is the as-of universe mask passed to
+    the engine (point-in-time eligibility); a search must use the same mask as the run it is compared with."""
     if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
         raise ValueError("seed must be the integer research seed of the data, got %r" % (seed,))
     code_id = code_identity(CODE_PATHS)
     rows = []
     for g in genomes:
-        res = run_genome(g, bars, cfg)
+        res = run_genome(g, bars, cfg, membership)
         m = metrics(res)
         r = res.equity.pct_change().dropna().to_numpy()
         m["sr_per_period"] = float(S.sharpe(r)) if len(r) > 2 and r.std() > 0 else 0.0
-        rm = np.array([t.r_multiple for t in res.trades], dtype=float)
+        rm = np.array([t.r_multiple for t in res.trades if np.isfinite(t.r_multiple)], dtype=float)
         tid = ledger.record_trial(TrialRecord(
             family_id=family_id, kind="research", spec_digest=g.genome_id, data_digest=data_digest,
             code_digest=code_id, seed=int(seed), metrics={k: v for k, v in m.items() if np.isfinite(v)},
