@@ -1,0 +1,148 @@
+{
+ "checks": {
+  "card_cannot_pass_without_canary": true,
+  "card_charged_for_all_genome_trials": true,
+  "card_computed_pbo_and_spa": true,
+  "card_provenance_verified": true,
+  "every_candidate_labelled": true,
+  "genome_trials_carry_snapshot_digest": true,
+  "lab_dataset_traces_to_snapshot": true,
+  "ledger_verifies": true,
+  "snapshot_verifies": true,
+  "split_suspects_excluded": true
+ },
+ "counterfactual": {
+  "candidates": 108,
+  "definitive": 108,
+  "effective_n": {
+   "n_effective": 26.911218405580602,
+   "n_raw": 108.0,
+   "status": "ok"
+  },
+  "executed_trades": 58,
+  "mean_r_net_definitive": 0.9973044628407118,
+  "status_counts": {
+   "definitive": 108
+  }
+ },
+ "data": {
+  "excluded": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
+  "files": 16,
+  "grades": {
+   "clean": 4,
+   "unusable": 0,
+   "usable_with_warnings": 12
+  },
+  "snapshot_digest": "f8eb3290d2384af3ed3e09d212ab36e2a5542aa5203c87fa31c8f2418f7267d3",
+  "symbols": 16,
+  "usable": 12
+ },
+ "genome": {
+  "baselines": {
+   "buy_and_hold_equal_weight": {
+    "max_drawdown": -0.14078352862885535,
+    "sharpe_ann": 1.8861328729465363,
+    "total_return": 2.2574833713619005
+   },
+   "no_trade": {
+    "max_drawdown": 0.0,
+    "sharpe_ann": 0.0,
+    "total_return": 0.0
+   }
+  },
+  "dsr_best_isolated": {
+   "dsr": 0.9999999992719295,
+   "n_obs": 699,
+   "n_trials": 9.0,
+   "psr0": 1.0,
+   "sr0": 0.09037548033301358,
+   "sr_per_period": 0.2997591389626642
+  },
+  "grid_points": 9,
+  "invalid": 0,
+  "portfolio": {
+   "max_drawdown": -0.021190189894201183,
+   "mean_bars_held": 6.741379310344827,
+   "mean_r": 0.9111582480467214,
+   "n_trades": 58.0,
+   "profit_factor": 10.246416252039761,
+   "sharpe_ann": 3.935758071613438,
+   "signals_seen": 108.0,
+   "skipped": 0.0,
+   "total_return": 0.6612277134387363,
+   "win_rate": 0.8620689655172413
+  },
+  "selected": "mean_reversion-9619d39fbda8",
+  "selected_params": {
+   "bb_std": 1.5,
+   "bb_window": 20,
+   "rsi_entry": 25.0,
+   "rsi_exit": 55.0,
+   "rsi_mode": "sma_gain_loss",
+   "rsi_period": 14
+  },
+  "selection": {
+   "best_isolated": {
+    "genome_id": "mean_reversion-2f0e650247ad",
+    "plateau": 3.8733787071059336,
+    "sharpe_ann": 4.75852880948437
+   },
+   "best_plateau": {
+    "genome_id": "mean_reversion-9619d39fbda8",
+    "plateau": 3.935758071613438,
+    "sharpe_ann": 3.935758071613438
+   },
+   "median": 3.1493410760807246,
+   "n_points": 9,
+   "n_trials_family": 9,
+   "share_positive": 1.0
+  }
+ },
+ "hypothesis": {
+  "id": "KH-4089d49af8",
+  "status": "rejected"
+ },
+ "knowledge": {
+  "hypotheses": 1,
+  "lineage": 1,
+  "refusals": 0,
+  "rejected": 1,
+  "reviews": 0,
+  "sources": 2,
+  "status": {
+   "KH-4089d49af8": "rejected"
+  }
+ },
+ "lab": {
+  "auc": {
+   "hgb": 0.4105263157894737,
+   "logistic": 0.6666666666666666,
+   "prior": 0.4552631578947368
+  },
+  "card": "INCONCLUSIVE",
+  "rows": 102,
+  "verdicts": {
+   "hgb": "NO_EVIDENCE"
+  },
+  "vs_prior": {
+   "hgb": "NO_EVIDENCE",
+   "logistic": "DECISIONS_ONLY"
+  }
+ },
+ "ledger": {
+  "entries": 24,
+  "tip": "2aae949ddb20048edb3c53bbc79acfacdd49f8d6bec15280b7aa19dc14aa9efe"
+ },
+ "report_card": {
+  "reasons": [
+   "pipeline canary battery missing or not CALIBRATED"
+  ],
+  "verdict": "INCONCLUSIVE"
+ },
+ "runtime_seconds": 5.0
+}
