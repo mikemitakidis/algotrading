@@ -1,0 +1,95 @@
+"""research.evidence.effective_n — how many INDEPENDENT observations a label set holds.
+
+Raw candidate counts overstate evidence (Issue #2 critique #1): labels
+overlap in time within a symbol, and candidates on the same day share market
+moves. This module reports, side by side:
+
+* ``n_uniqueness``  — sum of average uniqueness (López de Prado): an event
+  that shares every bar of its window with three others counts 1/4;
+* ``n_cluster_<dim>`` — the effective N implied by a cluster-robust variance
+  of the mean, clustering by decision date, symbol or sector:
+  n_eff = s^2 / Var_cluster(mean);
+* ``n_twoway``      — two-way clustering by date and symbol
+  (Cameron–Gelbach–Miller);
+* ``n_effective``   — the most conservative of the above (the headline).
+
+All are capped at the raw N.
+"""
+from __future__ import annotations
+
+from typing import Dict, Optional, Sequence
+
+import numpy as np
+import pandas as pd
+
+
+def average_uniqueness(symbols: Sequence[str], entry_idx: Sequence[int], exit_idx: Sequence[int]) -> np.ndarray:
+    """Per-event average uniqueness within its own symbol's bar timeline."""
+    sym = np.asarray(symbols)
+    e0 = np.asarray(entry_idx, dtype=np.int64)
+    e1 = np.asarray(exit_idx, dtype=np.int64)
+    if (e1 < e0).any():
+        raise ValueError("exit before entry")
+    u = np.zeros(len(sym))
+    for s in np.unique(sym):
+        m = np.flatnonzero(sym == s)
+        lo, hi = int(e0[m].min()), int(e1[m].max())
+        conc = np.zeros(hi - lo + 2, dtype=np.int64)
+        np.add.at(conc, e0[m] - lo, 1)
+        np.add.at(conc, e1[m] - lo + 1, -1)
+        conc = np.cumsum(conc)[:-1]
+        inv = 1.0 / np.maximum(conc, 1)
+        cs = np.concatenate([[0.0], np.cumsum(inv)])
+        u[m] = (cs[e1[m] - lo + 1] - cs[e0[m] - lo]) / (e1[m] - e0[m] + 1)
+    return u
+
+
+def cluster_variance_of_mean(x: np.ndarray, groups: np.ndarray) -> float:
+    """Cluster-robust variance of the sample mean with the G/(G-1) correction."""
+    e = x - x.mean()
+    df = pd.DataFrame({"g": groups, "e": e})
+    sums = df.groupby("g", sort=False)["e"].sum().to_numpy()
+    G = len(sums)
+    if G < 2:
+        return float("nan")
+    return float((G / (G - 1.0)) * np.sum(sums ** 2) / len(x) ** 2)
+
+
+def _n_from_var(x: np.ndarray, v: float) -> float:
+    s2 = x.var(ddof=1)
+    if not (np.isfinite(v) and v > 0 and s2 > 0):
+        return float(len(x))
+    return float(np.clip(s2 / v, 1.0, len(x)))
+
+
+def effective_n(values, *, dates=None, symbols=None, sectors=None, entry_idx=None, exit_idx=None) -> Dict[str, float]:
+    x = np.asarray(values, dtype=float)
+    ok = np.isfinite(x)
+    x = x[ok]
+    n = len(x)
+    out: Dict[str, float] = {"n_raw": float(n)}
+    if n < 3:
+        out["n_effective"] = float(n)
+        return out
+    cands = []
+    if symbols is not None and entry_idx is not None and exit_idx is not None:
+        u = average_uniqueness(np.asarray(symbols)[ok], np.asarray(entry_idx)[ok], np.asarray(exit_idx)[ok])
+        out["n_uniqueness"] = float(u.sum())
+        cands.append(out["n_uniqueness"])
+    for name, g in (("date", dates), ("symbol", symbols), ("sector", sectors)):
+        if g is not None:
+            gg = np.asarray(g)[ok]
+            out["n_cluster_" + name] = _n_from_var(x, cluster_variance_of_mean(x, gg))
+            cands.append(out["n_cluster_" + name])
+    if dates is not None and symbols is not None:
+        d, s = np.asarray(dates)[ok], np.asarray(symbols)[ok]
+        inter = np.array(["%s|%s" % (a, b) for a, b in zip(d, s)])
+        v = (cluster_variance_of_mean(x, d) + cluster_variance_of_mean(x, s)
+             - cluster_variance_of_mean(x, inter))
+        out["n_twoway"] = _n_from_var(x, v)
+        cands.append(out["n_twoway"])
+    out["n_effective"] = float(min(cands)) if cands else float(n)
+    return out
+
+
+__all__ = ["average_uniqueness", "cluster_variance_of_mean", "effective_n"]
