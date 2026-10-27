@@ -62,6 +62,13 @@ class E1_Roles(unittest.TestCase):
         self.assertTrue(R.ROLES["auditor"].deterministic)
         self.assertNotIn("eval.synthetic", R.ROLES["hypothesist"].allowed)
 
+    def test_never_list_holds_even_if_roles_are_altered_after_construction(self):
+        g = R.Gate(Ledger())
+        g.roles["scout"] = replace(R.ROLES["scout"], allowed=R.ROLES["scout"].allowed | {"network.fetch"})
+        d = g.check("scout", "network.fetch")
+        self.assertFalse(d.allowed)
+        self.assertIn("never permitted", d.reason)
+
     def test_a_role_cannot_be_configured_with_a_forbidden_action(self):
         bad = dict(R.ROLES)
         bad["scout"] = replace(R.ROLES["scout"], allowed=R.ROLES["scout"].allowed | {"broker.order"})
@@ -128,6 +135,8 @@ class E2_Knowledge(unittest.TestCase):
         self.assertEqual(kb.status(hid), "rejected")
         with self.assertRaises(K.KnowledgeError):
             kb.propose(reworded, context={"n_symbols": 100})
+        with self.assertRaises(K.KnowledgeError):
+            kb.propose(reworded, context={"n_symbols": 10, "flags": ["real_data"]})
         with self.assertRaises(K.KnowledgeError):
             kb.propose(reworded, distinct_from={hid: "it is really different"})     # no bypass of the graveyard
         new = kb.propose(reworded, context={"n_symbols": 100, "flags": ["real_data"]})
