@@ -449,8 +449,25 @@ class A3b_BarTimeCapacity(unittest.TestCase):
         self.assertEqual([e.stage for e in apply_gates(evs, {}, release_times=rel)],
                          ["executed", "blocked_risk", "executed"])                  # held over the weekend
         rel_unf = {"c0": NO_POSITION, "c1": pd.Timestamp("2024-01-09 21:00", tz="UTC"), "c2": None}
-        self.assertEqual([e.stage for e in apply_gates(evs, {}, release_times=rel_unf)],
-                         ["executed", "executed", "executed"])                      # unfillable never held the slot
+        out = apply_gates(evs, {}, release_times=rel_unf)
+        # Third review (PR #6): an unfillable candidate is never "executed" and never holds the slot
+        self.assertEqual([e.stage for e in out], ["unfillable", "executed", "executed"])   # c1 released Tue
+        self.assertEqual(out[0].reasons, ("no_position_possible",))
+
+    def test_unfillable_candidates_use_no_daily_capacity(self):
+        """Third review (PR #6): with a daily cap of one, an unfillable candidate first in the day must not take
+        the day's slot from the next fillable candidate."""
+        d1, d2 = (pd.Timestamp(d, tz="UTC") for d in ("2024-01-08 15:00", "2024-01-08 18:00"))
+        evs = [CandidateEvent(candidate_id="u", symbol="A", decision_ts_utc=d1, direction="long", stage="eligible",
+                              source="synthetic", timeframe="1H", strategy_id="t", atr_at_decision=1.0),
+               CandidateEvent(candidate_id="f", symbol="B", decision_ts_utc=d2, direction="long", stage="eligible",
+                              source="synthetic", timeframe="1H", strategy_id="t", atr_at_decision=1.0)]
+        out = apply_gates(evs, {}, max_entries_per_day=1, release_times={"u": NO_POSITION, "f": None})
+        self.assertEqual([(e.candidate_id, e.stage) for e in out], [("u", "unfillable"), ("f", "executed")])
+        self.assertNotIn("executed", [e.stage for e in out if e.candidate_id == "u"])
+        # the same pair with the unfillable one made fillable: now the cap binds on the second
+        out2 = apply_gates(evs, {}, max_entries_per_day=1, release_times={"u": None, "f": None})
+        self.assertEqual([e.stage for e in out2], ["executed", "skipped_capacity"])
 
 
 class A3c_BarOpenConvention(unittest.TestCase):
