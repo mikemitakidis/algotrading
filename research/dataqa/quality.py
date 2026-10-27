@@ -194,13 +194,18 @@ def flag_breakdown(flags) -> "tuple[Dict[str, int], Dict[str, int]]":
 
 
 def admissible_mask(df: pd.DataFrame) -> np.ndarray:
-    """True where a bar may enter research: finite positive OHLC, consistent high/low, non-negative volume
-    (the M16 hard rules) and no blocking or unknown quality-flag bit."""
+    """True where a bar may enter research: finite positive OHLC, consistent high/low, FINITE non-negative
+    volume (the M16 hard rules) and no blocking or unknown quality-flag bit.
+
+    Volume must be finite and >= 0 (third review, PR #8): a missing (NaN), infinite or non-numeric volume
+    (coerced to NaN) is not an observation. Zero volume is admissible for descriptive research and carries a
+    WARNING bit only; it means no trade printed in the bar, so it is no evidence that a simulated fill at that
+    bar was executable. The research engines do not yet model liquidity; that limitation is stated, not hidden."""
     o, h, l, c = (pd.to_numeric(df[k], errors="coerce").to_numpy(float) for k in ("open", "high", "low", "close"))
     v = pd.to_numeric(df["volume"], errors="coerce").to_numpy(float)
     with np.errstate(invalid="ignore"):
         ok = (np.isfinite(o) & np.isfinite(h) & np.isfinite(l) & np.isfinite(c) & (o > 0) & (h > 0) & (l > 0)
-              & (c > 0) & (h >= np.maximum(o, c)) & (l <= np.minimum(o, c)) & ~(v < 0))
+              & (c > 0) & (h >= np.maximum(o, c)) & (l <= np.minimum(o, c)) & np.isfinite(v) & (v >= 0))
     if "quality_flags" in df.columns:
         qf = df["quality_flags"].fillna(0).astype(np.int64).to_numpy()
         blocking = sum(BLOCKING_FLAG_BITS)
