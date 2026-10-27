@@ -43,6 +43,7 @@ from research.common.hashing import digest
 from research.common.synthetic import MarketSpec, generate
 from research.integrity.controls import BatteryPlan, PipelineDecision, run_battery
 from research.integrity.ledger import Ledger
+from research.integrity.provenance import code_identity
 from research.integrity.stats import clopper_pearson
 from research.mllab import audits as AU
 from research.mllab import benchmarks as BM
@@ -197,8 +198,8 @@ def _uncertainty(res: EV.LabResult, ds, cfg: EvidenceConfig, models: Sequence[st
         if nm not in res.runs:
             continue
         try:
-            oc = U.online_coverage(res.runs[nm].p[oof], ds.y[oof], res.fold_of[oof], alpha=cfg.conformal_alpha,
-                                   gamma=cfg.aci_gamma)
+            oc = U.online_coverage(res.runs[nm].p[oof], ds.y[oof], res.fold_of[oof], ds.start[oof], ds.end[oof],
+                                   alpha=cfg.conformal_alpha, gamma=cfg.aci_gamma)
         except ValueError:
             continue
         out["online"][nm] = oc
@@ -292,7 +293,8 @@ def to_json(ev: Dict) -> Dict:
            "calibrated_run": run_json(ev["calibrated"]), "ledger": {"verified": ev["ledger_ok"],
                                                                     "entries": ev["ledger_entries"],
                                                                     "tip": ev["ledger_tip"]},
-           "versions": ev["versions"], "runtime_seconds": ev["runtime_seconds"]}
+           "versions": ev["versions"], "code_identity": code_identity(EV.CODE_PATHS),
+           "runtime_seconds": ev["runtime_seconds"]}
     out = _jsonable(out)
     out["report_digest"] = digest({k: v for k, v in out.items() if k != "runtime_seconds"})
     return out
@@ -436,8 +438,10 @@ def render_markdown(j: Dict) -> str:
             L.append("| %s | %s | %.3f | %s | %s | %d (%s) |" % (name, m, met["ece"], _f(met["conformal_coverage"], "%.2f"),
                                                              _f(met["conformal_singleton_share"], "%.2f"),
                                                              met["conformal_trades"], _f(met["conformal_mean_net_r"])))
-    L += ["", "**Static versus adaptive conformal (ACI, γ = %g)** on the time-ordered out-of-fold stream. Fold 0 "
-          "calibrates both methods; every later row is scored online." % c["aci_gamma"], "",
+    L += ["", "**Static versus adaptive conformal (ACI, γ = %g)** on the time-ordered out-of-fold stream, causally: "
+          "static conformal is calibrated on fold-0 labels that resolved before the first later decision, and ACI "
+          "receives each label only after its barrier resolved (before the decision that uses it), judged against "
+          "the quantile in force at its own decision time." % c["aci_gamma"], "",
           "| benchmark | model | rows | static coverage | ACI coverage | static mean set size | ACI mean set size |",
           "|---|---|---|---|---|---|---|"]
     for name, b in j["benchmarks"].items():
@@ -499,6 +503,8 @@ def render_markdown(j: Dict) -> str:
           "- Ledger: %d entries, chain verified = %s, tip `%s`" % (j["ledger"]["entries"], j["ledger"]["verified"],
                                                                  (j["ledger"]["tip"] or "")[:16]),
           "- Libraries: " + ", ".join("%s %s" % kv for kv in sorted(j["versions"].items())),
+          "- Code identity (content hash of the lab, integrity and feature sources; recorded on every trial): `%s`"
+          % j.get("code_identity", "n/a"),
           "- Benchmark dataset digests: " + ", ".join("%s `%s`" % (n, b["run"]["dataset_digest"][:12])
                                                       for n, b in j["benchmarks"].items() if not n.startswith("_")),
           "- Every model is bit-reproducible for its seed (random forests single-threaded, LightGBM deterministic).",

@@ -45,6 +45,7 @@ from research.common.rng import stream
 from research.integrity import multiple_testing as MT
 from research.integrity import stats as S
 from research.integrity.ledger import Ledger, TrialRecord
+from research.integrity.provenance import code_identity, outcome_digest
 from research.integrity.controls import BatteryResult
 from research.integrity.report_card import GauntletConfig, ReportCard, evaluate as gauntlet
 from research.integrity.splits import walk_forward
@@ -52,6 +53,10 @@ from research.mllab.datasets import EventDataset
 from research.mllab.uncertainty import SplitConformal
 
 VERDICTS = ("IMPROVES", "PROBABILITIES_ONLY", "DECISIONS_ONLY", "NO_EVIDENCE", "WORSE")
+# Source that determines a lab trial's behaviour: its code identity (research.integrity.provenance) changes
+# whenever any of these files change (second review, P2: no literal placeholder digests).
+CODE_PATHS = ("research/mllab", "research/integrity", "research/common", "bot/ml/features",
+              "bot/ml/evaluation")
 EPS = 1e-6
 
 
@@ -310,26 +315,32 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
             r["holm_p"] = float(a)
     family = "mllab:%s" % scenario
     trial_ids: Dict[str, str] = {}
+    # Per-trial committed outcome series: the gross R of the rows the model took, and its daily net-R series
+    # (the family-matrix column). The report card recomputes both from its inputs (outcome provenance).
+    daily = {k: _daily(np.where(runs[k].take[oof], r_net[oof], 0.0), days, all_days) for k in runs}
     if ledger is not None:
+        code_id = code_identity(CODE_PATHS)
         for nm, rr in runs.items():
             trial_ids[nm] = ledger.record_trial(TrialRecord(
                 family_id=family, kind="baseline" if nm in (cfg.baseline, "prior") else "research",
-                spec_digest=nm, data_digest=ds.digest, code_digest="research.mllab", seed=cfg.seed,
+                spec_digest=nm, data_digest=ds.digest, code_digest=code_id, seed=cfg.seed,
                 metrics={k: v for k, v in rr.metrics.items() if isinstance(v, float) and np.isfinite(v)},
-                split={"n_folds": cfg.n_folds, "embargo_ns": cfg.embargo_ns}))
+                split={"n_folds": cfg.n_folds, "embargo_ns": cfg.embargo_ns},
+                artifacts={"gross": outcome_digest(ds.r[oof][rr.take[oof]]),
+                           "family_series": outcome_digest(daily[nm])}))
     # Charge the card for every model EVER tried in this family, not just this call.
     n_trials = max(len(runs), ledger.family_trial_count(family)) if ledger is not None else len(runs)
     card = None
     best = max(challengers, key=lambda k: runs[k].metrics["total_net_r"]) if challengers else None
     if best is not None and runs[best].take[oof].sum() >= 10:
         tk = runs[best].take[oof]
-        fam = np.column_stack([_daily(np.where(runs[k].take[oof], r_net[oof], 0.0), days, all_days)
-                               for k in runs])
+        fam = np.column_stack([daily[k] for k in runs])
         card = gauntlet(candidate_id="%s:%s" % (scenario, best), family_id=family,
                         gross=ds.r[oof][tk], cost_per_obs=cfg.cost_r, n_trials=n_trials,
                         rng=stream(cfg.seed, "card", scenario), family_matrix=fam if fam.shape[0] >= 40 else None,
                         canary=canary, cfg=GauntletConfig(n_boot=300, hac_lags=cfg.hac_lags),
-                        ledger=ledger, trial_ids=tuple(trial_ids.values()))
+                        ledger=ledger, trial_ids=tuple(trial_ids.values()),
+                        candidate_trial_id=trial_ids.get(best))
     sizes = [{"train": int(len(f.train)), "test": int(len(f.test)), "purged": int(f.purged),
               "embargoed": int(f.embargoed)} for f in folds]
     return LabResult(scenario, ds.digest, n, oof, runs, comparisons, vs_prior, card, sizes,

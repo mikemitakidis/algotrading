@@ -193,6 +193,28 @@ class C2_Datasets(unittest.TestCase):
         self.assertFalse(any(f.startswith("ctx.") for f in no_ctx.feature_names))
         self.assertEqual(ds.digest, build_dataset(self.m.bars, sampler=every_k(3), truth=self.m.truth).digest)
 
+    def test_digest_covers_every_field(self):
+        """Second review P1 (#7): every field that drives training, purging, grouping or analysis is hashed."""
+        import copy
+        base = _event_ds(n_days=20, per_day=4)
+        d0 = base.digest
+        edits = {
+            "X": lambda d: d.X.__setitem__((0, 0), d.X[0, 0] + 1),
+            "y": lambda d: d.y.__setitem__(0, 1 - d.y[0]),
+            "r": lambda d: d.r.__setitem__(0, d.r[0] + 0.5),
+            "start": lambda d: d.start.__setitem__(0, d.start[0] + 1),
+            "end": lambda d: d.end.__setitem__(0, d.end[0] + 1),
+            "symbol": lambda d: d.symbol.__setitem__(0, "T"),
+            "day": lambda d: d.day.__setitem__(0, "d9999"),
+            "truth_regime": lambda d: d.truth_regime.__setitem__(0, "bull"),
+            "feature_names": lambda d: d.feature_names.__setitem__(0, "renamed"),
+            "meta": lambda d: d.meta.__setitem__("kind", "other"),
+        }
+        for name, f in edits.items():
+            d = copy.deepcopy(base)
+            f(d)
+            self.assertNotEqual(d.digest, d0, "%s is not covered by the dataset digest" % name)
+
 
 class C3_Harness(unittest.TestCase):
     def test_every_fit_sees_only_resolved_past(self):
@@ -297,9 +319,37 @@ class C4_Uncertainty(unittest.TestCase):
     def test_aci_tracks_target_under_drift_static_does_not(self):
         rng = np.random.default_rng(0)
         p = np.r_[rng.uniform(0.5, 1, 1000), rng.uniform(0.2, 1, 3000)]
-        res = U.online_coverage(p, np.ones(4000), np.r_[np.zeros(1000), np.ones(3000)], alpha=0.2)
+        t = np.arange(4000) * 10
+        res = U.online_coverage(p, np.ones(4000), np.r_[np.zeros(1000), np.ones(3000)], t, t + 35, alpha=0.2)
         self.assertLess(res["static_coverage"], 0.6)
-        self.assertLess(abs(res["aci_coverage"] - 0.8), 0.02)
+        self.assertLess(abs(res["aci_coverage"] - 0.8), 0.03)
+        self.assertEqual(res["warmup_labels_pending"], 3)          # the last 3 warm-up labels resolve too late
+
+    def test_aci_uses_only_labels_resolved_before_each_decision(self):
+        """Second review P1 (#7): delayed, overlapping labels. The quantile used at decision t must not depend on
+        any label resolving at or after t; changing those labels leaves every earlier quantile unchanged."""
+        rng = np.random.default_rng(1)
+        n = 1500
+        p = rng.uniform(0.2, 1, n)
+        y = (rng.uniform(size=n) < p).astype(int)
+        block = np.r_[np.zeros(300), np.ones(n - 300)].astype(int)
+        dts = np.arange(n) * 100
+        rts = dts + rng.integers(1, 2000, n)                  # labels resolve 0-20 decisions later, overlapping
+        base = U.online_coverage(p, y, block, dts, rts, alpha=0.2, return_q=True)["q_used"]
+        for k in (400, 900, 1300):
+            y2 = y.copy()
+            y2[k:] = 1 - y2[k:]                               # rewrite every outcome from decision k on
+            q2 = U.online_coverage(p, y2, block, dts, rts, alpha=0.2, return_q=True)["q_used"]
+            unseen = (np.arange(n) >= 300) & (dts <= rts[k:].min())
+            np.testing.assert_array_equal(base[unseen], q2[unseen])
+            self.assertFalse(np.array_equal(base[300:], q2[300:]))
+        # leaking control: label-instant feedback DOES change quantiles before the rewritten labels resolve
+        aci = U.AdaptiveConformal(alpha=0.2)
+        self.assertTrue(hasattr(aci, "resolve"))
+        with self.assertRaises(ValueError):
+            U.online_coverage(p, y, block, dts, dts - 1, alpha=0.2)
+        with self.assertRaises(ValueError):                   # no warm-up label known before evaluation starts
+            U.online_coverage(p, y, block, dts, dts + 10 ** 9, alpha=0.2)
 
     def test_risk_coverage_orders_by_confidence(self):
         rc = U.risk_coverage(np.array([0.9, 0.1, 0.8, 0.2]), np.array([1.0, -1.0, 1.0, -1.0]), grid=(0.5, 1.0))
@@ -488,8 +538,38 @@ class C7_Provenance(unittest.TestCase):
         self.assertEqual(r2.meta["n_trials_charged"], 6)
         L.assert_ledgered(r2.trial_ids.values())
         self.assertEqual(r2.card.numbers["provenance_verified"], 1.0)
+        self.assertEqual(r2.card.numbers["outcomes_verified"], 1.0)
         self.assertEqual(r2.card.numbers["n_trials"], 6.0)
         self.assertFalse(any("not reconciled" in r for r in r2.card.reasons))
+
+    def test_trials_carry_real_code_identity_and_outcome_artifacts(self):
+        """Second review P1 (#7): code_digest is a content hash of the lab sources, not a literal; trial artifacts
+        bind the reported outcomes, so a substituted outcome stream is refused by the report card."""
+        from research.integrity import report_card as RC
+        from research.integrity.provenance import code_identity
+        ds = _event_ds(n_days=150, per_day=10, strength=1.5)
+        L = Ledger()
+        fac = {"prior": lambda: MD.make("prior"), "logistic": lambda: MD.make("logistic")}
+        res = EV.run(ds, fac, EV.LabConfig(n_folds=4, min_trades=20), scenario="s", ledger=L)
+        rows = L.entries("trial")
+        self.assertTrue(rows)
+        want = code_identity(EV.CODE_PATHS)
+        for e in rows:
+            self.assertEqual(e.payload["code_digest"], want)
+            self.assertEqual(set(e.payload["artifacts"]), {"gross", "family_series"})
+        self.assertTrue(want.startswith("src-"))
+        tid = res.trial_ids["logistic"]
+        rec = [e.payload for e in rows if e.ref_id == tid][0]
+        self.assertEqual(rec["data_digest"], ds.digest)
+        # substituting the outcomes but keeping the genuine trial ids must not verify
+        ids = list(res.trial_ids.values())
+        rng = np.random.default_rng(0)
+        card = RC.evaluate(candidate_id="s:logistic", family_id="mllab:s", gross=rng.normal(0.3, 1, 200),
+                           cost_per_obs=0.0, n_trials=len(ids), rng=rng,
+                           family_matrix=rng.normal(size=(60, len(ids))), ledger=L, trial_ids=ids,
+                           candidate_trial_id=tid)
+        self.assertEqual(card.numbers["outcomes_verified"], 0.0)
+        self.assertNotEqual(card.verdict, "PASS")
 
 
 class C8_ModelCard(unittest.TestCase):
@@ -570,6 +650,9 @@ class C10_EvidenceRun(unittest.TestCase):
         self.assertEqual(j["battery"]["result"]["verdict"], "NOT_CALIBRATED")     # 2 nulls cannot bound anything
         self.assertTrue(j["ledger"]["verified"])
         self.assertNotEqual((j["calibrated_run"]["report_card"] or {}).get("verdict"), "PASS")
+        self.assertTrue(j["code_identity"].startswith("src-"))
+        online = j["benchmarks"]["null"]["uncertainty"]["online"]
+        self.assertTrue(online and all(o["feedback"].startswith("causal") for o in online.values()))
         with tempfile.TemporaryDirectory() as d:
             jp, mp = EVD.write(j, Path(d) / "lane_c")
             self.assertEqual(json.loads(jp.read_text())["report_digest"], j["report_digest"])

@@ -32,6 +32,7 @@ LEVEL_FEATURES = ("price_return.close", "vol_regime.atr_14_sma_true_range", "mom
 CTX_FEATURES = ("ctx.mkt_ret_1", "ctx.mkt_ret_5", "ctx.mkt_vol_20", "ctx.mkt_vol_pct", "ctx.breadth50",
                 "ctx.dispersion")
 ATR_COL = "vol_regime.atr_14_sma_true_range"
+DATASET_SCHEMA = "mllab-eventdataset-v2"
 
 Sampler = Callable[[pd.DataFrame, pd.DataFrame], np.ndarray]
 
@@ -91,8 +92,16 @@ class EventDataset:
 
     @property
     def digest(self) -> str:
-        return digest({"X": array_digest(self.X), "y": array_digest(self.y), "r": array_digest(self.r),
-                       "start": array_digest(self.start), "features": self.feature_names})
+        """Identity of EVERYTHING that can change training, purging or the statistics (second review, P1):
+        features, labels, outcomes, decision AND resolution times (purging), symbols and days (daily paired
+        tests), the diagnostic regime column, and the metadata (barrier spec, sampler, scenario, source
+        snapshot), under an explicit schema version."""
+        return digest({"schema": DATASET_SCHEMA, "X": array_digest(self.X), "y": array_digest(self.y),
+                       "r": array_digest(self.r), "start": array_digest(np.asarray(self.start, dtype=np.int64)),
+                       "end": array_digest(np.asarray(self.end, dtype=np.int64)),
+                       "symbol": [str(x) for x in self.symbol], "day": [str(x) for x in self.day],
+                       "truth_regime": [str(x) for x in self.truth_regime], "features": list(self.feature_names),
+                       "meta": self.meta})
 
 
 def symbol_features(bars: pd.DataFrame) -> pd.DataFrame:
