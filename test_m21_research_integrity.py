@@ -689,8 +689,11 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         self.assertEqual(good.verdict, "PASS", good.reasons)
         self.assertEqual(good.numbers["provenance_verified"], 1.0)
         no_canary = evaluate(candidate_id="c2", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
-                             rng=stream(20, "b"), family_matrix=fam, canary=None, cfg=cfg)
+                             rng=stream(20, "b"), family_matrix=fam, canary=None, cfg=cfg,
+                             ledger=led, trial_ids=ids)                 # provenance fine, canary missing
         self.assertEqual(no_canary.verdict, "INCONCLUSIVE")
+        self.assertEqual(no_canary.numbers["provenance_verified"], 1.0)
+        self.assertTrue(any("canary" in r for r in no_canary.reasons))
         noise = rng.normal(0.0, 1.0, (400, 50))
         best = noise[:, int(np.argmax(noise.mean(axis=0)))]
         bad = evaluate(candidate_id="c3", family_id="f", gross=best, cost_per_obs=0.0, n_trials=50,
