@@ -1,0 +1,197 @@
+{
+  "batteries": {
+    "honest": {
+      "false_pass_rate": 0.008333333333333333,
+      "false_pass_upper": 0.03892084686016847,
+      "n_nulls": 120,
+      "notes": "",
+      "null_calibrated": true,
+      "null_passes": 1,
+      "plan_digest": "de709875e990bac3ad8d447e59208544c064607709a1c944e92b21d699853558",
+      "power": [
+        {
+          "detections": 0,
+          "effect": 0.05,
+          "hi": 0.11570330822202778,
+          "lo": 0.0,
+          "n": 30,
+          "rate": 0.0
+        },
+        {
+          "detections": 1,
+          "effect": 0.1,
+          "hi": 0.17216945563341265,
+          "lo": 0.0008435709266304788,
+          "n": 30,
+          "rate": 0.03333333333333333
+        },
+        {
+          "detections": 13,
+          "effect": 0.2,
+          "hi": 0.6257265493907793,
+          "lo": 0.254607549903263,
+          "n": 30,
+          "rate": 0.43333333333333335
+        },
+        {
+          "detections": 29,
+          "effect": 0.3,
+          "hi": 0.9991564290733695,
+          "lo": 0.8278305443665873,
+          "n": 30,
+          "rate": 0.9666666666666667
+        },
+        {
+          "detections": 29,
+          "effect": 0.4,
+          "hi": 0.9991564290733695,
+          "lo": 0.8278305443665873,
+          "n": 30,
+          "rate": 0.9666666666666667
+        }
+      ],
+      "power_ok": true,
+      "power_rule": "cp_lower_bound_at_every_required_effect",
+      "verdict": "CALIBRATED"
+    },
+    "naive": {
+      "false_pass_rate": 0.2,
+      "false_pass_upper": 0.26958140149492826,
+      "n_nulls": 120,
+      "notes": "",
+      "null_calibrated": false,
+      "null_passes": 24,
+      "plan_digest": "817c317399ce43b351e09eadc012492a31b95ecced323ba2f53fdfb14848fa87",
+      "power": [
+        {
+          "detections": 17,
+          "effect": 0.05,
+          "hi": 0.745392450096737,
+          "lo": 0.37427345060922074,
+          "n": 30,
+          "rate": 0.5666666666666667
+        },
+        {
+          "detections": 18,
+          "effect": 0.1,
+          "hi": 0.7734423511714064,
+          "lo": 0.4060349300518187,
+          "n": 30,
+          "rate": 0.6
+        },
+        {
+          "detections": 26,
+          "effect": 0.2,
+          "hi": 0.9624465036616366,
+          "lo": 0.6927816497238732,
+          "n": 30,
+          "rate": 0.8666666666666667
+        },
+        {
+          "detections": 30,
+          "effect": 0.3,
+          "hi": 1.0,
+          "lo": 0.8842966917779722,
+          "n": 30,
+          "rate": 1.0
+        },
+        {
+          "detections": 30,
+          "effect": 0.4,
+          "hi": 1.0,
+          "lo": 0.8842966917779722,
+          "n": 30,
+          "rate": 1.0
+        }
+      ],
+      "power_ok": true,
+      "power_rule": "cp_lower_bound_at_every_required_effect",
+      "verdict": "NOT_CALIBRATED"
+    }
+  },
+  "config": {
+    "cost": 0.05,
+    "effects": [
+      0.05,
+      0.1,
+      0.2,
+      0.3,
+      0.4
+    ],
+    "market": {
+      "n_sessions": 750,
+      "n_symbols": 10
+    },
+    "n_nulls": 120,
+    "n_per_effect": 30,
+    "n_snoop": 20,
+    "snoop_effect": 0.4
+  },
+  "family_variants": 12,
+  "ledger": {
+    "entries": 492,
+    "jsonl": "lane_b_ledger.jsonl",
+    "jsonl_verified": true,
+    "tamper_detected_at_seq": 1,
+    "tamper_reason": "entry content does not match its hash",
+    "tampered_copy_verified": false,
+    "verified": true
+  },
+  "prereg": {
+    "digest": "86dd105c860294953402dd7a1bef2fad6573fafa24f024c61b4d3e48d599a8c4",
+    "first_evaluation": {
+      "authority_independent": false,
+      "authority_model": "local_hmac_policy_model",
+      "effective_n": 40,
+      "passed": false,
+      "prereg_digest": "86dd105c860294953402dd7a1bef2fad6573fafa24f024c61b4d3e48d599a8c4",
+      "reason": "metric dsr >= 0.95: not met",
+      "value": 0.5
+    },
+    "second_evaluation": "refused: pre-registration 86dd105c8602 was already evaluated (one-shot)",
+    "untrusted_attestation_evaluation": {
+      "authority_independent": false,
+      "authority_model": "",
+      "effective_n": 40,
+      "passed": false,
+      "prereg_digest": "3ab044f9c76417c27e1a890eeafccd6c60fe23ed8343a0b78b99aece977f6ec5",
+      "reason": "attestation is declared, not independently verified: local diagnostic only",
+      "value": 0.99
+    }
+  },
+  "runtime_seconds": 41.1,
+  "snooping": {
+    "null": {
+      "mean_eff_trials_cluster": 3.6,
+      "mean_eff_trials_eigen": 3.416793647137731,
+      "mean_pbo": 0.4700396825396826,
+      "n": 20,
+      "rc_rejection_ci": [
+        0.0,
+        0.1684334709830853
+      ],
+      "rc_rejections": 0,
+      "spa_rejection_ci": [
+        0.0012650894979498038,
+        0.24873276277202777
+      ],
+      "spa_rejections": 1
+    },
+    "planted_0.4": {
+      "mean_eff_trials_cluster": 2.2,
+      "mean_eff_trials_eigen": 2.791786551408177,
+      "mean_pbo": 0.26805555555555555,
+      "n": 20,
+      "rc_rejection_ci": [
+        0.8315665290169146,
+        1.0
+      ],
+      "rc_rejections": 20,
+      "spa_rejection_ci": [
+        0.8315665290169146,
+        1.0
+      ],
+      "spa_rejections": 20
+    }
+  }
+}
