@@ -32,6 +32,24 @@ PASS:
   (``artifacts['family_series']``). Substituted or edited outcomes with
   genuine ledger ids therefore fail.
 
+Canary acceptance (comprehensive audit, PR #5, P1). A caller-supplied
+``BatteryResult`` with ``verdict == 'CALIBRATED'`` is not enough. The card
+accepts a battery only if (``canary_verified``): its plan and result are
+recorded in THIS ledger (plan before result; the result entry equals the
+supplied object); the plan's ``pipeline_id`` is
+``controls.pipeline_identity(family_id, <candidate trial code_digest>)``; it
+required at least one positive effect with ``min_power >= cfg.min_canary_power``;
+and re-deriving the Clopper-Pearson bounds from the recorded COUNTS gives
+null upper bound <= target and power lower bound >= min_power at every
+required effect. Anything else is INCONCLUSIVE. ``require_canary=False`` is a
+diagnostic configuration and can never yield PASS.
+
+Complete search family (comprehensive audit, PR #5, P2). PBO, SPA and
+White's Reality Check are computed only when the family matrix covers EVERY
+comparable ledgered trial of the family (kinds ``research`` and ``baseline``;
+control trials are not search candidates and are excluded by policy). A
+matrix over a caller-chosen subset leaves them uncomputed: INCONCLUSIVE.
+
 ``provenance_verified`` is 1 only when both hold. Outcome provenance proves
 the card evaluated what the ledger recorded; it does not prove the recorded
 series came from the claimed computation (that requires recomputation from
@@ -48,7 +66,7 @@ import numpy as np
 
 from research.common.hashing import array_digest, digest
 from research.integrity import stats as S
-from research.integrity.controls import BatteryResult
+from research.integrity.controls import BatteryResult, pipeline_identity
 from research.integrity.ledger import Ledger
 from research.integrity.pbo import pbo as _pbo
 from research.integrity.provenance import outcome_digest
@@ -69,7 +87,8 @@ class GauntletConfig:
     n_boot: int = 1000
     hac_lags: Optional[int] = None
     pbo_blocks: int = 10
-    require_canary: bool = True
+    require_canary: bool = True        # False = diagnostic only: such a card can never PASS
+    min_canary_power: float = 0.8      # pre-declared minimum detection power the battery must have required
 
 
 @dataclass(frozen=True)
@@ -128,6 +147,7 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
     out_ok, out_why = (_outcomes(ledger, trial_ids, candidate_trial_id, x, family_matrix) if meta_ok
                        else (False, "metadata not reconciled"))
     prov_ok = meta_ok and out_ok
+    fam_ok, fam_why = _family_complete(ledger, family_id, trial_ids, family_matrix) if meta_ok else (False, "")
     nums: Dict[str, float] = {"n_obs": float(len(x)), "n_trials": float(n_trials),
                               "cost_per_obs": float(cost_per_obs)}
     if len(x) < 10 or not np.isfinite(x).all():
@@ -161,7 +181,7 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
     nums["payoff_ratio_diagnostic"] = float(wins.mean() / -losses.mean()) if len(wins) and len(losses) else float("nan")
     nums["max_drawdown"] = S.max_drawdown(net1)
     nums["expected_shortfall_95"] = S.expected_shortfall(net1, 0.95)
-    if family_matrix is not None:
+    if family_matrix is not None and fam_ok:
         fm = np.asarray(family_matrix, dtype=float)
         try:
             nums["pbo"] = _pbo(fm, n_blocks=cfg.pbo_blocks).pbo
@@ -171,6 +191,8 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
         rc = white_reality_check(fm, rng, n_boot=cfg.n_boot, mean_block=block)
         nums["spa_p"] = spa.p_value
         nums["reality_check_p"] = rc.p_value
+    can_ok, can_why = _canary_status(canary, ledger, family_id, candidate_trial_id, cfg)
+    nums["canary_verified"] = 1.0 if can_ok else 0.0
     if canary is not None:
         nums["canary_false_pass_upper"] = canary.false_pass_upper
         nums["canary_power_at_max_effect"] = canary.power[-1].rate if canary.power else float("nan")
@@ -187,10 +209,16 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
     # INCONCLUSIVE conditions.
     if neff < cfg.min_effective_n:
         reasons_inc.append("effective N %.1f < %d" % (neff, cfg.min_effective_n))
-    if cfg.require_canary and (canary is None or canary.verdict != "CALIBRATED"):
+    if not cfg.require_canary:
+        reasons_inc.append("canary requirement disabled: diagnostic configuration, never PASS")
+    elif canary is None or canary.verdict != "CALIBRATED":
         reasons_inc.append("pipeline canary battery missing or not CALIBRATED")
+    elif not can_ok:
+        reasons_inc.append("canary battery not verified for this pipeline (%s)" % can_why)
     if family_matrix is None:
         reasons_inc.append("no family matrix: PBO / SPA not computed")
+    elif meta_ok and not fam_ok:
+        reasons_inc.append("%s: PBO / SPA / Reality Check not computed" % fam_why)
     nums["ledger_metadata_reconciled"] = 1.0 if meta_ok else 0.0
     nums["outcomes_verified"] = 1.0 if out_ok else 0.0
     nums["provenance_verified"] = 1.0 if prov_ok else 0.0
@@ -232,6 +260,63 @@ def _provenance(ledger: Optional[Ledger], family_id: str, n_trials: int, trial_i
     if not ledger.verify(expected_tip).ok:
         return False, "ledger chain does not verify" + (" against the anchored tip" if expected_tip else "")
     return True, "reconciled"
+
+
+def _family_complete(ledger: Ledger, family_id: str, trial_ids: Sequence[str], family_matrix) -> Tuple[bool, str]:
+    """Matrix-based inference needs every comparable (research / baseline) family trial as a column."""
+    if family_matrix is None:
+        return False, "no family matrix"
+    comparable = {e.ref_id for e in ledger.trials(family_id, ("research", "baseline"))}
+    got = set(trial_ids)
+    if got != comparable:
+        return False, ("family matrix covers %d of %d comparable ledgered family trials (incomplete search "
+                       "family%s)" % (len(got & comparable), len(comparable),
+                                      "; includes non-comparable control trials" if got - comparable else ""))
+    return True, "complete"
+
+
+def _canary_status(canary: Optional[BatteryResult], ledger: Optional[Ledger], family_id: str,
+                   candidate_trial_id: Optional[str], cfg: GauntletConfig) -> Tuple[bool, str]:
+    """Verify a control battery for THIS pipeline from the ledger; never trust the supplied verdict."""
+    from research.integrity.stats import clopper_pearson
+    if canary is None:
+        return False, "no battery"
+    if ledger is None or not candidate_trial_id:
+        return False, "battery identity needs the ledger and the candidate trial"
+    trials = {e.ref_id: e for e in ledger.entries("trial")}
+    if candidate_trial_id not in trials:
+        return False, "candidate trial not in the ledger"
+    plans = ledger.entries("control_battery_plan", canary.plan_digest)
+    results = ledger.entries("control_battery_result", canary.plan_digest)
+    if len(plans) != 1 or len(results) != 1:
+        return False, "battery plan/result not recorded exactly once in this ledger"
+    if not plans[0].seq < results[0].seq:
+        return False, "battery result recorded before its plan"
+    if digest(results[0].payload) != digest(asdict(canary)):
+        return False, "supplied battery result differs from the ledgered result"
+    plan = plans[0].payload
+    want = pipeline_identity(family_id, trials[candidate_trial_id].payload["code_digest"])
+    if plan.get("pipeline_id") != want:
+        return False, "battery calibrates %r, not this pipeline %r" % (plan.get("pipeline_id"), want)
+    effects = [float(e) for e in plan.get("effect_sizes") or ()]
+    required = [float(e) for e in plan.get("required_effects") or ()] or ([max(effects)] if effects else [])
+    if not required:
+        return False, "no positive-control power was required (null-only battery)"
+    if not float(plan["min_power"]) >= cfg.min_canary_power:
+        return False, "battery required power %.2f < %.2f" % (float(plan["min_power"]), cfg.min_canary_power)
+    r = results[0].payload
+    _, ub = clopper_pearson(int(r["null_passes"]), int(r["n_nulls"]), float(plan["alpha"]), one_sided_upper=True)
+    if int(r["n_nulls"]) != int(plan["n_nulls"]) or not ub <= float(plan["false_pass_target"]):
+        return False, "recorded null counts do not bound the false-pass rate at the target"
+    pts = {float(p["effect"]): p for p in r.get("power") or ()}
+    for e in required:
+        p = pts.get(e)
+        if p is None or int(p["n"]) != int(plan["n_per_effect"]):
+            return False, "no recorded positive controls at required effect %g" % e
+        lo, _ = clopper_pearson(int(p["detections"]), int(p["n"]), float(plan["alpha"]))
+        if not lo >= float(plan["min_power"]):
+            return False, "recorded detections at effect %g do not show power %.2f" % (e, float(plan["min_power"]))
+    return True, "verified"
 
 
 def _outcomes(ledger: Ledger, trial_ids: Sequence[str], candidate_trial_id: Optional[str], x: np.ndarray,

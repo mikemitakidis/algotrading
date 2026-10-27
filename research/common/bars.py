@@ -64,6 +64,11 @@ def session_key(ts: pd.Series) -> pd.Series:
     return ts.dt.tz_convert("UTC").dt.floor("D")
 
 
+def _or_flags(x: pd.Series) -> int:
+    v = pd.to_numeric(x, errors="coerce").fillna(0).astype(np.int64).to_numpy()
+    return int(np.bitwise_or.reduce(v)) if len(v) else 0
+
+
 def resample(bars: pd.DataFrame, target_tf: str, *, source_tf: str = "15m") -> pd.DataFrame:
     """Aggregate intraday bars into a coarser timeframe, session-aware.
 
@@ -99,7 +104,9 @@ def resample(bars: pd.DataFrame, target_tf: str, *, source_tf: str = "15m") -> p
         "low": g["low"].min(),
         "close": g["close"].last(),
         "volume": g["volume"].sum(),
-        "quality_flags": g["quality_flags"].max() if "quality_flags" in bars else 0,
+        # quality_flags is a BITMASK (M16 QF_* bits): combine constituents by bitwise OR so no warning, blocking
+        # or unknown bit is lost (comprehensive audit, PR #4: max() dropped bits).
+        "quality_flags": g["quality_flags"].agg(_or_flags) if "quality_flags" in bars else 0,
     }).reset_index(drop=True)
     out["ts_utc"] = pd.to_datetime(out["ts_utc"], utc=True)
     return out
