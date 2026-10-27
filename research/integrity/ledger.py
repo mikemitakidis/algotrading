@@ -18,6 +18,8 @@ has 40 trials (this feeds the deflated Sharpe ratio).
 """
 from __future__ import annotations
 
+import re
+
 import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
@@ -113,8 +115,12 @@ class TrialRecord:
     hypothesis_id: Optional[str] = None
     parent_trial_id: Optional[str] = None
     notes: str = ""
+    artifacts: Dict[str, str] = field(default_factory=dict)   # name -> outcome digest (research.integrity.provenance)
 
     def __post_init__(self):
+        for k, v in self.artifacts.items():
+            if not (isinstance(k, str) and isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)):
+                raise ValueError("trial artifacts must map names to sha256 hex digests, got %r: %r" % (k, v))
         if self.kind not in TRIAL_KINDS:
             raise ValueError("trial kind must be one of %s" % (TRIAL_KINDS,))
         if self.status not in TRIAL_STATUSES:

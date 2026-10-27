@@ -36,6 +36,7 @@ from research.genome import schema as G
 from research.genome import search as SR
 from research.genome import templates as T
 from research.integrity.ledger import Ledger
+from research.integrity.provenance import code_identity
 
 EFFECTS = {
     "rsi_oversold": PlantedEffect("rsi", "rsi_oversold", 0.5, horizon=5, level=30.0),
@@ -54,7 +55,7 @@ class DConfig:
     n_seeds: int = 8
     parity_symbols: int = 10
     parity_sessions: int = 1500
-    strength_scale: float = 1.0
+    strength_scale: float = 0.2          # 0.5 x 0.2 = 0.1 sigma per bar: modest, interpretable effects
     profile: str = "full"
 
 
@@ -144,7 +145,8 @@ def constraints_section(c: DConfig) -> Dict:
         mt = E.metrics(r)
         sweep.append({"max_positions": k, **{x: mt[x] for x in ("n_trades", "total_return", "sharpe_ann",
                                                                "max_drawdown")},
-                      "skipped": dict(r.skipped), "signals_seen": r.signals_seen})
+                      "skipped": dict(r.skipped), "signals_seen": r.signals_seen,
+                      "decisions": r.decision_counts()})
     # Survivorship: a market where some symbols delist after a decline.
     d = generate(MarketSpec(n_symbols=c.n_symbols, n_sessions=c.n_sessions, seed=c.seed + 2, delist_prob=0.4))
     last = {s: b["ts_utc"].iloc[-1] for s, b in d.bars.items()}
@@ -164,11 +166,12 @@ def constraints_section(c: DConfig) -> Dict:
 def search_section(c: DConfig) -> Dict:
     out = {}
     L = Ledger()
-    for name, effects in (("planted_rsi_oversold", (EFFECTS["rsi_oversold"],)), ("null", ())):
+    for name, effects in (("planted_rsi_oversold", (_scaled(EFFECTS["rsi_oversold"], c.strength_scale),)), ("null", ())):
         m = generate(MarketSpec(n_symbols=c.n_symbols, n_sessions=c.n_sessions, seed=c.seed + 3, effects=effects))
         gs, bad = SR.grid("mean_reversion", SEARCH_AXES)
         fam = "genome:mean_reversion:%s" % name
-        df = SR.evaluate(gs, m.bars, ledger=L, family_id=fam, data_digest=SR.data_digest(m.bars), keep_equity=True)
+        df = SR.evaluate(gs, m.bars, ledger=L, family_id=fam, data_digest=SR.data_digest(m.bars), seed=c.seed + 3,
+                         keep_equity=True)
         sel = SR.select(df, SEARCH_AXES, ledger=L, family_id=fam)
         pl = SR.plateau(df, SEARCH_AXES, "sharpe_ann")
         base = SR.baselines(m.bars)
@@ -206,7 +209,8 @@ def run_evidence(c: DConfig = DConfig()) -> Dict:
     sea = search_section(c)
     j = _js({"lane": "D", "config": asdict(c), "parity": par, "matrix": mat, "constraints": con, "search": sea,
              "effects": {k: asdict(v) for k, v in EFFECTS.items()},
-             "genomes": {t: G.seed(t).to_dict() for t in T.STARTER_TEMPLATES}, "versions": _versions()})
+             "genomes": {t: G.seed(t).to_dict() for t in T.STARTER_TEMPLATES}, "versions": _versions(),
+             "code_identity": code_identity(SR.CODE_PATHS)})
     j["report_digest"] = digest(j)
     j["runtime_seconds"] = round(time.time() - t0, 1)
     return j
@@ -283,7 +287,7 @@ def render_markdown(j: Dict) -> str:
             sk["insufficient_cash"], 100 * r["total_return"], r["sharpe_ann"], 100 * r["max_drawdown"]))
     L += ["", "**Survivorship.** On a market where %d of %d symbols decline (−0.15 σ per bar over their last 40 "
           "bars) and then delist, the same genome was run twice. The full universe keeps delisted symbols until "
-          "they stop trading; %d positions were closed at delisting. The survivors-only universe is the classic "
+          "they stop trading; %d position(s) were closed at delisting. The survivors-only universe is the classic "
           "biased backtest. The difference between the rows is the survivorship effect in this sample; its sign "
           "and size depend on the sample." % (
               sv["delisted"], sv["symbols"], sv["delisted_exits"]), "",
@@ -320,7 +324,13 @@ def render_markdown(j: Dict) -> str:
               " --quick" if c["profile"] == "quick" else ""),
           "- Seed genomes: " + ", ".join("`%s`" % g["genome_id"] for g in j["genomes"].values()),
           "- Libraries: " + ", ".join("%s %s" % kv for kv in sorted(j["versions"].items())),
-          "- The engine is deterministic: the same inputs give the same trade-list digest (tested).", "",
+          "- Code identity (content hash of genome, integrity, common and M17 backtesting sources; recorded on "
+          "every search trial with the market seed and outcome digests): `%s`" % j.get("code_identity", "n/a"),
+          "- The engine is deterministic: the same inputs give the same trade-list digest (tested).",
+          "- Timestamps: `ts_utc` is a bar's close. Trades report the decision time (signal-bar close), the entry "
+          "fill event (fill-bar open) and the exit fill event (open for open exits; an unobservable intrabar "
+          "window for stops and targets inside a bar; close for delisting / end-of-data marks). `entry_ts` / "
+          "`exit_ts` keep M17's legacy close labels for parity only.", "",
           "## What this does and does not show", "",
           "- **Does:** the research engine reproduces M17 exactly where their semantics overlap, and extends it "
           "to portfolios with explicit, tested capacity, exposure, cash, membership, delisting, time and trailing "

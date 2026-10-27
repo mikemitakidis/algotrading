@@ -14,6 +14,12 @@ backtest:
   the trials themselves;
 * ``baselines`` gives the no-trade and equal-weight buy-and-hold references
   every genome must be compared with.
+
+Provenance (second review, PR #10): every trial records the content hash of
+the code that produced it (``CODE_PATHS``), the data snapshot digest, the
+research seed of the market or manifest it ran on, and outcome artifacts
+(digests of the trade R multiples and of the per-period return series) that
+the report card can verify.
 """
 from __future__ import annotations
 
@@ -29,6 +35,9 @@ from research.genome.engine import EngineConfig, EngineResult, metrics, run_geno
 from research.genome.schema import Genome, GenomeError, seed, with_params
 from research.integrity import stats as S
 from research.integrity.ledger import Ledger, TrialRecord
+from research.integrity.provenance import code_identity, outcome_digest
+
+CODE_PATHS = ("research/genome", "research/integrity", "research/common", "bot/backtesting")
 
 
 def grid(template: str, axes: Mapping[str, Sequence], base: Optional[Genome] = None) -> Tuple[List[Genome], int]:
@@ -45,17 +54,25 @@ def grid(template: str, axes: Mapping[str, Sequence], base: Optional[Genome] = N
 
 
 def evaluate(genomes: Sequence[Genome], bars: Mapping[str, pd.DataFrame], *, ledger: Ledger, family_id: str,
-             data_digest: str, cfg: EngineConfig = EngineConfig(), keep_equity: bool = False) -> pd.DataFrame:
+             data_digest: str, seed: int, cfg: EngineConfig = EngineConfig(),
+             keep_equity: bool = False) -> pd.DataFrame:
+    """``seed`` is the research seed of the market (synthetic generator seed or the manifest's seed); it is
+    required so no trial is recorded with a placeholder."""
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+        raise ValueError("seed must be the integer research seed of the data, got %r" % (seed,))
+    code_id = code_identity(CODE_PATHS)
     rows = []
     for g in genomes:
         res = run_genome(g, bars, cfg)
         m = metrics(res)
         r = res.equity.pct_change().dropna().to_numpy()
         m["sr_per_period"] = float(S.sharpe(r)) if len(r) > 2 and r.std() > 0 else 0.0
+        rm = np.array([t.r_multiple for t in res.trades], dtype=float)
         tid = ledger.record_trial(TrialRecord(
             family_id=family_id, kind="research", spec_digest=g.genome_id, data_digest=data_digest,
-            code_digest="research.genome", seed=0, metrics={k: v for k, v in m.items() if np.isfinite(v)},
-            config={"genome": g.to_dict(), "engine": dict(res.config)}))
+            code_digest=code_id, seed=int(seed), metrics={k: v for k, v in m.items() if np.isfinite(v)},
+            config={"genome": g.to_dict(), "engine": dict(res.config), "decisions": res.decision_counts()},
+            artifacts={"gross": outcome_digest(rm), "family_series": outcome_digest(r)}))
         row = {"genome_id": g.genome_id, "trial_id": tid, **g.p, **m}
         if keep_equity:
             row["_returns"] = r
@@ -136,4 +153,4 @@ def data_digest(bars: Mapping[str, pd.DataFrame]) -> str:
                    for s, b in sorted(bars.items())})
 
 
-__all__ = ["grid", "evaluate", "plateau", "select", "baselines", "data_digest"]
+__all__ = ["CODE_PATHS", "grid", "evaluate", "plateau", "select", "baselines", "data_digest"]

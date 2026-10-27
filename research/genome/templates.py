@@ -29,6 +29,13 @@ so a template's indicator values are the ones the backtester already uses.
 
 ``sma_crossover`` adapts the existing M17 strategy unchanged. It is the M17
 parity reference, not a fifth template.
+
+Diagnostics (second review, PR #11): each template also reports ``setup``
+(its primary trigger fired) and ``reject_reason`` (which of its own filters
+failed when the setup did not become an entry). ``entry`` is unchanged and
+always implies ``setup``; the engine records setups without entries as
+``rejected_by_rule`` decisions. They are NOT trades and are serially
+correlated (a persistent condition repeats on consecutive bars).
 """
 from __future__ import annotations
 
@@ -41,6 +48,15 @@ from bot.backtesting import indicators as ind
 from research.genome.schema import Genome, ParamSpec, TemplateSpec
 
 SIGNAL_COLUMNS = ("entry", "exit", "atr", "score")
+DIAGNOSTIC_COLUMNS = ("setup", "reject_reason")
+
+
+def _reasons(index, *pairs) -> pd.Series:
+    """First failing filter per row: pairs of (failed: bool Series, reason)."""
+    out = pd.Series("", index=index, dtype=object)
+    for failed, why in reversed(pairs):
+        out = out.where(~failed.fillna(True).astype(bool), why)
+    return out
 
 
 def _atr(bars, period=14):
@@ -63,19 +79,27 @@ def trend_confluence(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
     ready = ef.notna() & es.notna() & htf.notna() & hist.notna() & r.notna()
     on = (votes >= p["min_votes"]) & ready
     a = _atr(bars)
-    return pd.DataFrame({"entry": _fresh(on), "exit": ready & (c < es), "atr": a,
-                         "score": votes / 5.0 + (c / es - 1.0).fillna(0.0)}, index=bars.index)
+    entry = _fresh(on)
+    near = _fresh((votes == p["min_votes"] - 1) & ready)          # one vote short of the rule
+    return pd.DataFrame({"entry": entry, "exit": ready & (c < es), "atr": a,
+                         "score": votes / 5.0 + (c / es - 1.0).fillna(0.0),
+                         "setup": entry | near, "reject_reason": _reasons(bars.index, (near & ~entry, "one_vote_short"))},
+                        index=bars.index)
 
 
 def mean_reversion(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
     c = bars["close"].astype(float)
     r = ind.rsi(c, p["rsi_period"], mode=p["rsi_mode"])
     bb = ind.bollinger(c, p["bb_window"], p["bb_std"])
-    entry = (r < p["rsi_entry"]) & (c < bb["lower"])
+    oversold = (r < p["rsi_entry"]).fillna(False)
+    entry = oversold & (c < bb["lower"])
     ex = (r > p["rsi_exit"]) | (c > bb["middle"])
     a = _atr(bars)
     return pd.DataFrame({"entry": entry.fillna(False), "exit": ex.fillna(False), "atr": a,
-                         "score": ((p["rsi_entry"] - r) / p["rsi_entry"]).fillna(0.0)}, index=bars.index)
+                         "score": ((p["rsi_entry"] - r) / p["rsi_entry"]).fillna(0.0),
+                         "setup": oversold | entry.fillna(False),
+                         "reject_reason": _reasons(bars.index, (oversold & ~(c < bb["lower"]), "not_below_lower_band"))},
+                        index=bars.index)
 
 
 def breakout_momentum(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
@@ -85,9 +109,13 @@ def breakout_momentum(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
     vr = ind.volume_ratio(bars["volume"].astype(float), 20)
     a = _atr(bars)
     expand = a / a.rolling(50, min_periods=50).mean()
-    entry = (c > prior_hi) & (vr >= p["vol_ratio_min"]) & (expand >= p["atr_expansion"])
-    return pd.DataFrame({"entry": entry.fillna(False), "exit": (c < prior_lo).fillna(False), "atr": a,
-                         "score": ((c / prior_hi - 1.0) / (a / c)).fillna(0.0)}, index=bars.index)
+    brk = (c > prior_hi).fillna(False)
+    vol_ok, exp_ok = (vr >= p["vol_ratio_min"]), (expand >= p["atr_expansion"])
+    entry = (brk & vol_ok & exp_ok).fillna(False)
+    return pd.DataFrame({"entry": entry, "exit": (c < prior_lo).fillna(False), "atr": a,
+                         "score": ((c / prior_hi - 1.0) / (a / c)).fillna(0.0), "setup": brk | entry,
+                         "reject_reason": _reasons(bars.index, (brk & ~vol_ok, "volume_below_min"),
+                                                   (brk & ~exp_ok, "atr_not_expanding"))}, index=bars.index)
 
 
 def pullback_in_trend(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
@@ -95,10 +123,14 @@ def pullback_in_trend(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
     ef, es = ind.ema(c, p["ema_fast"]), ind.ema(c, p["ema_slow"])
     r = ind.rsi(c, 14)
     a = _atr(bars)
-    pull = (ef > es) & (c < ef) & (r <= p["rsi_max"])
+    dip = (ef > es) & (c < ef)
+    pull = dip & (r <= p["rsi_max"])
     ex = (ef < es) | (c > ef + p["extend_atr"] * a)
-    return pd.DataFrame({"entry": _fresh(pull), "exit": ex.fillna(False), "atr": a,
-                         "score": ((ef - c) / a).fillna(0.0)}, index=bars.index)
+    entry = _fresh(pull)
+    setup = _fresh(dip) | entry
+    return pd.DataFrame({"entry": entry, "exit": ex.fillna(False), "atr": a,
+                         "score": ((ef - c) / a).fillna(0.0), "setup": setup,
+                         "reject_reason": _reasons(bars.index, (setup & ~entry, "rsi_above_max"))}, index=bars.index)
 
 
 def sma_crossover(bars: pd.DataFrame, p: Dict) -> pd.DataFrame:
@@ -141,15 +173,22 @@ _FUNCS: Dict[str, Callable[[pd.DataFrame, Dict], pd.DataFrame]] = {
 
 def signals(g: Genome, bars: pd.DataFrame) -> pd.DataFrame:
     out = _FUNCS[g.template](bars, g.p)
-    if list(out.columns) != list(SIGNAL_COLUMNS) or len(out) != len(bars):
+    cols = list(out.columns)
+    if (cols[:len(SIGNAL_COLUMNS)] != list(SIGNAL_COLUMNS) or not set(cols[len(SIGNAL_COLUMNS):]) <= set(DIAGNOSTIC_COLUMNS)
+            or len(out) != len(bars)):
         raise RuntimeError("template %s broke the signal contract" % g.template)
     out = out.copy()
     out["entry"] = out["entry"].astype(bool)
     out["exit"] = out["exit"].astype(bool)
+    if "setup" in out.columns:
+        out["setup"] = out["setup"].fillna(False).astype(bool) | out["entry"]
+        rr = out["reject_reason"].astype(str) if "reject_reason" in out.columns else pd.Series("", index=out.index)
+        out["reject_reason"] = rr.where(out["setup"] & ~out["entry"], "")
+        out.loc[out["setup"] & ~out["entry"] & (out["reject_reason"] == ""), "reject_reason"] = "rule_not_met"
     if not g.exits.signal_exit:
         out["exit"] = False
     return out
 
 
-__all__ = ["SIGNAL_COLUMNS", "TEMPLATES", "STARTER_TEMPLATES", "signals", "trend_confluence", "mean_reversion",
+__all__ = ["SIGNAL_COLUMNS", "DIAGNOSTIC_COLUMNS", "TEMPLATES", "STARTER_TEMPLATES", "signals", "trend_confluence", "mean_reversion",
            "breakout_momentum", "pullback_in_trend", "sma_crossover"]
