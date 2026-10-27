@@ -20,7 +20,7 @@ illustrations, not a model of the production paper loop.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
@@ -92,15 +92,20 @@ def scanner_stage_candidates(per_tf_bars: Dict[str, pd.DataFrame], symbol: str, 
 GateRule = Callable[[CandidateEvent], Optional[str]]
 
 
-def position_release_times(labels: pd.DataFrame) -> Dict[str, Optional[pd.Timestamp]]:
+NO_POSITION = "no_position"      # release-map value: the candidate could never hold a position (unfillable)
+
+
+def position_release_times(labels: pd.DataFrame) -> Dict[str, Union[None, str, pd.Timestamp]]:
     """When a hypothetically opened position would free its symbol slot, from
     LABELLED exits (bar time, not wall-clock): the exit bar's close for
     resolved, ambiguous or data-flagged windows; ``None`` (= never released
-    within the data) for pending or series-ended windows; and no entry at all
-    for unfillable ones (they never held a position)."""
-    out: Dict[str, Optional[pd.Timestamp]] = {}
+    within the data) for pending or series-ended windows; ``NO_POSITION`` for
+    unfillable ones (they never held a position). Every labelled candidate
+    gets an entry, so a missing entry always means missing information."""
+    out: Dict[str, Union[None, str, pd.Timestamp]] = {}
     for r in labels.itertuples(index=False):
         if r.status == "unfillable":
+            out[r.candidate_id] = NO_POSITION
             continue
         ex = r.exit_ts_utc
         out[r.candidate_id] = None if ex is None or pd.isna(ex) else pd.Timestamp(ex)
@@ -121,7 +126,11 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
     Capacity is bar-time (PR #6 review, P2): a position occupies its symbol
     until its LABELLED exit (``position_release_times``), across nights and
     weekends, never for a wall-clock duration. With one_open_per_symbol the
-    release times are required (fail closed).
+    release map is required AND must cover every candidate accepted for
+    execution (second review, P1): a missing entry is unknown capacity, never
+    free capacity, so it raises instead of silently re-opening the slot.
+    ``executed`` here means "would have been sent"; it is a counterfactual
+    replay stage, never a broker execution.
     """
     if one_open_per_symbol and release_times is None:
         raise ValueError("one_open_per_symbol needs labelled release_times (bar-time capacity)")
@@ -145,11 +154,16 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
         if max_entries_per_day is not None and per_day.get(day, 0) >= max_entries_per_day:
             out.append(replace(e, stage="skipped_capacity", reasons=("daily_entry_cap",)))
             continue
+        if one_open_per_symbol:
+            if e.candidate_id not in release_times:
+                raise ValueError("release map has no entry for accepted candidate %s (%s): capacity is unknown, "
+                                 "refusing to treat the slot as free" % (e.candidate_id, e.symbol))
+            rel = release_times[e.candidate_id]
+            if not (isinstance(rel, str) and rel == NO_POSITION):
+                open_until[e.symbol] = rel
         per_day[day] = per_day.get(day, 0) + 1
-        if one_open_per_symbol and e.candidate_id in release_times:
-            open_until[e.symbol] = release_times[e.candidate_id]
         out.append(replace(e, stage="executed"))
     return out
 
 
-__all__ = ["scanner_stage_candidates", "position_release_times", "apply_gates", "GateRule"]
+__all__ = ["NO_POSITION", "scanner_stage_candidates", "position_release_times", "apply_gates", "GateRule"]

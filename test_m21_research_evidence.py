@@ -26,7 +26,7 @@ from research.evidence.candidates import Bracket, CandidateEvent, make_candidate
 from research.evidence.costs import ZERO, CostModel
 from research.evidence.effective_n import average_uniqueness, cluster_variance_of_mean, effective_n
 from research.evidence.labeler import SourceInfo, label_candidates, validate_finer
-from research.evidence.replay import apply_gates, position_release_times, scanner_stage_candidates
+from research.evidence.replay import NO_POSITION, apply_gates, position_release_times, scanner_stage_candidates
 from research.evidence.snapshots import from_candidate_snapshots
 
 
@@ -415,7 +415,58 @@ class A3b_BarTimeCapacity(unittest.TestCase):
         self.assertEqual(g2, {"c0": "executed", "c1": "blocked_risk", "c2": "blocked_risk"})
         lab = pd.DataFrame({"candidate_id": ["a", "b", "c"], "status": ["definitive", "unfillable", "pending"],
                             "exit_ts_utc": [pd.Timestamp("2024-01-03", tz="UTC"), None, None]})
-        self.assertEqual(position_release_times(lab), {"a": pd.Timestamp("2024-01-03", tz="UTC"), "c": None})
+        self.assertEqual(position_release_times(lab), {"a": pd.Timestamp("2024-01-03", tz="UTC"), "b": NO_POSITION,
+                                                      "c": None})
+
+    @staticmethod
+    def _evs(times, prefix="c"):
+        return [CandidateEvent(candidate_id="%s%d" % (prefix, i), symbol="X", decision_ts_utc=t, direction="long",
+                               stage="eligible", source="synthetic", timeframe="1D", strategy_id="t",
+                               atr_at_decision=1.0) for i, t in enumerate(times)]
+
+    def test_missing_release_entries_fail_closed(self):
+        """Second review P1: an empty or partial release map must never turn an
+        unknown exit into free capacity."""
+        evs = self._evs([pd.Timestamp("2024-01-02 21:00", tz="UTC"), pd.Timestamp("2024-01-03 21:00", tz="UTC"),
+                         pd.Timestamp("2024-01-04 21:00", tz="UTC")])
+        with self.assertRaisesRegex(ValueError, "no entry for accepted candidate c0"):
+            apply_gates(evs, {}, release_times={})
+        with self.assertRaisesRegex(ValueError, "no entry for accepted candidate c0"):
+            apply_gates(evs, {}, release_times={"c1": None, "c2": None})            # first position unknown
+        with self.assertRaisesRegex(ValueError, "no entry for accepted candidate c1"):
+            apply_gates(evs, {}, release_times={"c0": pd.Timestamp("2024-01-02 21:00", tz="UTC")})
+        rej = apply_gates(evs, {"always": lambda e: True}, release_times={})         # nothing accepted: no lookup
+        self.assertEqual({e.stage for e in rej}, {"blocked_gate"})
+
+    def test_weekend_overlap_and_unfillable_positions(self):
+        fri, mon, wed = (pd.Timestamp(d + " 21:00", tz="UTC") for d in ("2024-01-05", "2024-01-08", "2024-01-10"))
+        evs = self._evs([fri, mon, wed])
+        rel = {"c0": pd.Timestamp("2024-01-09 21:00", tz="UTC"), "c1": None, "c2": None}
+        self.assertEqual([e.stage for e in apply_gates(evs, {}, release_times=rel)],
+                         ["executed", "blocked_risk", "executed"])                  # held over the weekend
+        rel_unf = {"c0": NO_POSITION, "c1": pd.Timestamp("2024-01-09 21:00", tz="UTC"), "c2": None}
+        self.assertEqual([e.stage for e in apply_gates(evs, {}, release_times=rel_unf)],
+                         ["executed", "executed", "executed"])                      # unfillable never held the slot
+
+
+class A3c_BarOpenConvention(unittest.TestCase):
+    def test_real_data_needs_explicit_bar_opens(self):
+        """Second review P2: the synthetic 390-minute daily-bar convention is refused for real providers."""
+        m = generate(MarketSpec(n_symbols=1, n_sessions=60, seed=4))
+        b = m.bars["S000"].copy()
+        ts = pd.Timestamp(b["ts_utc"].iloc[30])
+        cd = CandidateEvent(candidate_id="x", symbol="S000", decision_ts_utc=ts, direction="long",
+                            stage="eligible", source="historical_replay", timeframe="1D", strategy_id="t", atr_at_decision=1.0)
+        with self.assertRaisesRegex(ValueError, "explicit bar_open_ts"):
+            label_candidates([cd], {"S000": b}, timeframe="1D", source=SourceInfo("vendorX", "1D", True))
+        real = b.assign(bar_open_ts=pd.to_datetime(b["ts_utc"], utc=True) - pd.Timedelta(7, unit="h"))
+        lab = label_candidates([cd], {"S000": real}, timeframe="1D", source=SourceInfo("vendorX", "1D", True))
+        self.assertEqual(lab["entry_ts_utc"].iloc[0], real["bar_open_ts"].iloc[31])
+        with self.assertRaisesRegex(ValueError, "strictly before"):
+            label_candidates([cd], {"S000": b.assign(bar_open_ts=b["ts_utc"])}, timeframe="1D",
+                             source=SourceInfo("vendorX", "1D", True))
+        syn = label_candidates([cd], {"S000": b}, timeframe="1D", source=SourceInfo("synthetic", "1D", False))
+        self.assertEqual(syn["entry_ts_utc"].iloc[0], pd.Timestamp(b["ts_utc"].iloc[31]) - pd.Timedelta(390, unit="m"))
 
 
 class A4_SnapshotAdapter(unittest.TestCase):
