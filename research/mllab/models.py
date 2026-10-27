@@ -124,7 +124,8 @@ def make(name: str, seed: int = 0) -> object:
     if name == "catboost":
         from catboost import CatBoostClassifier
         return SK(name, lambda: CatBoostClassifier(iterations=200, depth=4, learning_rate=0.05,
-                                                   random_seed=s, verbose=False, thread_count=2))
+                                                   random_seed=s, verbose=False, thread_count=2,
+                                                   allow_writing_files=False))
     if name == "mlp":
         from sklearn.neural_network import MLPClassifier
         from sklearn.pipeline import make_pipeline

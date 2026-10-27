@@ -315,6 +315,20 @@ class C5_Models(unittest.TestCase):
             b = MD.make(name, seed=4).fit(ds.X, ds.y).predict_proba(ds.X)
             np.testing.assert_array_equal(a, b, err_msg=name)
 
+    def test_models_write_no_files(self):
+        import os
+        import tempfile
+        ds = _event_ds(n_days=40, per_day=10)
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as d:
+            os.chdir(d)
+            try:
+                for name in [n for n in ("catboost", "lgbm", "xgb", "hgb") if MD.available(n)]:
+                    MD.make(name).fit(ds.X, ds.y)
+                self.assertEqual(os.listdir(d), [])
+            finally:
+                os.chdir(cwd)
+
     def test_regime_model_routes_rows_by_regime(self):
         rng = np.random.default_rng(1)
         X = rng.uniform(size=(2000, 2))
@@ -347,6 +361,35 @@ class C6_Verdicts(unittest.TestCase):
         self.assertEqual(EV.verdict(0.5, 0.5, 0.5, a), "NO_EVIDENCE")
         self.assertEqual(EV.verdict(0.05, 0.05, 1.0, a), "IMPROVES")      # boundary is inclusive
         self.assertEqual(EV.verdict(0.051, 0.051, 0.051, a), "NO_EVIDENCE")
+
+    def test_skill_gate_rule(self):
+        row = {"verdict": "IMPROVES", "holm_p_logloss": 0.01, "holm_p_decision": 0.01, "holm_p_worse": 1.0}
+        pr_none = {"holm_p_logloss": 0.4, "holm_p_decision": 0.4}
+        pr_prob = {"holm_p_logloss": 0.01, "holm_p_decision": 0.4}
+        self.assertEqual(EV.skill_gate(dict(row), pr_none, 0.05)["verdict"], "NO_EVIDENCE")
+        self.assertEqual(EV.skill_gate(dict(row), pr_prob, 0.05)["verdict"], "PROBABILITIES_ONLY")
+        g = EV.skill_gate(dict(row), {"holm_p_logloss": 0.01, "holm_p_decision": 0.01}, 0.05)
+        self.assertEqual((g["verdict"], g["skill_gate"]), ("IMPROVES", ""))
+        u = EV.skill_gate(dict(row), None, 0.05)
+        self.assertEqual(u["verdict"], "IMPROVES")
+        self.assertIn("ungated", u["skill_gate"])
+
+    def test_beating_a_worse_than_prior_baseline_is_not_a_claim(self):
+        class Half:
+            def fit(self, X, y, **kw):
+                return self
+
+            def predict_proba(self, X):
+                return np.full(len(X), 0.5)
+
+        ds = _event_ds(n_days=200, per_day=12, kind="null", seed=9)
+        ds.X[:, 4] = 0.0
+        res = EV.run(ds, {"prior": lambda: MD.make("prior"), "noise": lambda: _Noise(3), "half": lambda: Half()},
+                     EV.LabConfig(n_folds=5, min_trades=20, baseline="noise"))
+        half = [r for r in res.comparisons if r["model"] == "half"][0]
+        self.assertIn(half["verdict_raw"], ("IMPROVES", "PROBABILITIES_ONLY"))
+        self.assertIn(half["verdict"], ("NO_EVIDENCE", "WORSE"))
+        self.assertTrue(half["skill_gate"].startswith("downgraded"))
 
     def test_informative_model_improves_on_prior_and_noise_does_not_beat_it(self):
         ds = _event_ds(n_days=240, per_day=12, strength=2.0)
@@ -463,6 +506,34 @@ class C9_Benchmarks(unittest.TestCase):
         h = BM.scaled("interaction", 0.5, "half")
         self.assertEqual([e.strength for e in h.effects], [-0.25, 0.5])
         self.assertEqual(BM.SCENARIOS["interaction"].effects[1].strength, 1.0)
+
+
+class C10_EvidenceRun(unittest.TestCase):
+    def test_tiny_evidence_run_is_complete_and_honest(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from research.mllab import evidence as EVD
+        cfg = EVD.EvidenceConfig(bench_symbols=8, bench_sessions=300, bench_models=("prior", "logistic", "hgb"),
+                                 parity_symbols=1, parity_sessions=300, asof_probes=1, battery_symbols=8,
+                                 battery_sessions=300, battery_models=("prior", "logistic", "hgb"), n_nulls=2,
+                                 effect_sizes=(1.0,), required_effects=(), n_per_effect=1, scenarios=("null",),
+                                 profile="test")
+        j = EVD.to_json(EVD.run_evidence(cfg))
+        self.assertEqual(j["parity"]["outcome_mismatch"], 0)
+        self.assertEqual(j["benchmarks"]["_asof"]["clean"]["violations"], 0)
+        self.assertGreater(j["benchmarks"]["_asof"]["leaky_control"]["violations"], 0)
+        self.assertTrue(j["benchmarks"]["null"]["leakage"]["clean"])
+        self.assertEqual(j["battery"]["result"]["verdict"], "NOT_CALIBRATED")     # 2 nulls cannot bound anything
+        self.assertTrue(j["ledger"]["verified"])
+        self.assertNotEqual((j["calibrated_run"]["report_card"] or {}).get("verdict"), "PASS")
+        with tempfile.TemporaryDirectory() as d:
+            jp, mp = EVD.write(j, Path(d) / "lane_c")
+            self.assertEqual(json.loads(jp.read_text())["report_digest"], j["report_digest"])
+            md = mp.read_text()
+        for s in ("not** evidence of any edge", "## 3. Canary battery", "Model card", "What this does and does not show"):
+            self.assertIn(s, md)
+        self.assertNotIn("deploy", md.replace("never deployment", "").lower())
 
 
 if __name__ == "__main__":

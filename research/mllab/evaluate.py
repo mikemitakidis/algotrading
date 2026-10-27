@@ -16,7 +16,8 @@ Protocol (no tuning on test data):
    same-day correlation does not inflate significance: log-loss gain and
    daily net-R difference, Newey–West t, one-sided p, Holm-adjusted across
    challengers. Verdicts: IMPROVES (both), PROBABILITIES_ONLY, DECISIONS_ONLY,
-   NO_EVIDENCE, WORSE.
+   NO_EVIDENCE, WORSE. Skill gate: a gain over the baseline only counts if
+   the challenger also beats the base-rate prior in the same way.
 6. Every model is a ledgered trial; the best challenger gets an integrity
    report card charged for every model ever tried in the family. With a
    ledger the card's inputs are reconciled against it (trial ids, family
@@ -111,6 +112,28 @@ def verdict(holm_p_better_prob: float, holm_p_better_dec: float, holm_p_worse_pr
     if holm_p_worse_prob <= alpha:
         return "WORSE"
     return "NO_EVIDENCE"
+
+
+def skill_gate(row: Dict, prior_row: Optional[Dict], alpha: float) -> Dict:
+    """A claim against a reference OTHER than the base-rate prior counts only
+    where the challenger shows the same kind of improvement over the prior.
+
+    Beating a baseline that is itself worse than the prior (an over-fitted or
+    mis-calibrated logistic regression on a null market, say) demonstrates
+    less damage, not information. The raw verdict is kept in
+    ``verdict_raw``; a downgrade is explained in ``skill_gate``."""
+    row["verdict_raw"] = row["verdict"]
+    if prior_row is None:
+        row["skill_gate"] = "ungated: no prior in this run"
+        return row
+    p_ok = prior_row["holm_p_logloss"] <= alpha
+    d_ok = prior_row["holm_p_decision"] <= alpha
+    row["verdict"] = verdict(row["holm_p_logloss"] if p_ok else 1.0, row["holm_p_decision"] if d_ok else 1.0,
+                             row["holm_p_worse"], alpha)
+    row["skill_gate"] = ("" if row["verdict"] == row["verdict_raw"] else
+                         "downgraded from %s: no matching significant gain over the base-rate prior"
+                         % row["verdict_raw"])
+    return row
 
 
 def _ll(y, p):
@@ -270,6 +293,10 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
                                  MT.adjust([r["p_logloss_worse"] for r in pair_rows], "holm")):
             r["holm_p_logloss"], r["holm_p_decision"], r["holm_p_worse"] = float(a1), float(a2), float(a3)
             r["verdict"] = verdict(a1, a2, a3, cfg.alpha)
+    by_prior = {r["model"]: r for r in vs_prior}
+    for r in comparisons + pair_rows:
+        if r["vs"] != "prior":
+            skill_gate(r, by_prior.get(r["model"]) if "prior" in runs else None, cfg.alpha)
     # Decisions versus simply taking every candidate (the primary rule alone).
     all_daily = _daily(r_net[oof], days, all_days)
     vs_take_all = []
@@ -336,8 +363,11 @@ def comparison_table(rows: List[Dict]) -> str:
     for r in rows:
         L.append("| %s | %s | %+.4f (%.3f) | %+.3f [%+.3f, %+.3f] (%.3f) | **%s** |" % (
             r["model"], r["vs"], r["logloss_gain_per_day"], r["holm_p_logloss"], r["daily_r_diff"],
-            r["daily_r_diff_lo"], r["daily_r_diff_hi"], r["holm_p_decision"], r["verdict"]))
+            r["daily_r_diff_lo"], r["daily_r_diff_hi"], r["holm_p_decision"],
+            r["verdict"] + (" (raw %s, skill-gated)" % r["verdict_raw"]
+                            if r.get("skill_gate", "").startswith("downgraded") else "")))
     return "\n".join(L)
 
 
-__all__ = ["VERDICTS", "LabConfig", "ModelRun", "LabResult", "verdict", "run", "summary_table", "comparison_table"]
+__all__ = ["VERDICTS", "LabConfig", "ModelRun", "LabResult", "verdict", "skill_gate", "run", "summary_table",
+           "comparison_table"]
