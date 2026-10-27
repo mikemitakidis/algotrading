@@ -1,0 +1,226 @@
+{
+ "decisions": [
+  {
+   "action": "task.assign",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "short-horizon oversold reversal after costs",
+   "role": "director"
+  },
+  {
+   "action": "kb.write.source",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "Does the Stock Market Overreact?",
+   "role": "scout"
+  },
+  {
+   "action": "kb.write.source",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "When Are Contrarian Profits Due to Stock Market Overreaction?",
+   "role": "scout"
+  },
+  {
+   "action": "kb.write.source",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "Returns to Buying Winners and Selling Losers",
+   "role": "scout"
+  },
+  {
+   "action": "kb.write.source",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "The Deflated Sharpe Ratio",
+   "role": "scout"
+  },
+  {
+   "action": "kb.write.source",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "FICTIONAL TEST FIXTURE: a source from the future",
+   "role": "scout"
+  },
+  {
+   "action": "network.fetch",
+   "allowed": false,
+   "reason": "never permitted to any research agent",
+   "resource": "https://example.invalid/papers",
+   "role": "scout"
+  },
+  {
+   "action": "kb.write.hypothesis",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "Short horizon oversold stocks below the lower Bollinger band",
+   "role": "hypothesist"
+  },
+  {
+   "action": "kb.write.hypothesis",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "Short-horizon oversold stocks below the lower Bollinger band",
+   "role": "hypothesist"
+  },
+  {
+   "action": "kb.write.hypothesis",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "A completely different claim about intraday seasonality in s",
+   "role": "hypothesist"
+  },
+  {
+   "action": "genome.propose",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "engineer"
+  },
+  {
+   "action": "genome.validate",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "engineer"
+  },
+  {
+   "action": "code.lint",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "generated signal function",
+   "role": "engineer"
+  },
+  {
+   "action": "code.execute",
+   "allowed": false,
+   "reason": "never permitted to any research agent",
+   "resource": "generated signal function",
+   "role": "engineer"
+  },
+  {
+   "action": "kb.write.review",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "KH-c6fe4141ae",
+   "role": "skeptic"
+  },
+  {
+   "action": "prereg.register",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "H-afb1cd54183e",
+   "role": "auditor"
+  },
+  {
+   "action": "eval.synthetic",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "auditor"
+  },
+  {
+   "action": "ledger.trial",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "auditor"
+  },
+  {
+   "action": "ledger.trial",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "auditor"
+  },
+  {
+   "action": "ledger.trial",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "auditor"
+  },
+  {
+   "action": "holdout.open",
+   "allowed": false,
+   "reason": "never permitted to any research agent",
+   "resource": "agents:mock",
+   "role": "auditor"
+  },
+  {
+   "action": "kb.write.lineage",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "mean_reversion-24659b18ea2b",
+   "role": "librarian"
+  },
+  {
+   "action": "kb.write.rejection",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "KH-c6fe4141ae",
+   "role": "librarian"
+  },
+  {
+   "action": "report.write",
+   "allowed": true,
+   "reason": "allowed",
+   "resource": "KH-c6fe4141ae",
+   "role": "reporter"
+  }
+ ],
+ "digest": "2ea69b8b02a30190de2545093fb1e0e3b24ee6a33a7136df6ac3f426c97fbffc",
+ "evaluation": {
+  "mean_diff": 0.6011338019941659,
+  "n_markets": 3,
+  "paired_return_diffs": [
+   0.5347282755057675,
+   0.7614276206604085,
+   0.5072455098163215
+  ],
+  "positive_markets": 3,
+  "trades_r_multiples": 182,
+  "trial_ids": [
+   "T000033-7c285d36",
+   "T000034-1462a311",
+   "T000036-2d589bb1",
+   "T000037-4b79bad5",
+   "T000039-8360d6da",
+   "T000040-ecc36575"
+  ]
+ },
+ "kb": {
+  "hypotheses": 1,
+  "lineage": 1,
+  "refusals": 2,
+  "rejected": 1,
+  "reviews": 1,
+  "sources": 5,
+  "status": {
+   "KH-c6fe4141ae": "rejected"
+  }
+ },
+ "ledger_entries": 48,
+ "ledger_ok": true,
+ "prereg": {
+  "effective_n": 3,
+  "passed": false,
+  "prereg_digest": "d555d84301baa1ecfd53ebea9a6b26385edc8c590f7a23536eabcc90dfd9ac59",
+  "reason": "attestation is declared, not independently verified: local diagnostic only",
+  "value": 0.6011338019941659
+ },
+ "refusals": [
+  "PermissionDenied: scout may not network.fetch (https://example.invalid/papers): never permitted to any research agent",
+  "KnowledgeError: duplicate of KH-c6fe4141ae (similarity 1.00, status open)",
+  "KnowledgeError: look-ahead: source SRC-d272fd8e7f published 2030-01-01, on or after the test window start 2018-01-02",
+  "PermissionDenied: engineer may not code.execute (generated signal function): never permitted to any research agent",
+  "PermissionDenied: auditor may not holdout.open (agents:mock): never permitted to any research agent"
+ ],
+ "report_card": {
+  "reasons": [
+   "pipeline canary battery missing or not CALIBRATED",
+   "no family matrix: PBO / SPA not computed"
+  ],
+  "verdict": "INCONCLUSIVE"
+ }
+}

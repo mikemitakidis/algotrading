@@ -34,6 +34,9 @@ ENTRY_KINDS = (
     "prereg_evaluation", "holdout_seal", "holdout_release", "holdout_access_denied",
     "data_access", "control_battery_plan", "control_battery_result", "report_card",
     "note",
+    # lane E: agent permission decisions and the knowledge library (research.agents)
+    "agent_decision", "kb_source", "kb_source_verification", "kb_hypothesis", "kb_status", "kb_refusal",
+    "kb_rejection", "kb_lineage", "kb_review", "kb_report",
 )
 TRIAL_KINDS = ("research", "baseline", "control_null", "control_positive")
 TRIAL_STATUSES = ("completed", "failed", "abandoned")
