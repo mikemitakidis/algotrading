@@ -18,7 +18,17 @@ Protocol (no tuning on test data):
    challengers. Verdicts: IMPROVES (both), PROBABILITIES_ONLY, DECISIONS_ONLY,
    NO_EVIDENCE, WORSE.
 6. Every model is a ledgered trial; the best challenger gets an integrity
-   report card charged for every model tried.
+   report card charged for every model ever tried in the family. With a
+   ledger the card's inputs are reconciled against it (trial ids, family
+   count); without one the card is a local diagnostic and cannot PASS.
+
+Known limitations (stated, not hidden): the split-conformal sets for fold j
+are calibrated on the PAST folds' out-of-fold predictions, which came from
+earlier fits of the same model family, not the fold-j fit; markets are not
+exchangeable. Coverage is therefore measured out of sample, never assumed.
+Holm adjustment is applied within each comparison table (vs baseline, vs
+prior, extra pairs), not across tables; the report card's trial count is
+the across-everything correction.
 """
 from __future__ import annotations
 
@@ -34,6 +44,7 @@ from research.common.rng import stream
 from research.integrity import multiple_testing as MT
 from research.integrity import stats as S
 from research.integrity.ledger import Ledger, TrialRecord
+from research.integrity.controls import BatteryResult
 from research.integrity.report_card import GauntletConfig, ReportCard, evaluate as gauntlet
 from research.integrity.splits import walk_forward
 from research.mllab.datasets import EventDataset
@@ -66,6 +77,7 @@ class ModelRun:
     thresholds: List[float]
     fit_seconds: float
     metrics: Dict[str, float] = field(default_factory=dict)
+    member_p: Optional[np.ndarray] = None   # (n, k) OOF member probabilities for ensembles, NaN outside test folds
 
 
 @dataclass
@@ -81,6 +93,24 @@ class LabResult:
     fold_sizes: List[Dict]
     runtime_seconds: float
     meta: Dict = field(default_factory=dict)
+    fold_of: Optional[np.ndarray] = None    # test-fold index per row (-1 = never tested)
+    trial_ids: Dict[str, str] = field(default_factory=dict)
+
+
+def verdict(holm_p_better_prob: float, holm_p_better_dec: float, holm_p_worse_prob: float,
+            alpha: float) -> str:
+    """Verdict from Holm-adjusted one-sided p-values. IMPROVES needs BOTH
+    better probabilities (log loss) and better decisions (daily net R)."""
+    better_p, better_d = holm_p_better_prob <= alpha, holm_p_better_dec <= alpha
+    if better_p and better_d:
+        return "IMPROVES"
+    if better_p:
+        return "PROBABILITIES_ONLY"
+    if better_d:
+        return "DECISIONS_ONLY"
+    if holm_p_worse_prob <= alpha:
+        return "WORSE"
+    return "NO_EVIDENCE"
 
 
 def _ll(y, p):
@@ -119,9 +149,11 @@ def _daily(values: np.ndarray, days: np.ndarray, all_days: np.ndarray) -> np.nda
 
 def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabConfig = LabConfig(), *,
         scenario: str = "scenario", ledger: Optional[Ledger] = None,
-        extra_pairs: Sequence = ()) -> LabResult:
+        extra_pairs: Sequence = (), canary: Optional[BatteryResult] = None) -> LabResult:
     """Walk-forward comparison. `extra_pairs` adds direct (model, reference)
-    paired tests, e.g. ("hgb", "hgb_noctx") to isolate a feature family."""
+    paired tests, e.g. ("hgb", "hgb_noctx") to isolate a feature family.
+    `canary` is passed through to the report card (a CALIBRATED pipeline
+    battery is one of its PASS requirements)."""
     t0 = time.time()
     if cfg.baseline not in factories:
         raise ValueError("baseline %r missing from factories" % cfg.baseline)
@@ -129,8 +161,10 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
                          min_train_groups=cfg.min_train_groups)
     n = len(ds)
     oof = np.zeros(n, dtype=bool)
-    for f in folds:
+    fold_of = np.full(n, -1, dtype=np.int64)
+    for j, f in enumerate(folds):
         oof[f.test] = True
+        fold_of[f.test] = j
     r_net = ds.r - cfg.cost_r
     runs: Dict[str, ModelRun] = {}
     for name, fac in factories.items():
@@ -139,6 +173,7 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
         take_cf = np.zeros(n, dtype=bool)
         thr, fit_s = [], 0.0
         seen: List[np.ndarray] = []
+        members: Optional[np.ndarray] = None
         cov_n = cov_hit = single_n = 0
         for j, f in enumerate(folds):
             tr, te = f.train, f.test
@@ -147,6 +182,15 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
             m.fit(ds.X[tr], ds.y[tr], start=ds.start[tr], end=ds.end[tr])
             fit_s += time.time() - t1
             p[te] = m.predict_proba(ds.X[te])
+            try:
+                mp = np.asarray(m.member_proba(ds.X[te]), dtype=float)
+            except AttributeError:
+                mp = None
+            if mp is not None and mp.ndim == 2:
+                if members is None:
+                    members = np.full((n, mp.shape[1]), np.nan)
+                if mp.shape[1] == members.shape[1]:
+                    members[te] = mp
             past = np.concatenate(seen) if seen else np.arange(0)
             default = _breakeven(ds.y[tr], ds.r[tr], cfg.cost_r)
             t = _best_threshold(p[past], r_net[past], cfg.min_trades, default) if len(past) else default
@@ -160,7 +204,7 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
                 single_n += int((sets.sum(axis=1) == 1).sum())
                 cov_n += len(te)
             seen.append(te)
-        runs[name] = ModelRun(name, p, take, take_cf, thr, fit_s)
+        runs[name] = ModelRun(name, p, take, take_cf, thr, fit_s, member_p=members)
         runs[name].metrics["_conformal"] = (cov_hit, single_n, cov_n)
     # Metrics on pooled OOF rows.
     y, days = ds.y[oof], ds.day[oof]
@@ -210,9 +254,7 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
             a3 = MT.adjust([r["p_logloss_worse"] for r in rows], "holm")
             for r, x1, x2, x3 in zip(rows, a1, a2, a3):
                 r["holm_p_logloss"], r["holm_p_decision"], r["holm_p_worse"] = float(x1), float(x2), float(x3)
-                better_p, better_d = x1 <= cfg.alpha, x2 <= cfg.alpha
-                r["verdict"] = ("IMPROVES" if better_p and better_d else "PROBABILITIES_ONLY" if better_p
-                                else "DECISIONS_ONLY" if better_d else "WORSE" if x3 <= cfg.alpha else "NO_EVIDENCE")
+                r["verdict"] = verdict(x1, x2, x3, cfg.alpha)
         return rows
 
     challengers = [k for k in runs if k not in (cfg.baseline, "prior")]
@@ -223,12 +265,11 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
         if nm in runs and ref in runs:
             pair_rows += compare(ref, [nm])
     if pair_rows:
-        for r, a1, a2 in zip(pair_rows, MT.adjust([r["p_logloss"] for r in pair_rows], "holm"),
-                             MT.adjust([r["p_decision"] for r in pair_rows], "holm")):
-            r["holm_p_logloss"], r["holm_p_decision"] = float(a1), float(a2)
-            bp, bd = a1 <= cfg.alpha, a2 <= cfg.alpha
-            r["verdict"] = ("IMPROVES" if bp and bd else "PROBABILITIES_ONLY" if bp else "DECISIONS_ONLY" if bd
-                            else "WORSE" if r["holm_p_worse"] <= cfg.alpha else "NO_EVIDENCE")
+        for r, a1, a2, a3 in zip(pair_rows, MT.adjust([r["p_logloss"] for r in pair_rows], "holm"),
+                                 MT.adjust([r["p_decision"] for r in pair_rows], "holm"),
+                                 MT.adjust([r["p_logloss_worse"] for r in pair_rows], "holm")):
+            r["holm_p_logloss"], r["holm_p_decision"], r["holm_p_worse"] = float(a1), float(a2), float(a3)
+            r["verdict"] = verdict(a1, a2, a3, cfg.alpha)
     # Decisions versus simply taking every candidate (the primary rule alone).
     all_daily = _daily(r_net[oof], days, all_days)
     vs_take_all = []
@@ -240,30 +281,39 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
     if vs_take_all:
         for r, a in zip(vs_take_all, MT.adjust([r["p"] for r in vs_take_all], "holm")):
             r["holm_p"] = float(a)
+    family = "mllab:%s" % scenario
+    trial_ids: Dict[str, str] = {}
     if ledger is not None:
         for nm, rr in runs.items():
-            ledger.record_trial(TrialRecord(family_id="mllab:%s" % scenario, kind="baseline" if nm in (cfg.baseline, "prior") else "research",
-                                            spec_digest=nm, data_digest=ds.digest, code_digest="research.mllab",
-                                            seed=cfg.seed, metrics={k: v for k, v in rr.metrics.items()
-                                                                    if isinstance(v, float) and np.isfinite(v)},
-                                            split={"n_folds": cfg.n_folds, "embargo_ns": cfg.embargo_ns}))
+            trial_ids[nm] = ledger.record_trial(TrialRecord(
+                family_id=family, kind="baseline" if nm in (cfg.baseline, "prior") else "research",
+                spec_digest=nm, data_digest=ds.digest, code_digest="research.mllab", seed=cfg.seed,
+                metrics={k: v for k, v in rr.metrics.items() if isinstance(v, float) and np.isfinite(v)},
+                split={"n_folds": cfg.n_folds, "embargo_ns": cfg.embargo_ns}))
+    # Charge the card for every model EVER tried in this family, not just this call.
+    n_trials = max(len(runs), ledger.family_trial_count(family)) if ledger is not None else len(runs)
     card = None
     best = max(challengers, key=lambda k: runs[k].metrics["total_net_r"]) if challengers else None
     if best is not None and runs[best].take[oof].sum() >= 10:
         tk = runs[best].take[oof]
         fam = np.column_stack([_daily(np.where(runs[k].take[oof], r_net[oof], 0.0), days, all_days)
                                for k in runs])
-        card = gauntlet(candidate_id="%s:%s" % (scenario, best), family_id="mllab:%s" % scenario,
-                        gross=ds.r[oof][tk], cost_per_obs=cfg.cost_r, n_trials=len(runs),
+        card = gauntlet(candidate_id="%s:%s" % (scenario, best), family_id=family,
+                        gross=ds.r[oof][tk], cost_per_obs=cfg.cost_r, n_trials=n_trials,
                         rng=stream(cfg.seed, "card", scenario), family_matrix=fam if fam.shape[0] >= 40 else None,
-                        cfg=GauntletConfig(n_boot=300, hac_lags=cfg.hac_lags))
+                        canary=canary, cfg=GauntletConfig(n_boot=300, hac_lags=cfg.hac_lags),
+                        ledger=ledger, trial_ids=tuple(trial_ids.values()))
     sizes = [{"train": int(len(f.train)), "test": int(len(f.test)), "purged": int(f.purged),
               "embargoed": int(f.embargoed)} for f in folds]
     return LabResult(scenario, ds.digest, n, oof, runs, comparisons, vs_prior, card, sizes,
                      round(time.time() - t0, 1), {"vs_take_all": vs_take_all, "pairs": pair_rows,
                                                   "take_all_mean_net_r": base_mean,
                                                   "take_all_total_net_r": float(r_net[oof].sum()),
-                                                  "oof_rows": int(oof.sum()), "best_challenger": best})
+                                                  "oof_rows": int(oof.sum()), "best_challenger": best,
+                                                  "n_trials_charged": int(n_trials),
+                                                  "feature_names": list(ds.feature_names),
+                                                  "dataset_meta": dict(ds.meta)},
+                     fold_of=fold_of, trial_ids=trial_ids)
 
 
 def summary_table(res: LabResult) -> str:
@@ -290,4 +340,4 @@ def comparison_table(rows: List[Dict]) -> str:
     return "\n".join(L)
 
 
-__all__ = ["VERDICTS", "LabConfig", "ModelRun", "LabResult", "run", "summary_table", "comparison_table"]
+__all__ = ["VERDICTS", "LabConfig", "ModelRun", "LabResult", "verdict", "run", "summary_table", "comparison_table"]

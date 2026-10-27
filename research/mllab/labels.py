@@ -53,6 +53,8 @@ def barrier_outcomes(o, h, l, c, atr, spec: BarrierSpec) -> Dict[str, np.ndarray
             pend[i] = i + 1 >= n
             continue
         e = o[i + 1]
+        if not (np.isfinite(e) and e > 0):
+            continue
         risk = spec.sl_mult * atr[i]
         up, dn = e + spec.tp_mult * atr[i], e - risk
         j1 = min(i + H, n - 1)

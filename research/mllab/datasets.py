@@ -190,14 +190,19 @@ def _fill(X: np.ndarray, names: Sequence[str]):
     return out, np.column_stack([ind_a, ind_o]) if ind_o.size else ind_a, list(names_a) + names_o
 
 
-def audit_feature_asof(bars: Dict[str, pd.DataFrame], *, probes: int = 3, seed: int = 0) -> Dict[str, float]:
+def audit_feature_asof(bars: Dict[str, pd.DataFrame], *, probes: int = 3, seed: int = 0,
+                       feature_fn: Callable[[pd.DataFrame], pd.DataFrame] = None) -> Dict[str, float]:
     """Perturb all bars AFTER a probe time and verify that every feature row at
-    or before the probe is unchanged. Returns counts; `violations` must be 0."""
+    or before the probe is unchanged. Returns counts; `violations` must be 0.
+
+    `feature_fn` defaults to ``symbol_features``; passing a deliberately
+    leaky function is the audit's own negative control (it must flag it)."""
     from research.common.rng import stream
+    feature_fn = feature_fn or symbol_features
     rng = stream(seed, "mllab", "asof")
     any_sym = next(iter(bars))
     ts_all = pd.to_datetime(bars[any_sym]["ts_utc"], utc=True)
-    base_per = {s: symbol_features(b) for s, b in bars.items()}
+    base_per = {s: feature_fn(b) for s, b in bars.items()}
     base_ctx = market_context(base_per, bars)
     checked = violations = 0
     for _ in range(probes):
@@ -211,7 +216,7 @@ def audit_feature_asof(bars: Dict[str, pd.DataFrame], *, probes: int = 3, seed: 
                 b2.loc[fut, col] = b2.loc[fut, col].to_numpy() * k
             b2.loc[fut, "volume"] = b2.loc[fut, "volume"].to_numpy() * rng.uniform(0.2, 5.0, size=int(fut.sum()))
             pert[s] = b2
-        per2 = {s: symbol_features(b) for s, b in pert.items()}
+        per2 = {s: feature_fn(b) for s, b in pert.items()}
         ctx2 = market_context(per2, pert)
         for s in bars:
             past = (pd.to_datetime(bars[s]["ts_utc"], utc=True) <= t).to_numpy()

@@ -23,7 +23,10 @@ Challengers:
 * BaggedModel: seed/bootstrap bag of one learner; its member dispersion is an
   epistemic-uncertainty signal
 
-All randomness is seeded through research.common.rng.child_seed.
+All randomness is seeded through research.common.rng.child_seed, and every
+model is bit-for-bit reproducible for a given seed: random forests run
+single-threaded (threaded probability accumulation changes the last bits)
+and LightGBM runs in deterministic mode.
 """
 from __future__ import annotations
 
@@ -95,11 +98,11 @@ def make(name: str, seed: int = 0) -> object:
     if name == "rf":
         from sklearn.ensemble import RandomForestClassifier
         return SK(name, lambda: RandomForestClassifier(n_estimators=150, max_depth=8, min_samples_leaf=40,
-                                                       max_features=0.3, n_jobs=2, random_state=s))
+                                                       max_features=0.3, n_jobs=1, random_state=s))
     if name == "extra_trees":
         from sklearn.ensemble import ExtraTreesClassifier
         return SK(name, lambda: ExtraTreesClassifier(n_estimators=150, max_depth=8, min_samples_leaf=40,
-                                                     max_features=0.3, n_jobs=2, random_state=s))
+                                                     max_features=0.3, n_jobs=1, random_state=s))
     if name == "hgb":
         from sklearn.ensemble import HistGradientBoostingClassifier
         return SK(name, lambda: HistGradientBoostingClassifier(max_iter=200, learning_rate=0.05, max_depth=4,
@@ -116,7 +119,8 @@ def make(name: str, seed: int = 0) -> object:
         return SK(name, lambda: lgb.LGBMClassifier(n_estimators=200, num_leaves=15, learning_rate=0.05,
                                                    min_child_samples=60, subsample=0.8, subsample_freq=1,
                                                    colsample_bytree=0.6, reg_lambda=2.0, random_state=s,
-                                                   n_jobs=2, verbose=-1))
+                                                   n_jobs=2, verbose=-1, deterministic=True,
+                                                   force_row_wise=True))
     if name == "catboost":
         from catboost import CatBoostClassifier
         return SK(name, lambda: CatBoostClassifier(iterations=200, depth=4, learning_rate=0.05,
@@ -166,6 +170,12 @@ class Calibrated:
             from sklearn.linear_model import LogisticRegression
             self.cal_ = LogisticRegression(C=1e6, max_iter=1000).fit(_logit(p)[:, None], y[hold_i])
         return self
+
+    def member_proba(self, X):
+        """Uncalibrated member probabilities of an ensemble/bagged base (epistemic signal)."""
+        if not hasattr(self.base, "member_proba"):
+            raise AttributeError("%s has no ensemble members" % self.name)
+        return self.base.member_proba(X)
 
     def predict_proba(self, X):
         p = self.base.predict_proba(X)

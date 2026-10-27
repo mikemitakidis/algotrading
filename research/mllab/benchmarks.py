@@ -23,10 +23,11 @@ realized vol"; every model acts as a META-LABELER on those candidates
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Optional, Sequence, Tuple
 
 from research.common.synthetic import MarketSpec, PlantedEffect, generate
+from research.integrity.controls import BatteryResult
 from research.integrity.ledger import Ledger
 from research.mllab import models as MD
 from research.mllab.datasets import build_dataset, drop_rule, oversold_rule
@@ -64,31 +65,54 @@ SCENARIOS: Dict[str, Scenario] = {
                        expected="models WITH market-regime context beat the regime-blind baseline"),
 }
 
-DEFAULT_MODELS = ("prior", "logistic", "hgb", "xgb", "lgbm", "rf", "mlp", "mean_ens", "stack", "regime_hgb")
+DEFAULT_MODELS = ("prior", "logistic", "hgb", "xgb", "lgbm", "rf", "mlp", "mean_ens", "stack", "regime_hgb",
+                  "bag_hgb")
+EMBARGO_NS = 6 * DAY_NS
+BARRIER = BarrierSpec(tp_mult=1.0, sl_mult=1.0, horizon=5)
+
+
+def scaled(name: str, factor: float, new_name: Optional[str] = None) -> Scenario:
+    """The scenario with every planted strength multiplied by `factor` (0 = null)."""
+    scn = SCENARIOS[name]
+    return replace(scn, name=new_name or "%s_x%g" % (name, factor),
+                   effects=tuple(replace(e, strength=e.strength * factor) for e in scn.effects))
 
 
 def market(scn: Scenario, *, n_symbols: int, n_sessions: int, seed: int):
     return generate(MarketSpec(n_symbols=n_symbols, n_sessions=n_sessions, seed=seed, effects=scn.effects))
 
 
-def run_scenario(name: str, *, n_symbols: int = 40, n_sessions: int = 1500, seed: int = 7,
-                 models: Optional[Sequence[str]] = None, ledger: Optional[Ledger] = None,
-                 n_folds: int = 5) -> LabResult:
-    scn = SCENARIOS[name]
+def prepare(scn: Scenario, *, n_symbols: int = 40, n_sessions: int = 1500, seed: int = 7,
+            models: Optional[Sequence[str]] = None):
+    """(market, dataset, factories) for a scenario: no fitting yet."""
     m = market(scn, n_symbols=n_symbols, n_sessions=n_sessions, seed=seed)
-    spec = BarrierSpec(tp_mult=1.0, sl_mult=1.0, horizon=5)
     sampler = drop_rule(1.0) if scn.sampler == "drop" else oversold_rule(40.0)
-    ds = build_dataset(m.bars, spec=spec, sampler=sampler, truth=m.truth,
-                       extra_meta={"scenario": name, "market_digest": m.spec_digest})
+    ds = build_dataset(m.bars, spec=BARRIER, sampler=sampler, truth=m.truth,
+                       extra_meta={"scenario": scn.name, "market_digest": m.spec_digest})
     ctx_cols = [i for i, f in enumerate(ds.feature_names) if f.startswith("ctx.")]
     use = tuple(models) if models is not None else (scn.models or DEFAULT_MODELS)
     fac = MD.factories(use, seed=seed, regime_col=ds.feature_names.index("ctx.mkt_vol_pct"),
                        context_cols=ctx_cols, n_features=len(ds.feature_names))
-    res = run(ds, fac, LabConfig(n_folds=n_folds, embargo_ns=6 * DAY_NS, seed=seed, baseline=scn.baseline),
-              scenario=name, ledger=ledger, extra_pairs=scn.pairs)
+    return m, ds, fac
+
+
+def lab_config(scn: Scenario, *, seed: int, n_folds: int = 5) -> LabConfig:
+    return LabConfig(n_folds=n_folds, embargo_ns=EMBARGO_NS, seed=seed, baseline=scn.baseline)
+
+
+def run_scenario(name, *, n_symbols: int = 40, n_sessions: int = 1500, seed: int = 7,
+                 models: Optional[Sequence[str]] = None, ledger: Optional[Ledger] = None,
+                 n_folds: int = 5, canary: Optional[BatteryResult] = None, return_inputs: bool = False):
+    """Run a named (or given) scenario. With return_inputs=True returns
+    (result, market, dataset) so audits can reuse the exact inputs."""
+    scn = name if isinstance(name, Scenario) else SCENARIOS[name]
+    m, ds, fac = prepare(scn, n_symbols=n_symbols, n_sessions=n_sessions, seed=seed, models=models)
+    res = run(ds, fac, lab_config(scn, seed=seed, n_folds=n_folds), scenario=scn.name, ledger=ledger,
+              extra_pairs=scn.pairs, canary=canary)
     res.meta.update({"expected": scn.expected, "n_symbols": n_symbols, "n_sessions": n_sessions,
-                     "market_digest": m.spec_digest, "n_features": len(ds.feature_names)})
-    return res
+                     "market_digest": m.spec_digest, "n_features": len(ds.feature_names), "seed": seed})
+    return (res, m, ds) if return_inputs else res
 
 
-__all__ = ["Scenario", "SCENARIOS", "DEFAULT_MODELS", "market", "run_scenario"]
+__all__ = ["Scenario", "SCENARIOS", "DEFAULT_MODELS", "EMBARGO_NS", "BARRIER", "scaled", "market", "prepare",
+           "lab_config", "run_scenario"]

@@ -11,6 +11,12 @@
 * ``ensemble_dispersion`` — std of member probabilities (epistemic signal).
 * ``risk_coverage`` — selective-prediction curve: performance of the most
   confident fraction of decisions, and its area (AURC-style summary).
+* ``online_coverage`` — static split conformal (calibrated once on a warm-up
+  block) versus ACI on the same time-ordered stream: coverage and mean set
+  size after the warm-up, overall and per block.
+* ``dispersion_report`` — does ensemble disagreement carry information?
+  Rank correlation with per-row log loss, log loss by dispersion tercile, and
+  the net R of taken trades kept at low dispersion.
 """
 from __future__ import annotations
 
@@ -104,4 +110,69 @@ def risk_coverage(confidence: np.ndarray, value: np.ndarray, grid=(0.1, 0.2, 0.3
     return {"curve": out, "area": float(csum.mean()) if len(v) else float("nan")}
 
 
-__all__ = ["SplitConformal", "AdaptiveConformal", "ensemble_dispersion", "risk_coverage"]
+def _binary_scores(p, y):
+    p, y = np.asarray(p, float), np.asarray(y).astype(int)
+    return np.where(y == 1, 1.0 - p, p)
+
+
+def _set_size(p, q):
+    p = np.asarray(p, float)
+    return (1.0 - p <= q).astype(int) + (p <= q).astype(int)
+
+
+def online_coverage(p, y, block, *, alpha: float = 0.2, gamma: float = 0.01, window: int = 500,
+                    warmup_block: int = 0) -> Dict:
+    """Rows must be in time order. ``block`` labels each row (e.g. the walk-
+    forward fold); rows of ``warmup_block`` calibrate both methods, every
+    later row is scored online. Score = 1 - P(true class) (binary)."""
+    p, y, block = np.asarray(p, float), np.asarray(y).astype(int), np.asarray(block)
+    s = _binary_scores(p, y)
+    warm = block == warmup_block
+    later = np.flatnonzero(block > warmup_block)
+    if not warm.any() or not len(later):
+        raise ValueError("need warm-up rows and later rows")
+    q_static = _q(s[warm], alpha)
+    aci = AdaptiveConformal(alpha=alpha, gamma=gamma, window=window)
+    aci.scores = list(s[warm])
+    cov_a = np.zeros(len(later), dtype=bool)
+    size_a = np.zeros(len(later), dtype=int)
+    for k, i in enumerate(later):
+        size_a[k] = _set_size(p[i:i + 1], aci.interval_q())[0]
+        cov_a[k] = aci.update(s[i])
+    cov_s = s[later] <= q_static
+    size_s = _set_size(p[later], q_static)
+    per = []
+    for b in np.unique(block[later]):
+        m = block[later] == b
+        per.append({"block": int(b), "n": int(m.sum()), "static": float(cov_s[m].mean()),
+                    "aci": float(cov_a[m].mean())})
+    return {"target": 1.0 - alpha, "n": int(len(later)), "static_coverage": float(cov_s.mean()),
+            "aci_coverage": float(cov_a.mean()), "static_mean_set_size": float(size_s.mean()),
+            "aci_mean_set_size": float(size_a.mean()), "static_q": float(q_static),
+            "aci_final_alpha": float(aci.alpha_t), "per_block": per}
+
+
+def dispersion_report(member_p, p, y, r_net, take) -> Dict:
+    """Is ensemble disagreement informative? Rows with any NaN member are dropped."""
+    from scipy.stats import spearmanr
+    M = np.asarray(member_p, float)
+    ok = np.isfinite(M).all(axis=1) & np.isfinite(np.asarray(p, float))
+    M, p, y = M[ok], np.asarray(p, float)[ok], np.asarray(y, float)[ok]
+    r_net, take = np.asarray(r_net, float)[ok], np.asarray(take, bool)[ok]
+    d = ensemble_dispersion(M)
+    pc = np.clip(p, 1e-6, 1 - 1e-6)
+    ll = -(y * np.log(pc) + (1 - y) * np.log(1 - pc))
+    rho, pval = spearmanr(d, ll) if np.ptp(d) > 0 else (float("nan"), float("nan"))
+    terc = np.quantile(d, [1 / 3, 2 / 3]) if len(d) else np.array([np.nan, np.nan])
+    groups = [d <= terc[0], (d > terc[0]) & (d <= terc[1]), d > terc[1]]
+    by_t = [{"tercile": k + 1, "n": int(g.sum()), "mean_dispersion": float(d[g].mean()) if g.any() else float("nan"),
+             "log_loss": float(ll[g].mean()) if g.any() else float("nan")} for k, g in enumerate(groups)]
+    rc = risk_coverage(-d[take], r_net[take], grid=(0.2, 0.5, 1.0)) if take.any() else {"curve": [], "area": float("nan")}
+    return {"n": int(len(d)), "members": int(M.shape[1]) if M.ndim == 2 else 0,
+            "mean_dispersion": float(d.mean()) if len(d) else float("nan"),
+            "spearman_dispersion_vs_logloss": float(rho), "spearman_p": float(pval),
+            "by_tercile": by_t, "taken_trades_low_dispersion_first": rc["curve"]}
+
+
+__all__ = ["SplitConformal", "AdaptiveConformal", "ensemble_dispersion", "risk_coverage", "online_coverage",
+           "dispersion_report"]
