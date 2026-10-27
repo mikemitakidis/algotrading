@@ -84,6 +84,7 @@ class ModelRun:
     fit_seconds: float
     metrics: Dict[str, float] = field(default_factory=dict)
     member_p: Optional[np.ndarray] = None   # (n, k) OOF member probabilities for ensembles, NaN outside test folds
+    calibration_rows: List[int] = field(default_factory=list)   # resolved past OOF rows usable per fold
 
 
 @dataclass
@@ -201,6 +202,7 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
         take_cf = np.zeros(n, dtype=bool)
         thr, fit_s = [], 0.0
         seen: List[np.ndarray] = []
+        calib_rows: List[int] = []
         members: Optional[np.ndarray] = None
         cov_n = cov_hit = single_n = 0
         for j, f in enumerate(folds):
@@ -220,6 +222,11 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
                 if mp.shape[1] == members.shape[1]:
                     members[te] = mp
             past = np.concatenate(seen) if seen else np.arange(0)
+            # Comprehensive audit (PR #7, P1): the fold's threshold and conformal sets are frozen at its FIRST
+            # decision, so only earlier out-of-fold outcomes RESOLVED strictly before that decision may tune
+            # them. An earlier-fold event whose barrier resolves later is unknowable then.
+            past = past[ds.end[past] < ds.start[te].min()] if len(past) else past
+            calib_rows.append(int(len(past)))
             default = _breakeven(ds.y[tr], ds.r[tr], cfg.cost_r)
             t = _best_threshold(p[past], r_net[past], cfg.min_trades, default) if len(past) else default
             thr.append(t)
@@ -234,6 +241,7 @@ def run(ds: EventDataset, factories: Dict[str, Callable[[], object]], cfg: LabCo
             seen.append(te)
         runs[name] = ModelRun(name, p, take, take_cf, thr, fit_s, member_p=members)
         runs[name].metrics["_conformal"] = (cov_hit, single_n, cov_n)
+        runs[name].calibration_rows = calib_rows
     # Metrics on pooled OOF rows.
     y, days = ds.y[oof], ds.day[oof]
     all_days = np.unique(days)

@@ -25,7 +25,8 @@ import pandas as pd
 from bot.ml.features import SAFE_FEATURE_GROUPS_V2
 from bot.ml.features.missingness import apply_missingness_fill
 from research.common.hashing import array_digest, digest
-from research.mllab.labels import BarrierSpec, barrier_outcomes
+from research.common.bars import TF_MINUTES
+from research.mllab.labels import BarrierSpec, barrier_outcomes, path_observability, unobserved_paths
 
 LEVEL_FEATURES = ("price_return.close", "vol_regime.atr_14_sma_true_range", "momentum.macd_line",
                   "momentum.macd_signal", "momentum.macd_hist", "volume_liquidity.dollar_vol_20")
@@ -131,10 +132,14 @@ def market_context(per_symbol: Dict[str, pd.DataFrame], bars: Dict[str, pd.DataF
 
 def build_dataset(bars: Dict[str, pd.DataFrame], *, spec: BarrierSpec = BarrierSpec(),
                   sampler: Sampler = every_k(2), truth: Optional[Dict[str, pd.DataFrame]] = None,
-                  include_context: bool = True, extra_meta: Optional[Dict] = None) -> EventDataset:
+                  include_context: bool = True, extra_meta: Optional[Dict] = None, timeframe: str = "1D",
+                  calendar=None) -> EventDataset:
+    """Labels whose barrier path crosses a missing expected bar or an invalid / blocked bar are dropped
+    (comprehensive audit, PR #7): an unobserved path is never a definitive training or evaluation outcome."""
     per = {s: symbol_features(b) for s, b in bars.items()}
     ctx = market_context(per, bars) if include_context else None
     rows_X, ys, rs, st, en, sy, dy, tr = [], [], [], [], [], [], [], []
+    n_unobserved = 0
     names: Optional[List[str]] = None
     for s, b in bars.items():
         f = per[s].drop(columns=[c for c in LEVEL_FEATURES if c in per[s].columns])
@@ -142,7 +147,13 @@ def build_dataset(bars: Dict[str, pd.DataFrame], *, spec: BarrierSpec = BarrierS
         if ctx is not None:
             f = pd.concat([f.reset_index(drop=True), ctx.reindex(ts).reset_index(drop=True)], axis=1)
         out = barrier_outcomes(b["open"], b["high"], b["low"], b["close"], per[s][ATR_COL], spec)
-        keep = sampler(b, per[s]) & np.isfinite(out["y"]) & ~out["ambiguous"] & ~out["pending"]
+        obs = path_observability(b["ts_utc"], flags=b["quality_flags"] if "quality_flags" in b.columns else None,
+                                 ohlc=(b["open"], b["high"], b["low"], b["close"]), timeframe=timeframe,
+                                 tf_minutes=TF_MINUTES.get(timeframe, 390), calendar=calendar)
+        unobs = unobserved_paths(out, obs)
+        cand = sampler(b, per[s]) & np.isfinite(out["y"]) & ~out["ambiguous"] & ~out["pending"]
+        n_unobserved += int((cand & unobs).sum())
+        keep = cand & ~unobs
         idx = np.flatnonzero(keep)
         if not len(idx):
             continue
@@ -172,7 +183,9 @@ def build_dataset(bars: Dict[str, pd.DataFrame], *, spec: BarrierSpec = BarrierS
                       np.concatenate(st)[order], np.concatenate(en)[order], np.concatenate(sy)[order],
                       np.concatenate(dy)[order], np.concatenate(tr)[order],
                       {"barrier": spec.__dict__, "sampler": getattr(sampler, "__name__", "custom"),
-                       "n_symbols": len(bars), **(extra_meta or {})})
+                       "n_symbols": len(bars), "unobserved_path_labels_excluded": n_unobserved,
+                       "observability": "calendar" if calendar is not None else "business-day/contiguous (no calendar)",
+                       **(extra_meta or {})})
     if not np.isfinite(ds.X).all():
         raise ValueError("non-finite values reached the feature matrix")
     return ds
