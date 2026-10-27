@@ -105,7 +105,8 @@ def _ibkr_parts(args):
     from bot.brokers.ibkr_broker import _get_connection_params
     from bot.paper_loop_d2.ibkr_adapter import IbkrLoopBroker
     from bot.paper_loop_d2 import make_d0_gate, make_d1_gate
-    from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
+    from bot.paper_loop_d2.risk_gate import (make_market_state_provider,
+                                             make_risk_authority_gate)
     from bot.kill_switch import is_kill_switch_active
 
     host, port, _account, cid = _get_connection_params()
@@ -122,7 +123,8 @@ def _ibkr_parts(args):
     signals_db = str(REPO / "data" / "signals.db")
     return dict(broker=broker, d0_gate=make_d0_gate(), d1_gate=make_d1_gate(),
                 kill_switch_active=is_kill_switch_active,
-                risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db)),
+                risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
+                                                   market_state=make_market_state_provider()),
                 candidate_provider=_scanner_provider(args.focus_size))
 
 

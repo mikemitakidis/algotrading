@@ -562,6 +562,28 @@ class D23CrashRecovery(unittest.TestCase):
         self.assertEqual(h.submits(), 1)
 
 
+MS_NOW = datetime(2026, 10, 27, 15, 0, tzinfo=timezone.utc)   # Tue 11:00 New York
+
+
+def ms_source(**kw):
+    """A D1 mock source (fixture). Default: regular session open at MS_NOW."""
+    from bot.market_clock import MockMarketStatusSource, SourceResult, STATUS_OK
+    base = dict(status=STATUS_OK, is_open=True,
+                session_open_utc=MS_NOW.replace(hour=13, minute=30),
+                session_close_utc=MS_NOW.replace(hour=20, minute=0),
+                next_close_utc=MS_NOW.replace(hour=20, minute=0), calendar_present=True)
+    base.update(kw)
+    stamp = base.pop("_stamp", True)
+    return MockMarketStatusSource(SourceResult(**base), stamp_fetched_at=stamp)
+
+
+def market_state(now=MS_NOW, sources=None, **kw):
+    """market_state() over the REAL D1 guard with a fixture source."""
+    from bot.paper_loop_d2.risk_gate import make_market_state_provider
+    return make_market_state_provider(
+        sources=[ms_source(**kw)] if sources is None else sources, clock=lambda: now)
+
+
 class D23RiskAuthorityReal(unittest.TestCase):
     """The real M14 engine on a temp signals DB decides the entry."""
 
@@ -578,7 +600,8 @@ class D23RiskAuthorityReal(unittest.TestCase):
     def test_allow_and_block(self):
         from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
         ok_db = self._db({})
-        g = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(ok_db))
+        g = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(ok_db),
+                                     market_state=market_state(), clock=lambda: MS_NOW)
         allowed, why, did = g(symbol="AAA", side="long", notional_usd=100.0, stop_loss=95.0,
                               take_profit=110.0)
         self.assertEqual((allowed, why), (True, "risk_authority_allow"))
@@ -589,20 +612,172 @@ class D23RiskAuthorityReal(unittest.TestCase):
         self.assertEqual(r["entry"]["state"], "SUBMITTED")
         self.assertEqual(h.orders()[0]["risk_decision_id"] is not None, True)
         kill_db = self._db({"global.kill_switch": True})
-        g2 = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(kill_db))
+        g2 = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(kill_db),
+                                      market_state=market_state(), clock=lambda: MS_NOW)
         allowed, why, _ = g2(symbol="AAA", side="long", notional_usd=100.0, stop_loss=95.0,
                              take_profit=110.0)
         self.assertFalse(allowed)
         self.assertIn("global_kill", why)
         low = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(ok_db),
+                                       market_state=market_state(), clock=lambda: MS_NOW,
                                        authority_name="PAPER_ONLY")
         self.assertFalse(low(symbol="AAA", side="long", notional_usd=1.0, stop_loss=0.5,
                              take_profit=2.0)[0])
-        broken = make_risk_authority_gate(conn_factory=lambda: 1 / 0)
+        broken = make_risk_authority_gate(conn_factory=lambda: 1 / 0,
+                                          market_state=market_state(), clock=lambda: MS_NOW)
         self.assertEqual(broken(symbol="AAA", side="long", notional_usd=1.0, stop_loss=0.5,
                                 take_profit=2.0)[:2], (False, "risk_authority_error:ZeroDivisionError"))
         with self.assertRaises(ValueError):
-            make_risk_authority_gate(conn_factory=lambda: None, broker_scope="ibkr_live")
+            make_risk_authority_gate(conn_factory=lambda: None, broker_scope="ibkr_live",
+                                     market_state=market_state())
+
+    def test_closed_market_blocks_before_the_real_engine(self):
+        from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
+        ok_db = self._db({})
+        g = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(ok_db),
+                                     market_state=market_state(is_open=False),
+                                     clock=lambda: MS_NOW)
+        allowed, why, did = g(symbol="AAA", side="long", notional_usd=100.0,
+                              stop_loss=95.0, take_profit=110.0)
+        self.assertEqual((allowed, did), (False, None))
+        self.assertEqual(why, "market_state_block:market_not_open:market_closed")
+        with sqlite3.connect(ok_db) as c:      # no decision row was written
+            n = c.execute("SELECT COUNT(*) FROM risk_decisions").fetchone()[0]
+        self.assertEqual(n, 0)
+
+
+class D23MarketStateBoundary(unittest.TestCase):
+    """A09: the risk gate verifies market state itself on every call, so it
+    cannot be bypassed by calling it directly (outside the scheduler) with the
+    market closed, on a holiday, or on a stale / unavailable clock."""
+
+    def setUp(self):
+        from unittest import mock
+        import bot.risk_authority as RA
+        self.calls = []
+
+        def fake_preflight(conn, **kw):
+            self.calls.append(kw)
+            return SimpleNamespace(allowed=True, reason_codes=[], decision_id="dec-ok")
+        p = mock.patch.object(RA, "run_risk_preflight", fake_preflight)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def gate(self, state, now=MS_NOW, **kw):
+        from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
+        return make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(":memory:"),
+                                        market_state=state, clock=lambda: now, **kw)
+
+    def call(self, g):
+        return g(symbol="AAA", side="long", notional_usd=100.0, stop_loss=95.0,
+                 take_profit=110.0)
+
+    def blocked(self, state, expect, now=MS_NOW, **kw):
+        allowed, why, did = self.call(self.gate(state, now=now, **kw))
+        self.assertEqual((allowed, did), (False, None), why)
+        self.assertEqual(why, "market_state_block:" + expect)
+        self.assertEqual(self.calls, [], "preflight must not be reached")
+
+    def test_verified_open_reaches_preflight_with_market_open_true(self):
+        self.assertEqual(self.call(self.gate(market_state())),
+                         (True, "risk_authority_allow", "dec-ok"))
+        self.assertEqual(len(self.calls), 1)
+        self.assertIs(self.calls[0]["market_open"], True)
+
+    def test_closed_after_hours(self):
+        late = MS_NOW.replace(hour=21)
+        self.blocked(market_state(now=late), "market_not_open:market_closed", now=late)
+
+    def test_holiday(self):
+        # the source reports closed with no session on the calendar (holiday)
+        self.blocked(market_state(is_open=False, session_open_utc=None,
+                                  session_close_utc=None, calendar_present=False),
+                     "market_not_open:market_closed")
+
+    def test_open_flag_without_calendar(self):
+        self.blocked(market_state(session_open_utc=None, session_close_utc=None,
+                                  calendar_present=False),
+                     "market_not_open:market_status_source_unavailable")
+
+    def test_stale_clock_reading(self):
+        self.blocked(market_state(_stamp=False,
+                                  fetched_at_utc=MS_NOW - timedelta(minutes=5),
+                                  as_of_utc=MS_NOW - timedelta(minutes=5)),
+                     "market_not_open:market_status_source_stale")
+
+    def test_decision_aged_before_the_gate_used_it(self):
+        # D1 said open when asked, but the gate is evaluated 2 minutes later
+        self.blocked(market_state(now=MS_NOW), "market_state_stale",
+                     now=MS_NOW + timedelta(minutes=2))
+        self.blocked(market_state(now=MS_NOW + timedelta(minutes=1)),
+                     "market_state_from_future")
+
+    def test_session_already_ended(self):
+        from bot.market_clock.decision import market_open as open_decision
+        d = open_decision(market_calendar_id="US_EQ", symbol=None, source="mock",
+                          source_status="ok", as_of_utc=MS_NOW.isoformat(),
+                          fetched_at_utc=MS_NOW.isoformat(), next_open_utc=None,
+                          next_close_utc=(MS_NOW - timedelta(seconds=1)).isoformat())
+        self.blocked(lambda: d, "market_session_ended")
+
+    def test_unavailable_or_absent_calendar_source(self):
+        from bot.market_clock import STATUS_UNAVAILABLE, STATUS_NO_CREDENTIALS
+        self.blocked(market_state(status=STATUS_UNAVAILABLE, is_open=None),
+                     "market_not_open:market_status_source_unavailable")
+        self.blocked(market_state(status=STATUS_NO_CREDENTIALS, is_open=None),
+                     "market_not_open:market_status_no_credentials")
+        self.blocked(market_state(sources=[]),
+                     "market_not_open:market_status_source_unavailable")
+
+    def test_provider_errors_and_forgeries(self):
+        self.blocked(lambda: 1 / 0, "market_state_error:ZeroDivisionError")
+        for forged in (True, "market_open", (True, "market_open"),
+                       SimpleNamespace(may_submit=True, reason="market_open",
+                                       market_calendar_id="US_EQ", stale=False,
+                                       inconsistent=False, unsupported=False,
+                                       regular_session_only=True,
+                                       fetched_at_utc=MS_NOW.isoformat(),
+                                       next_close_utc=None)):
+            self.blocked(lambda f=forged: f, "market_state_untrusted_type")
+
+    def test_provider_adapter_never_raises(self):
+        from unittest import mock
+        import bot.market_clock as MC
+        with mock.patch.object(MC, "evaluate_market_clock", side_effect=RuntimeError("x")):
+            d = market_state()()
+        self.assertIs(d.may_submit, False)
+        self.assertEqual(d.reason, "market_clock_internal_error")
+
+    def test_direct_invocation_cannot_skip_market_state(self):
+        from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
+        with self.assertRaises(TypeError):
+            make_risk_authority_gate(conn_factory=lambda: None)          # no provider
+        with self.assertRaises(ValueError):
+            make_risk_authority_gate(conn_factory=lambda: None, market_state=None)
+        with self.assertRaises(ValueError):
+            make_risk_authority_gate(conn_factory=lambda: None, market_state=True)
+
+    def test_scheduler_d1_pass_does_not_override_the_boundary(self):
+        # The loop's own d1_gate says open, but by the time the risk gate runs
+        # the market state says closed: the entry is blocked, nothing submitted.
+        h = LoopHarness(self)
+        h.loop = h.make_loop(risk_gate=self.gate(market_state(is_open=False)))
+        r = h.tick()
+        self.assertIsNone(r["entry"])
+        self.assertEqual(r["entry_block"],
+                         "risk:market_state_block:market_not_open:market_closed")
+        self.assertEqual(h.submits(), 0)
+        self.assertEqual(self.calls, [])
+
+    def test_static_no_literal_market_open_true(self):
+        for p in sorted((REPO / "bot" / "paper_loop_d2").glob("*.py")) + [
+                REPO / "tools" / "paper_loop" / "m21_1extra_d2_3_scheduler.py"]:
+            for node in ast.walk(ast.parse(p.read_text())):
+                if isinstance(node, ast.keyword) and node.arg == "market_open":
+                    self.assertNotIsInstance(node.value, ast.Constant,
+                                             "%s passes a literal market_open" % p.name)
+        src = (REPO / "tools" / "paper_loop" / "m21_1extra_d2_3_scheduler.py").read_text()
+        self.assertIn("market_state=make_market_state_provider()", src)
 
 
 class FakeIBValue(SimpleNamespace):
