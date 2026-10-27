@@ -171,6 +171,22 @@ class D3_Engine(unittest.TestCase):
                 n_trades += r["trades_m17"]
         self.assertGreater(n_trades, 100)
 
+    def test_parity_harness_detects_a_difference(self):
+        b = next(iter(_market(n_symbols=1, n_sessions=600, seed=9).bars.values()))
+        r = PAR.compare(b, "S", research_overrides={"slippage_bps": 6.0})
+        self.assertTrue(any("entry_price" in x for x in r["mismatches"]))
+        self.assertTrue(any("pnl_absolute" in x for x in r["mismatches"]))
+
+    def test_cash_check_reserves_the_entry_fee(self):
+        n = 6
+        bars = {s: _bars([FLAT] * n) for s in "ABCDE"}
+        sigs = {s: _sig(n, entries=[2], score=i) for i, s in enumerate("ABCDE")}
+        res = E.run(bars, sigs, G.ExitSpec(stop_atr=1, target_atr=None), G.RiskSpec(0.02, 0.25),
+                    E.EngineConfig(max_positions=10, max_gross_exposure=10.0, fee_bps=50.0))
+        self.assertGreater(res.skipped["insufficient_cash"] + len(res.trades), 4)
+        self.assertGreaterEqual(res.meta["min_cash"], 0.0)
+        self.assertLess(res.meta["min_cash"], 200.0)
+
     def test_next_open_execution_and_accounting_identity(self):
         b = _bars([FLAT] * 5 + [(101, 103, 100, 102)] * 5 + [FLAT] * 5)
         res = E.run({"A": b}, {"A": _sig(15, entries=[4], exits=[9])}, G.ExitSpec(stop_atr=50), G.RiskSpec(),
@@ -273,6 +289,10 @@ class D4_Search(unittest.TestCase):
         self.assertEqual(sel["n_trials_family"], 5)
         self.assertEqual(sel["dsr_best_isolated"]["n_trials"], 5.0)
         self.assertLessEqual(sel["best_isolated"]["plateau"], sel["best_isolated"]["sharpe_ann"] + 1e-12)
+        df2 = SR.evaluate(gs, m.bars, ledger=L, family_id="d:test", data_digest=SR.data_digest(m.bars),
+                          keep_equity=True)
+        sel2 = SR.select(df2, axes, ledger=L, family_id="d:test")
+        self.assertEqual((sel2["n_trials_family"], sel2["dsr_best_isolated"]["n_trials"]), (10, 10.0))
 
     def test_plateau_is_the_neighbourhood_median(self):
         axes = {"a": [1, 2, 3], "b": [1, 2]}

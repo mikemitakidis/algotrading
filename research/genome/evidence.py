@@ -179,6 +179,7 @@ def search_section(c: DConfig) -> Dict:
                                  for i, r in df.iterrows()]}
         _log("search %s: %d points" % (name, len(df)))
     out["ledger"] = {"entries": len(L.entries()), "verified": L.verify().ok, "tip": L.tip_hash}
+    L.close()
     return out
 
 

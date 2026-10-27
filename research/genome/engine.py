@@ -142,6 +142,7 @@ def run(bars: Mapping[str, pd.DataFrame], sigs: Mapping[str, pd.DataFrame], exit
     skipped = {k: 0 for k in SKIP_REASONS}
     eq_vals = np.empty(len(timeline))
     seen = 0
+    min_cash = cash
 
     def close(s, px, ts, reason, row, slip_per_share):
         nonlocal cash
@@ -225,6 +226,7 @@ def run(bars: Mapping[str, pd.DataFrame], sigs: Mapping[str, pd.DataFrame], exit
                     continue
             efee = qty * fill * fee
             cash -= qty * fill + efee
+            min_cash = min(min_cash, cash)
             rps = (fill - stop) if stop is not None and stop < fill else 0.0
             pos[s] = _Pos(s, qty, fill, stop, target, k, t, efee, qty * (fill - O[s][k]),
                           float(a) if np.isfinite(a) else float("nan"), rps, -np.inf)
@@ -261,7 +263,7 @@ def run(bars: Mapping[str, pd.DataFrame], sigs: Mapping[str, pd.DataFrame], exit
     if len(timeline):
         eq_vals[-1] = cash
     return EngineResult(trades, pd.Series(eq_vals, index=timeline, name="equity"), skipped, seen, asdict(cfg),
-                        genome_id)
+                        genome_id, {"min_cash": float(min_cash)})
 
 
 def run_genome(g: Genome, bars: Mapping[str, pd.DataFrame], cfg: EngineConfig = EngineConfig(),

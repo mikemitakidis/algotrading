@@ -36,7 +36,9 @@ def m17_config(symbol: str, *, fast: int, slow: int, stop_pct: Optional[float], 
 
 def compare(bars: pd.DataFrame, symbol: str = "S", *, fast: int = 10, slow: int = 30,
             stop_pct: Optional[float] = 0.05, target_pct: Optional[float] = 0.10, equity: float = 10_000.0,
-            fee_bps: float = 5.0, slippage_bps: float = 5.0) -> Dict:
+            fee_bps: float = 5.0, slippage_bps: float = 5.0, research_overrides: Optional[Dict] = None) -> Dict:
+    """`research_overrides` deliberately mis-configures the research side (used to prove that the
+    comparison detects differences)."""
     cfg = m17_config(symbol, fast=fast, slow=slow, stop_pct=stop_pct, target_pct=target_pct, equity=equity,
                      fee_bps=fee_bps, slippage_bps=slippage_bps)
     b = bars.reset_index(drop=True)
@@ -48,6 +50,9 @@ def compare(bars: pd.DataFrame, symbol: str = "S", *, fast: int = 10, slow: int 
     ecfg = EngineConfig(initial_equity=equity, fee_bps=fee_bps, slippage_bps=slippage_bps, max_positions=1,
                         max_gross_exposure=1e9, stop_mode="pct", stop_pct=stop_pct, target_pct=target_pct,
                         m17_compat=True)
+    if research_overrides:
+        from dataclasses import replace as _replace
+        ecfg = _replace(ecfg, **research_overrides)
     res = run({cfg.request.symbol: b}, {cfg.request.symbol: rs}, ExitSpec(), RiskSpec(0.01, 0.25), ecfg)
     m, r = led.trades, res.trades
     mism: List[str] = []
