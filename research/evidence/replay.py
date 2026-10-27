@@ -119,7 +119,9 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
 
     Rule failures -> blocked_gate (reason = rule name); an open position on the
     same symbol -> blocked_risk ('symbol_exposure'); exceeding the daily cap
-    -> skipped_capacity ('daily_entry_cap'); otherwise -> executed (meaning
+    -> skipped_capacity ('daily_entry_cap'); a candidate whose release is
+    ``NO_POSITION`` (unfillable) -> unfillable, using no slot and no daily
+    capacity; otherwise -> executed (meaning
     "would have been sent to the paper loop" in this replay). Non-eligible
     candidates pass through unchanged.
 
@@ -150,6 +152,12 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
                 open_until[e.symbol] is None or e.decision_ts_utc < open_until[e.symbol]):
             out.append(replace(e, stage="blocked_risk", reasons=("symbol_exposure",)))
             continue
+        if one_open_per_symbol and isinstance(release_times.get(e.candidate_id), str) \
+                and release_times[e.candidate_id] == NO_POSITION:
+            # Third review (PR #6): an unfillable candidate could never hold a position. It is recorded as
+            # unfillable, never as executed, and it consumes no daily entry capacity.
+            out.append(replace(e, stage="unfillable", reasons=("no_position_possible",)))
+            continue
         day = e.decision_ts_utc.floor("D")
         if max_entries_per_day is not None and per_day.get(day, 0) >= max_entries_per_day:
             out.append(replace(e, stage="skipped_capacity", reasons=("daily_entry_cap",)))
@@ -158,9 +166,7 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
             if e.candidate_id not in release_times:
                 raise ValueError("release map has no entry for accepted candidate %s (%s): capacity is unknown, "
                                  "refusing to treat the slot as free" % (e.candidate_id, e.symbol))
-            rel = release_times[e.candidate_id]
-            if not (isinstance(rel, str) and rel == NO_POSITION):
-                open_until[e.symbol] = rel
+            open_until[e.symbol] = release_times[e.candidate_id]
         per_day[day] = per_day.get(day, 0) + 1
         out.append(replace(e, stage="executed"))
     return out

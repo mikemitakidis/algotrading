@@ -30,6 +30,8 @@ STAGES: Tuple[str, ...] = (
     "skipped_capacity",   # eligible, allowed, but no slot / daily cap reached
     "executed",           # an order was placed (paper or live)
     "simulated_entry",    # accepted and filled by a research backtest engine: simulated, never an order
+    "unfillable",         # accepted by the rules but no position was possible (no fill bar, no ATR, ...):
+                          # never executed, uses no capacity
     "historical_anchor",  # replayed from history (M18 anchors / scanner replica)
     "shadow",             # scored by a challenger in shadow mode
 )
