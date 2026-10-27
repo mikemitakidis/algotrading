@@ -252,5 +252,26 @@ class F3_Inventory(unittest.TestCase):
         self.assertEqual(inv["has_bars"], bool(inv["bar_files"]))
 
 
+class F4_InactiveCIExample(unittest.TestCase):
+    def test_ci_example_lists_every_research_suite_and_stays_inactive(self):
+        """Comprehensive audit (PR #8): the inactive example omitted the agents and integration suites. It must
+        name all eight research suites and every test_m21_research_*.py present in the tree, plus the guards,
+        and must not be an active workflow."""
+        root = Path(__file__).resolve().parent
+        ex = (root / "docs/research/ci/research-offline-ci.yml.example").read_text()
+        listed = set(ex.split("python _test_isolation.py", 1)[1].replace("\\", " ").split())
+        required = {"test_m21_research_%s" % k for k in ("foundation", "integrity", "evidence", "mllab", "genome",
+                                                         "data", "agents", "integration")}
+        present = {p.stem for p in root.glob("test_m21_research_*.py")}
+        self.assertFalse(required - listed, sorted(required - listed))
+        self.assertFalse(present - listed, sorted(present - listed))
+        for g in ("test_m17_backtesting.G10_Hygiene", "test_m18_ml.G10_Hygiene", "test_hygiene_suite",
+                  "test_quarantine_guard", "test_m21_c5b_protected_baselines", "test_m21_c5a_test_isolation"):
+            self.assertIn(g, listed)
+        self.assertIn("INACTIVE EXAMPLE", ex)
+        self.assertIn("contents: read", ex)
+        self.assertFalse(list((root / ".github" / "workflows").glob("research-offline-ci*")))
+
+
 if __name__ == "__main__":
     unittest.main()
