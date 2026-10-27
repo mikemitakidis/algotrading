@@ -205,6 +205,27 @@ class F4_Bars(unittest.TestCase):
         with self.assertRaises(ValueError):
             B.resample(mt["1H"], "15m", source_tf="1H")
 
+    def test_resample_ors_quality_flag_bits(self):
+        """Comprehensive audit (PR #4): quality_flags is a bitmask; max() lost bits (max(1, 8) = 8 drops
+        zero-volume). Aggregation is a bitwise OR at every coarser timeframe, with the real M16 constants."""
+        from bot.historical.quality import QF_BACKFILLED_GAP, QF_DUPLICATE_KEPT, QF_OUTLIER_WARNED, QF_ZERO_VOLUME
+        m = generate(MarketSpec(n_symbols=1, n_sessions=2, timeframe="15m", seed=1))
+        b = m.bars["S000"].copy()
+        b["quality_flags"] = 0
+        b.loc[0, "quality_flags"] = QF_ZERO_VOLUME                      # first 1H bucket of day 0
+        b.loc[1, "quality_flags"] = QF_BACKFILLED_GAP                   # same 1H bucket
+        b.loc[5, "quality_flags"] = QF_OUTLIER_WARNED | QF_DUPLICATE_KEPT   # second 1H bucket, first 4H bucket
+        b.loc[20, "quality_flags"] = 1 << 12                            # unknown bit, second 4H bucket (26 bars per session)
+        mt = B.multi_timeframe(b)
+        self.assertEqual(int(mt["1H"]["quality_flags"].iloc[0]), QF_ZERO_VOLUME | QF_BACKFILLED_GAP)
+        self.assertEqual(int(mt["1H"]["quality_flags"].iloc[1]), QF_OUTLIER_WARNED | QF_DUPLICATE_KEPT)
+        self.assertEqual(int(mt["4H"]["quality_flags"].iloc[0]),
+                         QF_ZERO_VOLUME | QF_BACKFILLED_GAP | QF_OUTLIER_WARNED | QF_DUPLICATE_KEPT)
+        self.assertEqual(int(mt["4H"]["quality_flags"].iloc[1]), 1 << 12)
+        self.assertEqual(int(mt["1D"]["quality_flags"].iloc[0]),
+                         QF_ZERO_VOLUME | QF_BACKFILLED_GAP | QF_OUTLIER_WARNED | QF_DUPLICATE_KEPT | (1 << 12))
+        self.assertEqual(int(mt["1D"]["quality_flags"].iloc[1]), 0)
+
     def test_resample_refuses_real_calendar_bars(self):
         """Synthetic-session helpers must not bucket real exchange data
         (review of PR #4, P2): US summer bars at 13:30-20:00 UTC are refused."""
