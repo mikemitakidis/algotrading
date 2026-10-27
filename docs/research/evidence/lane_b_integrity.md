@@ -41,4 +41,4 @@ Mean PBO is 0.47 on null markets (about 0.5 means picking the in-sample best var
 - Authority-signed timestamp, first evaluation: metric dsr >= 0.95: not met.
 - Second evaluation: refused: pre-registration 86dd105c8602 was already evaluated (one-shot).
 
-_Runtime 62.1 s. Reproduce with the command above; all randomness is seeded._
+_Runtime 41.1 s. Reproduce with the command above; all randomness is seeded._

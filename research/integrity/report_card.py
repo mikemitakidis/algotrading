@@ -16,13 +16,27 @@ Every number in the card is computed here from the inputs. ``unsupported_numbers
 lets reviewers (and the lane E Reporter) check that narrative text quotes only
 numbers that are in the card.
 
-Input provenance (PR #5 review, P2): ``n_trials``, ``effective_n`` and the
-family matrix are claims. PASS is only possible when they are reconciled with
-the immutable ledger: a ledger and the ledgered trial ids must be supplied,
-every id must belong to the family, and ``n_trials`` may not understate the
-ledger's family count. Without that the card is a local diagnostic and can be
-at best INCONCLUSIVE. A caller-supplied effective N can only LOWER the
-internally estimated one, never raise it.
+Input provenance. ``n_trials``, ``effective_n``, the outcome series and the
+family matrix are claims until proved. Two separate checks, both required for
+PASS:
+
+* ``ledger_metadata_reconciled`` (first review, P2): a ledger and its trial
+  ids are supplied, every id belongs to the family, ``n_trials`` does not
+  understate the ledger's family count, the matrix is no wider than
+  ``n_trials``, and the chain verifies (against ``expected_tip`` when one is
+  supplied from outside the research process).
+* ``outcomes_verified`` (second review, P1): the evaluated ``gross`` series
+  must be EXACTLY the series the candidate trial committed in its ledger
+  record (``artifacts['gross']``), and every family-matrix column j must be
+  exactly the series trial ``trial_ids[j]`` committed
+  (``artifacts['family_series']``). Substituted or edited outcomes with
+  genuine ledger ids therefore fail.
+
+``provenance_verified`` is 1 only when both hold. Outcome provenance proves
+the card evaluated what the ledger recorded; it does not prove the recorded
+series came from the claimed computation (that requires recomputation from
+the snapshot and code identity — see ``research.integrity.provenance``). A
+caller-supplied effective N can only LOWER the internal estimate.
 """
 from __future__ import annotations
 
@@ -37,6 +51,7 @@ from research.integrity import stats as S
 from research.integrity.controls import BatteryResult
 from research.integrity.ledger import Ledger
 from research.integrity.pbo import pbo as _pbo
+from research.integrity.provenance import outcome_digest
 from research.integrity.reality_check import hansen_spa, white_reality_check
 
 DISCLAIMER = ("PASS means the candidate survived this offline gauntlet on this data. It is not a "
@@ -101,14 +116,18 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
              effective_n: Optional[float] = None, family_matrix=None,
              canary: Optional[BatteryResult] = None,
              cfg: GauntletConfig = GauntletConfig(), ledger: Optional[Ledger] = None,
-             trial_ids: Sequence[str] = ()) -> ReportCard:
+             trial_ids: Sequence[str] = (), candidate_trial_id: Optional[str] = None,
+             expected_tip: Optional[str] = None) -> ReportCard:
     x = np.asarray(gross, dtype=float).ravel()
     reasons_fail, reasons_inc = [], []
     if isinstance(n_trials, bool) or not isinstance(n_trials, (int, np.integer)) or n_trials < 1:
         raise ValueError("n_trials must be an integer >= 1, got %r" % (n_trials,))
     if effective_n is not None and not (np.isfinite(effective_n) and effective_n > 0):
         raise ValueError("effective_n must be finite and > 0 when given, got %r" % (effective_n,))
-    prov_ok, prov_why = _provenance(ledger, family_id, n_trials, trial_ids, family_matrix)
+    meta_ok, meta_why = _provenance(ledger, family_id, n_trials, trial_ids, family_matrix, expected_tip)
+    out_ok, out_why = (_outcomes(ledger, trial_ids, candidate_trial_id, x, family_matrix) if meta_ok
+                       else (False, "metadata not reconciled"))
+    prov_ok = meta_ok and out_ok
     nums: Dict[str, float] = {"n_obs": float(len(x)), "n_trials": float(n_trials),
                               "cost_per_obs": float(cost_per_obs)}
     if len(x) < 10 or not np.isfinite(x).all():
@@ -172,9 +191,14 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
         reasons_inc.append("pipeline canary battery missing or not CALIBRATED")
     if family_matrix is None:
         reasons_inc.append("no family matrix: PBO / SPA not computed")
+    nums["ledger_metadata_reconciled"] = 1.0 if meta_ok else 0.0
+    nums["outcomes_verified"] = 1.0 if out_ok else 0.0
     nums["provenance_verified"] = 1.0 if prov_ok else 0.0
-    if not prov_ok:
-        reasons_inc.append("inputs not reconciled with the immutable ledger (%s): local diagnostic only" % prov_why)
+    nums["ledger_tip_anchored"] = 1.0 if (meta_ok and expected_tip is not None) else 0.0
+    if not meta_ok:
+        reasons_inc.append("inputs not reconciled with the immutable ledger (%s): local diagnostic only" % meta_why)
+    elif not out_ok:
+        reasons_inc.append("outcomes not tied to ledgered trial artifacts (%s): local diagnostic only" % out_why)
     if reasons_fail:
         verdict, reasons = "FAIL", reasons_fail + reasons_inc
     elif reasons_inc:
@@ -188,7 +212,7 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
 
 
 def _provenance(ledger: Optional[Ledger], family_id: str, n_trials: int, trial_ids: Sequence[str],
-                family_matrix) -> Tuple[bool, str]:
+                family_matrix, expected_tip: Optional[str] = None) -> Tuple[bool, str]:
     if ledger is None:
         return False, "no ledger supplied"
     if not trial_ids:
@@ -205,9 +229,32 @@ def _provenance(ledger: Optional[Ledger], family_id: str, n_trials: int, trial_i
         return False, "n_trials %d understates the ledger's %d family trials" % (n_trials, counted)
     if family_matrix is not None and np.asarray(family_matrix).shape[1] > n_trials:
         return False, "family matrix has more columns than n_trials"
-    if not ledger.verify().ok:
-        return False, "ledger chain does not verify"
+    if not ledger.verify(expected_tip).ok:
+        return False, "ledger chain does not verify" + (" against the anchored tip" if expected_tip else "")
     return True, "reconciled"
+
+
+def _outcomes(ledger: Ledger, trial_ids: Sequence[str], candidate_trial_id: Optional[str], x: np.ndarray,
+              family_matrix) -> Tuple[bool, str]:
+    entries = {e.ref_id: e.payload for e in ledger.entries("trial")}
+    if candidate_trial_id is None:
+        return False, "no candidate trial id: the evaluated series cannot be traced to a trial"
+    if candidate_trial_id not in trial_ids:
+        return False, "candidate trial id is not among the supplied trial ids"
+    want = entries[candidate_trial_id].get("artifacts", {}).get("gross")
+    if not want:
+        return False, "candidate trial recorded no 'gross' outcome artifact"
+    if outcome_digest(x) != want:
+        return False, "evaluated gross series differs from the series the candidate trial committed"
+    if family_matrix is not None:
+        fm = np.asarray(family_matrix, dtype=float)
+        if fm.ndim != 2 or fm.shape[1] != len(trial_ids):
+            return False, "family matrix columns do not correspond one-to-one to the trial ids"
+        for j, tid in enumerate(trial_ids):
+            want = entries[tid].get("artifacts", {}).get("family_series")
+            if not want or outcome_digest(fm[:, j]) != want:
+                return False, "family matrix column %d differs from trial %s's committed series" % (j, tid)
+    return True, "outcomes match ledgered artifacts"
 
 
 _NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
