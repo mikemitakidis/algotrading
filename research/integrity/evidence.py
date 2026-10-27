@@ -192,10 +192,10 @@ def run(out_dir: Path, n_nulls: int = 100, n_per_effect: int = 30,
     d_unt = register(led, p_unt)
     attest(led, d_unt, server_timestamp_utc="2026-10-26T23:59:00+00:00", source="declared by caller",
            evidence_url="(none)")
-    untrusted = evaluate_once(led, d_unt, value=0.99, effective_n=40,
-                              data_first_ts_utc="2027-01-02T21:00:00+00:00", data_digest="example")
     # 2) An authority-signed attestation (local demo authority; in operation a separately held key).
     demo = Authority("local-demo-authority", stream(7, "lane_b", "demo-key").bytes(32))
+    untrusted = evaluate_once(led, d_unt, value=0.99, effective_n=40, attestation_verifier=demo.verifier(),
+                              data_first_ts_utc="2027-01-02T21:00:00+00:00", data_digest="example")
     payload = attestation_payload(d, "2026-10-26T23:59:00+00:00", "example: github comment created_at",
                                   "(illustrative; a real run uses the actual comment URL)")
     attest(led, d, **{k: payload[k] for k in ("server_timestamp_utc", "source", "evidence_url")},
