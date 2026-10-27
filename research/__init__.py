@@ -23,7 +23,7 @@ Lanes (each on its own ``research/*`` branch and draft PR):
   C  research.mllab      advanced model laboratory
   D  research.genome     strategy-as-data and multi-symbol backtesting
   E  research.agents     offline research-agent foundations
-  F  research.data       data inventory, quality and manifests
+  F  research.dataqa       data inventory, quality and manifests
 Shared: research.common (hashing, RNG streams, synthetic markets, bars).
 """
 

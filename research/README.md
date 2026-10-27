@@ -10,7 +10,7 @@ Offline research code for the M21 research lanes (Issues #2 and #3). Nothing her
 | `research.mllab` | C | B14–B17, B19, D07 | Model laboratory: baselines vs boosted trees, ensembles, meta-labeling, regimes, uncertainty, abstention |
 | `research.genome` | D | B09–B11, A15 | Strategy-as-data, the four templates, validator, multi-symbol backtester |
 | `research.agents` | E | B21, B22, D06 | Offline research-agent foundations: permissions, knowledge library, deterministic mock flow (no execution of generated code) |
-| `research.data` | F | B01, B02, E05, E09 | Data inventory, OHLCV quality audit, snapshot manifests, vendor memo |
+| `research.dataqa` | F | B01, B02, E05, E09 | Data inventory, OHLCV quality audit, snapshot manifests, vendor memo |
 
 ## Rules
 
