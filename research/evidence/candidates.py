@@ -29,6 +29,7 @@ STAGES: Tuple[str, ...] = (
     "blocked_risk",       # eligible but blocked by the Risk Authority
     "skipped_capacity",   # eligible, allowed, but no slot / daily cap reached
     "executed",           # an order was placed (paper or live)
+    "simulated_entry",    # accepted and filled by a research backtest engine: simulated, never an order
     "historical_anchor",  # replayed from history (M18 anchors / scanner replica)
     "shadow",             # scored by a challenger in shadow mode
 )

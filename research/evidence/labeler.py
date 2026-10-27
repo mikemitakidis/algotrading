@@ -108,8 +108,31 @@ class PathLabel:
 FinerBars = Callable[[str, pd.Timestamp, pd.Timestamp], Optional[pd.DataFrame]]
 
 
+SYNTHETIC_PROVIDERS = ("synthetic",)
+
+
 def bar_open_times(ts_close: pd.Series, timeframe: str) -> pd.Series:
+    """SYNTHETIC-calendar bar opens: close minus the nominal bar length (a daily bar = the 390-minute US
+    regular session). Correct only for ``research.common.synthetic`` data; real bars must carry their own
+    ``bar_open_ts`` (see ``resolve_bar_opens``)."""
     return pd.to_datetime(ts_close, utc=True) - pd.Timedelta(TF_MINUTES[timeframe], unit="m")
+
+
+def resolve_bar_opens(bars: pd.DataFrame, timeframe: str, source: "SourceInfo") -> pd.Series:
+    """Bar-open times for labelling (second review, P2). Real (non-synthetic) data must supply an explicit
+    ``bar_open_ts`` column from an exchange calendar or the vendor's own bar start; the synthetic
+    390-minute convention is refused for it, because DST, half days, extended hours and vendor daily
+    stamps make it wrong."""
+    if "bar_open_ts" in bars.columns:
+        bo = pd.to_datetime(bars["bar_open_ts"], utc=True)
+        if bo.isna().any() or (bo >= pd.to_datetime(bars["ts_utc"], utc=True)).any():
+            raise ValueError("bar_open_ts must be present and strictly before each bar's ts_utc (close)")
+        return bo
+    if source.provider not in SYNTHETIC_PROVIDERS:
+        raise ValueError("provider %r: real data needs an explicit bar_open_ts column (exchange calendar or "
+                         "vendor bar start); the synthetic %d-minute convention is not valid for it"
+                         % (source.provider, TF_MINUTES[timeframe]))
+    return bar_open_times(bars["ts_utc"], timeframe)
 
 
 def _data_flags(o, h, l, c, v, q, ts, lo: int, hi: int, timeframe: str) -> Tuple[str, ...]:
@@ -221,7 +244,7 @@ def label_symbol(cands: List[CandidateEvent], bars: pd.DataFrame, *, timeframe: 
                  data_end_utc: Optional[pd.Timestamp] = None) -> List[PathLabel]:
     ts = pd.to_datetime(bars["ts_utc"], utc=True)
     ts_np = ts.to_numpy(dtype="datetime64[ns]")
-    open_t = bar_open_times(ts, timeframe).to_numpy(dtype="datetime64[ns]")
+    open_t = resolve_bar_opens(bars, timeframe, source).to_numpy(dtype="datetime64[ns]")
     o, h, l, c = (bars[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     v = bars["volume"].to_numpy(dtype=float)
     q = bars["quality_flags"].to_numpy() if "quality_flags" in bars else np.zeros(len(bars), dtype=np.int64)
@@ -402,5 +425,6 @@ def status_summary(labels: pd.DataFrame) -> Dict[str, float]:
     return out
 
 
-__all__ = ["STATUSES", "BLOCKING_DATA_FLAGS", "SourceInfo", "PathLabel", "bar_open_times", "validate_finer", "label_symbol",
+__all__ = ["STATUSES", "BLOCKING_DATA_FLAGS", "SYNTHETIC_PROVIDERS", "SourceInfo", "PathLabel", "bar_open_times",
+           "resolve_bar_opens", "validate_finer", "label_symbol",
            "label_candidates", "atr_asof", "status_summary"]
