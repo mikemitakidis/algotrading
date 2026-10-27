@@ -35,13 +35,11 @@ from research.evidence import parity
 from research.evidence.candidates import Bracket, CandidateEvent, make_candidate_id, stage_counts
 from research.evidence.effective_n import effective_n
 from research.evidence.labeler import SourceInfo, atr_asof, label_candidates, status_summary
-from research.evidence.replay import apply_gates, scanner_stage_candidates
+from research.evidence.replay import apply_gates, position_release_times, scanner_stage_candidates
 
 
-def _eff(lab: pd.DataFrame) -> Dict[str, float]:
+def _eff(lab: pd.DataFrame) -> Dict:
     d = lab[lab["status"] == "definitive"]
-    if len(d) < 3:
-        return {"n_raw": float(len(d)), "n_effective": float(len(d))}
     return effective_n(d["r_net"].to_numpy(), dates=pd.to_datetime(d["decision_ts_utc"], utc=True).dt.floor("D").astype(str).to_numpy(),
                        symbols=d["symbol"].to_numpy(), sectors=d["sector"].to_numpy(),
                        entry_idx=d["entry_idx"].to_numpy(), exit_idx=d["exit_idx"].to_numpy())
@@ -60,9 +58,11 @@ def part_stage_replay(n_symbols: int, n_sessions: int, seed: int) -> Dict:
     rules = {"low_volume": lambda e: e.features.get("vol_ratio", 1.0) < 0.8,
              "rsi_extreme": lambda e: (e.features.get("rsi", 50.0) > 70.0) if e.direction == "long"
              else (e.features.get("rsi", 50.0) < 30.0)}
+    src = SourceInfo("synthetic", "15m", True)
+    pre = label_candidates(cands, m.bars, timeframe="15m", source=src)       # labels do not depend on stage
     gated = apply_gates(cands, rules, max_entries_per_day=3, one_open_per_symbol=True,
-                        holding=pd.Timedelta(26 * 15, unit="m"))
-    lab = label_candidates(gated, m.bars, timeframe="15m", source=SourceInfo("synthetic", "15m", True))
+                        release_times=position_release_times(pre))           # bar-time capacity
+    lab = label_candidates(gated, m.bars, timeframe="15m", source=src)
     lab_exec = lab[lab["stage"] == "executed"]
     eff_all, eff_exec = _eff(lab), _eff(lab_exec)
     by_id = {c.candidate_id: c for c in gated}
@@ -185,13 +185,17 @@ def render(s: Dict) -> str:
          "Stages recorded: %s." % ", ".join("%s %d" % kv for kv in sorted(sr["stage_counts"].items())), "",
          "| learning set | definitive labels (raw N) | effective N (most conservative) | by uniqueness | two-way (date x symbol) |",
          "|---|---|---|---|---|",
-         "| executed only (what a paper loop would learn from) | %d | %.0f | %.0f | %.0f |" % (
-             ex["n_raw"], ex["n_effective"], ex.get("n_uniqueness", float("nan")), ex.get("n_twoway", float("nan"))),
-         "| every decision stage | %d | %.0f | %.0f | %.0f |" % (
-             al["n_raw"], al["n_effective"], al.get("n_uniqueness", float("nan")), al.get("n_twoway", float("nan"))),
-         "", "Multiplier: **%.1fx raw**, **%.1fx effective**. The effective multiplier is the honest one: "
-         "candidates on the same day and overlapping windows are not independent." % (
-             sr["multiplier_raw"], sr["multiplier_effective"]), "",
+         "| executed only (what a paper loop would learn from) | %d | %s | %s | %s |" % (
+             ex["n_raw"], _f(ex["n_effective"], "%.0f"), _f(ex.get("n_uniqueness", float("nan")), "%.0f"),
+             _f(ex.get("n_twoway", float("nan")), "%.0f")),
+         "| every decision stage | %d | %s | %s | %s |" % (
+             al["n_raw"], _f(al["n_effective"], "%.0f"), _f(al.get("n_uniqueness", float("nan")), "%.0f"),
+             _f(al.get("n_twoway", float("nan")), "%.0f")),
+         "", "Multiplier: **%sx raw**, **%sx effective**. The effective multiplier is the honest one: "
+         "candidates on the same day and overlapping windows are not independent. The executed-only set comes "
+         "from an ILLUSTRATIVE gate layer (3 entries/day, one open position per symbol until its labelled exit), "
+         "so both multipliers depend on that scenario." % (
+             _f(sr["multiplier_raw"], "%.1f"), _f(sr["multiplier_effective"], "%.1f")), "",
          "Label status shares (all stages): definitive %.1f %%, ambiguous %.1f %%, unobserved %.1f %%, "
          "unfillable %.1f %%, pending %.1f %%." % tuple(100 * sr["status"]["share_" + k] for k in
                                                        ("definitive", "ambiguous", "unobserved", "unfillable", "pending")),

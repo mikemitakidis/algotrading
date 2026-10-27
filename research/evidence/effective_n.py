@@ -14,6 +14,12 @@ moves. This module reports, side by side:
 * ``n_effective``   — the most conservative of the above (the headline).
 
 All are capped at the raw N.
+
+FAIL-CLOSED (PR #6 review, P1): a clustering that cannot be estimated
+(fewer than two clusters, e.g. one decision day or one sector), a zero or
+non-finite cluster variance, or a constant outcome gives NaN — never the raw
+N — and ``status`` becomes ``insufficient_evidence`` with the reasons. A NaN
+effective N must block any downstream claim or promotion.
 """
 from __future__ import annotations
 
@@ -56,20 +62,24 @@ def cluster_variance_of_mean(x: np.ndarray, groups: np.ndarray) -> float:
 
 
 def _n_from_var(x: np.ndarray, v: float) -> float:
+    """Effective N implied by a variance of the mean; NaN when not estimable."""
     s2 = x.var(ddof=1)
-    if not (np.isfinite(v) and v > 0 and s2 > 0):
-        return float(len(x))
+    if not (np.isfinite(v) and v > 0 and np.isfinite(s2) and s2 > 0):
+        return float("nan")
     return float(np.clip(s2 / v, 1.0, len(x)))
 
 
-def effective_n(values, *, dates=None, symbols=None, sectors=None, entry_idx=None, exit_idx=None) -> Dict[str, float]:
+def effective_n(values, *, dates=None, symbols=None, sectors=None, entry_idx=None, exit_idx=None) -> Dict:
     x = np.asarray(values, dtype=float)
     ok = np.isfinite(x)
     x = x[ok]
     n = len(x)
-    out: Dict[str, float] = {"n_raw": float(n)}
+    out: Dict = {"n_raw": float(n), "status": "ok", "reasons": []}
     if n < 3:
-        out["n_effective"] = float(n)
+        out.update(n_effective=float("nan"), status="insufficient_evidence", reasons=["fewer than 3 observations"])
+        return out
+    if not np.ptp(x) > 0:
+        out.update(n_effective=float("nan"), status="insufficient_evidence", reasons=["constant outcome"])
         return out
     cands = []
     if symbols is not None and entry_idx is not None and exit_idx is not None:
@@ -79,16 +89,27 @@ def effective_n(values, *, dates=None, symbols=None, sectors=None, entry_idx=Non
     for name, g in (("date", dates), ("symbol", symbols), ("sector", sectors)):
         if g is not None:
             gg = np.asarray(g)[ok]
-            out["n_cluster_" + name] = _n_from_var(x, cluster_variance_of_mean(x, gg))
-            cands.append(out["n_cluster_" + name])
+            v = _n_from_var(x, cluster_variance_of_mean(x, gg))
+            out["n_cluster_" + name] = v
+            if not np.isfinite(v):
+                out["reasons"].append("cannot estimate %s clustering (%d cluster(s))" % (name, len(np.unique(gg))))
+            cands.append(v)
     if dates is not None and symbols is not None:
         d, s = np.asarray(dates)[ok], np.asarray(symbols)[ok]
         inter = np.array(["%s|%s" % (a, b) for a, b in zip(d, s)])
         v = (cluster_variance_of_mean(x, d) + cluster_variance_of_mean(x, s)
              - cluster_variance_of_mean(x, inter))
         out["n_twoway"] = _n_from_var(x, v)
+        if not np.isfinite(out["n_twoway"]):
+            out["reasons"].append("cannot estimate two-way clustering")
         cands.append(out["n_twoway"])
-    out["n_effective"] = float(min(cands)) if cands else float(n)
+    if not cands:
+        out.update(n_effective=float("nan"), status="insufficient_evidence",
+                   reasons=["no clustering or overlap information supplied"])
+    elif not all(np.isfinite(c) for c in cands):
+        out.update(n_effective=float("nan"), status="insufficient_evidence")
+    else:
+        out["n_effective"] = float(min(cands))
     return out
 
 

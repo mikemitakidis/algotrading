@@ -11,9 +11,11 @@ records EVERY decision stage per anchor and direction, not only fires:
              inverse-probability weight in ``features['sample_weight']``
 
 ``apply_gates`` then runs an explicit, auditable gate layer over eligible
-candidates (illustrative rules for research; the production gates live in
+candidates (ILLUSTRATIVE rules for research; the production gates live in
 M19 / M14 and are not changed here) and records reason codes, so gate
-economics can be measured.
+economics can be measured. Symbol capacity uses labelled exits in bar time.
+Counts produced by this replay (e.g. "executed") are scenario-dependent
+illustrations, not a model of the production paper loop.
 """
 from __future__ import annotations
 
@@ -90,9 +92,24 @@ def scanner_stage_candidates(per_tf_bars: Dict[str, pd.DataFrame], symbol: str, 
 GateRule = Callable[[CandidateEvent], Optional[str]]
 
 
+def position_release_times(labels: pd.DataFrame) -> Dict[str, Optional[pd.Timestamp]]:
+    """When a hypothetically opened position would free its symbol slot, from
+    LABELLED exits (bar time, not wall-clock): the exit bar's close for
+    resolved, ambiguous or data-flagged windows; ``None`` (= never released
+    within the data) for pending or series-ended windows; and no entry at all
+    for unfillable ones (they never held a position)."""
+    out: Dict[str, Optional[pd.Timestamp]] = {}
+    for r in labels.itertuples(index=False):
+        if r.status == "unfillable":
+            continue
+        ex = r.exit_ts_utc
+        out[r.candidate_id] = None if ex is None or pd.isna(ex) else pd.Timestamp(ex)
+    return out
+
+
 def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
                 max_entries_per_day: Optional[int] = None, one_open_per_symbol: bool = True,
-                holding: Optional[pd.Timedelta] = None) -> List[CandidateEvent]:
+                release_times: Optional[Dict[str, Optional[pd.Timestamp]]] = None) -> List[CandidateEvent]:
     """Run rules over ELIGIBLE candidates in decision order.
 
     Rule failures -> blocked_gate (reason = rule name); an open position on the
@@ -100,9 +117,16 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
     -> skipped_capacity ('daily_entry_cap'); otherwise -> executed (meaning
     "would have been sent to the paper loop" in this replay). Non-eligible
     candidates pass through unchanged.
+
+    Capacity is bar-time (PR #6 review, P2): a position occupies its symbol
+    until its LABELLED exit (``position_release_times``), across nights and
+    weekends, never for a wall-clock duration. With one_open_per_symbol the
+    release times are required (fail closed).
     """
+    if one_open_per_symbol and release_times is None:
+        raise ValueError("one_open_per_symbol needs labelled release_times (bar-time capacity)")
     evs = sorted(events, key=lambda e: (e.decision_ts_utc, e.symbol, e.direction))
-    open_until: Dict[str, pd.Timestamp] = {}
+    open_until: Dict[str, Optional[pd.Timestamp]] = {}
     per_day: Dict[pd.Timestamp, int] = {}
     out: List[CandidateEvent] = []
     for e in evs:
@@ -113,7 +137,8 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
         if fails:
             out.append(replace(e, stage="blocked_gate", reasons=tuple(fails)))
             continue
-        if one_open_per_symbol and e.symbol in open_until and e.decision_ts_utc < open_until[e.symbol]:
+        if one_open_per_symbol and e.symbol in open_until and (
+                open_until[e.symbol] is None or e.decision_ts_utc < open_until[e.symbol]):
             out.append(replace(e, stage="blocked_risk", reasons=("symbol_exposure",)))
             continue
         day = e.decision_ts_utc.floor("D")
@@ -121,10 +146,10 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
             out.append(replace(e, stage="skipped_capacity", reasons=("daily_entry_cap",)))
             continue
         per_day[day] = per_day.get(day, 0) + 1
-        if holding is not None:
-            open_until[e.symbol] = e.decision_ts_utc + holding
+        if one_open_per_symbol and e.candidate_id in release_times:
+            open_until[e.symbol] = release_times[e.candidate_id]
         out.append(replace(e, stage="executed"))
     return out
 
 
-__all__ = ["scanner_stage_candidates", "apply_gates", "GateRule"]
+__all__ = ["scanner_stage_candidates", "position_release_times", "apply_gates", "GateRule"]

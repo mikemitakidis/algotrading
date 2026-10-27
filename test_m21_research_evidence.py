@@ -25,8 +25,8 @@ from research.evidence import parity
 from research.evidence.candidates import Bracket, CandidateEvent, make_candidate_id, stage_counts, to_frame
 from research.evidence.costs import ZERO, CostModel
 from research.evidence.effective_n import average_uniqueness, cluster_variance_of_mean, effective_n
-from research.evidence.labeler import SourceInfo, label_candidates
-from research.evidence.replay import apply_gates, scanner_stage_candidates
+from research.evidence.labeler import SourceInfo, label_candidates, validate_finer
+from research.evidence.replay import apply_gates, position_release_times, scanner_stage_candidates
 from research.evidence.snapshots import from_candidate_snapshots
 
 
@@ -136,6 +136,15 @@ class A1_LabelRules(unittest.TestCase):
         r = label_candidates([c], {"X": b}, timeframe="15m").iloc[0]
         self.assertEqual(r.entry_idx, 3)        # bar [15:15, 15:30): the first that OPENS after 15:07
         self.assertEqual(r.entry_price, 103)
+        # PR #6 review P1: the entry time is the OPEN of the bar whose open is the fill price.
+        self.assertEqual(r.entry_ts_utc, pd.Timestamp("2024-01-02 15:15", tz="UTC"))
+        self.assertEqual(r.entry_time_basis, "entry_bar_open")
+        self.assertEqual(r.exit_ts_utc, pd.Timestamp(b.ts_utc.iloc[r.exit_idx]))     # exit bar CLOSE
+        self.assertEqual(r.exit_time_basis, "exit_bar_close_observation")
+        self.assertGreater(r.entry_ts_utc, dec)
+        d = _daily([FLAT, (100, 101, 99.5, 100.5), (100.5, 102.5, 100, 102)])
+        rd = _label(d, [_cand(d, 0)]).iloc[0]
+        self.assertEqual(rd.entry_ts_utc, pd.Timestamp(d.ts_utc.iloc[1]) - pd.Timedelta(390, unit="m"))
 
     def test_data_defects_block_definitive_labels(self):
         rows = [FLAT, (100, 100.5, 99.5, 100), (100, 100.5, 99.5, 100), (100, 100.5, 99.5, 100.1)]
@@ -177,22 +186,62 @@ class A1_LabelRules(unittest.TestCase):
         self.assertAlmostEqual(s2.round_trip_cost(100, 101, short=True, holding_bars=3, stop_gap=True),
                                2.0 * c.round_trip_cost(100, 101, short=True, holding_bars=3, stop_gap=True))
 
+    @staticmethod
+    def _fine_day(coarse_close, events, o=100.0, c=100.0, h=102.5, l=98.5):
+        """26 x 15m bars covering the coarse day exactly; `events` maps bar
+        index -> (high, low) placing the day's extremes."""
+        ts = pd.date_range(pd.Timestamp(coarse_close) - pd.Timedelta(375, unit="m"), periods=26, freq="15min")
+        rows = []
+        px = o
+        for k in range(26):
+            hi, lo = events.get(k, (max(px, 100.2), min(px, 99.8)))
+            close = c if k == 25 else min(max(px, lo), hi)
+            rows.append((px, max(hi, px, close), min(lo, px, close), close))
+            px = close
+        f = pd.DataFrame(rows, columns=["open", "high", "low", "close"])
+        f.insert(0, "ts_utc", ts)
+        f["volume"] = 1.0
+        f["quality_flags"] = 0
+        return f
+
     def test_finer_data_resolves_ambiguity(self):
         b = _daily([FLAT, (100, 102.5, 98.5, 100)])
-        t0 = pd.Timestamp(b.ts_utc.iloc[1]) - pd.Timedelta(390, unit="m")
-
-        def fine(path):
-            ts = pd.date_range(t0 + pd.Timedelta(15, unit="m"), periods=len(path), freq="15min")
-            return lambda sym, a, z: pd.DataFrame({"ts_utc": ts, "open": [p[0] for p in path],
-                                                   "high": [p[1] for p in path], "low": [p[2] for p in path],
-                                                   "close": [p[3] for p in path], "volume": 1.0})
-        stop_first = fine([(100, 100.2, 98.5, 99.0), (99.0, 102.5, 99.0, 100)])
-        tgt_first = fine([(100, 102.5, 99.8, 101.0), (101.0, 101.0, 98.5, 100)])
-        still = fine([(100, 102.5, 98.5, 100)])
-        self.assertEqual(_label(b, [_cand(b, 0)], finer=stop_first).iloc[0].outcome, "stop")
-        r = _label(b, [_cand(b, 0)], finer=tgt_first).iloc[0]
+        cc = b.ts_utc.iloc[1]
+        stop_first = self._fine_day(cc, {3: (100.2, 98.5), 10: (102.5, 99.0)})
+        tgt_first = self._fine_day(cc, {3: (102.5, 99.8), 10: (101.0, 98.5)})
+        still = self._fine_day(cc, {5: (102.5, 98.5)})
+        lab = lambda f: _label(b, [_cand(b, 0)], finer=lambda sym, a, z: f).iloc[0]   # noqa: E731
+        self.assertEqual(lab(stop_first).outcome, "stop")
+        r = lab(tgt_first)
         self.assertEqual((r.outcome, r.status, r.resolved_by_finer_data), ("target", "definitive", True))
-        self.assertEqual(_label(b, [_cand(b, 0)], finer=still).iloc[0].status, "ambiguous")
+        self.assertEqual(lab(still).status, "ambiguous")
+
+    def test_partial_or_dirty_finer_data_never_resolves(self):
+        """PR #6 review P2: finer bars must cover the coarse bar exactly, be
+        clean and agree with it; otherwise the label stays ambiguous."""
+        b = _daily([FLAT, (100, 102.5, 98.5, 100)])
+        cc = b.ts_utc.iloc[1]
+        good = self._fine_day(cc, {3: (102.5, 99.8), 10: (101.0, 98.5)})
+        bad = {
+            "partial": good.iloc[:5],
+            "truncated_end": good.iloc[:20],      # consistent extremes and close, but stops before the coarse close
+            "late_start": good.iloc[2:],
+            "gap": good.drop(index=12),
+            "dirty": good.assign(quality_flags=[0] * 25 + [3]),
+            "inconsistent": good.assign(low=good["low"].clip(lower=99.0)),       # never touches the coarse low
+            "empty": good.iloc[0:0],
+            "unsorted": good.iloc[::-1],
+        }
+        for name, f in bad.items():
+            r = _label(b, [_cand(b, 0)], finer=lambda sym, a, z, f=f: f).iloc[0]
+            self.assertEqual(r.status, "ambiguous", name)
+            self.assertFalse(r.resolved_by_finer_data, name)
+            self.assertIn("finer_data_rejected:", r.data_flags, name)
+        none = _label(b, [_cand(b, 0)], finer=lambda sym, a, z: None).iloc[0]
+        self.assertEqual(none.status, "ambiguous")
+        ok, why = validate_finer(good, pd.Timestamp(cc) - pd.Timedelta(390, unit="m"), pd.Timestamp(cc),
+                                 100.0, 102.5, 98.5, 100.0)
+        self.assertEqual((ok, why), (True, "ok"))
 
     def test_candidate_validation_and_frames(self):
         b = _daily([FLAT, FLAT])
@@ -220,6 +269,28 @@ class A2_EffectiveN(unittest.TestCase):
         np.testing.assert_allclose(u, 1.0)
         with self.assertRaises(ValueError):
             average_uniqueness(["A"], [5], [4])
+
+    def test_degenerate_clustering_fails_closed(self):
+        """PR #6 review P1: one decision day, one sector or a constant outcome
+        must give NO effective N (NaN + insufficient_evidence), never raw N."""
+        rng = stream(3, "degenerate")
+        x = rng.standard_normal(200)
+        one_day = effective_n(x, dates=np.zeros(200), symbols=np.arange(200) % 7)
+        self.assertTrue(np.isnan(one_day["n_effective"]))
+        self.assertEqual(one_day["status"], "insufficient_evidence")
+        self.assertTrue(np.isnan(one_day["n_cluster_date"]))
+        one_sector = effective_n(x, dates=np.arange(200) % 40, sectors=np.array(["S"] * 200))
+        self.assertTrue(np.isnan(one_sector["n_effective"]))
+        const = effective_n(np.ones(50), dates=np.arange(50) % 10)
+        self.assertTrue(np.isnan(const["n_effective"]))
+        self.assertIn("constant outcome", const["reasons"])
+        tiny = effective_n([1.0, 2.0], dates=[0, 1])
+        self.assertTrue(np.isnan(tiny["n_effective"]))
+        bare = effective_n(x)
+        self.assertTrue(np.isnan(bare["n_effective"]))
+        ok = effective_n(x, dates=np.arange(200) % 40, symbols=np.arange(200) % 7)
+        self.assertEqual(ok["status"], "ok")
+        self.assertTrue(1.0 <= ok["n_effective"] <= 200)
 
     def test_cluster_effective_n(self):
         rng = stream(1, "neff")
@@ -292,7 +363,17 @@ class A3_ParityReplayGates(unittest.TestCase):
 
     def test_gate_layer_and_gate_economics(self):
         rules = {"low_volume": lambda e: e.features["vol_ratio"] < 0.8}
-        g = apply_gates(self.cands, rules, max_entries_per_day=2, holding=pd.Timedelta(390, unit="m"))
+        with self.assertRaises(ValueError):                       # no wall-clock fallback
+            apply_gates(self.cands, rules, max_entries_per_day=2)
+        g = apply_gates(self.cands, rules, max_entries_per_day=2,
+                        release_times=position_release_times(self.lab))
+        ex = {e.candidate_id: e for e in g if e.stage == "executed"}
+        rel = position_release_times(self.lab)
+        for e in g:                                                # bar-time capacity holds
+            if e.stage == "executed":
+                same = [x for x in ex.values() if x.symbol == e.symbol and x.decision_ts_utc < e.decision_ts_utc]
+                for x in same:
+                    self.assertTrue(rel.get(x.candidate_id) is not None and e.decision_ts_utc >= rel[x.candidate_id])
         counts = stage_counts(g)
         for st in ("executed", "blocked_gate", "blocked_risk"):
             self.assertIn(st, counts)
@@ -315,6 +396,26 @@ class A3_ParityReplayGates(unittest.TestCase):
         self.assertGreater(rows[0].diff_ci_lo, 0)
         self.assertEqual(rows[0].avoided_loss_r, 40.0)
         self.assertIn("Observational", GE.to_markdown(rows))
+
+
+class A3b_BarTimeCapacity(unittest.TestCase):
+    def test_position_held_overnight_blocks_next_session(self):
+        """PR #6 review P2: a 26-bar hold opened late in a session is still open
+        the next morning; a 6.5-hour wall-clock rule would wrongly free it."""
+        ts = [pd.Timestamp("2024-01-02 20:45", tz="UTC"), pd.Timestamp("2024-01-03 14:45", tz="UTC"),
+              pd.Timestamp("2024-01-04 20:00", tz="UTC")]
+        evs = [CandidateEvent(candidate_id="c%d" % i, symbol="X", decision_ts_utc=t, direction="long",
+                              stage="eligible", source="synthetic", timeframe="15m", strategy_id="t",
+                              atr_at_decision=1.0) for i, t in enumerate(ts)]
+        rel = {"c0": pd.Timestamp("2024-01-03 20:30", tz="UTC"), "c1": None, "c2": None}
+        g = {e.candidate_id: e.stage for e in apply_gates(evs, {}, release_times=rel)}
+        self.assertEqual(g, {"c0": "executed", "c1": "blocked_risk", "c2": "executed"})
+        rel_pending = {"c0": None}
+        g2 = {e.candidate_id: e.stage for e in apply_gates(evs, {}, release_times=rel_pending)}
+        self.assertEqual(g2, {"c0": "executed", "c1": "blocked_risk", "c2": "blocked_risk"})
+        lab = pd.DataFrame({"candidate_id": ["a", "b", "c"], "status": ["definitive", "unfillable", "pending"],
+                            "exit_ts_utc": [pd.Timestamp("2024-01-03", tz="UTC"), None, None]})
+        self.assertEqual(position_release_times(lab), {"a": pd.Timestamp("2024-01-03", tz="UTC"), "c": None})
 
 
 class A4_SnapshotAdapter(unittest.TestCase):

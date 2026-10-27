@@ -24,7 +24,11 @@ simulated_execution (ALWAYS True here: every price is a modelled fill),
 resolved_by_finer_data, gap_fill, data_flags.
 
 Conventions: bars follow research.common.bars (``ts_utc`` = bar close).
-The entry bar is the first bar that OPENS at or after the decision time.
+The entry bar is the first bar that OPENS at or after the decision time;
+``entry_ts_utc`` is that bar's OPEN (the modelled fill time). ``exit_ts_utc``
+is the CLOSE of the exit bar: when the exit is first observable from bars,
+not an intrabar fill time. Finer bars resolve an ambiguous bar only if they
+cover it exactly and agree with it (``validate_finer``).
 The holding window is ``max_holding_bars`` bars starting with the entry bar;
 the time stop exits at the close of its last bar. Stops and targets are set
 from the ENTRY price with the decision-time ATR (M17 ATR-mode semantics).
@@ -96,6 +100,9 @@ class PathLabel:
     adjusted: Optional[bool]
     sector: str = ""
     reasons: Tuple[str, ...] = ()
+    entry_time_basis: str = "entry_bar_open"           # entry_ts_utc = OPEN of the bar whose open is the fill price
+    exit_time_basis: str = "exit_bar_close_observation"  # exit_ts_utc = CLOSE of the exit bar, when the exit is
+                                                          # first observable; NOT an intrabar fill time
 
 
 FinerBars = Callable[[str, pd.Timestamp, pd.Timestamp], Optional[pd.DataFrame]]
@@ -135,6 +142,44 @@ def _data_flags(o, h, l, c, v, q, ts, lo: int, hi: int, timeframe: str) -> Tuple
     if ((h[lo:hi + 1] == l[lo:hi + 1]) & (v[lo:hi + 1] == 0)).any():
         flags.append("stale_bar")
     return tuple(flags)
+
+
+def validate_finer(fb: Optional[pd.DataFrame], bar_open: pd.Timestamp, bar_close: pd.Timestamp,
+                   o: float, h: float, l: float, c: float, rel_tol: float = 1e-6) -> Tuple[bool, str]:
+    """Finer bars may resolve an ambiguous coarse bar only if they cover it
+    EXACTLY (first finer bar opens at the coarse open, last closes at the
+    coarse close, uniform spacing, no gaps), are clean (valid OHLC, no quality
+    flags) and are consistent with it (same open, close, high and low)."""
+    if fb is None or len(fb) == 0:
+        return False, "no_finer_bars"
+    need = ("ts_utc", "open", "high", "low", "close")
+    if any(k not in fb.columns for k in need):
+        return False, "missing_columns"
+    ts = pd.to_datetime(fb["ts_utc"], utc=True)
+    if not ts.is_monotonic_increasing or ts.duplicated().any():
+        return False, "unsorted_or_duplicate_timestamps"
+    fo, fh, fl, fc = (fb[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
+    if not (np.isfinite(fo).all() and np.isfinite(fh).all() and np.isfinite(fl).all() and np.isfinite(fc).all()):
+        return False, "non_finite_prices"
+    if (fl > np.minimum(fo, fc) + 1e-12).any() or (fh < np.maximum(fo, fc) - 1e-12).any():
+        return False, "invalid_ohlc"
+    if "quality_flags" in fb.columns and (fb["quality_flags"].to_numpy() != 0).any():
+        return False, "quality_flagged"
+    if len(ts) >= 2:
+        steps = np.diff(ts.to_numpy(dtype="datetime64[ns]")).astype(np.int64)
+        if (steps != steps[0]).any():
+            return False, "gap_or_uneven_spacing"
+        step = pd.Timedelta(int(steps[0]), unit="ns")
+    else:
+        step = bar_close - bar_open
+    if ts.iloc[0] - step != bar_open:
+        return False, "does_not_start_at_coarse_open"
+    if ts.iloc[-1] != bar_close:
+        return False, "does_not_end_at_coarse_close"
+    tol = rel_tol * max(abs(h), 1.0)
+    if abs(fo[0] - o) > tol or abs(fc[-1] - c) > tol or abs(fh.max() - h) > tol or abs(fl.min() - l) > tol:
+        return False, "inconsistent_with_coarse_bar"
+    return True, "ok"
 
 
 def _resolve(o, h, l, c, j0: int, j1: int, stop: float, target: float, long: bool, first_is_entry: bool):
@@ -231,12 +276,17 @@ def label_symbol(cands: List[CandidateEvent], bars: pd.DataFrame, *, timeframe: 
         j1 = min(last, n - 1)
         kind, j, px, gap = _resolve(o, h, l, c, e, j1, stop, target, long, first_is_entry=True)
         finer_used = False
+        finer_flags: Tuple[str, ...] = ()
         pess = opt = nan
         if kind == "ambiguous":
             pess, opt = _r(entry, stop, risk, long), _r(entry, target, risk, long)
             if finer is not None:
-                fb = finer(cd.symbol, pd.Timestamp(open_t[j], tz="UTC"), pd.Timestamp(ts_np[j], tz="UTC"))
-                if fb is not None and len(fb):
+                b_open, b_close = pd.Timestamp(open_t[j], tz="UTC"), pd.Timestamp(ts_np[j], tz="UTC")
+                fb = finer(cd.symbol, b_open, b_close)
+                ok, why = validate_finer(fb, b_open, b_close, o[j], h[j], l[j], c[j])
+                if not ok:
+                    finer_flags = ("finer_data_rejected:%s" % why,)
+                else:
                     fo, fh, fl, fc = (fb[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
                     k2, _, px2, gap2 = _resolve(fo, fh, fl, fc, 0, len(fb) - 1, stop, target, long,
                                                 first_is_entry=(j == e))
@@ -255,7 +305,7 @@ def label_symbol(cands: List[CandidateEvent], bars: pd.DataFrame, *, timeframe: 
                     bad("", "pending")
                 continue
             kind, j, px = "timeout", last, c[last]
-        flags = _data_flags(o, h, l, c, v, q, ts_np, e, j, timeframe)
+        flags = _data_flags(o, h, l, c, v, q, ts_np, e, j, timeframe) + finer_flags
         blocking = [f for f in flags if f in BLOCKING_DATA_FLAGS]
         if kind == "ambiguous":
             status = "ambiguous"
@@ -293,7 +343,7 @@ def label_symbol(cands: List[CandidateEvent], bars: pd.DataFrame, *, timeframe: 
             **base, status=status, outcome=None if kind == "ambiguous" else kind,
             path_observed=status == "definitive", ambiguous_intrabar=kind == "ambiguous", unfillable=False,
             unfillable_reason="", resolved_by_finer_data=finer_used, gap_fill=bool(gap), data_flags=flags,
-            entry_idx=e, exit_idx=j, entry_ts_utc=pd.Timestamp(ts_np[e], tz="UTC"),
+            entry_idx=e, exit_idx=j, entry_ts_utc=pd.Timestamp(open_t[e], tz="UTC"),
             exit_ts_utc=pd.Timestamp(ts_np[j], tz="UTC"), holding_bars=hold, entry_price=float(entry),
             stop_price=float(stop), target_price=float(target), exit_price=float(exit_px), r_gross=r_g,
             r_gross_pessimistic=float(pess), r_gross_optimistic=float(opt), r_net=r_n,
@@ -352,5 +402,5 @@ def status_summary(labels: pd.DataFrame) -> Dict[str, float]:
     return out
 
 
-__all__ = ["STATUSES", "BLOCKING_DATA_FLAGS", "SourceInfo", "PathLabel", "bar_open_times", "label_symbol",
+__all__ = ["STATUSES", "BLOCKING_DATA_FLAGS", "SourceInfo", "PathLabel", "bar_open_times", "validate_finer", "label_symbol",
            "label_candidates", "atr_asof", "status_summary"]
