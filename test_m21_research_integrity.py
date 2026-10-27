@@ -26,7 +26,7 @@ from research.integrity import evidence as EV
 from research.integrity import multiple_testing as MT
 from research.integrity import splits as SP
 from research.integrity import stats as S
-from research.integrity.controls import (BatteryPlan, PipelineDecision, block_permute,
+from research.integrity.controls import (BatteryPlan, BatteryResult, PipelineDecision, PowerPoint, block_permute,
                                          circular_shift, placebo_events, run_battery)
 from research.integrity.authority import LOCAL_POLICY_MODEL, Authority
 from research.integrity.holdout import RELEASE_PURPOSE, HoldoutDenied, HoldoutVault, release_request
@@ -672,7 +672,10 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         never = lambda d: PipelineDecision(False)               # noqa: E731
         p59 = BatteryPlan("never", "never", n_nulls=59)
         self.assertEqual(p59.min_nulls_for_target(), 59)
-        self.assertEqual(run_battery(p59, never, lambda s: s).verdict, "CALIBRATED")
+        # Comprehensive audit P1: an always-reject pipeline with no positive controls is NULL_ONLY (type-I
+        # calibrated only), never CALIBRATED (it used to be: all([]) is True)
+        r59 = run_battery(p59, never, lambda s: s)
+        self.assertEqual((r59.verdict, r59.power_ok), ("NULL_ONLY", False))
         p5 = BatteryPlan("never5", "never", n_nulls=5)
         r5 = run_battery(p5, never, lambda s: s)
         self.assertEqual(r5.verdict, "NOT_CALIBRATED")          # 0/5 cannot bound 5 %
@@ -747,8 +750,20 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         np.testing.assert_array_equal(circular_shift([1, 2, 3], 1), [3, 1, 2])
 
     def _calibrated(self):
+        """The OLD fixture: a null-only, always-reject battery outside any ledger. Kept as a negative control:
+        it must never support a PASS (comprehensive audit, PR #5, P1)."""
         never = lambda d: PipelineDecision(False)               # noqa: E731
         return run_battery(BatteryPlan("c", "c", n_nulls=60), never, lambda s: s)
+
+    @staticmethod
+    def _battery(led, family="f", code="code", name="b", min_power=0.8, pipeline_id=None, detect=True):
+        """A verified-style battery recorded in `led` for pipeline_identity(family, code): 60 nulls plus
+        positive controls at a required effect, run through a pipeline that detects planted effects."""
+        from research.integrity.controls import pipeline_identity
+        pipe = (lambda d: PipelineDecision(d > 0)) if detect else (lambda d: PipelineDecision(False))
+        plan = BatteryPlan(name, pipeline_id or pipeline_identity(family, code), n_nulls=60, effect_sizes=(1.0,),
+                           n_per_effect=20, min_power=min_power)
+        return run_battery(plan, pipe, lambda s: 0.0, lambda e, s: e, ledger=led)
 
     @staticmethod
     def _ledgered(n, family="f", fam=None, gross=None):
@@ -772,11 +787,12 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         cfg = GauntletConfig(n_boot=300)
         led, ids = self._ledgered(6, fam=fam, gross=strong)
         good = evaluate(candidate_id="c1", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
-                        rng=stream(20, "a"), family_matrix=fam, canary=self._calibrated(), cfg=cfg,
+                        rng=stream(20, "a"), family_matrix=fam, canary=self._battery(led), cfg=cfg,
                         ledger=led, trial_ids=ids, candidate_trial_id=ids[0], expected_tip=led.tip_hash)
         self.assertEqual(good.verdict, "PASS", good.reasons)
         self.assertEqual(good.numbers["provenance_verified"], 1.0)
         self.assertEqual(good.numbers["ledger_tip_anchored"], 1.0)
+        self.assertEqual(good.numbers["canary_verified"], 1.0)
         no_canary = evaluate(candidate_id="c2", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
                              rng=stream(20, "b"), family_matrix=fam, canary=None, cfg=cfg,
                              ledger=led, trial_ids=ids, candidate_trial_id=ids[0])  # provenance fine, canary missing
@@ -847,7 +863,7 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         cfg = GauntletConfig(n_boot=200)
         led, ids = self._ledgered(6, fam=fam, gross=strong)
         base = dict(candidate_id="c", family_id="f", cost_per_obs=0.05, rng=stream(28, "a"), n_trials=6,
-                    canary=self._calibrated(), cfg=cfg, ledger=led, trial_ids=ids)
+                    canary=self._battery(led), cfg=cfg, ledger=led, trial_ids=ids)
         ok = evaluate(gross=strong, family_matrix=fam, candidate_trial_id=ids[0], **base)
         self.assertEqual((ok.verdict, ok.numbers["outcomes_verified"]), ("PASS", 1.0))
         better = strong.copy()
@@ -874,6 +890,87 @@ class B6_ControlsAndReportCard(unittest.TestCase):
         self.assertEqual(wrong_tip.numbers["ledger_metadata_reconciled"], 0.0)
         with self.assertRaises(ValueError):
             _trial(artifacts={"gross": "not-a-digest"})
+
+    def test_canary_must_be_verified_for_this_pipeline(self):
+        """Comprehensive audit P1 (PR #5): a PASS needs a battery recorded in this ledger, for this exact
+        pipeline (family + code identity), with verified positive-control power. Everything else is
+        INCONCLUSIVE."""
+        from dataclasses import asdict, replace as _r
+        from research.integrity.controls import pipeline_identity
+        rng = stream(31, "canary")
+        strong = rng.normal(0.6, 1.0, 400)
+        fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
+        cfg = GauntletConfig(n_boot=200)
+
+        def card(led, ids, canary, c=cfg):
+            return evaluate(candidate_id="c", family_id="f", gross=strong, cost_per_obs=0.05, n_trials=6,
+                            rng=stream(32, "a"), family_matrix=fam, canary=canary, cfg=c, ledger=led,
+                            trial_ids=ids, candidate_trial_id=ids[0])
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        self.assertEqual(card(led, ids, self._battery(led)).verdict, "PASS")
+        cases = {}
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        cases["old null-only always-reject fixture (not ledgered)"] = card(led, ids, self._calibrated())
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        never = run_battery(BatteryPlan("n", pipeline_identity("f", "code"), n_nulls=60), lambda d: PipelineDecision(False),
+                            lambda s: s, ledger=led)
+        cases["null-only always-reject battery in this ledger"] = card(led, ids, never)
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        cases["battery for another pipeline id"] = card(led, ids, self._battery(led, pipeline_id="pipeline:g@code"))
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        cases["battery for another code version"] = card(led, ids, self._battery(led, code="other-code"))
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        other = Ledger(clock=_clock())
+        cases["battery recorded in another ledger"] = card(led, ids, self._battery(other))
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        real = self._battery(led)
+        fake = BatteryResult("0" * 64, 60, 0, 0.0, 0.01, True, real.power, True, "CALIBRATED")
+        cases["caller-constructed result"] = card(led, ids, fake)
+        cases["edited result object"] = card(led, ids, _r(real, null_passes=0, notes="edited"))
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        cases["required power below the pre-declared minimum"] = card(led, ids, self._battery(led, min_power=0.5))
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        cases["require_canary=False (diagnostic config)"] = card(led, ids, None, GauntletConfig(n_boot=200,
+                                                                                               require_canary=False))
+        # a forged result appended straight to the ledger claims CALIBRATED with counts that show no power
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        plan = BatteryPlan("forged", pipeline_identity("f", "code"), n_nulls=60, effect_sizes=(1.0,), n_per_effect=20)
+        led.append("control_battery_plan", {**asdict(plan), "plan_digest": plan.digest}, ref_id=plan.digest)
+        weak = (PowerPoint(1.0, 20, 3, 0.15, 0.95, 1.0),)                 # 3/20 detections, lo claimed 0.95
+        forged = BatteryResult(plan.digest, 60, 0, 0.0, 0.049, True, weak, True, "CALIBRATED")
+        led.append("control_battery_result", asdict(forged), ref_id=plan.digest)
+        cases["forged ledger result with no real power"] = card(led, ids, forged)
+        for name, c in cases.items():
+            self.assertEqual(c.verdict, "INCONCLUSIVE", name)
+            self.assertEqual(c.numbers["canary_verified"], 0.0, name)
+            self.assertEqual(c.numbers["provenance_verified"], 1.0, name)     # everything else was fine
+
+    def test_matrix_inference_needs_the_whole_search_family(self):
+        """Comprehensive audit P2 (PR #5): PBO / SPA / Reality Check over a caller-chosen subset of the family
+        overstate post-search confidence. An omitted genuine family trial leaves them uncomputed."""
+        rng = stream(33, "family")
+        strong = rng.normal(0.6, 1.0, 400)
+        fam = np.column_stack([strong] + [rng.normal(0, 1, 400) for _ in range(5)])
+        cfg = GauntletConfig(n_boot=200)
+        led, ids = self._ledgered(6, fam=fam, gross=strong)
+        led.record_trial(_trial(family_id="f", kind="control_null", spec_digest="ctl"))   # controls: not candidates
+        canary = self._battery(led)
+        kw = dict(candidate_id="c", family_id="f", gross=strong, cost_per_obs=0.05, rng=stream(34, "a"),
+                  canary=canary, cfg=cfg, ledger=led, candidate_trial_id=ids[0])
+        full = evaluate(n_trials=6, family_matrix=fam, trial_ids=ids, **kw)
+        self.assertEqual(full.verdict, "PASS", full.reasons)
+        self.assertIn("pbo", full.numbers)
+        extra = rng.normal(0, 1, 400)                                     # an earlier batch's variant
+        led.record_trial(_trial(family_id="f", spec_digest="s-extra",
+                                artifacts={"family_series": outcome_digest(extra)}))
+        part = evaluate(n_trials=7, family_matrix=fam, trial_ids=ids, **kw)
+        self.assertNotEqual(part.verdict, "PASS")
+        for k in ("pbo", "spa_p", "reality_check_p"):
+            self.assertNotIn(k, part.numbers)
+        self.assertTrue(any("covers 6 of 7" in r for r in part.reasons), part.reasons)
+        whole = evaluate(n_trials=7, family_matrix=np.column_stack([fam, extra]), trial_ids=ids + [
+            e.ref_id for e in led.trials("f", ("research",)) if e.ref_id not in ids], **kw)
+        self.assertIn("pbo", whole.numbers)
 
     def test_code_identity_tracks_source_edits(self):
         import shutil
