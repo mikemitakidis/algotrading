@@ -223,6 +223,32 @@ class C2_Datasets(unittest.TestCase):
         same = {s0: y0 for s0, y0 in zip(ds_gap.start, ds_gap.y)}
         self.assertTrue(keep and all(same.get(full.start[k]) == full.y[k] for k in keep))
 
+    def test_context_mask_excludes_ineligible_cells(self):
+        """Comprehensive audit P1 (PR #11, mechanism in the lab): an ineligible (symbol, bar) cell - e.g. a symbol
+        quarantined after an unadjusted split - contributes to no cross-sectional context value; too thin a
+        cross-section makes the context unavailable; the default (no mask) is unchanged."""
+        from research.mllab.datasets import market_context, symbol_features
+        bars = {s: b.reset_index(drop=True) for s, b in self.m.bars.items()}
+        per = {s: symbol_features(b) for s, b in bars.items()}
+        base = market_context(per, bars)
+        pd.testing.assert_frame_equal(base, market_context(per, bars, None, 1))
+        q = sorted(bars)[0]
+        elig = {s: np.ones(len(b), bool) for s, b in bars.items()}
+        elig[q][150:] = False
+        masked = market_context(per, bars, elig, 1)
+        t = pd.Timestamp(bars[q]["ts_utc"].iloc[160])
+        others = [s for s in bars if s != q]
+        rets = {s: pd.Series(per[s]["price_return.log_ret_1"].to_numpy(), index=pd.to_datetime(bars[s]["ts_utc"], utc=True))
+                for s in bars}
+        self.assertAlmostEqual(masked.loc[t, "ctx.mkt_ret_1"], np.mean([rets[s].loc[t] for s in others]), places=12)
+        self.assertNotAlmostEqual(base.loc[t, "ctx.mkt_ret_1"], masked.loc[t, "ctx.mkt_ret_1"], places=9)
+        t0 = pd.Timestamp(bars[q]["ts_utc"].iloc[140])
+        pd.testing.assert_series_equal(base.loc[t0], masked.loc[t0])     # eligible cells unchanged
+        thin = market_context(per, bars, elig, len(bars))
+        self.assertTrue(np.isnan(thin.loc[t, "ctx.mkt_ret_1"]) and np.isfinite(thin.loc[t0, "ctx.mkt_ret_1"]))
+        with self.assertRaises(ValueError):
+            market_context(per, bars, {q: np.ones(3, bool)}, 1)
+
     def test_digest_covers_every_field(self):
         """Second review P1 (#7): every field that drives training, purging, grouping or analysis is hashed."""
         import copy

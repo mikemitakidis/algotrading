@@ -112,32 +112,50 @@ def symbol_features(bars: pd.DataFrame) -> pd.DataFrame:
     return f
 
 
-def market_context(per_symbol: Dict[str, pd.DataFrame], bars: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Cross-sectional context indexed by ts (all values known at that close)."""
+def market_context(per_symbol: Dict[str, pd.DataFrame], bars: Dict[str, pd.DataFrame],
+                   eligible: Optional[Dict[str, np.ndarray]] = None, min_symbols: int = 1) -> pd.DataFrame:
+    """Cross-sectional context indexed by ts (all values known at that close).
+
+    ``eligible[s][i] == False`` removes symbol s's bar i from EVERY cross-sectional statistic (comprehensive
+    audit, PR #11: a symbol quarantined after an unadjusted split must not inject its split return into other
+    symbols' market return, volatility, breadth or dispersion). The mask must be point-in-time (bars <= i). Where
+    fewer than ``min_symbols`` contribute, the context is unavailable (NaN: neutral fill plus a was_missing
+    indicator downstream), never computed from a thin or contaminated cross-section."""
     rets, above, idx = [], [], []
     for s, f in per_symbol.items():
         ts = pd.to_datetime(bars[s]["ts_utc"], utc=True)
-        rets.append(pd.Series(f["price_return.log_ret_1"].to_numpy(), index=ts, name=s))
-        above.append(pd.Series((f["trend.ema_distance_50"].to_numpy() > 0).astype(float), index=ts, name=s))
+        r = f["price_return.log_ret_1"].to_numpy(dtype=float)
+        a = (f["trend.ema_distance_50"].to_numpy() > 0).astype(float)
+        if eligible is not None and s in eligible:
+            m = np.asarray(eligible[s], dtype=bool)
+            if len(m) != len(r):
+                raise ValueError("eligibility mask for %s does not match its bars" % s)
+            r, a = np.where(m, r, np.nan), np.where(m, a, np.nan)
+        rets.append(pd.Series(r, index=ts, name=s))
+        above.append(pd.Series(a, index=ts, name=s))
     R = pd.concat(rets, axis=1).sort_index()
     A = pd.concat(above, axis=1).reindex(R.index)
-    mkt = R.mean(axis=1)
+    n_r, n_a = R.notna().sum(axis=1), A.notna().sum(axis=1)
+    mkt = R.mean(axis=1).where(n_r >= min_symbols)
     vol = mkt.rolling(20, min_periods=20).std()
     pct = vol.expanding(min_periods=60).rank(pct=True)
     ctx = pd.DataFrame({"ctx.mkt_ret_1": mkt, "ctx.mkt_ret_5": mkt.rolling(5, min_periods=5).sum(),
-                        "ctx.mkt_vol_20": vol, "ctx.mkt_vol_pct": pct, "ctx.breadth50": A.mean(axis=1),
-                        "ctx.dispersion": R.std(axis=1)})
+                        "ctx.mkt_vol_20": vol, "ctx.mkt_vol_pct": pct,
+                        "ctx.breadth50": A.mean(axis=1).where(n_a >= min_symbols),
+                        "ctx.dispersion": R.std(axis=1).where(n_r >= max(min_symbols, 2))})
+    ctx.attrs["contributors"] = n_r
     return ctx
 
 
 def build_dataset(bars: Dict[str, pd.DataFrame], *, spec: BarrierSpec = BarrierSpec(),
                   sampler: Sampler = every_k(2), truth: Optional[Dict[str, pd.DataFrame]] = None,
                   include_context: bool = True, extra_meta: Optional[Dict] = None, timeframe: str = "1D",
-                  calendar=None) -> EventDataset:
+                  calendar=None, context_eligible: Optional[Dict[str, np.ndarray]] = None,
+                  min_context_symbols: int = 1) -> EventDataset:
     """Labels whose barrier path crosses a missing expected bar or an invalid / blocked bar are dropped
     (comprehensive audit, PR #7): an unobserved path is never a definitive training or evaluation outcome."""
     per = {s: symbol_features(b) for s, b in bars.items()}
-    ctx = market_context(per, bars) if include_context else None
+    ctx = market_context(per, bars, context_eligible, min_context_symbols) if include_context else None
     rows_X, ys, rs, st, en, sy, dy, tr = [], [], [], [], [], [], [], []
     n_unobserved = 0
     names: Optional[List[str]] = None
@@ -185,6 +203,9 @@ def build_dataset(bars: Dict[str, pd.DataFrame], *, spec: BarrierSpec = BarrierS
                       {"barrier": spec.__dict__, "sampler": getattr(sampler, "__name__", "custom"),
                        "n_symbols": len(bars), "unobserved_path_labels_excluded": n_unobserved,
                        "observability": "calendar" if calendar is not None else "business-day/contiguous (no calendar)",
+                       "context_eligibility": "point-in-time mask" if context_eligible is not None else "all bars",
+                       "min_context_symbols": int(min_context_symbols),
+                       "context_unavailable_ts": int(ctx["ctx.mkt_ret_1"].isna().sum()) if ctx is not None else None,
                        **(extra_meta or {})})
     if not np.isfinite(ds.X).all():
         raise ValueError("non-finite values reached the feature matrix")
