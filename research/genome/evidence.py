@@ -54,7 +54,7 @@ class DConfig:
     n_seeds: int = 8
     parity_symbols: int = 10
     parity_sessions: int = 1500
-    strength_scale: float = 1.0
+    strength_scale: float = 0.2          # 0.5 x 0.2 = 0.1 sigma per bar: modest, interpretable effects
     profile: str = "full"
 
 
@@ -164,7 +164,7 @@ def constraints_section(c: DConfig) -> Dict:
 def search_section(c: DConfig) -> Dict:
     out = {}
     L = Ledger()
-    for name, effects in (("planted_rsi_oversold", (EFFECTS["rsi_oversold"],)), ("null", ())):
+    for name, effects in (("planted_rsi_oversold", (_scaled(EFFECTS["rsi_oversold"], c.strength_scale),)), ("null", ())):
         m = generate(MarketSpec(n_symbols=c.n_symbols, n_sessions=c.n_sessions, seed=c.seed + 3, effects=effects))
         gs, bad = SR.grid("mean_reversion", SEARCH_AXES)
         fam = "genome:mean_reversion:%s" % name
@@ -283,7 +283,7 @@ def render_markdown(j: Dict) -> str:
             sk["insufficient_cash"], 100 * r["total_return"], r["sharpe_ann"], 100 * r["max_drawdown"]))
     L += ["", "**Survivorship.** On a market where %d of %d symbols decline (−0.15 σ per bar over their last 40 "
           "bars) and then delist, the same genome was run twice. The full universe keeps delisted symbols until "
-          "they stop trading; %d positions were closed at delisting. The survivors-only universe is the classic "
+          "they stop trading; %d position(s) were closed at delisting. The survivors-only universe is the classic "
           "biased backtest. The difference between the rows is the survivorship effect in this sample; its sign "
           "and size depend on the sample." % (
               sv["delisted"], sv["symbols"], sv["delisted_exits"]), "",
