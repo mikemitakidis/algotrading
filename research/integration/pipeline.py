@@ -34,6 +34,21 @@ and it writes only inside the caller's work directory.
    so it cannot PASS.
 7. **E (outcome):** lineage, then the graveyard.
 
+Corporate actions (third review, PR #11). The bars are UNADJUSTED and no
+validated split/share-count adjustment exists yet. The point-in-time mask
+stops NEW decisions after a split is knowable, but a position (or a label's
+bracket) that is already open keeps its share count, stop and target while
+prices jump. Such economics are invalid, so the pipeline fails closed:
+``split_suspect_rows`` marks bars where a split is suspected (causal flag OR
+the full-sample audit: this is a validity audit of simulated results, never
+a decision input, and it can only make results LESS trusted). Every trade,
+search trial, label, lab row and the buy-and-hold baseline whose holding
+window [entry bar, exit bar] contains such a bar is flagged. Contaminated
+labels and lab rows are excluded from outcome statistics; a contaminated
+selected run or search family makes the integrated verdict INCONCLUSIVE
+whatever the report card says; a contaminated buy-and-hold baseline is
+reported as invalid. Positions are NOT pre-closed with hindsight.
+
 ``checks`` lists the invariants the integration test asserts.
 """
 from __future__ import annotations
@@ -76,8 +91,10 @@ AXES = {"rsi_entry": [25.0, 30.0, 35.0], "bb_std": [1.5, 2.0, 2.5]}
 # engine decision stage -> lane A candidate stage (a simulated entry is never "executed": no order exists)
 STAGE_MAP = {"entered": "simulated_entry", "rejected_by_rule": "rejected", "position_already_open": "blocked_gate",
              "reentry_same_bar": "blocked_gate", "not_in_universe": "blocked_gate",
-             "blocked_capacity": "skipped_capacity", "blocked_risk": "blocked_risk", "unfillable": "blocked_gate",
-             "no_next_bar": "blocked_gate"}
+             "blocked_capacity": "skipped_capacity", "blocked_risk": "blocked_risk", "unfillable": "unfillable",
+             "no_next_bar": "unfillable"}
+CORPORATE_ACTION_POLICY = ("unadjusted bars, no validated split/share-count adjustment: any holding window that "
+                           "contains a suspected split invalidates its economics (fail closed, no hindsight pre-close)")
 ENGINE_CFG = E.EngineConfig(bar_minutes=TF_MINUTES[TF])     # synthetic bar-open convention, same as lane A
 
 
@@ -103,6 +120,55 @@ def retrospective_exclusions(raw: Mapping[str, pd.DataFrame]) -> list:
     return sorted(s for s, x in q.items() if x["grade"] == "unusable" or x["suspected_splits"])
 
 
+def split_suspect_rows(bars: Mapping[str, pd.DataFrame]) -> Dict[str, np.ndarray]:
+    """Rows of each symbol's admissible bars where an unadjusted split is suspected: the causal flag OR any
+    split candidate of the full-sample audit (a validity audit, never a decision input)."""
+    out = {}
+    for s, b in sorted(bars.items()):
+        rows = set(int(i) for i in np.flatnonzero(QA.causal_split_flags(b)))
+        pos = {pd.Timestamp(t): i for i, t in enumerate(pd.to_datetime(b["ts_utc"], utc=True))}
+        for c in QA.audit_symbol(b, s, timeframe=TF).suspected_splits:
+            rows.add(pos[pd.Timestamp(c["ts_utc"])])
+        out[s] = np.array(sorted(rows), dtype=int)
+    return out
+
+
+def _crosses(rows: np.ndarray, lo: int, hi: int) -> bool:
+    return bool(len(rows)) and bool(((rows >= lo) & (rows <= hi)).any())
+
+
+def contaminated_trades(res: E.EngineResult, bars: Mapping[str, pd.DataFrame],
+                        suspects: Mapping[str, np.ndarray]) -> list:
+    """Trades whose holding window [fill bar, exit bar] contains a suspected unadjusted split. The fill bar is
+    included: a fill at a split bar's open is sized and stopped with the pre-split ATR."""
+    row = {s: {pd.Timestamp(t): i for i, t in enumerate(pd.to_datetime(b["ts_utc"], utc=True))}
+           for s, b in bars.items()}
+    out = []
+    for i, t in enumerate(res.trades):
+        e, x = row[t.symbol][pd.Timestamp(t.entry_bar_close_ts)], row[t.symbol][pd.Timestamp(t.exit_bar_close_ts)]
+        hit = [int(j) for j in suspects.get(t.symbol, ()) if e <= j <= x]
+        if hit:
+            out.append({"trade_index": i, "symbol": t.symbol, "candidate_id": t.candidate_id, "entry_row": e,
+                        "exit_row": x, "split_rows": hit, "exit_reason": t.exit_reason,
+                        "r_multiple": float(t.r_multiple), "pnl_absolute": float(t.pnl_absolute)})
+    return out
+
+
+def economics_verdict(card_verdict: str, selected_contaminated: int, family_contaminated: int,
+                      family_size: int) -> Tuple[str, list]:
+    """Fail closed: contaminated economics can neither PASS nor FAIL; the result is INCONCLUSIVE."""
+    reasons = []
+    if selected_contaminated:
+        reasons.append("%d trade(s) of the selected genome were held across a suspected unadjusted split"
+                       % selected_contaminated)
+    if family_contaminated:
+        reasons.append("%d of %d search trials hold positions across a suspected unadjusted split (selection, "
+                       "DSR, PBO and SPA used invalid economics)" % (family_contaminated, family_size))
+    if reasons:
+        return "INCONCLUSIVE", reasons + ["no validated corporate-action adjustment: economics invalid"]
+    return card_verdict, []
+
+
 def decide(genome: G.Genome, bars: Mapping[str, pd.DataFrame], member: Mapping[str, np.ndarray],
            cfg: E.EngineConfig = ENGINE_CFG) -> E.EngineResult:
     return E.run_genome(genome, bars, cfg, member)
@@ -125,18 +191,26 @@ def decisions_to_candidates(res: E.EngineResult, genome: G.Genome,
     return out
 
 
+def _usable(lab: pd.DataFrame) -> pd.Series:
+    """Definitive labels whose bracket window holds no suspected unadjusted split."""
+    clean = ~lab["split_contaminated"] if "split_contaminated" in lab.columns else True
+    return (lab["status"] == "definitive") & clean
+
+
 def _stage_report(lab: pd.DataFrame) -> Dict[str, Dict]:
     out = {}
     for st, g in lab.groupby("stage"):
-        dfn = g[g["status"] == "definitive"]
+        dfn = g[_usable(g)]
         out[st] = {"n": int(len(g)), "status": g["status"].value_counts().to_dict(),
-                   "definitive": int(len(dfn)),
+                   "definitive": int((g["status"] == "definitive").sum()),
+                   "split_contaminated": int(g["split_contaminated"].sum()) if "split_contaminated" in g else 0,
+                   "definitive_used": int(len(dfn)),
                    "mean_r_net_definitive": float(dfn["r_net"].mean()) if len(dfn) else float("nan")}
     return out
 
 
 def _neff(lab: pd.DataFrame) -> Dict:
-    d = lab[lab["status"] == "definitive"]
+    d = lab[_usable(lab)]
     if not len(d):
         return {"status": "insufficient_evidence", "n_raw": 0}
     n = effective_n(d["r_net"].to_numpy(), dates=pd.to_datetime(d["decision_ts_utc"]).dt.date.astype(str),
@@ -145,7 +219,8 @@ def _neff(lab: pd.DataFrame) -> Dict:
     return {k: n.get(k) for k in ("n_raw", "n_effective", "status")}
 
 
-def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 700) -> Dict:
+def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 700,
+        split_prob: float = 0.15) -> Dict:
     t0 = time.time()
     workdir = Path(workdir)
     L = Ledger()
@@ -155,7 +230,7 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
     # 1. F — data store, snapshot, inventory; point-in-time universe
     eff = (PlantedEffect("rsi", "rsi_oversold", 0.5, horizon=5, level=30.0),)
     mk = generate(MarketSpec(n_symbols=n_symbols, n_sessions=n_sessions, seed=seed, effects=eff,
-                             missing_bar_prob=0.005, split_prob=0.15))
+                             missing_bar_prob=0.005, split_prob=split_prob))
     store = workdir / "store"
     for s, b in mk.bars.items():
         p = store / "synthetic" / TF / ("%s.parquet" % s)
@@ -167,6 +242,7 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
     q = inv["quality"]["synthetic/%s" % TF]["per_symbol"]
     raw = {s: pd.read_parquet(store / "synthetic" / TF / ("%s.parquet" % s)) for s in sorted(q)}
     bars, member, pit = point_in_time_universe(raw)
+    suspects = split_suspect_rows(bars)
     leaky_excluded = retrospective_exclusions(raw)
     data_digest = manifest["snapshot_digest"]
     first_day = str(min(pd.to_datetime(b["ts_utc"], utc=True).min() for b in bars.values()).date())
@@ -188,11 +264,15 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
     best = {g.genome_id: g for g in gs}[sel["best_plateau"]["genome_id"]]
     best_tid = df.loc[df["genome_id"] == best.genome_id, "trial_id"].iloc[0]
     port = decide(best, bars, member)
+    sel_contam = contaminated_trades(port, bars, suspects)
+    fam_contam = {g.genome_id: len(contaminated_trades(decide(g, bars, member), bars, suspects)) for g in gs}
 
     # 4. A — every engine decision is a candidate with its real stage; all are labelled
     cands = decisions_to_candidates(port, best, bars)
     cost = CostModel()
     lab = label_candidates(cands, bars, timeframe=TF, cost=cost, source=SourceInfo("synthetic", TF, False))
+    lab["split_contaminated"] = [bool(xi >= 0 and _crosses(suspects[sy], ei, xi))
+                                 for sy, ei, xi in zip(lab["symbol"], lab["entry_idx"], lab["exit_idx"])]
     by_id = lab.set_index("candidate_id")
     sim = lab[lab["stage"] == "simulated_entry"]
     join_ok, eod_pending = len(sim) == len(port.trades), 0
@@ -229,9 +309,19 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
         return m
     spec = BarrierSpec(tp_mult=best.exits.target_atr or 3.0, sl_mult=best.exits.stop_atr,
                        horizon=best.exits.time_stop_bars)
-    ds = build_dataset(bars, spec=spec, sampler=sampler, extra_meta={"snapshot_digest": data_digest,
-                                                                      "genome_id": best.genome_id,
-                                                                      "universe": "point_in_time"})
+    ds_all = build_dataset(bars, spec=spec, sampler=sampler, extra_meta={"snapshot_digest": data_digest,
+                                                                          "genome_id": best.genome_id,
+                                                                          "universe": "point_in_time"})
+    # a lab label whose barrier window (decision bar, resolution bar] holds a suspected split is invalid
+    lab_bad = np.zeros(len(ds_all), dtype=bool)
+    for s in bars:
+        tsn = pd.to_datetime(bars[s]["ts_utc"], utc=True).astype("int64").to_numpy()
+        m = ds_all.symbol == s
+        if m.any() and len(suspects[s]):
+            d0, d1 = np.searchsorted(tsn, ds_all.start[m]), np.searchsorted(tsn, ds_all.end[m])
+            lab_bad[np.flatnonzero(m)] = [_crosses(suspects[s], a + 1, b) for a, b in zip(d0, d1)]
+    ds = ds_all.subset(np.flatnonzero(~lab_bad))
+    ds.meta = {**ds.meta, "split_contaminated_rows_excluded": int(lab_bad.sum())}
     fac = MD.factories(("prior", "logistic", "hgb"), seed=seed)
     labres = LAB.run(ds, fac, LAB.LabConfig(n_folds=4, embargo_ns=6 * DAY_NS, seed=seed), scenario="integration",
                      ledger=L)
@@ -245,11 +335,23 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
                     family_matrix=fam_matrix, cfg=GauntletConfig(n_boot=200), ledger=L,
                     trial_ids=tuple(df["trial_id"]), candidate_trial_id=best_tid)
 
+    verdict, econ_reasons = economics_verdict(card.verdict, len(sel_contam), sum(v > 0 for v in fam_contam.values()),
+                                              len(fam_contam))
+    bh = SR.baselines(bars)
+    bh_contaminated = sorted(s for s in bars if len(suspects[s]))   # buy-and-hold holds every bar of every symbol
+    if bh_contaminated:
+        bh["buy_and_hold_equal_weight"] = {**bh["buy_and_hold_equal_weight"], "valid": False,
+                                           "invalid_reason": "held across suspected unadjusted splits in %s"
+                                                             % bh_contaminated}
+
     # 7. E — lineage and outcome
     kb.record_lineage("librarian", hypothesis_id=hid, genome_id=best.genome_id, trial_ids=list(df["trial_id"]))
-    if card.verdict != "PASS":
-        kb.reject("librarian", hid, reason="report card %s" % card.verdict, evidence=list(df["trial_id"]),
-                  retest_trigger={"requires": ["approved_real_data_snapshot", "integrated_calibrated_canary"]})
+    if verdict != "PASS":
+        trig = ["approved_real_data_snapshot", "integrated_calibrated_canary"]
+        if econ_reasons:
+            trig.append("validated_corporate_action_adjustment")
+        kb.reject("librarian", hid, reason="integrated verdict %s (report card %s)" % (verdict, card.verdict),
+                  evidence=list(df["trial_id"]), retest_trigger={"requires": trig})
 
     genome_trials = L.trials(fam)
     lab_trials = L.trials("mllab:integration")
@@ -288,6 +390,9 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
         "card_provenance_verified": card.numbers.get("provenance_verified") == 1.0,
         "card_outcomes_verified": card.numbers.get("outcomes_verified") == 1.0,
         "card_cannot_pass_without_integrated_canary": card.verdict != "PASS",
+        "split_crossings_fail_closed": (verdict == "INCONCLUSIVE") if (sel_contam or any(fam_contam.values()))
+                                       else verdict == card.verdict,
+
         "card_computed_pbo_and_spa": fam_matrix is not None and "pbo" in card.numbers,
         "ledger_verifies": L.verify().ok,
     }
@@ -303,7 +408,7 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
         "genome": {"grid_points": len(gs), "invalid": bad, "selected": best.genome_id, "selected_trial": best_tid,
                    "selected_params": best.p, "selection": {k: v for k, v in sel.items() if k != "dsr_best_isolated"},
                    "dsr_best_isolated": sel["dsr_best_isolated"], "portfolio": E.metrics(port),
-                   "baselines": SR.baselines(bars), "fill_time_basis": port.meta["fill_time_basis"],
+                   "baselines": bh, "fill_time_basis": port.meta["fill_time_basis"],
                    "costs": {"engine_fee_bps": ENGINE_CFG.fee_bps, "engine_slippage_bps": ENGINE_CFG.slippage_bps,
                              "label_cost_model": cost.name},
                    "trades_ending_after_a_split_quarantine": int(trades_across_flags),
@@ -317,6 +422,15 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
                 "vs_prior": {x["model"]: x["verdict"] for x in labres.vs_prior},
                 "auc": {k: v.metrics["auc"] for k, v in labres.runs.items()},
                 "card": labres.card.verdict if labres.card else None, "dataset_digest": ds.digest},
+        "corporate_actions": {"policy": CORPORATE_ACTION_POLICY,
+                              "suspect_rows": {s: [int(j) for j in v] for s, v in suspects.items() if len(v)},
+                              "selected_run_contaminated_trades": sel_contam,
+                              "family_trials_contaminated": {k: v for k, v in fam_contam.items() if v},
+                              "labels_contaminated": int(lab["split_contaminated"].sum()),
+                              "lab_rows_excluded": int(lab_bad.sum()),
+                              "buy_and_hold_contaminated_symbols": bh_contaminated},
+        "integrated_verdict": {"verdict": verdict, "reasons": econ_reasons or list(card.reasons),
+                               "economics_valid": not econ_reasons},
         "report_card": {"verdict": card.verdict, "reasons": list(card.reasons),
                         "provenance": {k: card.numbers.get(k) for k in ("provenance_verified", "outcomes_verified",
                                                                         "ledger_metadata_reconciled")}},
@@ -330,7 +444,8 @@ def run(workdir: Path, *, seed: int = 7, n_symbols: int = 16, n_sessions: int = 
 
 
 def render(o: Dict) -> str:
-    g, dc, lab, d = o["genome"], o["decisions"], o["lab"], o["data"]
+    g, dc, lab, d, ca = o["genome"], o["decisions"], o["lab"], o["data"], o["corporate_actions"]
+    bhx = g["baselines"]["buy_and_hold_equal_weight"]
     L = ["# Research lanes connected end to end (offline, synthetic)", "",
          "> One deterministic run through every lane: a synthetic M16-layout store, then F, E, D, A, C and B. No "
          "broker, network, VPS or production data is touched; writes stay inside a temporary work directory. "
@@ -346,12 +461,23 @@ def render(o: Dict) -> str:
           "- The retrospective full-sample audit grades %s and its old exclusion rule would have removed %s from "
           "their WHOLE history, including decisions made before the split was knowable. It is reported only." % (
               d["retrospective_grades"], d["retrospective_rule_would_exclude"] or "none"), "",
+          "## Corporate actions (fail closed)", "",
+          "- Policy: %s." % ca["policy"],
+          "- Bars with a suspected unadjusted split: %s." % (ca["suspect_rows"] or "none"),
+          "- Selected run: %d trade(s) held across one; search trials affected: %s; labels affected: %d (excluded "
+          "from outcome statistics); lab rows excluded: %d; buy-and-hold baseline invalid for %s." % (
+              len(ca["selected_run_contaminated_trades"]), ca["family_trials_contaminated"] or "none",
+              ca["labels_contaminated"], ca["lab_rows_excluded"], ca["buy_and_hold_contaminated_symbols"] or "none"),
+          "- **Integrated verdict: %s** (economics valid: %s). %s" % (
+              o["integrated_verdict"]["verdict"], o["integrated_verdict"]["economics_valid"],
+              "; ".join(o["integrated_verdict"]["reasons"])), "",
           "## Decision records (selected genome `%s`)" % g["selected"], "",
-          "| lane A stage | candidates | definitive | statuses | mean net R (definitive) |", "|---|---|---|---|---|"]
+          "| lane A stage | candidates | definitive | split-contaminated | used | statuses | mean net R (used) |",
+          "|---|---|---|---|---|---|---|"]
     for st, x in sorted(dc["per_stage"].items()):
-        L.append("| %s | %d | %d | %s | %s |" % (st, x["n"], x["definitive"], x["status"],
-                                                 "%+.3f" % x["mean_r_net_definitive"]
-                                                 if np.isfinite(x["mean_r_net_definitive"]) else "—"))
+        L.append("| %s | %d | %d | %d | %d | %s | %s |" % (
+            st, x["n"], x["definitive"], x["split_contaminated"], x["definitive_used"], x["status"],
+            "%+.3f" % x["mean_r_net_definitive"] if np.isfinite(x["mean_r_net_definitive"]) else "—"))
     L += ["", "Engine stages: %s. Only `simulated_entry` candidates were filled by the backtest (simulated, never "
           "an order); every other label is a counterfactual bracket that was never traded. Labels measure the "
           "fixed bracket (stop / target / time), the engine's trades also use the template's signal exit, so the "
@@ -364,13 +490,15 @@ def render(o: Dict) -> str:
               o["hypothesis"]["id"], o["hypothesis"]["status"],
               {k: v for k, v in o["knowledge"].items() if k != "status"}),
           "- **D (genome):** %d grid points, %d invalid. Plateau-selected `%s` with %s. Portfolio: %d trades, "
-          "return %+.1f %%, Sharpe %.2f; equal-weight buy-and-hold Sharpe %.2f. DSR of the best isolated point: "
+          "return %+.1f %%, Sharpe %.2f; equal-weight buy-and-hold Sharpe %.2f%s. DSR of the best isolated point: "
           "%.3f with %d trials. Trades ending after a split quarantine: %d." % (
               g["grid_points"], g["invalid"], g["selected"], g["selected_params"], g["portfolio"]["n_trades"],
               100 * g["portfolio"]["total_return"], g["portfolio"]["sharpe_ann"],
-              g["baselines"]["buy_and_hold_equal_weight"]["sharpe_ann"], g["dsr_best_isolated"]["dsr"],
+              bhx["sharpe_ann"], "" if bhx.get("valid", True) else " (INVALID: %s)" % bhx["invalid_reason"],
+              g["dsr_best_isolated"]["dsr"],
               g["dsr_best_isolated"]["n_trials"], g["trades_ending_after_a_split_quarantine"]),
-          "- **C (lab):** meta-labeling the genome's point-in-time candidates on %d rows. Verdicts vs logistic: %s; "
+          "- **C (lab):** meta-labeling the genome's point-in-time candidates on %d rows (split-crossing labels "
+          "excluded). Verdicts vs logistic: %s; "
           "vs prior: %s; AUC %s; lab report card %s." % (lab["rows"], lab["verdicts"], lab["vs_prior"],
                                                           {k: round(v, 3) for k, v in lab["auc"].items()}, lab["card"]),
           "- **B (integrity):** genome report card **%s** (provenance %s): %s. The integrated pipeline has no "
@@ -410,7 +538,8 @@ def main(argv=None) -> int:
     return 0 if all(o["checks"].values()) else 1
 
 
-__all__ = ["AXES", "STAGE_MAP", "ENGINE_CFG", "point_in_time_universe", "retrospective_exclusions", "decide",
+__all__ = ["AXES", "STAGE_MAP", "ENGINE_CFG", "CORPORATE_ACTION_POLICY", "point_in_time_universe",
+           "retrospective_exclusions", "split_suspect_rows", "contaminated_trades", "economics_verdict", "decide",
            "decisions_to_candidates", "run", "render", "main"]
 
 if __name__ == "__main__":  # pragma: no cover

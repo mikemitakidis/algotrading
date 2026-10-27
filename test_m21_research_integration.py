@@ -188,6 +188,105 @@ class I2_PointInTime(unittest.TestCase):
         self.assertNotIn(self.sym, self.P.retrospective_exclusions(self.raw))
         self.assertIn(self.sym, self.P.retrospective_exclusions(self.mod))   # whole history dropped
 
+    def test_nonfinite_volume_never_reaches_research(self):
+        """Third review (PR #8 -> #11): NaN, infinite and non-numeric volume bars are excluded before any lane."""
+        raw = {s: b.copy() for s, b in self.raw.items()}
+        b = raw[self.sym]
+        b["volume"] = b["volume"].astype(object)
+        bad_ts = [b["ts_utc"].iloc[i] for i in (50, 51, 52)]
+        b.loc[50, "volume"], b.loc[51, "volume"], b.loc[52, "volume"] = np.nan, np.inf, "n/a"
+        bars, _, info = self.P.point_in_time_universe(raw)
+        self.assertEqual(info[self.sym]["inadmissible_rows_removed"], 3)
+        self.assertFalse(set(bad_ts) & set(bars[self.sym]["ts_utc"]))
+        self.assertTrue(np.isfinite(bars[self.sym]["volume"].astype(float)).all())
+
+
+class I3_SplitCrossing(unittest.TestCase):
+    """Third review (PR #11): a position already open when an unadjusted split happens keeps its share count,
+    stop and target while the price halves. Such economics must be flagged and fail closed, without pre-closing
+    the position with hindsight."""
+
+    @classmethod
+    def setUpClass(cls):
+        from research.integration import pipeline as P
+        cls.P = P
+
+    def _fixture(self):
+        n, split = 30, 15
+        ts = pd.date_range("2021-01-04", periods=n, freq="B", tz="UTC") + pd.Timedelta(21, unit="h")
+        px = np.full(n, 100.0)
+        vol = np.full(n, 1e6)
+        px[split:] /= 2.0                                        # unadjusted 2:1 split at bar 15's open
+        vol[split:] *= 2.0
+        b = pd.DataFrame({"ts_utc": ts, "open": px, "high": px * 1.01, "low": px * 0.99, "close": px,
+                          "volume": vol, "quality_flags": 0})
+        return b, split
+
+    def test_hand_built_split_crossing_trade_is_flagged_and_fails_closed(self):
+        from research.genome import engine as E
+        from research.genome import schema as G
+        raw, split = self._fixture()
+        bars, member, info = self.P.point_in_time_universe({"X": raw})
+        self.assertEqual(info["X"]["quarantined_from"], str(raw["ts_utc"].iloc[split]))
+        sig = pd.DataFrame({"entry": np.zeros(30, bool), "exit": np.zeros(30, bool), "atr": np.full(30, 1.0),
+                            "score": np.zeros(30)})
+        sig.loc[10, "entry"] = True                              # decided at bar 10, filled at bar 11's open
+        res = E.run(bars, {"X": sig}, G.ExitSpec(stop_atr=2.0, target_atr=None), G.RiskSpec(0.01, 0.25),
+                    self.P.ENGINE_CFG, member, genome_id="GX")
+        t = res.trades[0]
+        # the defect is real: the raw engine books an artificial gap loss far beyond the 1R stop
+        self.assertEqual((t.exit_reason, t.exit_bar_close_ts), ("stop_loss", raw["ts_utc"].iloc[split]))
+        self.assertLess(t.r_multiple, -10.0)
+        # the guard flags it; the trade is still recorded as simulated (no hindsight pre-close)
+        sus = self.P.split_suspect_rows(bars)
+        self.assertIn(split, list(sus["X"]))
+        bad = self.P.contaminated_trades(res, bars, sus)
+        self.assertEqual([(x["candidate_id"], x["split_rows"]) for x in bad], [(t.candidate_id, [split])])
+        for card in ("PASS", "FAIL"):
+            v, why = self.P.economics_verdict(card, len(bad), 1, 1)
+            self.assertEqual(v, "INCONCLUSIVE")
+            self.assertTrue(any("unadjusted split" in r for r in why))
+        # a trade that closes before the split, and the same fixture without a split, are not flagged
+        sig2 = sig.copy()
+        sig2.loc[12, "exit"] = True
+        res2 = E.run(bars, {"X": sig2}, G.ExitSpec(stop_atr=2.0, target_atr=None), G.RiskSpec(0.01, 0.25),
+                     self.P.ENGINE_CFG, member, genome_id="GX")
+        self.assertEqual(self.P.contaminated_trades(res2, bars, sus), [])
+        flat = raw.copy()
+        flat.loc[split:, ["open", "high", "low", "close"]] *= 2.0
+        flat.loc[split:, "volume"] /= 2.0
+        fb, fm, _ = self.P.point_in_time_universe({"X": flat})
+        self.assertEqual(len(self.P.split_suspect_rows(fb)["X"]), 0)
+        self.assertEqual(self.P.economics_verdict("FAIL", 0, 0, 1), ("FAIL", []))
+
+    def test_multi_seed_control(self):
+        """A seed with split crossings fails closed end to end; a seed without them is left alone."""
+        outs = {}
+        for seed, sp in ((23, 0.5), (7, 0.15)):
+            with tempfile.TemporaryDirectory() as d:
+                outs[seed] = self.P.run(Path(d), seed=seed, n_symbols=10, n_sessions=400, split_prob=sp)
+        hit, clean = outs[23], outs[7]
+        ca = hit["corporate_actions"]
+        self.assertGreater(len(ca["selected_run_contaminated_trades"]), 0)
+        self.assertTrue(ca["family_trials_contaminated"])
+        self.assertEqual(hit["integrated_verdict"]["verdict"], "INCONCLUSIVE")
+        self.assertFalse(hit["integrated_verdict"]["economics_valid"])
+        self.assertGreater(ca["labels_contaminated"], 0)
+        used = sum(x["definitive_used"] for x in hit["decisions"]["per_stage"].values())
+        dfn = sum(x["definitive"] for x in hit["decisions"]["per_stage"].values())
+        self.assertEqual(sum(x["split_contaminated"] for x in hit["decisions"]["per_stage"].values()),
+                         ca["labels_contaminated"])
+        self.assertLessEqual(used, dfn)          # contaminated labels never enter outcome statistics (lane A may
+                                                 # already have marked a split window unobserved)
+        self.assertFalse(hit["genome"]["baselines"]["buy_and_hold_equal_weight"]["valid"])
+        for o in outs.values():
+            for name, ok in o["checks"].items():
+                self.assertTrue(ok, name)
+        cc = clean["corporate_actions"]
+        self.assertEqual((cc["selected_run_contaminated_trades"], cc["family_trials_contaminated"]), ([], {}))
+        self.assertEqual(clean["integrated_verdict"]["verdict"], clean["report_card"]["verdict"])
+        self.assertTrue(clean["integrated_verdict"]["economics_valid"])
+
 
 if __name__ == "__main__":
     unittest.main()
