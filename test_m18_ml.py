@@ -10422,6 +10422,12 @@ class G10_Hygiene(unittest.TestCase):
             "tools/paper_loop/",                            # M21.1extra paper loop
             "bot/market_clock/",                            # M21.1extra-D1 market clock
             "bot/paper_loop_d2/",                           # M21.1extra-D2 loop
+            # M21 research lanes (Issues #2/#3): offline-only package, docs and
+            # root test modules; never imported by production
+            # (guarded in test_m21_research_foundation.py).
+            "research/",
+            "docs/research/",
+            "test_m21_research_",
         )
         allowed_exact = {
             "test_m17_backtesting.py",

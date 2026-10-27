@@ -1,0 +1,165 @@
+{
+  "config": {
+    "n_sessions": 160,
+    "n_symbols": 12,
+    "seed": 20261027
+  },
+  "data_quality": {
+    "delisted_symbols": 3,
+    "flag_counts": {
+      "possible_holiday_or_missing_bar": 98,
+      "series_ended_early": 7,
+      "split_suspect": 12
+    },
+    "n": 993,
+    "of_which_not_definitive": 12,
+    "status": {
+      "n": 993.0,
+      "share_ambiguous": 0.0,
+      "share_definitive": 0.9607250755287009,
+      "share_pending": 0.02014098690835851,
+      "share_unfillable": 0.0,
+      "share_unobserved": 0.019133937562940583
+    },
+    "windows_crossing_a_split": 12
+  },
+  "eod_ambiguity": {
+    "grid": [
+      {
+        "n": 282,
+        "opt_mean_r": 1.4999999999999996,
+        "pess_mean_r": -0.9999999999999994,
+        "resolved_by_15m": 62,
+        "resolved_mean_r": -0.19354838709677413,
+        "resolved_stop_first": 0.6774193548387096,
+        "share_ambiguous_after_15m": 0.0,
+        "share_ambiguous_eod": 0.2198581560283688,
+        "stop_atr": 0.25,
+        "target_atr": 0.375
+      },
+      {
+        "n": 282,
+        "opt_mean_r": 1.5000000000000018,
+        "pess_mean_r": -0.9999999999999994,
+        "resolved_by_15m": 3,
+        "resolved_mean_r": -0.9999999999999994,
+        "resolved_stop_first": 1.0,
+        "share_ambiguous_after_15m": 0.0,
+        "share_ambiguous_eod": 0.010638297872340425,
+        "stop_atr": 0.5,
+        "target_atr": 0.75
+      },
+      {
+        "n": 282,
+        "opt_mean_r": NaN,
+        "pess_mean_r": NaN,
+        "resolved_by_15m": 0,
+        "resolved_mean_r": NaN,
+        "resolved_stop_first": NaN,
+        "share_ambiguous_after_15m": 0.0,
+        "share_ambiguous_eod": 0.0,
+        "stop_atr": 1.0,
+        "target_atr": 1.5
+      },
+      {
+        "n": 282,
+        "opt_mean_r": NaN,
+        "pess_mean_r": NaN,
+        "resolved_by_15m": 0,
+        "resolved_mean_r": NaN,
+        "resolved_stop_first": NaN,
+        "share_ambiguous_after_15m": 0.0,
+        "share_ambiguous_eod": 0.0,
+        "stop_atr": 2.0,
+        "target_atr": 3.0
+      }
+    ]
+  },
+  "runtime_seconds": 50.6,
+  "stage_replay": {
+    "eff_all_stages": {
+      "n_cluster_date": 751.4886488075923,
+      "n_cluster_sector": 1449.1549521748063,
+      "n_cluster_symbol": 2288.7907541824047,
+      "n_effective": 748.0223565888991,
+      "n_raw": 18181.0,
+      "n_twoway": 748.0223565888991,
+      "n_uniqueness": 2345.771014044906,
+      "reasons": [],
+      "status": "ok"
+    },
+    "eff_executed_only": {
+      "n_cluster_date": 240.85153561583184,
+      "n_cluster_sector": 138.54838651939815,
+      "n_cluster_symbol": 201.11090483789175,
+      "n_effective": 138.54838651939815,
+      "n_raw": 329.0,
+      "n_twoway": 166.3438434790291,
+      "n_uniqueness": 329.0,
+      "reasons": [],
+      "status": "ok"
+    },
+    "gates_md": "| gate | blocked (definitive) | ambiguous | unobserved/unfillable | mean R blocked | mean R passed | passed \u2212 blocked (95 % CI) | avoided loss R | forfeited gain R |\n|---|---|---|---|---|---|---|---|---|\n| daily_entry_cap | 506 (506) | 0 % | 0 % | -0.029 | 0.151 | 0.180 (0.001 to 0.353) | 271.3 | 256.7 |\n| low_volume | 1038 (1037) | 0 % | 0 % | 0.168 | 0.151 | -0.017 (-0.143 to 0.108) | 321.3 | 495.2 |\n| rsi_extreme | 797 (796) | 0 % | 0 % | 0.230 | 0.151 | -0.079 (-0.206 to 0.051) | 232.7 | 415.6 |\n| symbol_exposure | 1405 (1396) | 0 % | 0 % | 0.204 | 0.151 | -0.053 (-0.161 to 0.056) | 366.0 | 651.1 |\n\n_Observational: blocked and passed candidates may differ in ways other than the gate. Counterfactual R uses modelled fills and is not P&L._\n",
+    "mean_r_net_by_stage": {
+      "blocked_gate": 0.17801629911505729,
+      "blocked_risk": 0.20422790728918688,
+      "executed": 0.1508197900215862,
+      "near_miss": -0.008547800484568983,
+      "rejected": -0.10048954785397765,
+      "skipped_capacity": -0.028781659592766514
+    },
+    "multiplier_effective": 5.398997241185256,
+    "multiplier_raw": 55.26139817629179,
+    "n_candidates": 18287,
+    "parity": {
+      "compared": 6122,
+      "known_divergence": 0,
+      "match": 6122,
+      "mismatch": 0,
+      "skipped": 0
+    },
+    "spec_digest": "88af6eb05daf2e0372986f7a08b4e56ed370a97058fe50e49f4d84e58a5ab060",
+    "stage_counts": {
+      "blocked_gate": 1612,
+      "blocked_risk": 1405,
+      "executed": 332,
+      "near_miss": 12796,
+      "rejected": 1636,
+      "skipped_capacity": 506
+    },
+    "stage_status": {
+      "blocked_gate": {
+        "definitive": 1610,
+        "pending": 2
+      },
+      "blocked_risk": {
+        "definitive": 1396,
+        "pending": 9
+      },
+      "executed": {
+        "definitive": 329,
+        "pending": 3
+      },
+      "near_miss": {
+        "definitive": 12713,
+        "pending": 83
+      },
+      "rejected": {
+        "definitive": 1627,
+        "pending": 9
+      },
+      "skipped_capacity": {
+        "definitive": 506,
+        "pending": 0
+      }
+    },
+    "status": {
+      "n": 18287.0,
+      "share_ambiguous": 0.0,
+      "share_definitive": 0.9942035325641165,
+      "share_pending": 0.005796467435883414,
+      "share_unfillable": 0.0,
+      "share_unobserved": 0.0
+    }
+  }
+}

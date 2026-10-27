@@ -4180,7 +4180,14 @@ class G10_Hygiene(unittest.TestCase):
                             "tools/signal_scoring/",
                             "tools/paper_loop/",
                             "bot/market_clock/",
-                            "bot/paper_loop_d2/")
+                            "bot/paper_loop_d2/",
+                            # M21 research lanes (Issues #2/#3): offline-only
+                            # package, its docs and root test modules. Never
+                            # imported by production (guarded in
+                            # test_m21_research_foundation.py).
+                            "research/",
+                            "docs/research/",
+                            "test_m21_research_")
         allowed_exact = {
             "test_m17_backtesting.py",
             "MILESTONE_STATUS.md",

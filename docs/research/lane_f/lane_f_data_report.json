@@ -1,0 +1,116 @@
+{
+ "calibration": {
+  "causal_splits": {
+   "false_negative": 8,
+   "false_positive": 1,
+   "precision": 0.9824561403508771,
+   "recall": 0.875,
+   "true_positive": 56
+  },
+  "clean_markets": {
+   "graded_clean": 191,
+   "symbols": 200
+  },
+  "delistings": {
+   "symbols": 200,
+   "symbols_correct": 198
+  },
+  "missing_bars": {
+   "symbols": 200,
+   "symbols_exact": 200
+  },
+  "n_sessions": 750,
+  "n_symbols": 40,
+  "seeds": [
+   21,
+   22,
+   23,
+   24,
+   25
+  ],
+  "splits": {
+   "false_negative": 2,
+   "false_positive": 1,
+   "precision": 0.9841269841269841,
+   "recall": 0.96875,
+   "true_positive": 62
+  }
+ },
+ "lane": "F",
+ "repo_inventory": {
+  "bar_files": [],
+  "data_dir_exists": true,
+  "files": [
+   "data/symbol_metadata.csv",
+   "data/symbol_universe.csv"
+  ],
+  "finding": "the repository holds no historical bars; the M16 parquet store lives on the production host",
+  "has_bars": false,
+  "metadata": {
+   "blank_industry": 120,
+   "duplicates": 0,
+   "rows": 120,
+   "sectors": {
+    "Communication Services": 8,
+    "Consumer Discretionary": 12,
+    "Consumer Staples": 9,
+    "Energy": 5,
+    "Financials": 15,
+    "Healthcare": 22,
+    "Industrials": 12,
+    "Materials": 4,
+    "Real Estate": 3,
+    "Technology": 27,
+    "Utilities": 3
+   }
+  },
+  "universe": {
+   "duplicates": 0,
+   "list": [
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "NVDA",
+    "TSLA",
+    "JPM",
+    "WMT",
+    "KO"
+   ],
+   "missing_metadata": [],
+   "symbols": 10
+  }
+ },
+ "report_digest": "65fd913edff200f1bf5c77b0abaf57f410701e9b99b5cc43c1d376b61048c7e4",
+ "runtime_seconds": 12.6,
+ "snapshot": {
+  "clean_verify": [],
+  "example_entry": {
+   "bytes": 17368,
+   "columns": [
+    "ts_utc",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quality_flags"
+   ],
+   "first_ts": "2018-01-02 21:00:00+00:00",
+   "last_ts": "2018-12-17 21:00:00+00:00",
+   "path": "synthetic/1D/S000.parquet",
+   "readable": true,
+   "rows": 250,
+   "sha256": "a424e49c9b6f7fb2321020d09b02420c715b7a81a59132fcf530e02a9d73e223"
+  },
+  "files": 5,
+  "inventory_files": 5,
+  "snapshot_digest": "c15bce532319e674dcdb48e10455b61dd0c30465e0afb245b32ce12fa72db2d0",
+  "tampered_verify": [
+   "modified: synthetic/1D/S000.parquet",
+   "missing: synthetic/1D/S004.parquet",
+   "unexpected: synthetic/1D/S999.parquet"
+  ]
+ }
+}
