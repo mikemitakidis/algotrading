@@ -13,6 +13,7 @@
   "genome_trials_carry_research_seed": true,
   "genome_trials_carry_snapshot_digest": true,
   "inadmissible_bars_excluded": true,
+  "lab_context_uses_point_in_time_eligibility": true,
   "lab_dataset_traces_to_snapshot": true,
   "lab_rows_are_point_in_time_eligible": true,
   "lab_trials_carry_dataset_and_code": true,
@@ -294,7 +295,7 @@
    "rsi_mode": "sma_gain_loss",
    "rsi_period": 14
   },
-  "selected_trial": "T000008-e88cc5e3",
+  "selected_trial": "T000008-1a428b30",
   "selection": {
    "best_isolated": {
     "genome_id": "mean_reversion-2f0e650247ad",
@@ -340,24 +341,30 @@
  },
  "lab": {
   "auc": {
-   "hgb": 0.6594574780058651,
-   "logistic": 0.685483870967742,
-   "prior": 0.5032991202346041
+   "hgb": 0.4642857142857143,
+   "logistic": 0.6114718614718615,
+   "prior": 0.3430735930735931
   },
-  "card": "INCONCLUSIVE",
-  "dataset_digest": "4a3f0472cbcfbde905bff5ef38dfe81e62110c127832d68770d846b47e63a571",
-  "rows": 113,
+  "card": "FAIL",
+  "context": {
+   "context_eligibility": "point-in-time mask",
+   "context_unavailable_ts": 1,
+   "min_context_symbols": 3
+  },
+  "dataset_digest": "2113a4b1dad1f9eae9ab167afda917fb53ecf691c048f8ac1de99d967ce378ef",
+  "rows": 99,
+  "unobserved_path_labels_excluded": 14,
   "verdicts": {
-   "hgb": "NO_EVIDENCE"
+   "hgb": "WORSE"
   },
   "vs_prior": {
-   "hgb": "DECISIONS_ONLY",
-   "logistic": "DECISIONS_ONLY"
+   "hgb": "NO_EVIDENCE",
+   "logistic": "PROBABILITIES_ONLY"
   }
  },
  "ledger": {
   "entries": 24,
-  "tip": "f7e51a2a0b1a84372338a864624178d45d6c9ea29a5f0c5309ef4dfca5346272"
+  "tip": "4bcae3e48cbc77e53247700d91301f96380c2efb3ababc24c2da5f0d55b221bb"
  },
  "report_card": {
   "provenance": {
@@ -370,5 +377,5 @@
   ],
   "verdict": "INCONCLUSIVE"
  },
- "runtime_seconds": 9.4
+ "runtime_seconds": 8.6
 }
