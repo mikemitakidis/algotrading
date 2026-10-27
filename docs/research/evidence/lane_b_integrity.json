@@ -7,7 +7,7 @@
       "notes": "",
       "null_calibrated": true,
       "null_passes": 1,
-      "plan_digest": "7a52d980784b6fb7e2fa15d5a354547e33d0b244103a1758c543d702a7414a67",
+      "plan_digest": "de709875e990bac3ad8d447e59208544c064607709a1c944e92b21d699853558",
       "power": [
         {
           "detections": 0,
@@ -51,6 +51,7 @@
         }
       ],
       "power_ok": true,
+      "power_rule": "cp_lower_bound_at_every_required_effect",
       "verdict": "CALIBRATED"
     },
     "naive": {
@@ -60,7 +61,7 @@
       "notes": "",
       "null_calibrated": false,
       "null_passes": 24,
-      "plan_digest": "2984760c9ffd486dd153bb5b5a25b59652636e51bc229b45eb57ca7bb3db0a27",
+      "plan_digest": "817c317399ce43b351e09eadc012492a31b95ecced323ba2f53fdfb14848fa87",
       "power": [
         {
           "detections": 17,
@@ -104,6 +105,7 @@
         }
       ],
       "power_ok": true,
+      "power_rule": "cp_lower_bound_at_every_required_effect",
       "verdict": "NOT_CALIBRATED"
     }
   },
@@ -127,7 +129,7 @@
   },
   "family_variants": 12,
   "ledger": {
-    "entries": 489,
+    "entries": 492,
     "jsonl": "lane_b_ledger.jsonl",
     "jsonl_verified": true,
     "tamper_detected_at_seq": 1,
@@ -144,9 +146,16 @@
       "reason": "metric dsr >= 0.95: not met",
       "value": 0.5
     },
-    "second_evaluation": "refused: pre-registration 86dd105c8602 was already evaluated (one-shot)"
+    "second_evaluation": "refused: pre-registration 86dd105c8602 was already evaluated (one-shot)",
+    "untrusted_attestation_evaluation": {
+      "effective_n": 40,
+      "passed": false,
+      "prereg_digest": "3ab044f9c76417c27e1a890eeafccd6c60fe23ed8343a0b78b99aece977f6ec5",
+      "reason": "attestation is declared, not independently verified: local diagnostic only",
+      "value": 0.99
+    }
   },
-  "runtime_seconds": 42.5,
+  "runtime_seconds": 62.1,
   "snooping": {
     "null": {
       "mean_eff_trials_cluster": 3.6,

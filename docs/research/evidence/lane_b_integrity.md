@@ -19,6 +19,8 @@ Detection rate (power) on markets with a planted drop-reversal effect of the giv
 | 0.30 | 30/30 | 29/30 (83–100 %) |
 | 0.40 | 30/30 | 29/30 (83–100 %) |
 
+Verdict rule: CALIBRATED needs the one-sided 95 % upper bound on the null false-pass rate at or below 5 % **and** the exact lower bound of the detection rate at every required effect (by default the largest) at or above 80 %. Each battery plan is ledgered before it runs and can be used only once.
+
 ## 2. Data-snooping tests across 20 null and 20 planted (strength 0.4) markets
 
 | datasets | Hansen SPA rejections at 5 % (95 % CI) | White RC rejections at 5 % (95 % CI) | mean PBO | mean effective trials (eigen / cluster) |
@@ -30,12 +32,13 @@ Mean PBO is 0.47 on null markets (about 0.5 means picking the in-sample best var
 
 ## 3. Ledger integrity
 
-- Entries: 489; chain verified: **True**; JSONL mirror verified: **True**.
+- Entries: 492; chain verified: **True**; JSONL mirror verified: **True**.
 - Tampered copy (one payload edited after dropping the UPDATE trigger): verified = **False**, detected at entry 1 (entry content does not match its hash).
 
-## 4. Pre-registration is one-shot
+## 4. Pre-registration needs a trusted timestamp and is one-shot
 
-- First evaluation: metric dsr >= 0.95: not met.
+- Caller-declared (untrusted) timestamp, metric value far above threshold: passed = False (attestation is declared, not independently verified: local diagnostic only).
+- Authority-signed timestamp, first evaluation: metric dsr >= 0.95: not met.
 - Second evaluation: refused: pre-registration 86dd105c8602 was already evaluated (one-shot).
 
-_Runtime 42.5 s. Reproduce with the command above; all randomness is seeded._
+_Runtime 62.1 s. Reproduce with the command above; all randomness is seeded._

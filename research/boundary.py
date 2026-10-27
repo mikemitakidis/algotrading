@@ -1,21 +1,34 @@
-"""research.boundary — the import boundary of the offline research package.
+"""research.boundary — STRUCTURAL import lint for the offline research package.
 
-The research package may read market data and reuse the deterministic research
-libraries that already exist (M16 store readers, M17 simulator, M18 ML, M19
-scoring). It must never reach a broker, send a message, touch runtime state,
-load secrets or open a network connection.
+SECURITY SCOPE (read this first): this module is a static lint, NOT a sandbox.
+It parses source with ``ast`` and reports imports of forbidden modules. It
+cannot stop what running Python can do without importing anything new:
+``open()``, ``pathlib`` reads/writes, ``os.system`` / ``os.environ`` (``os``
+itself is not forbidden), ``eval`` / ``exec`` / ``compile``, attribute access
+built at runtime with ``getattr``, introspection escapes, and so on.
+
+Therefore:
+* Passing ``scan_source`` is NEVER evidence that code is safe to execute.
+  ``may_execute_untrusted`` returns False for every input by contract, and
+  ``vet_for_execution`` always raises ``NotASandboxError``.
+* Untrusted or AI-generated code (lane E, canonical B22) may only ever run
+  inside an OS/container-level sandbox with no secrets, no network, read-only
+  inputs, scoped write paths and process limits — a separate, operator-approved
+  design. A growing AST denylist is not, and will not become, that boundary.
+* ``capability_findings`` lists risky capabilities (file, process,
+  environment, dynamic evaluation, introspection) to help a HUMAN reviewer;
+  an empty list is likewise not a safety guarantee.
+
+What the lint is for: keeping the research package's own imports inside the
+read-only libraries (M16 store readers, M17 simulator, M18 ML, M19 scoring)
+and away from broker, order, notifier, kill-switch, runtime, dashboard,
+network, secret-loading and process-spawning modules.
 
 Policy (deny by default for ``bot.*``):
-
 * ``bot.*`` imports must match ``ALLOWED_BOT_MODULES`` (exact module or a
   sub-module of an allowed package).
-* ``FORBIDDEN_MODULES`` (network, broker SDKs, secrets, process spawning) are
-  rejected anywhere under ``research/``.
+* ``FORBIDDEN_MODULES`` are rejected anywhere under ``research/``.
 * ``dashboard``, ``main``, ``tools`` and ``server_scripts`` are rejected.
-
-``scan_file`` / ``scan_tree`` are pure AST helpers (no import, no execution).
-They are reused by the foundation guard test and by the agent sandbox (lane E)
-to vet generated code before it can be run.
 """
 from __future__ import annotations
 
@@ -139,7 +152,71 @@ def scan_tree(root: Path) -> List[ImportViolation]:
     return out
 
 
+# ── capability findings (reviewer aid, NOT a security control) ─────────
+
+SECURITY_SCOPE = "structural_import_lint_only_not_a_sandbox"
+
+RISKY_CALLS = frozenset({
+    "eval", "exec", "compile", "__import__", "open", "getattr", "setattr", "delattr", "globals",
+    "locals", "vars", "input", "breakpoint", "memoryview",
+})
+RISKY_ATTRS = frozenset({
+    # process / OS
+    "system", "popen", "fork", "forkpty", "kill", "killpg", "execv", "execve", "execl", "execle",
+    "execlp", "execvp", "execvpe", "spawnl", "spawnv", "spawnve", "posix_spawn", "startfile",
+    # environment
+    "environ", "getenv", "putenv", "unsetenv",
+    # filesystem
+    "remove", "unlink", "rmdir", "removedirs", "rmtree", "rename", "renames", "replace", "chmod",
+    "chown", "symlink", "symlink_to", "link", "mkdir", "makedirs", "write_text", "write_bytes",
+    "read_text", "read_bytes", "open", "touch", "copyfile", "copytree", "move",
+    # introspection escapes
+    "__subclasses__", "__globals__", "__builtins__", "__dict__", "__code__", "__class__", "__bases__",
+    "__mro__", "f_globals", "f_locals", "gi_frame",
+})
+
+
+@dataclass(frozen=True)
+class CapabilityFinding:
+    path: str
+    line: int
+    capability: str
+
+
+def capability_findings(source: str, path: str = "<string>") -> List[CapabilityFinding]:
+    """Risky capabilities a human reviewer should look at. Incomplete by
+    design: an empty result does NOT mean the code is safe."""
+    tree = ast.parse(source, filename=path)
+    out: List[CapabilityFinding] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in RISKY_CALLS:
+            out.append(CapabilityFinding(path, node.lineno, "call:%s" % node.func.id))
+        elif isinstance(node, ast.Attribute) and node.attr in RISKY_ATTRS:
+            out.append(CapabilityFinding(path, node.lineno, "attr:%s" % node.attr))
+        elif isinstance(node, ast.Name) and node.id == "__builtins__":
+            out.append(CapabilityFinding(path, node.lineno, "name:__builtins__"))
+    return out
+
+
+class NotASandboxError(PermissionError):
+    """Raised whenever a caller asks this lint to authorise code execution."""
+
+
+def may_execute_untrusted(source: str) -> bool:
+    """Always False: no static check here can make untrusted code safe to run."""
+    return False
+
+
+def vet_for_execution(source: str, path: str = "<string>") -> None:
+    """Refuse, always. Execution of untrusted code needs an OS/container sandbox."""
+    raise NotASandboxError(
+        "research.boundary is a structural import lint, not a sandbox (%s): untrusted or generated "
+        "code must only run inside an approved OS/container sandbox with no secrets or network" % path)
+
+
 __all__ = [
-    "ALLOWED_BOT_MODULES", "FORBIDDEN_MODULES", "FORBIDDEN_TOP_LEVEL",
+    "ALLOWED_BOT_MODULES", "FORBIDDEN_MODULES", "FORBIDDEN_TOP_LEVEL", "SECURITY_SCOPE",
     "ImportViolation", "classify", "scan_source", "scan_file", "scan_tree",
+    "RISKY_CALLS", "RISKY_ATTRS", "CapabilityFinding", "capability_findings",
+    "NotASandboxError", "may_execute_untrusted", "vet_for_execution",
 ]

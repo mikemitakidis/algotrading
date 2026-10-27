@@ -11,6 +11,15 @@ for its digest (e.g. the `created_at` of a GitHub issue or PR comment that
 contains the digest, read back from the API) and that timestamp precedes the
 forward window. Posting the digest is a manual, reviewer-visible step.
 
+Trust (PR #5 review, P1): an attestation is only TRUSTED when it carries a
+signature from a separately held authority (``research.integrity.authority``)
+over the digest, timestamp, source and evidence URL — e.g. an independent CI
+verifier that read the GitHub comment's ``created_at`` through the API.
+Attestations typed in by a caller are recorded as ``untrusted_declared`` and
+can never make an evaluation pass (``require_trusted`` defaults to True).
+Until connected to such an operational authority this module is a local
+policy model, not proof that a research agent could not see future data.
+
 One-shot: a pre-registration can be evaluated exactly once. A second
 evaluation is refused and the refusal is visible in the ledger.
 """
@@ -21,7 +30,10 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from research.common.hashing import digest
+from research.integrity.authority import TRUST_AUTHORITY_SIGNED, TRUST_UNTRUSTED_DECLARED, Verifier
 from research.integrity.ledger import Ledger, LedgerError
+
+ATTESTATION_PURPOSE = "prereg_attestation"
 
 COMPARATORS = (">", ">=", "<", "<=")
 
@@ -70,20 +82,36 @@ def register(ledger: Ledger, p: PreRegistration) -> str:
     return d
 
 
-def attest(ledger: Ledger, prereg_digest: str, *, server_timestamp_utc: str, source: str,
-           evidence_url: str) -> None:
-    """Record a server-side timestamp for a pre-registration digest.
+def attestation_payload(prereg_digest: str, server_timestamp_utc: str, source: str, evidence_url: str) -> Dict[str, Any]:
+    return {"prereg_digest": prereg_digest, "server_timestamp_utc": server_timestamp_utc, "source": source,
+            "evidence_url": evidence_url}
 
-    `source` names the authority (e.g. "github_issue_comment.created_at");
-    `evidence_url` lets a reviewer re-check it. This function never contacts
-    the network: the caller supplies values read by a reviewer or an approved
-    tool.
+
+def attest(ledger: Ledger, prereg_digest: str, *, server_timestamp_utc: str, source: str,
+           evidence_url: str, signature: str = "", verifier: Optional[Verifier] = None) -> str:
+    """Record a server-side timestamp for a pre-registration digest; returns its trust level.
+
+    Without a verifier and a valid authority signature the attestation is
+    stored as ``untrusted_declared``. An invalid signature is refused. This
+    function never contacts the network.
     """
     if not ledger.entries("prereg", prereg_digest):
         raise LedgerError("unknown pre-registration %s" % prereg_digest[:12])
     datetime.fromisoformat(server_timestamp_utc)
-    ledger.append("attestation", {"server_timestamp_utc": server_timestamp_utc, "source": source,
-                                  "evidence_url": evidence_url}, ref_id=prereg_digest)
+    payload = attestation_payload(prereg_digest, server_timestamp_utc, source, evidence_url)
+    trust, authority = TRUST_UNTRUSTED_DECLARED, ""
+    if verifier is not None or signature:
+        if verifier is None or not verifier.verify(ATTESTATION_PURPOSE, payload, signature):
+            raise LedgerError("attestation signature does not verify")
+        trust, authority = TRUST_AUTHORITY_SIGNED, verifier.authority_id
+    ledger.append("attestation", {**payload, "trust": trust, "authority": authority, "signature": signature},
+                  ref_id=prereg_digest)
+    return trust
+
+
+def trusted_attestations(ledger: Ledger, prereg_digest: str):
+    return [a for a in ledger.entries("attestation", prereg_digest)
+            if a.payload.get("trust") == TRUST_AUTHORITY_SIGNED]
 
 
 def _compare(v: float, op: str, thr: float) -> bool:
@@ -91,20 +119,27 @@ def _compare(v: float, op: str, thr: float) -> bool:
 
 
 def evaluate_once(ledger: Ledger, prereg_digest: str, *, value: float, effective_n: int,
-                  data_first_ts_utc: str, data_digest: str) -> PreregOutcome:
-    """Evaluate a pre-registration exactly once, fail-closed."""
+                  data_first_ts_utc: str, data_digest: str, require_trusted: bool = True) -> PreregOutcome:
+    """Evaluate a pre-registration exactly once, fail-closed. Only
+    authority-signed attestations count unless require_trusted=False (local
+    diagnostics; such an outcome is labelled untrusted and never passes)."""
     rows = ledger.entries("prereg", prereg_digest)
     if not rows:
         raise LedgerError("unknown pre-registration %s" % prereg_digest[:12])
     if ledger.entries("prereg_evaluation", prereg_digest):
         raise LedgerError("pre-registration %s was already evaluated (one-shot)" % prereg_digest[:12])
     p = rows[0].payload
-    att = ledger.entries("attestation", prereg_digest)
+    all_att = ledger.entries("attestation", prereg_digest)
+    att = trusted_attestations(ledger, prereg_digest)
     window = datetime.fromisoformat(p["forward_window_start_utc"])
     first = datetime.fromisoformat(data_first_ts_utc)
     reason = ""
-    if not att:
+    if not all_att:
         reason = "no server-side attestation: not provably out-of-sample"
+    elif not att and require_trusted:
+        reason = "attestation is declared, not independently verified: local diagnostic only"
+    elif not att:
+        reason = "untrusted attestation (require_trusted=False): local diagnostic only, cannot pass"
     elif min(datetime.fromisoformat(a.payload["server_timestamp_utc"]) for a in att) >= window:
         reason = "attested after the forward window started: not out-of-sample"
     elif first < window:
