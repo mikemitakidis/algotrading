@@ -62,6 +62,32 @@ class F1_ImportBoundary(unittest.TestCase):
         self.assertIn((4, "<dynamic import>"), got)
         self.assertFalse(any(line == 5 for line, _ in got))
 
+    def test_lint_is_not_a_sandbox_known_bypasses(self):
+        """Known escapes need no forbidden import: the import lint does not
+        see them, capability_findings flags them for a human, and nothing
+        here ever authorises execution (review of PR #4, P1)."""
+        bypasses = {
+            "os_system": "import os\nos.system('id')\n",
+            "file_read": "open('/etc/passwd').read()\n",
+            "pathlib": "from pathlib import Path\nPath('x').read_text()\n",
+            "environ": "import os\nsecret = os.environ['X']\n",
+            "eval": "eval('1+1')\n",
+            "exec": "exec('x = 1')\n",
+            "getattr": "import os\ngetattr(os, 'sys' + 'tem')('id')\n",
+            "introspection": "().__class__.__bases__[0].__subclasses__()\n",
+        }
+        for name, src in bypasses.items():
+            self.assertEqual(boundary.scan_source(src), [], name)          # the lint does not catch it
+            self.assertTrue(boundary.capability_findings(src), name)       # reviewer aid flags it
+            self.assertFalse(boundary.may_execute_untrusted(src), name)
+            with self.assertRaises(boundary.NotASandboxError):
+                boundary.vet_for_execution(src)
+        self.assertFalse(boundary.may_execute_untrusted("x = 1\n"))       # even trivially clean code
+        self.assertEqual(boundary.SECURITY_SCOPE, "structural_import_lint_only_not_a_sandbox")
+        doc = boundary.__doc__.lower()
+        self.assertIn("not a sandbox", doc)
+        self.assertNotIn("vet generated code before it can be run", doc)
+
     def test_no_production_code_imports_research(self):
         roots = [REPO / "bot", REPO / "dashboard", REPO / "tools", REPO / "server_scripts"]
         files = [p for r in roots if r.exists() for p in r.rglob("*.py") if "__pycache__" not in p.parts]
@@ -178,6 +204,19 @@ class F4_Bars(unittest.TestCase):
             self.assertEqual(B.validate_ohlcv(v), [])
         with self.assertRaises(ValueError):
             B.resample(mt["1H"], "15m", source_tf="1H")
+
+    def test_resample_refuses_real_calendar_bars(self):
+        """Synthetic-session helpers must not bucket real exchange data
+        (review of PR #4, P2): US summer bars at 13:30-20:00 UTC are refused."""
+        self.assertEqual(B.CALENDAR_SCOPE, "synthetic_only")
+        ts = pd.date_range("2024-07-01 13:45", periods=26, freq="15min", tz="UTC")   # EDT session
+        real = _bars(ts, [10.0] * 26, [10.5] * 26, [9.5] * 26, [10.0] * 26, [1.0] * 26)
+        with self.assertRaisesRegex(ValueError, "exchange-calendar"):
+            B.resample(real, "1H")
+        odd = _bars(pd.date_range("2024-07-01 14:52", periods=3, freq="15min", tz="UTC"),
+                    [10.0] * 3, [10.5] * 3, [9.5] * 3, [10.0] * 3, [1.0] * 3)
+        with self.assertRaises(ValueError):
+            B.resample(odd, "1D")
 
 
 def _rich_spec(**kw):

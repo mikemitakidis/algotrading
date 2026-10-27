@@ -9,6 +9,13 @@ Conventions used by every research lane:
   at an anchor only when ``ts_utc <= anchor``.
 * Synthetic US sessions run 14:30–21:00 UTC (09:30–16:00 ET, daylight saving
   ignored). Daily bars are stamped at the session close.
+
+CALENDAR SCOPE: the session helpers here (``session_key``, ``resample``,
+``multi_timeframe``) describe the SYNTHETIC calendar only — no daylight saving,
+no exchange holidays, no half days. ``resample`` refuses bars that do not sit
+on that grid, so real market data (e.g. US bars at 13:30 UTC in summer) cannot
+silently be bucketed with synthetic assumptions. Real-market adapters must
+use an actual exchange calendar and the source's own bar start/end times.
 """
 from __future__ import annotations
 
@@ -22,6 +29,7 @@ TS_CONVENTION = "bar_close_utc"
 TF_MINUTES: Dict[str, int] = {"15m": 15, "1H": 60, "4H": 240, "1D": 390}
 SESSION_OPEN_UTC = (14, 30)
 SESSION_MINUTES = 390
+CALENDAR_SCOPE = "synthetic_only"
 
 
 def validate_ohlcv(df: pd.DataFrame, *, name: str = "bars") -> List[str]:
@@ -73,6 +81,12 @@ def resample(bars: pd.DataFrame, target_tf: str, *, source_tf: str = "15m") -> p
     day = session_key(ts)
     open_utc = day + pd.Timedelta(SESSION_OPEN_UTC[0] * 60 + SESSION_OPEN_UTC[1], unit="m")
     start_min = ((ts - open_utc).dt.total_seconds() // 60).astype(int) - TF_MINUTES[source_tf]
+    off_grid = (start_min < 0) | (start_min + TF_MINUTES[source_tf] > SESSION_MINUTES) \
+        | (start_min % TF_MINUTES[source_tf] != 0)
+    if off_grid.any():
+        raise ValueError("bars are not on the synthetic 14:30-21:00 UTC %s grid (first offender %s); "
+                         "real market data needs an exchange-calendar resampler" % (
+                             source_tf, ts[off_grid].iloc[0]))
     if target_tf == "1D":
         bucket = pd.Series(0, index=bars.index)
     else:
@@ -101,5 +115,5 @@ def multi_timeframe(bars_15m: pd.DataFrame, timeframes=("1D", "4H", "1H", "15m")
 
 
 __all__ = ["BAR_COLUMNS", "TS_CONVENTION", "TF_MINUTES", "SESSION_OPEN_UTC",
-           "SESSION_MINUTES", "validate_ohlcv", "session_key", "resample",
+           "SESSION_MINUTES", "CALENDAR_SCOPE", "validate_ohlcv", "session_key", "resample",
            "multi_timeframe"]
