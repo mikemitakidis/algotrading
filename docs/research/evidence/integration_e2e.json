@@ -1,53 +1,212 @@
 {
  "checks": {
-  "card_cannot_pass_without_canary": true,
+  "ambiguous_bars_not_resolved_into_fills": true,
+  "candidate_ids_use_lane_a_formula": true,
+  "card_cannot_pass_without_integrated_canary": true,
   "card_charged_for_all_genome_trials": true,
   "card_computed_pbo_and_spa": true,
+  "card_outcomes_verified": true,
   "card_provenance_verified": true,
-  "every_candidate_labelled": true,
+  "engine_skips_match_decisions": true,
+  "every_decision_is_one_candidate": true,
+  "genome_trials_carry_code_identity": true,
+  "genome_trials_carry_research_seed": true,
   "genome_trials_carry_snapshot_digest": true,
+  "inadmissible_bars_excluded": true,
   "lab_dataset_traces_to_snapshot": true,
+  "lab_rows_are_point_in_time_eligible": true,
+  "lab_trials_carry_dataset_and_code": true,
   "ledger_verifies": true,
+  "no_candidate_labelled_executed": true,
   "snapshot_verifies": true,
-  "split_suspects_excluded": true
- },
- "counterfactual": {
-  "candidates": 108,
-  "definitive": 108,
-  "effective_n": {
-   "n_effective": 26.911218405580602,
-   "n_raw": 108.0,
-   "status": "ok"
-  },
-  "executed_trades": 58,
-  "mean_r_net_definitive": 0.9973044628407118,
-  "status_counts": {
-   "definitive": 108
-  }
+  "stages_conserved": true,
+  "trades_join_simulated_entries_on_id_and_fill_time": true,
+  "universe_is_point_in_time": true
  },
  "data": {
-  "excluded": [
+  "files": 16,
+  "inadmissible_rows_removed": 0,
+  "point_in_time": {
+   "S000": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-01-22 21:00:00+00:00",
+    "rows": 700
+   },
+   "S001": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S002": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-01-28 21:00:00+00:00",
+    "rows": 697
+   },
+   "S003": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S004": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S005": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 695
+   },
+   "S006": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S007": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 693
+   },
+   "S008": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 694
+   },
+   "S009": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 696
+   },
+   "S010": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2018-09-24 21:00:00+00:00",
+    "rows": 695
+   },
+   "S011": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 700
+   },
+   "S012": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 698
+   },
+   "S013": {
+    "causal_split_flags": 1,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": "2019-04-08 21:00:00+00:00",
+    "rows": 698
+   },
+   "S014": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 698
+   },
+   "S015": {
+    "causal_split_flags": 0,
+    "inadmissible_rows_removed": 0,
+    "quarantined_from": null,
+    "rows": 699
+   }
+  },
+  "quarantined_symbols": [
    "S000",
    "S002",
    "S010",
    "S013"
   ],
-  "files": 16,
-  "grades": {
+  "retrospective_grades": {
    "clean": 4,
    "unusable": 0,
    "usable_with_warnings": 12
   },
+  "retrospective_note": "full-sample audit: reported only, not used for any decision",
+  "retrospective_rule_would_exclude": [
+   "S000",
+   "S002",
+   "S010",
+   "S013"
+  ],
   "snapshot_digest": "f8eb3290d2384af3ed3e09d212ab36e2a5542aa5203c87fa31c8f2418f7267d3",
-  "symbols": 16,
-  "usable": 12
+  "symbols": 16
+ },
+ "decisions": {
+  "candidate_stages": {
+   "blocked_gate": 107,
+   "rejected": 190,
+   "simulated_entry": 62
+  },
+  "effective_n_all_definitive": {
+   "n_effective": 63.47670129719982,
+   "n_raw": 357.0,
+   "status": "ok"
+  },
+  "effective_n_simulated_entries": {
+   "n_effective": 39.339388491182234,
+   "n_raw": 62.0,
+   "status": "ok"
+  },
+  "engine_stages": {
+   "blocked_capacity": 0,
+   "blocked_risk": 0,
+   "entered": 62,
+   "no_next_bar": 0,
+   "not_in_universe": 50,
+   "position_already_open": 57,
+   "reentry_same_bar": 0,
+   "rejected_by_rule": 190,
+   "unfillable": 0
+  },
+  "note": "labels of non-entered candidates are counterfactual brackets that were never traded; overlapping candidates are serially dependent (see effective N)",
+  "per_stage": {
+   "blocked_gate": {
+    "definitive": 107,
+    "mean_r_net_definitive": 0.9263977941164927,
+    "n": 107,
+    "status": {
+     "definitive": 107
+    }
+   },
+   "rejected": {
+    "definitive": 188,
+    "mean_r_net_definitive": 0.7147894424932798,
+    "n": 190,
+    "status": {
+     "definitive": 188,
+     "unobserved": 2
+    }
+   },
+   "simulated_entry": {
+    "definitive": 62,
+    "mean_r_net_definitive": 0.9931593772680097,
+    "n": 62,
+    "status": {
+     "definitive": 62
+    }
+   }
+  }
  },
  "genome": {
   "baselines": {
    "buy_and_hold_equal_weight": {
-    "max_drawdown": -0.14078352862885535,
-    "sharpe_ann": 1.8861328729465363,
-    "total_return": 2.2574833713619005
+    "max_drawdown": -0.1497683677603957,
+    "sharpe_ann": 1.5986691797052013,
+    "total_return": 1.6500084036634046
    },
    "no_trade": {
     "max_drawdown": 0.0,
@@ -55,27 +214,33 @@
     "total_return": 0.0
    }
   },
+  "costs": {
+   "engine_fee_bps": 5.0,
+   "engine_slippage_bps": 5.0,
+   "label_cost_model": "base"
+  },
   "dsr_best_isolated": {
-   "dsr": 0.9999999992719295,
+   "dsr": 0.9999998975719512,
    "n_obs": 699,
    "n_trials": 9.0,
    "psr0": 1.0,
-   "sr0": 0.09037548033301358,
-   "sr_per_period": 0.2997591389626642
+   "sr0": 0.1492586544465456,
+   "sr_per_period": 0.32645351657772137
   },
+  "fill_time_basis": "synthetic convention: open = close - 390 min",
   "grid_points": 9,
   "invalid": 0,
   "portfolio": {
-   "max_drawdown": -0.021190189894201183,
-   "mean_bars_held": 6.741379310344827,
-   "mean_r": 0.9111582480467214,
-   "n_trades": 58.0,
-   "profit_factor": 10.246416252039761,
-   "sharpe_ann": 3.935758071613438,
-   "signals_seen": 108.0,
-   "skipped": 0.0,
-   "total_return": 0.6612277134387363,
-   "win_rate": 0.8620689655172413
+   "max_drawdown": -0.02116503876856468,
+   "mean_bars_held": 6.774193548387097,
+   "mean_r": 0.9123665815125366,
+   "n_trades": 62.0,
+   "profit_factor": 10.723213851126486,
+   "sharpe_ann": 3.8891369290940068,
+   "signals_seen": 169.0,
+   "skipped": 50.0,
+   "total_return": 0.7212371367534038,
+   "win_rate": 0.8709677419354839
   },
   "selected": "mean_reversion-9619d39fbda8",
   "selected_params": {
@@ -86,22 +251,25 @@
    "rsi_mode": "sma_gain_loss",
    "rsi_period": 14
   },
+  "selected_trial": "T000008-e88cc5e3",
   "selection": {
    "best_isolated": {
     "genome_id": "mean_reversion-2f0e650247ad",
-    "plateau": 3.8733787071059336,
-    "sharpe_ann": 4.75852880948437
+    "plateau": 3.082759995808644,
+    "sharpe_ann": 5.182288916922914
    },
    "best_plateau": {
     "genome_id": "mean_reversion-9619d39fbda8",
-    "plateau": 3.935758071613438,
-    "sharpe_ann": 3.935758071613438
+    "plateau": 3.8891369290940068,
+    "sharpe_ann": 3.8891369290940068
    },
-   "median": 3.1493410760807246,
+   "median": 2.051873504176228,
    "n_points": 9,
    "n_trials_family": 9,
    "share_positive": 1.0
-  }
+  },
+  "trades_ending_after_a_split_quarantine": 0,
+  "trades_with_pending_bracket_labels": 0
  },
  "hypothesis": {
   "id": "KH-4089d49af8",
@@ -110,6 +278,7 @@
  "knowledge": {
   "hypotheses": 1,
   "lineage": 1,
+  "operator_verified_sources": 0,
   "refusals": 0,
   "rejected": 1,
   "reviews": 0,
@@ -120,29 +289,35 @@
  },
  "lab": {
   "auc": {
-   "hgb": 0.4105263157894737,
-   "logistic": 0.6666666666666666,
-   "prior": 0.4552631578947368
+   "hgb": 0.6594574780058651,
+   "logistic": 0.685483870967742,
+   "prior": 0.5032991202346041
   },
   "card": "INCONCLUSIVE",
-  "rows": 102,
+  "dataset_digest": "086e361609abcb18602c5b7b4e7d319ab6ac5dd012a6b6dd68879d7ec6adbe23",
+  "rows": 113,
   "verdicts": {
    "hgb": "NO_EVIDENCE"
   },
   "vs_prior": {
-   "hgb": "NO_EVIDENCE",
+   "hgb": "DECISIONS_ONLY",
    "logistic": "DECISIONS_ONLY"
   }
  },
  "ledger": {
   "entries": 24,
-  "tip": "2aae949ddb20048edb3c53bbc79acfacdd49f8d6bec15280b7aa19dc14aa9efe"
+  "tip": "9fde8bc325f33b67b53e47d6ec05ecdd9fa261b99ffada8bf98c298c9a5ff8d0"
  },
  "report_card": {
+  "provenance": {
+   "ledger_metadata_reconciled": 1.0,
+   "outcomes_verified": 1.0,
+   "provenance_verified": 1.0
+  },
   "reasons": [
    "pipeline canary battery missing or not CALIBRATED"
   ],
   "verdict": "INCONCLUSIVE"
  },
- "runtime_seconds": 5.0
+ "runtime_seconds": 7.1
 }
