@@ -16,6 +16,14 @@ refused (PR #5 review, P2), so a battery cannot be silently repeated until it
 looks good. Power is judged on the exact Clopper–Pearson LOWER bound of the
 detection rate at EVERY required effect size, not on a point estimate.
 
+Positive controls are mandatory for CALIBRATED (comprehensive audit, PR #5,
+P1): a plan with no required effect size used to get ``power_ok = all([])``
+= True, so a pipeline that NEVER approves was CALIBRATED after enough nulls.
+Such a battery is now ``NULL_ONLY`` (type-I calibrated only), which can never
+support a PASS. ``pipeline_identity`` names the frozen pipeline a battery
+calibrates (search family + code identity); the report card accepts a battery
+only for the exact pipeline it evaluates.
+
 Negative-control helpers (label block-permutation, placebo events, circular
 shifts) build nulls from real data, where synthetic nulls are not enough.
 """
@@ -31,7 +39,15 @@ from research.common.rng import child_seed
 from research.integrity.ledger import Ledger, LedgerError
 from research.integrity.stats import clopper_pearson
 
-VERDICTS = ("CALIBRATED", "NOT_CALIBRATED", "UNDERPOWERED")
+VERDICTS = ("CALIBRATED", "NOT_CALIBRATED", "UNDERPOWERED", "NULL_ONLY")
+
+
+def pipeline_identity(family_id: str, code_digest: str) -> str:
+    """The frozen pipeline a control battery calibrates: the search family it serves and the content hash
+    of the code that decides. A battery for any other family or code version does not apply."""
+    if not family_id or not code_digest:
+        raise ValueError("pipeline identity needs a family id and a code digest")
+    return "pipeline:%s@%s" % (family_id, code_digest)
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,8 @@ class BatteryPlan:
             raise ValueError("n_per_effect must be >= 1 when effect sizes are given")
         if any(e not in self.effect_sizes for e in self.required_effects):
             raise ValueError("required_effects must be among effect_sizes")
+        if not (0.0 < self.min_power <= 1.0):
+            raise ValueError("min_power must be in (0, 1]")
 
     @property
     def required(self) -> Tuple[float, ...]:
@@ -132,12 +150,20 @@ def run_battery(plan: BatteryPlan, pipeline: Callable[[Any], PipelineDecision],
             lo, hi = clopper_pearson(det, plan.n_per_effect, plan.alpha)
             pts.append(PowerPoint(eff, plan.n_per_effect, det, det / plan.n_per_effect, lo, hi))
     by_eff = {p.effect: p for p in pts}
-    power_ok = all(by_eff[e].lo >= plan.min_power for e in plan.required)
-    verdict = "NOT_CALIBRATED" if not null_ok else ("CALIBRATED" if power_ok else "UNDERPOWERED")
+    # all([]) is True: without a required positive effect there is NO power evidence (audit P1)
+    power_ok = bool(plan.required) and all(by_eff[e].lo >= plan.min_power for e in plan.required)
+    if not null_ok:
+        verdict = "NOT_CALIBRATED"
+    elif not plan.required:
+        verdict = "NULL_ONLY"
+    else:
+        verdict = "CALIBRATED" if power_ok else "UNDERPOWERED"
     notes = ""
     if passes == 0 and not null_ok:
         notes = ("zero null passes but n_nulls=%d cannot bound the rate at %.3f; need >= %d"
                  % (plan.n_nulls, plan.false_pass_target, plan.min_nulls_for_target()))
+    elif verdict == "NULL_ONLY":
+        notes = "type-I calibrated only: no positive-control power was required or shown; never PASS-eligible"
     res = BatteryResult(plan.digest, plan.n_nulls, passes, passes / plan.n_nulls, ub, null_ok,
                         tuple(pts), power_ok, verdict, notes)
     if ledger is not None:
@@ -170,5 +196,5 @@ def circular_shift(x, shift: int) -> np.ndarray:
     return np.roll(np.asarray(x), int(shift))
 
 
-__all__ = ["VERDICTS", "PipelineDecision", "BatteryPlan", "PowerPoint", "BatteryResult",
+__all__ = ["VERDICTS", "pipeline_identity", "PipelineDecision", "BatteryPlan", "PowerPoint", "BatteryResult",
            "run_battery", "block_permute", "placebo_events", "circular_shift"]
