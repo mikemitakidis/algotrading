@@ -468,6 +468,13 @@ class A3b_BarTimeCapacity(unittest.TestCase):
         # the same pair with the unfillable one made fillable: now the cap binds on the second
         out2 = apply_gates(evs, {}, max_entries_per_day=1, release_times={"u": None, "f": None})
         self.assertEqual([e.stage for e in out2], ["executed", "skipped_capacity"])
+        # Final follow-up (PR #6): the same holds with symbol capacity disabled
+        out3 = apply_gates(evs, {}, one_open_per_symbol=False, max_entries_per_day=1,
+                           release_times={"u": NO_POSITION, "f": None})
+        self.assertEqual([(e.candidate_id, e.stage) for e in out3], [("u", "unfillable"), ("f", "executed")])
+        # ...and without any release knowledge nothing is assumed: both are ordinary candidates
+        out4 = apply_gates(evs, {}, one_open_per_symbol=False, max_entries_per_day=1)
+        self.assertEqual([e.stage for e in out4], ["executed", "skipped_capacity"])
 
 
 class A3c_BarOpenConvention(unittest.TestCase):

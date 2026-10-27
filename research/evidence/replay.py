@@ -121,7 +121,7 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
     same symbol -> blocked_risk ('symbol_exposure'); exceeding the daily cap
     -> skipped_capacity ('daily_entry_cap'); a candidate whose release is
     ``NO_POSITION`` (unfillable) -> unfillable, using no slot and no daily
-    capacity; otherwise -> executed (meaning
+    capacity, in either symbol-capacity mode; otherwise -> executed (meaning
     "would have been sent to the paper loop" in this replay). Non-eligible
     candidates pass through unchanged.
 
@@ -152,10 +152,12 @@ def apply_gates(events: Iterable[CandidateEvent], rules: Dict[str, GateRule], *,
                 open_until[e.symbol] is None or e.decision_ts_utc < open_until[e.symbol]):
             out.append(replace(e, stage="blocked_risk", reasons=("symbol_exposure",)))
             continue
-        if one_open_per_symbol and isinstance(release_times.get(e.candidate_id), str) \
+        if release_times is not None and isinstance(release_times.get(e.candidate_id), str) \
                 and release_times[e.candidate_id] == NO_POSITION:
             # Third review (PR #6): an unfillable candidate could never hold a position. It is recorded as
-            # unfillable, never as executed, and it consumes no daily entry capacity.
+            # unfillable, never as executed, and it consumes no daily entry capacity - whatever the symbol-capacity
+            # setting (final follow-up: also when one_open_per_symbol=False). Without release knowledge
+            # (release_times=None, allowed only when one_open_per_symbol=False) nothing is assumed.
             out.append(replace(e, stage="unfillable", reasons=("no_position_possible",)))
             continue
         day = e.decision_ts_utc.floor("D")
