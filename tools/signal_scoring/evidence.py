@@ -220,6 +220,13 @@ def score_with_evidence(signal: Mapping[str, Any], ce: CycleEvidence, *,
             blocks.append("review:%s" % code)              # unknown review: not accepted
     if side == "short" and not allow_short:
         blocks.append("short_disabled")
+    if ce.policy.bar_basis == "completed" and cal is not None:
+        # C01 §11 first-interval rule: during a session an entry needs a
+        # completed 15m bar from the CURRENT session (not yesterday's close).
+        from tools.signal_scoring.completed_bars import CompletedBarPolicy
+        ok, why = CompletedBarPolicy(cal, ev).first_interval_ready((asof or {}).get("15m"))
+        if not ok:
+            blocks.append(why)
     blocks = tuple(dict.fromkeys(blocks))
     return ScoredCandidate(signal=dict(signal), truthful=ts, research_rank=float(rank),
                            selectable=not blocks, block_reasons=blocks,
@@ -288,12 +295,15 @@ def build_cycle_evidence(*, signals: Sequence[Mapping[str, Any]],
                          fetch_calendar, fetch_actions, provider_name: str,
                          policy: Optional[TruthPolicy] = None, live: bool = True,
                          calendar_days_back: int = 150, calendar_days_ahead: int = 10,
-                         risk_decision_store: Any = None) -> CycleEvidence:
+                         risk_decision_store: Any = None,
+                         calendar_fetch: Any = None) -> CycleEvidence:
     """Observe the evidence for one cycle. Any fetch failure leaves the
     corresponding evidence UNKNOWN (and candidates fail closed); nothing is
     substituted. ``fetch_calendar(start, end, now_utc=)`` returns a
     ``CalendarFetch``; ``fetch_actions(symbols, start, end, now_utc=)`` a
-    ``CorporateActionsFetch``; ``fetch_daily(symbols)`` a {symbol: OHLCV frame}."""
+    ``CorporateActionsFetch``; ``fetch_daily(symbols)`` a {symbol: OHLCV frame}.
+    ``calendar_fetch`` reuses a snapshot already fetched for this cycle (the
+    one the completed-bar scanner used) instead of fetching again."""
     from bot.scoring_truth.evidence_records import (
         CorporateActionEvent, EvidenceError, calendar_fit_for_decision,
         corporate_action_record_from_events, session_calendar_from_rows,
@@ -306,7 +316,8 @@ def build_cycle_evidence(*, signals: Sequence[Mapping[str, Any]],
     end = today + timedelta(days=calendar_days_ahead)
     cal, fit = None, CalendarFit(False, "calendar_not_fetched")
     try:
-        cf = fetch_calendar(start, end, now_utc=ev)
+        cf = calendar_fetch if calendar_fetch is not None else \
+            fetch_calendar(start, end, now_utc=ev)
         if cf.ok:
             cal = session_calendar_from_rows(cf.rows, coverage_start=cf.start,
                                              coverage_end=cf.end, source=cf.source,
