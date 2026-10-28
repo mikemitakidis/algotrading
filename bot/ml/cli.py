@@ -294,8 +294,13 @@ def _default_bars_provider(symbol, timeframes, adjusted=False):
     # F2 / ISSUE-017: load with the SAME adjustment mode the config declares
     # (default raw). This is what makes the manifest's price_adjustment_mode
     # truthful — the loader and the manifest can never silently disagree.
-    return {tf: m16_loader.load_bars(symbol, tf, adjusted=adjusted)
+    bars = {tf: m16_loader.load_bars(symbol, tf, adjusted=adjusted)
             for tf in timeframes}
+    # M16 rows are stamped at the bar START; the assembler's MTF features
+    # need CLOSE stamps. Fail closed (review of PR #20).
+    from bot.backtesting.mtf_context import refuse_start_stamped
+    refuse_start_stamped(bars, "M18 dataset build (%s)" % symbol)
+    return bars
 
 
 def _build_assembler_config(args):
