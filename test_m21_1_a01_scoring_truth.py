@@ -1048,6 +1048,7 @@ class _Forged:
 # ═══════════════════ scanner as-of record (C5b transition) ══════════════════
 
 PRE_A01_SCANNER_BLOB = "4317e57e72f9d8d862607a8e3f155cc53f4ecd3d"
+A01_SCANNER_BLOB_ID = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"   # produced by 6242bde
 A01_SCANNER_ADDED = (
     "def _bar_start_iso(df):\n"
     "    \"\"\"A01: ISO start time of the last bar (the row compute_features scored).\n"
@@ -1130,7 +1131,13 @@ class T9_ScannerAsOf(unittest.TestCase):
         self.assertEqual(obs("1H", _bar_start_iso(naive), EV).state, ObservationState.INVALID)
 
     def test_scanner_change_is_exactly_the_a01_additions(self):
-        text = (REPO / "bot" / "scanner.py").read_text()
+        # A01's approved scanner content (blob 08dc751, produced by 6242bde)
+        # is exactly the pre-A01 scanner plus these chunks. The later, separately
+        # approved M21 WP6 transition (A01 blob -> current) is pinned line by
+        # line in test_m21_1_wp6_completed_candles.N6; the C5b table pins the
+        # current blob.
+        text = subprocess.run(["git", "cat-file", "-p", A01_SCANNER_BLOB_ID], cwd=str(REPO),
+                              capture_output=True, text=True, check=True).stdout
         for chunk in A01_SCANNER_ADDED:
             self.assertEqual(text.count(chunk), 1, chunk)
             text = text.replace(chunk, "", 1)
