@@ -41,6 +41,7 @@ jobs:
           python _test_isolation.py \
             test_m21_research_foundation test_m21_research_integrity test_m21_research_evidence \
             test_m21_research_mllab test_m21_research_genome test_m21_research_data \
-            test_m21_research_agents test_m21_research_integration \
+            test_m21_research_agents test_m21_research_integration test_m21_research_economics \
+            test_m21_research_readiness test_m21_research_optimiser \
             test_m17_backtesting.G10_Hygiene test_m18_ml.G10_Hygiene test_hygiene_suite \
             test_quarantine_guard test_m21_c5b_protected_baselines test_m21_c5a_test_isolation
