@@ -299,8 +299,12 @@ class O10_ExperimentIdentity(unittest.TestCase):
         ds = [C.experiment_digest(self.T, c, self.P) for c in cfgs] + \
              [C.experiment_digest(self.T, cfg, p) for p in protos] + \
              [C.experiment_digest("breakout_momentum", cfg, self.P)]
-        with mock.patch.object(C, "code_identity", side_effect=lambda paths: "code-%d" % len(paths)):
+        real = C.code_identity
+        with mock.patch.object(C, "code_identity",                      # the decision code alone changes
+                               side_effect=lambda paths: "changed" if tuple(paths) == C.CODE_PATHS else real(paths)):
             ds.append(C.experiment_digest(self.T, cfg, self.P))
+        with mock.patch.object(C, "MarketSpec", lambda **kw: MarketSpec(**dict(kw, tail_df=4.0))):
+            ds.append(C.experiment_digest(self.T, cfg, self.P))           # a generator parameter changes
         self.assertEqual(len(set(ds + [base])), len(ds) + 1)
 
     def test_plan_binds_the_identity_and_plans_without_one_hash_as_before(self):
@@ -317,6 +321,14 @@ class O10_ExperimentIdentity(unittest.TestCase):
         old_fields = {f.name: getattr(legacy, f.name) for f in fields(legacy) if f.name != "experiment"}
         self.assertEqual(legacy.digest, digest(old_fields))
         self.assertNotIn("experiment", legacy.record())
+
+    def test_the_protocol_horizon_reaches_the_planted_effect(self):
+        with mock.patch.object(C, "run_battery") as rb:
+            C.run_protocol(self.T, W.WFConfig(), replace(self.P, horizon=7), ledger=Ledger())
+        make_positive = rb.call_args[0][3]
+        with mock.patch.object(C, "market") as mk:
+            make_positive(0.5, 1)
+        self.assertEqual(mk.call_args.kwargs["horizon"], 7)
 
     def test_historical_v2_design_is_preserved_and_v3_differs_only_in_its_seeds(self):
         h, v3 = C.PROTOCOL_V2_HISTORICAL, C.PROTOCOL_V3
@@ -383,14 +395,24 @@ class O11_ReportCardBinding(unittest.TestCase):
                                          metrics={}))
         legacy = BatteryPlan("legacy", pipeline_identity("wf:%s" % self.T, code_identity(SR.CODE_PATHS)), 59,
                              effect_sizes=(0.5,), n_per_effect=20)
-        ok, why = self.status(res=self.battery(led, legacy), trial=t, led=led)
-        self.assertFalse(ok)
-        self.assertIn("no experiment identity", why)
+        res = self.battery(led, legacy)
+        for expected in ("want", None):                                  # wf: families always need one
+            ok, why = self.status(res=res, trial=t, led=led, expected=expected)
+            self.assertFalse(ok)
+            self.assertIn("no experiment identity", why)
         bad = replace(self.plan, name="rc-test-2", n_nulls=60)            # plan disagrees with its declared design
         bad = replace(bad, experiment=dict(bad.experiment, design=dict(bad.experiment["design"], name="rc-test-2")))
         ok, why = self.status(res=self.battery(self.led, bad), expected=bad.experiment_digest)
         self.assertFalse(ok)
         self.assertIn("n_nulls differs from its declared experiment design", why)
+        for i, (kw, needle) in enumerate(((dict(effect_sizes=(0.6,)), "effect_sizes differs"),
+                                          (dict(pipeline_id="pipeline:wf:%s@x" % self.T), "not bound"))):
+            name = "rc-test-%d" % (i + 3)
+            b = replace(self.plan, name=name, **kw)
+            b = replace(b, experiment=dict(b.experiment, design=dict(b.experiment["design"], name=name)))
+            ok, why = self.status(res=self.battery(self.led, b), expected=b.experiment_digest)
+            self.assertFalse(ok)
+            self.assertIn(needle, why)
 
     def test_tampered_record_is_refused(self):
         led = Ledger()
@@ -404,6 +426,16 @@ class O11_ReportCardBinding(unittest.TestCase):
         ok, why = self.status(trial=t, led=led)
         self.assertFalse(ok)
         self.assertIn("does not hash to the battery's plan digest", why)
+        led2 = Ledger()
+        t2 = led2.record_trial(TrialRecord(family_id="wf:%s" % self.T, kind="research", spec_digest="s",
+                                           data_digest="d", code_digest=code_identity(SR.CODE_PATHS), seed=1,
+                                           metrics={}))
+        led2.append("control_battery_plan", dict(self.plan.record(), experiment_digest="0" * 64),
+                    ref_id=self.plan.digest)
+        led2.append("control_battery_result", asdict(self.res), ref_id=self.plan.digest)
+        ok, why = self.status(trial=t2, led=led2)
+        self.assertFalse(ok)
+        self.assertIn("does not hash to its recorded digest", why)
 
     def test_evaluate_passes_the_required_identity_through(self):
         src = (REPO / "research/integrity/report_card.py").read_text()
