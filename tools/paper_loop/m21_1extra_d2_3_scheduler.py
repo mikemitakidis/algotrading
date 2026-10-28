@@ -199,7 +199,8 @@ def _ibkr_parts(args):
                 risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
                                                    market_state=make_market_state_provider()),
                 candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer),
-                ledger=LoopLedger(writer))
+                # reconcile verifies backfilled risk against M14 risk_decisions (read-only)
+                ledger=LoopLedger(writer, m14_db=signals_db))
 
 
 def main(argv: List[str] = None) -> int:
