@@ -1,0 +1,37 @@
+{
+  "origin": "synthetic",
+  "battery": {
+    "plan_digest": "16aaccc1460078fb26501811ff7103021536523c90db649e986abf6fbf326f43",
+    "n_nulls": 59,
+    "null_passes": 0,
+    "false_pass_rate": 0.0,
+    "false_pass_upper": 0.04950760988822693,
+    "null_calibrated": true,
+    "power": [
+      {
+        "effect": 0.5,
+        "n": 20,
+        "detections": 20,
+        "rate": 1.0,
+        "lo": 0.8315665290169146,
+        "hi": 1.0
+      }
+    ],
+    "power_ok": true,
+    "verdict": "CALIBRATED",
+    "notes": "",
+    "power_rule": "cp_lower_bound_at_every_required_effect"
+  },
+  "args": {
+    "template": "mean_reversion",
+    "nulls": 59,
+    "positives": 20,
+    "effect": 0.5,
+    "symbols": 30,
+    "sessions": 750,
+    "name": "wp13-canary-v2",
+    "out": "/tmp/claude-0/-home-claude/09235587-458f-5ea0-b28e-ee7bedbe67c2/scratchpad/evidence/canary_wp13"
+  },
+  "ledger_tip": "3bcd48851e1386a0508a44876d32d0a24cc4c9c9ca7cf8ae460146bbb3a3e44d",
+  "ledger_ok": true
+}
