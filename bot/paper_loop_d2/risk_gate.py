@@ -18,6 +18,11 @@ exception or unusable result is a BLOCK (fail closed). The decision id is
 returned so the journal can tie each order to the decision that allowed it.
 
 A09 — market state is verified HERE, at the authority boundary, on every call.
+A09 hardening (R1-R3): the provider must be a ``TrustedMarketStateProvider``
+built only from approved clock sources (exact ``AlpacaClockSource``); the
+decision must name that source with status ok; the market-state age limit has
+an absolute 30 s ceiling; and a valid, future, plausible session close is
+required.
 M14's ``market_open`` gate only trusts the flag its caller passes (and defaults
 to True), and the scheduler's D1 check can be bypassed by calling this gate
 directly. So the gate requires a ``market_state`` provider (no default) and,
@@ -31,6 +36,7 @@ preflight is not called. ``market_open=True`` reaches M14 only after that.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Tuple
@@ -41,8 +47,20 @@ RiskGate = Callable[..., GateResult]
 PAPER_SCOPE = "ibkr_paper"
 ACTOR = "paper_learning_loop"
 MARKET_CALENDAR = "US_EQ"
-MAX_MARKET_STATE_AGE_SEC = 30.0      # = D1 DEFAULT_MAX_AGE_SEC
+MAX_MARKET_STATE_AGE_SEC = 30.0      # = D1 DEFAULT_MAX_AGE_SEC; absolute ceiling
 _MAX_CLOCK_SKEW_SEC = 5.0
+_MAX_SESSION_CLOSE_AHEAD = timedelta(hours=24)
+TRUSTED_CLOCK_SOURCE_NAMES = frozenset({"alpaca"})
+
+
+def _trusted_source_types():
+    from bot.market_clock import AlpacaClockSource
+    return (AlpacaClockSource,)
+
+
+def _valid_age_limit(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0 < value <= MAX_MARKET_STATE_AGE_SEC)
 
 
 def _utc(value: Any) -> Optional[datetime]:
@@ -59,8 +77,13 @@ def _utc(value: Any) -> Optional[datetime]:
 def verify_market_open(market_state: Callable[[], Any], *, now: datetime,
                        max_age_sec: float = MAX_MARKET_STATE_AGE_SEC) -> Tuple[bool, str]:
     """Fail-closed check of a D1 market-clock decision. (True, 'market_open')
-    only for a genuine, fresh, affirmative, regular-session US_EQ open."""
+    only for a fresh, affirmative, regular-session US_EQ open from a trusted
+    clock source, with a valid future session close. The age limit can only
+    tighten the 30 s ceiling, never loosen it."""
     from bot.market_clock.decision import MarketClockDecision, REASON_MARKET_OPEN
+    from bot.market_clock.sources import STATUS_OK
+    if not _valid_age_limit(max_age_sec):
+        return False, "market_state_age_limit_invalid"
     try:
         decision = market_state()
     except Exception as exc:
@@ -69,6 +92,9 @@ def verify_market_open(market_state: Callable[[], Any], *, now: datetime,
         return False, "market_state_untrusted_type"
     if decision.may_submit is not True or decision.reason != REASON_MARKET_OPEN:
         return False, "market_not_open:%s" % decision.reason
+    if (decision.source not in TRUSTED_CLOCK_SOURCE_NAMES
+            or decision.source_status != STATUS_OK):
+        return False, "market_state_untrusted_source"
     if decision.market_calendar_id != MARKET_CALENDAR:
         return False, "market_calendar_mismatch"
     if (decision.stale or decision.inconsistent or decision.unsupported
@@ -80,43 +106,68 @@ def verify_market_open(market_state: Callable[[], Any], *, now: datetime,
         return False, "market_state_time_invalid"
     if fetched - now > timedelta(seconds=_MAX_CLOCK_SKEW_SEC):
         return False, "market_state_from_future"
-    if now - fetched > timedelta(seconds=max_age_sec):
+    if now - fetched > timedelta(seconds=min(max_age_sec, MAX_MARKET_STATE_AGE_SEC)):
         return False, "market_state_stale"
-    if decision.next_close_utc is not None:
-        close = _utc(decision.next_close_utc)
-        if close is None or close <= now:
-            return False, "market_session_ended"
+    if decision.next_close_utc is None:
+        return False, "market_session_close_missing"
+    close = _utc(decision.next_close_utc)
+    if close is None:
+        return False, "market_session_close_invalid"
+    if close <= now:
+        return False, "market_session_ended"
+    if close - now > _MAX_SESSION_CLOSE_AHEAD:
+        return False, "market_session_close_implausible"
     return True, REASON_MARKET_OPEN
 
 
-def make_market_state_provider(*, sources=None, max_age_sec: Optional[float] = None,
-                               clock: Optional[Callable[[], datetime]] = None
-                               ) -> Callable[[], Any]:
-    """A market_state() closure returning the D1 guard's FULL decision for
-    US_EQ (production default source: AlpacaClockSource, which itself fails
-    closed without credentials or network). Never raises: an adapter
-    exception becomes a do-not-submit decision."""
-    def _market_state():
-        from bot.market_clock import AlpacaClockSource, evaluate_market_clock
+class TrustedMarketStateProvider:
+    """market_state() over the real D1 guard, built ONLY from approved clock
+    sources (exact AlpacaClockSource instances; production default is a fresh
+    AlpacaClockSource, which fails closed without credentials or network).
+    Returns the D1 guard's full decision; never raises. The D1 freshness limit
+    is the 30 s ceiling."""
+
+    __slots__ = ("_sources", "_clock")
+
+    def __init__(self, *, sources=None, clock: Optional[Callable[[], datetime]] = None):
+        trusted = _trusted_source_types()
+        srcs = tuple(sources) if sources is not None else (trusted[0](),)
+        if not srcs:
+            raise ValueError("at least one trusted market clock source is required")
+        for s in srcs:
+            if type(s) not in trusted:
+                raise ValueError("untrusted market clock source: %s" % type(s).__name__)
+        if clock is not None and not callable(clock):
+            raise ValueError("clock must be callable")
+        self._sources = srcs
+        self._clock = clock
+
+    def __call__(self):
+        from bot.market_clock import evaluate_market_clock
         from bot.market_clock.decision import REASON_INTERNAL_ERROR, do_not_submit
         try:
-            srcs = sources if sources is not None else [AlpacaClockSource()]
-            kwargs: dict = {"market_calendar_id": MARKET_CALENDAR, "sources": srcs}
-            if clock is not None:
-                kwargs["now_utc"] = clock()
-            if max_age_sec is not None:
-                kwargs["max_age_sec"] = max_age_sec
+            kwargs: dict = {"market_calendar_id": MARKET_CALENDAR,
+                            "sources": list(self._sources),
+                            "max_age_sec": MAX_MARKET_STATE_AGE_SEC}
+            if self._clock is not None:
+                kwargs["now_utc"] = self._clock()
             return evaluate_market_clock(**kwargs)
         except Exception as exc:
             return do_not_submit(reason=REASON_INTERNAL_ERROR,
                                  market_calendar_id=MARKET_CALENDAR,
                                  source="market_state_adapter",
                                  raw_source_summary={"exc": type(exc).__name__})
-    return _market_state
+
+
+def make_market_state_provider(*, sources=None,
+                               clock: Optional[Callable[[], datetime]] = None
+                               ) -> TrustedMarketStateProvider:
+    """The only supported way to build a market_state provider for the gate."""
+    return TrustedMarketStateProvider(sources=sources, clock=clock)
 
 
 def make_risk_authority_gate(*, conn_factory: Callable[[], sqlite3.Connection],
-                             market_state: Callable[[], Any],
+                             market_state: TrustedMarketStateProvider,
                              authority_name: str = "AUTO_ALLOWED",
                              broker_scope: str = PAPER_SCOPE,
                              clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -124,8 +175,11 @@ def make_risk_authority_gate(*, conn_factory: Callable[[], sqlite3.Connection],
                              ) -> RiskGate:
     if broker_scope != PAPER_SCOPE:
         raise ValueError("the paper learning loop only ever uses the ibkr_paper scope")
-    if not callable(market_state):
-        raise ValueError("a market_state provider is required (fail closed)")
+    if type(market_state) is not TrustedMarketStateProvider:
+        raise ValueError("market_state must be a TrustedMarketStateProvider (fail closed)")
+    if not _valid_age_limit(max_market_state_age_sec):
+        raise ValueError("max_market_state_age_sec must be in (0, %s]"
+                         % MAX_MARKET_STATE_AGE_SEC)
     if not callable(clock):
         raise ValueError("clock must be callable")
 

@@ -562,29 +562,48 @@ class D23CrashRecovery(unittest.TestCase):
         self.assertEqual(h.submits(), 1)
 
 
-MS_NOW = datetime(2026, 10, 27, 15, 0, tzinfo=timezone.utc)   # Tue 11:00 New York
+MS_NOW = datetime(2026, 10, 27, 15, 0, tzinfo=timezone.utc)   # Tue 11:00 New York (EDT)
+MS_CLOSE = "2026-10-27T20:00:00Z"
 
 
-def ms_source(**kw):
-    """A D1 mock source (fixture). Default: regular session open at MS_NOW."""
-    from bot.market_clock import MockMarketStatusSource, SourceResult, STATUS_OK
-    base = dict(status=STATUS_OK, is_open=True,
-                session_open_utc=MS_NOW.replace(hour=13, minute=30),
-                session_close_utc=MS_NOW.replace(hour=20, minute=0),
-                next_close_utc=MS_NOW.replace(hour=20, minute=0), calendar_present=True)
-    base.update(kw)
-    stamp = base.pop("_stamp", True)
-    return MockMarketStatusSource(SourceResult(**base), stamp_fetched_at=stamp)
+def alpaca_source(*, is_open=True, ts="2026-10-27T15:00:00Z", next_close=MS_CLOSE,
+                  next_open="2026-10-28T13:30:00Z",
+                  cal=({"date": "2026-10-27", "open": "09:30", "close": "16:00"},),
+                  clock_code=200, cal_code=200, raise_exc=None):
+    """The REAL AlpacaClockSource with only its HTTP layer stubbed (fixture).
+    ``None`` for next_close omits the field from the clock body."""
+    from bot.market_clock.alpaca_clock import AlpacaClockSource, HttpResponse
+    body = {"is_open": is_open, "timestamp": ts, "next_open": next_open}
+    if next_close is not None:
+        body["next_close"] = next_close
+
+    def _get(url, *, headers, params, timeout):
+        if raise_exc is not None:
+            raise raise_exc
+        if "/v2/clock" in url:
+            return HttpResponse(status_code=clock_code, json_body=body)
+        return HttpResponse(status_code=cal_code, json_body=list(cal))
+    return AlpacaClockSource(http_get=_get)
 
 
 def market_state(now=MS_NOW, sources=None, **kw):
-    """market_state() over the REAL D1 guard with a fixture source."""
+    """Trusted market_state() over the REAL D1 guard and Alpaca source."""
     from bot.paper_loop_d2.risk_gate import make_market_state_provider
     return make_market_state_provider(
-        sources=[ms_source(**kw)] if sources is None else sources, clock=lambda: now)
+        sources=[alpaca_source(**kw)] if sources is None else sources, clock=lambda: now)
 
 
-class D23RiskAuthorityReal(unittest.TestCase):
+class _AlpacaCreds(unittest.TestCase):
+    """Dummy Alpaca credentials so the real source reaches its (stubbed) HTTP."""
+
+    def setUp(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ, {"ALPACA_KEY": "test-key", "ALPACA_SECRET": "test-secret"})
+        p.start()
+        self.addCleanup(p.stop)
+
+
+class D23RiskAuthorityReal(_AlpacaCreds):
     """The real M14 engine on a temp signals DB decides the entry."""
 
     def _db(self, policy_overrides):
@@ -634,9 +653,12 @@ class D23RiskAuthorityReal(unittest.TestCase):
     def test_closed_market_blocks_before_the_real_engine(self):
         from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
         ok_db = self._db({})
-        g = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(ok_db),
-                                     market_state=market_state(is_open=False),
-                                     clock=lambda: MS_NOW)
+        late = MS_NOW.replace(hour=21)
+        g = make_risk_authority_gate(
+            conn_factory=lambda: sqlite3.connect(ok_db),
+            market_state=market_state(now=late, is_open=False, ts="2026-10-27T21:00:00Z",
+                                      next_close="2026-10-28T20:00:00Z"),
+            clock=lambda: late)
         allowed, why, did = g(symbol="AAA", side="long", notional_usd=100.0,
                               stop_loss=95.0, take_profit=110.0)
         self.assertEqual((allowed, did), (False, None))
@@ -646,12 +668,15 @@ class D23RiskAuthorityReal(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
-class D23MarketStateBoundary(unittest.TestCase):
+class D23MarketStateBoundary(_AlpacaCreds):
     """A09: the risk gate verifies market state itself on every call, so it
     cannot be bypassed by calling it directly (outside the scheduler) with the
-    market closed, on a holiday, or on a stale / unavailable clock."""
+    market closed, on a holiday, on a stale / unavailable clock, from an
+    untrusted clock, with a loosened age limit, or without a valid session
+    close."""
 
     def setUp(self):
+        super().setUp()
         from unittest import mock
         import bot.risk_authority as RA
         self.calls = []
@@ -678,67 +703,135 @@ class D23MarketStateBoundary(unittest.TestCase):
         self.assertEqual(why, "market_state_block:" + expect)
         self.assertEqual(self.calls, [], "preflight must not be reached")
 
+    @staticmethod
+    def decision(source="alpaca", status="ok", fetched=MS_NOW, next_close=MS_CLOSE):
+        from bot.market_clock.decision import market_open as open_decision
+        return open_decision(market_calendar_id="US_EQ", symbol=None, source=source,
+                             source_status=status, as_of_utc=fetched.isoformat(),
+                             fetched_at_utc=fetched.isoformat(), next_open_utc=None,
+                             next_close_utc=next_close)
+
+    def verify(self, decision, now=MS_NOW, **kw):
+        from bot.paper_loop_d2.risk_gate import verify_market_open
+        return verify_market_open(lambda: decision, now=now, **kw)
+
+    # ── baseline ──
     def test_verified_open_reaches_preflight_with_market_open_true(self):
         self.assertEqual(self.call(self.gate(market_state())),
                          (True, "risk_authority_allow", "dec-ok"))
         self.assertEqual(len(self.calls), 1)
         self.assertIs(self.calls[0]["market_open"], True)
 
+    # ── closure / holidays / calendar ──
     def test_closed_after_hours(self):
         late = MS_NOW.replace(hour=21)
-        self.blocked(market_state(now=late), "market_not_open:market_closed", now=late)
+        self.blocked(market_state(now=late, is_open=False, ts="2026-10-27T21:00:00Z",
+                                  next_close="2026-10-28T20:00:00Z"),
+                     "market_not_open:market_closed", now=late)
 
     def test_holiday(self):
-        # the source reports closed with no session on the calendar (holiday)
-        self.blocked(market_state(is_open=False, session_open_utc=None,
-                                  session_close_utc=None, calendar_present=False),
-                     "market_not_open:market_closed")
+        hol = datetime(2026, 11, 26, 16, 0, tzinfo=timezone.utc)      # Thanksgiving
+        self.blocked(market_state(now=hol, is_open=False, ts="2026-11-26T16:00:00Z",
+                                  next_open="2026-11-27T14:30:00Z",
+                                  next_close="2026-11-27T18:00:00Z", cal=()),
+                     "market_not_open:market_closed", now=hol)
 
     def test_open_flag_without_calendar(self):
-        self.blocked(market_state(session_open_utc=None, session_close_utc=None,
-                                  calendar_present=False),
+        self.blocked(market_state(cal=()),
                      "market_not_open:market_status_source_unavailable")
 
+    # ── stale states ──
     def test_stale_clock_reading(self):
-        self.blocked(market_state(_stamp=False,
-                                  fetched_at_utc=MS_NOW - timedelta(minutes=5),
-                                  as_of_utc=MS_NOW - timedelta(minutes=5)),
+        self.blocked(market_state(ts="2026-10-27T14:55:00Z"),
                      "market_not_open:market_status_source_stale")
 
     def test_decision_aged_before_the_gate_used_it(self):
-        # D1 said open when asked, but the gate is evaluated 2 minutes later
         self.blocked(market_state(now=MS_NOW), "market_state_stale",
-                     now=MS_NOW + timedelta(minutes=2))
-        self.blocked(market_state(now=MS_NOW + timedelta(minutes=1)),
+                     now=MS_NOW + timedelta(seconds=31))
+        self.blocked(market_state(now=MS_NOW + timedelta(minutes=1),
+                                  ts="2026-10-27T15:01:00Z"),
                      "market_state_from_future")
 
-    def test_session_already_ended(self):
-        from bot.market_clock.decision import market_open as open_decision
-        d = open_decision(market_calendar_id="US_EQ", symbol=None, source="mock",
-                          source_status="ok", as_of_utc=MS_NOW.isoformat(),
-                          fetched_at_utc=MS_NOW.isoformat(), next_open_utc=None,
-                          next_close_utc=(MS_NOW - timedelta(seconds=1)).isoformat())
-        self.blocked(lambda: d, "market_session_ended")
+    # ── R2: absolute 30 s ceiling ──
+    def test_age_limit_cannot_be_loosened(self):
+        for bad in (31, 60, 1e6, float("inf"), float("nan"), 0, -1, True, "30"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                self.gate(market_state(), max_market_state_age_sec=bad)
+        g = self.gate(market_state(now=MS_NOW), now=MS_NOW + timedelta(seconds=20),
+                      max_market_state_age_sec=10)            # tightening is allowed
+        self.assertEqual(self.call(g)[1], "market_state_block:market_state_stale")
+        old = self.decision(fetched=MS_NOW - timedelta(hours=1))
+        self.assertEqual(self.verify(old, max_age_sec=30), (False, "market_state_stale"))
+        for loose in (1e6, float("inf"), float("nan"), 0, -5):
+            self.assertEqual(self.verify(old, max_age_sec=loose),
+                             (False, "market_state_age_limit_invalid"))
 
-    def test_unavailable_or_absent_calendar_source(self):
-        from bot.market_clock import STATUS_UNAVAILABLE, STATUS_NO_CREDENTIALS
-        self.blocked(market_state(status=STATUS_UNAVAILABLE, is_open=None),
+    # ── R3: valid future session close required ──
+    def test_session_close_required_and_valid(self):
+        self.blocked(market_state(next_close=None), "market_session_close_missing")
+        self.assertEqual(self.verify(self.decision(next_close=None)),
+                         (False, "market_session_close_missing"))
+        self.assertEqual(self.verify(self.decision(next_close="tomorrow")),
+                         (False, "market_session_close_invalid"))
+        self.assertEqual(self.verify(self.decision(next_close="2026-10-27T20:00:00")),
+                         (False, "market_session_close_invalid"))          # naive
+        self.assertEqual(self.verify(self.decision(next_close="2026-10-27T15:00:00Z")),
+                         (False, "market_session_ended"))
+        self.blocked(market_state(next_close="2026-11-05T20:00:00Z"),
+                     "market_session_close_implausible")
+        self.assertEqual(self.verify(self.decision()), (True, "market_open"))
+
+    # ── R1: trusted clock provider only ──
+    def test_only_trusted_providers_are_accepted(self):
+        from bot.market_clock import MockMarketStatusSource, SourceResult, STATUS_OK
+        from bot.market_clock.alpaca_clock import AlpacaClockSource
+        from bot.paper_loop_d2.risk_gate import (TrustedMarketStateProvider,
+                                                 make_market_state_provider)
+        good = self.decision()
+        mock_src = MockMarketStatusSource(SourceResult(status=STATUS_OK, is_open=True),
+                                          name="alpaca")
+
+        class SubAlpaca(AlpacaClockSource):
+            pass
+
+        class SubProvider(TrustedMarketStateProvider):
+            def __call__(self):
+                return good
+        for bad_sources in ([mock_src], [SubAlpaca()], [], [alpaca_source(), mock_src]):
+            with self.assertRaises(ValueError):
+                make_market_state_provider(sources=bad_sources)
+        for untrusted in (lambda: good, (lambda: True), SubProvider(sources=[alpaca_source()]),
+                          market_state().__call__, None, True):
+            with self.assertRaises(ValueError):
+                self.gate(untrusted)
+        # a decision that does not come from the trusted clock (pure helper)
+        self.assertEqual(self.verify(self.decision(source="mock")),
+                         (False, "market_state_untrusted_source"))
+        self.assertEqual(self.verify(self.decision(status="unavailable")),
+                         (False, "market_state_untrusted_source"))
+
+    # ── failure handling ──
+    def test_unavailable_clock_sources(self):
+        from bot.market_clock.alpaca_clock import HttpError
+        self.blocked(market_state(clock_code=503),
                      "market_not_open:market_status_source_unavailable")
-        self.blocked(market_state(status=STATUS_NO_CREDENTIALS, is_open=None),
-                     "market_not_open:market_status_no_credentials")
-        self.blocked(market_state(sources=[]),
+        self.blocked(market_state(raise_exc=HttpError("Timeout")),
                      "market_not_open:market_status_source_unavailable")
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"ALPACA_KEY": "", "ALPACA_SECRET": ""}):
+            self.blocked(market_state(), "market_not_open:market_status_no_credentials")
 
     def test_provider_errors_and_forgeries(self):
-        self.blocked(lambda: 1 / 0, "market_state_error:ZeroDivisionError")
+        from unittest import mock
+        from bot.paper_loop_d2 import risk_gate as RG
         for forged in (True, "market_open", (True, "market_open"),
-                       SimpleNamespace(may_submit=True, reason="market_open",
-                                       market_calendar_id="US_EQ", stale=False,
-                                       inconsistent=False, unsupported=False,
-                                       regular_session_only=True,
-                                       fetched_at_utc=MS_NOW.isoformat(),
-                                       next_close_utc=None)):
-            self.blocked(lambda f=forged: f, "market_state_untrusted_type")
+                       SimpleNamespace(may_submit=True, reason="market_open")):
+            self.assertEqual(self.verify(forged), (False, "market_state_untrusted_type"))
+        st = market_state()
+        with mock.patch.object(RG, "verify_market_open", side_effect=RuntimeError("x")):
+            self.assertEqual(self.call(self.gate(st))[:2],
+                             (False, "market_state_error:RuntimeError"))
+        self.assertEqual(self.calls, [])
 
     def test_provider_adapter_never_raises(self):
         from unittest import mock
@@ -748,20 +841,23 @@ class D23MarketStateBoundary(unittest.TestCase):
         self.assertIs(d.may_submit, False)
         self.assertEqual(d.reason, "market_clock_internal_error")
 
+    # ── direct invocation / scheduler bypass ──
     def test_direct_invocation_cannot_skip_market_state(self):
         from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
         with self.assertRaises(TypeError):
             make_risk_authority_gate(conn_factory=lambda: None)          # no provider
-        with self.assertRaises(ValueError):
-            make_risk_authority_gate(conn_factory=lambda: None, market_state=None)
-        with self.assertRaises(ValueError):
-            make_risk_authority_gate(conn_factory=lambda: None, market_state=True)
+        for bad in (None, True, lambda: None):
+            with self.assertRaises(ValueError):
+                make_risk_authority_gate(conn_factory=lambda: None, market_state=bad)
 
     def test_scheduler_d1_pass_does_not_override_the_boundary(self):
-        # The loop's own d1_gate says open, but by the time the risk gate runs
-        # the market state says closed: the entry is blocked, nothing submitted.
+        # The loop's own d1_gate says open, but the boundary's trusted clock
+        # says closed: the entry is blocked and nothing is submitted.
         h = LoopHarness(self)
-        h.loop = h.make_loop(risk_gate=self.gate(market_state(is_open=False)))
+        late = MS_NOW.replace(hour=21)
+        h.loop = h.make_loop(risk_gate=self.gate(
+            market_state(now=late, is_open=False, ts="2026-10-27T21:00:00Z",
+                         next_close="2026-10-28T20:00:00Z"), now=late))
         r = h.tick()
         self.assertIsNone(r["entry"])
         self.assertEqual(r["entry_block"],
