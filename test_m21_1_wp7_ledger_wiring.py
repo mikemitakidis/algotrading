@@ -542,6 +542,15 @@ class W7_RiskProvenance(unittest.TestCase):
         self.assertEqual(L.risk_evidence({"verdict": "pass", "evidence": "TRUST_ME"}), "UNVERIFIED")
         self.assertFalse(L.authorising({"verdict": "pass", "evidence": "TRUST_ME"}))
 
+    def test_verifier_rejects_a_record_for_another_decision(self):
+        order = {"risk_decision_id": "dec-a", "symbol": "QQQ", "direction": "long", "qty": 1.0,
+                 "entry_ref_price": 10.0, "planned_at_utc": self.PLAN.isoformat()}
+        rec = {"decision_id": "dec-b", "taken_at": self.PLAN.isoformat(), "broker_scope": "ibkr_paper",
+               "requested_action": "trade_open", "result": "allow",
+               "request_json": json.dumps({"symbol": "QQQ", "side": "long", "amount_usd": 10.0, "leverage": 1})}
+        self.assertEqual(L.verify_m14_decision(order, rec), ("UNVERIFIED", "record_for_other_decision"))
+        self.assertEqual(L.verify_m14_decision(order, dict(rec, decision_id="dec-a"))[0], "VERIFIED")
+
     def test_m14_reader_is_read_only(self):
         src = (Path(__file__).resolve().parent / "bot/candidate_ledger/loop_sink.py").read_text()
         self.assertIn("mode=ro", src)
