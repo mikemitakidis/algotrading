@@ -2,8 +2,9 @@
 
 **Status: DESIGN ONLY.**
 - No code, configuration or broker behaviour is changed by this document.
-- Basis: `main` @ `80b4343`, plus the WS2 risk gate in draft PR #1 @ `46c87ab` and the A01 contract in draft PR #12 @ `3f1fb1e`.
+- Basis: `main` @ `80b4343`, plus the WS2 risk gate in draft PR #1 @ `46c87ab` and the A01 contract in draft PR #12 @ `8013044`.
 - Anything that can only be confirmed on the VPS is labelled **VPS VERIFICATION REQUIRED**.
+- **Revision 2 (28 Oct 2026)** adopts the six policies P-1..P-6 proposed in the independent checkpoint (Issue #3 comment 6463489608) and forwarded by the operator. See **§10**, which also lists how they change §6–§9. Adopting a policy in this design is **not** permission to change live risk code; every implementation phase still needs review and approval.
 
 C01 stays a **hard blocker for M22 live-trading readiness** until this design is implemented, tested and independently reviewed.
 
@@ -129,7 +130,7 @@ Coverage key: ✔ enforced · ◐ partial / conditional · ✘ absent.
   - loss-streak read errors are treated as "not blocked".
 
 **HIGH:**
-- the daily-loss env override bypass, and no global loss cap;
+- the daily-loss env override bypass (resolved by policy **P-6**), and no global loss cap;
 - exposure as a percentage of the *configured* portfolio, not equity;
 - no signal-truth gate (A01);
 - no quote or spread check;
@@ -173,11 +174,15 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 | outcomes unreadable (loss streak) | block in live; explicit reason | legacy **fail-open** |
 | sector unknown (live) | block | legacy ✔ (default) |
 | kill-switch file unreadable | block (treated as active) | ✔ |
-| market clock unavailable / stale / closed / holiday / inconsistent | block before preflight (A09 pattern) | ✘ |
-| quote missing or stale (when quote gating is enabled) | block `quote_stale` | ✘ |
-| governor / authority state missing | treat as `SIGNAL_ONLY` → block `authority_too_low` | n/a |
-| A01 truth: stale / incomplete / unverified data | block before risk (policy decision: which states block) | ✘ |
+| market clock unavailable / stale / closed / holiday / inconsistent | block new entries before preflight (A09 pattern) | ✘ |
+| quote or spread missing or stale | block new entries (`quote_stale` / `spread_too_wide`). **P-4 makes quote and spread mandatory inputs for automatic entries**; M14 today only checks them if supplied | ✘ |
+| governor / authority state missing, unreadable, or not the persisted value | treat as `SIGNAL_ONLY` → block `authority_too_low` (**P-3**) | n/a: no persisted governor store exists today |
+| A01 truth: any required timeframe MISSING / INVALID / UNVERIFIED / STALE / **INCOMPLETE**; risk decision UNVERIFIED; corporate action not VERIFIED_CLEAN | block new entries (**P-4**) | ✘ |
+| exchange calendar missing or not covering the evaluation date | block new entries (**P-4**) | ✘ |
+| daily-loss override requested by environment variable | ignored for automatic entries; the gate still applies (**P-6**) | legacy: **override skips the gate** |
 | any exception in the risk path | block; no submit | legacy partly (live reconcile only) |
+
+**Entries vs risk-reducing exits.** Every row above blocks **new entries**. None may block a **risk-reducing flatten**: that goes through the separate reduce-only pathway (**P-5**, IP-8). The only things that may stop a flatten are an unprovable reduce-only property (position unknown or stale) or a broker or connectivity failure. In either case it goes to NEEDS_REVIEW, never to a new opening order.
 
 ---
 
@@ -186,14 +191,40 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 1. **IP-1, `main.py` between step 5 and step 6.**
    - **The call:** `run_risk_preflight(conn, broker_scope=SCOPE[broker.name], request=TradeRequest(symbol, amount_usd=position_size × entry, side, sl, tp), current_authority=<governor state>, actor="scanner", audit_source="auto", market_open=<verified>, quote_age_sec=..., spread_bps=...)`.
    - `main.py` is sha-pinned (`test_m17_backtesting._PROTECTED_APPROVED_SHA256`), so this needs an explicit reviewed pin transition.
-2. **IP-2, scope mapping.** `get_broker_name()` gives `paper | ibkr_paper | ibkr_live | etoro_paper`, while M14 scopes are `ibkr_paper | ibkr_live | etoro_paper | etoro_real`. The local JSONL `paper` broker has **no M14 scope**. **Decision needed:** treat it as simulation (excluded) or block it.
+2. **IP-2, scope mapping (P-1, P-2).** `get_broker_name()` gives `paper | ibkr_paper | ibkr_live | etoro_paper`, while M14 scopes are `ibkr_paper | ibkr_live | etoro_paper | etoro_real`.
+   - **Broker-connected scopes require M14** (`ibkr_paper`, `ibkr_live`, `etoro_paper`, `etoro_real`).
+   - `etoro_paper` (`PaperEtoroBroker`) is a dry run, but it can reach `EtoroClient` GET reads, so it is **not provably network-free**. It therefore requires M14 under scope `etoro_paper`.
+   - The local JSONL `paper` broker (`PaperBroker`: imports only `bot.brokers.base` and `bot.runtime_policy`) is an **exemption candidate**. It is exempt only while T-J proves the no-broker/no-network boundary, and only when the concrete broker is exactly `PaperBroker` (a type check, never a name string). If T-J fails, it loses the exemption and is blocked.
 3. **IP-3, market state.** Reuse the A09 `verify_market_open` (fresh, typed D1 decision) to compute `market_open`. Separately, M14's default should change from `True` to "required, no default". That is an M14 change with its own tests.
-4. **IP-4, authority source.** WS2 presents a constant `AUTO_ALLOWED`. The scanner path should read the **persisted governor authority**, so a downgrade (kill, loss latch) is honoured on the next decision.
-5. **IP-5, signal truth (A01, PR #12).** The `TruthReport` gates the candidate before risk. `stale_data` and `schema_mismatch` block; the INCOMPLETE-bar policy is an operator decision.
+4. **IP-4, authority source (P-3).** The scanner's `current_authority` is read from **persisted governor state**, never a constant.
+   - **Today no such store exists.** `GovernorState` is "persisted by the caller" (`governor.py:79`) and no caller persists it. WS2 presents a constant `AUTO_ALLOWED`; the eToro CLI takes `--authority` from the operator.
+   - **Required: an additive per-scope governor-state store**, with exactly two writers:
+     - `governor.propose()` after each audited decision (downgrade-only);
+     - `apply_manual_reset()` as an operator-signed, audited `manual_reset` event, the only path that raises authority.
+   - **Readers fail closed:** if the row is missing or unreadable, the auto lane runs at `SIGNAL_ONLY`.
+   - A downgrade (kill, loss latch, drawdown, unknown data) is therefore honoured on the very next decision.
+   - **WS2's constant must be replaced** before WS2 runs unattended.
+5. **IP-5, signal truth (A01, PR #12) (P-4).** The `TruthReport` gates every new entry before risk.
+   - **Blocking states:** any required timeframe MISSING, INVALID, UNVERIFIED, STALE or **INCOMPLETE**; an UNVERIFIED risk decision; a corporate action that is not VERIFIED_CLEAN; a missing calendar.
+   - **Consequence: the scanner must decide on closed bars.** Today it scores the in-progress bar (`compute_features` uses the last row), so during the session almost every timeframe is INCOMPLETE and every entry would block. The scanner has to decide on the **last closed bar** of each timeframe, by dropping the in-progress row before `compute_features`. That is a scanner change: a C5b transition with its own review, a parity report on signal counts, and no change to the strategy rules.
 6. **IP-6, traceability (A02).** An additive `risk_decision_id` on `execution_intents`, plus the candidate ledger linking candidate → score → decision → intent → outcome.
 7. **IP-7, broker boundary (defence in depth).** `broker.submit` verifies a fresh, matching **allow** decision (symbol, side, amount ≤ approved, age ≤ N s) before placing. This makes a submit without a decision impossible even if a caller skips IP-1.
-8. **IP-8, operator lanes.** For B2b one-shot and flatten, document the required authority (`ONE_SHOT_MANUAL` for an entry; `trade_close` ≥ `PAPER_ONLY`), and either route them through M14 or record an explicit, reviewed exemption.
+8. **IP-8, operator lanes (P-5).**
+   - **One-shot entries** (B2b `m21_1extra_b2b_single_submit`) run the M14 preflight. The scope is `ibkr_paper`; the authority must be ≥ `ONE_SHOT_MANUAL`, read from the persisted governor state (IP-4) and never from a CLI argument. Use `audit_source="manual"` and actor = operator. The existing confirmation flag, kill switch and clean-slate checks stay. The eToro live CLI's `--authority` argument moves to the same governor read.
+   - **Flatten** uses a **separate, audited, reduce-only pathway**, not the entry preflight. The entry preflight is hard-wired to `trade_open` (`preflight.py`), and every M14 gate would also block a close.
+     - **Invariants:**
+       - the side is opposite to the current position;
+       - the quantity is ≤ the current position;
+       - no order can create or increase exposure;
+       - every attempt writes an audit record (`requested_action='trade_close'` + `reduce_only=true` + position evidence) before submit.
+     - **Not blocked by entry gates:** it works through the kill switches, loss latches, drawdown and authority below `ONE_SHOT_MANUAL` (`trade_close` needs only `PAPER_ONLY`).
+     - **Closed market:** queue for the next open or follow an explicit, reviewed closed-market rule. Never a silent market order.
+     - **Blocked only when reduce-only cannot be proven:** position unknown, stale or ambiguous → NEEDS_REVIEW.
 9. **IP-9, ingestion.** M14 `data_staleness` needs M14.C/D ingestion of PnL and exposure for every scope. **VPS VERIFICATION REQUIRED:** whether ingestion runs, its freshness, and the current `RISK_*` env and `BROKER` values.
+10. **IP-10, daily-loss override (P-6).** `RISK_ALLOW_DAILY_LOSS_OVERRIDE` must have **no effect on automatic entries**.
+    - An exceptional override can only be an explicit, short-lived, operator-signed audit event: a `manual_reset`-style record with scope, reason, actor and expiry. It is honoured only for manual one-shot entries and is shown on the dashboard.
+    - An environment toggle never qualifies.
+    - Legacy P1's override branch is removed for the auto lane. The M14 daily-loss gates have no override at all and stay that way.
 
 ---
 
@@ -242,6 +273,38 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 
 **T-I, M14 market default.** Once IP-3 lands, calling preflight without an explicit, verified `market_open` fails.
 
+**T-J, simulation exemption proof (P-2).** For each exemption candidate:
+- the local `PaperBroker`;
+- WS2 simulated mode (`SimulatedPaperBroker`);
+- the M20.I paper loop;
+- the A-path sim;
+- the B1 dry-run.
+
+Each must pass all three checks below, or it loses the exemption.
+- **AST:** the module and every project module it imports reach no broker adapter (`bot.brokers.ibkr_broker`, `bot.etoro.*` clients, `ib_insync`) and no network library (`socket`, `http`, `urllib.request`, `requests`, `httpx`, `aiohttp`, `websockets`).
+- **Runtime:** a full cycle completes with `socket.socket` and `subprocess.Popen` patched to raise.
+- **Decision-point check:** the exemption is granted by exact concrete type, never by `BROKER` name, so `BROKER=paper` with a different adapter still requires M14.
+
+**T-K, reduce-only flatten pathway (P-5).**
+- **A flatten succeeds while:** kill switches are active, the daily-loss latch is set, drawdown has fired, authority is `PAPER_ONLY`, or the market is closed (queued by the reviewed rule).
+- **It is refused** (NEEDS_REVIEW, no order) when:
+  - the position is unknown, stale or ambiguous;
+  - the requested quantity is greater than the position;
+  - the side matches the position;
+  - a second close would exceed the remaining position.
+- **Audit:** every attempt is written before submit.
+- **No entry gate is consulted** on this path, and no entry can reach this path (AST).
+
+**T-L, override removal (P-6).**
+- With `RISK_ALLOW_DAILY_LOSS_OVERRIDE=true` and the loss limit exceeded, an automatic entry is still blocked.
+- An operator override record is honoured only for a manual one-shot entry, only before its expiry, and only for its scope.
+- No code path reads the env var for the auto lane (AST).
+
+**T-M, mandatory entry inputs (P-4).**
+- An automatic entry without `quote_age_sec` and `spread_bps` is blocked.
+- An entry with any INCOMPLETE required timeframe is blocked.
+- The governor-state reader returns `SIGNAL_ONLY` when its row is missing, unreadable or corrupt.
+
 ---
 
 ## 9. Migration approach (behaviour preserved until reviewed)
@@ -252,7 +315,10 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 | 1 | **offline parity harness** (T-C): replay fixture states and offline exports through both stacks | none (offline) | parity report reviewed; every disagreement explained |
 | 2 | **shadow on the scanner path**: compute M14 (IP-1) and record `risk_decision_id` (IP-6). The verdict stays legacy. Flag default **off** | none to verdicts. Enabling it writes audit rows to the production DB, so it **needs operator approval** | shadow agreement reviewed on paper |
 | 3 | **enforce `legacy AND M14`** + IP-3 market verification + IP-7 broker-boundary decision check. Flag default off; paper first | stricter only: M14 can add blocks, never remove one | paper evidence + review + approval |
-| 4 | **fix legacy fail-open bugs** (C-3) with T-D tests | stricter only | review |
+| 4 | **fix legacy fail-open bugs** (C-3) with T-D tests; **remove the env daily-loss override for automatic entries** (P-6, T-L) | stricter only | review |
+| 4a | **governor-state store** (P-3, IP-4): additive table, the two writers, fail-closed reader; WS2 and the eToro CLI switch to it | stricter only (missing state → SIGNAL_ONLY) | review + approval (schema deployment needs approval) |
+| 4b | **closed-bar scanner evaluation + A01 entry gating** (P-4, IP-5): C5b transition with a signal-count parity report | changes which bar is scored; entries block on unknown, stale or incomplete data | review + approval |
+| 4c | **one-shot via M14 and the reduce-only flatten pathway** (P-5, IP-8, T-K) | one-shot becomes stricter; flatten gets its own audited path | review + approval |
 | 5 | **consolidate limits** into the policy DB (§5). Port or retain legacy-only gates (sector, loss streak, duplicate/conflict, live reconcile conflicts) as M14 gates or pre-gates. Retire a legacy gate only with parity evidence | per gate, reviewed individually | review + approval |
 | 6 | M22 live readiness re-assessment | — | C01 closed by review |
 
@@ -264,16 +330,27 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 
 ---
 
-## 10. Open decisions for the operator
+## 10. Policies adopted in revision 2 (P-1..P-6)
 
-1. **Local JSONL `paper` broker:** treat it as M14-exempt simulation, or block it under M14 (IP-2)?
-2. **Authority source for the scanner auto lane:** the persisted governor state (recommended) or a constant as in WS2 (IP-4)?
-3. **A01 truth policy before risk:** which observation states block entries (at least STALE, INVALID, MISSING; INCOMPLETE?) (IP-5)?
-4. **Operator lanes (B2b, flatten):** route through M14, or a reviewed exemption (IP-8)?
-5. **`RISK_ALLOW_DAILY_LOSS_OVERRIDE`:** remove it, or confine it to paper only?
+These come from the independent checkpoint (Issue #3, comment 6463489608) and were forwarded by the operator for this design. They are design policies only: implementing each one is a separate, reviewed and approved phase (§9).
+
+| id | policy | design consequence | where |
+|---|---|---|---|
+| **P-1** | Broker-connected paper and live orders require M14. | Every path that can reach a broker adapter goes through the M14 preflight (IP-1). The broker adapters verify a fresh, matching allow decision (IP-7). | §7 IP-1, IP-2, IP-7; T-A, T-E, T-G |
+| **P-2** | Pure local simulation may be exempt only with a provable no-broker/no-network boundary. | Exemption candidates: local `PaperBroker`, WS2 simulated mode, M20.I paper loop, A-path sim, B1 dry-run. Each needs AST + runtime + exact-type proof. `PaperEtoroBroker` is **not** exempt (it can reach `EtoroClient` GETs). | §7 IP-2; T-J |
+| **P-3** | Scanner authority comes from persisted governor state. | A new governor-state store with two writers (`propose`, `apply_manual_reset`). Missing state → `SIGNAL_ONLY`. The WS2 constant and the eToro CLI argument are replaced. | §6; §7 IP-4; §9 4a; T-E, T-M |
+| **P-4** | Unknown, stale or incomplete inputs block new entries. | A01 states (incl. INCOMPLETE), the calendar, an unverified risk decision, the market clock, quote/spread (now mandatory), P&L/exposure and risk state all block entries. The scanner moves to closed-bar evaluation. **Risk-reducing flatten is exempt.** | §6; §7 IP-3, IP-5; §9 4b; T-D, T-M |
+| **P-5** | One-shot entries require M14; flatten uses a separate audited reduce-only pathway. | B2b runs the preflight with governor authority ≥ `ONE_SHOT_MANUAL`. Flatten gets a dedicated `trade_close` / reduce-only path that works through kill switches and latches, and fails to NEEDS_REVIEW only when reduce-only cannot be proven. | §6; §7 IP-8; §9 4c; T-F, T-K |
+| **P-6** | Remove silent daily-loss overrides for automatic entries. | `RISK_ALLOW_DAILY_LOSS_OVERRIDE` has no effect on the auto lane. An exception is only a short-lived, operator-signed audit event, for manual one-shot entries. | §6; §7 IP-10; §9 4; T-L |
+
+**Still open for the operator:**
+1. **The closed-market rule for flatten** (P-5): queue for the next open, or a reviewed alternative.
+2. **Whether to keep the local JSONL `paper` broker at all**, once T-J has decided its exemption.
+3. **The scanner's switch to closed-bar evaluation** (P-4): approval of the C5b transition and of the expected drop in intraday signal count.
+4. **VPS verification** of M14 ingestion, the `RISK_*` env values and `BROKER` (IP-9).
 
 **Dependencies:**
-- **A01** (PR #12) for IP-5.
+- **A01** (PR #12 @ `8013044`) for IP-5 and verified risk-decision provenance.
 - **A02** (candidate ledger) for IP-6.
-- **A09** (PR #1) for the verified-market-state pattern used in IP-3.
-- **VPS verification** of M14 ingestion and `RISK_*` env values (IP-9).
+- **A09** (PR #1 @ `46c87ab`) for the verified-market-state pattern used in IP-3.
+- **VPS verification** of M14 ingestion and the `RISK_*` env values (IP-9).
