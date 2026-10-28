@@ -10436,6 +10436,7 @@ class G10_Hygiene(unittest.TestCase):
             "ROADMAP.md",
             # Canonical project handoff (documentation only).
             "docs/handoffs/Algo_Trading_Full_Canonical_Handoff_2026-10-26.md",
+            "docs/handoffs/M21_Finish_Line_2026-10-28.md",
             "docs/NEXT_WORK_REGISTER.md",
             # M18 recovery-scope artifacts (this branch reconstructs
             # M18 from transcripts; these document/support that effort).

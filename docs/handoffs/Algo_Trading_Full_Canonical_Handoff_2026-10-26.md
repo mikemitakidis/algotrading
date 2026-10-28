@@ -1,5 +1,5 @@
 # Algo Trading — FULL Canonical Project Handoff & Completion Register
-**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.8) Europe/London** · **Version:** 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
+**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.9) Europe/London** · **Version:** 3.9 (28 Oct 2026: M21 finish line, requirements matrix, remaining-work plan, estimate, merge readiness and decisions in `docs/handoffs/M21_Finish_Line_2026-10-28.md`; A01 completed-bar staleness basis on PR #12 @ `47e9057`; `main` unchanged; all 71 tasks kept) · 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
 
 > **Permanent rule:** This handoff covers every remaining capability from the June 2026 canonical roadmap through M23 and the two-broker operating objective, plus all still-open technical debt and the new advanced AI/self-development research architecture. **No delivery deadlines or calendar estimates.** Work proceeds by dependencies, testing evidence and operator approvals. Preserve original milestone names and numbers. A GitHub merge, a VPS deployment, a runtime activation and an independently validated trading edge are FOUR DIFFERENT STATES.
 
@@ -30,11 +30,48 @@ Build a sophisticated continuously learning trading research-and-execution platf
 | M21.1extra D0/D1/supervised D2 | Pre-existing safety groundworks delivered | Unattended lifecycle not activated |
 | WS1 / D3 outcome metrics | **Code merged** to main at 015d2ce | Dashboard service NOT restarted; panel not yet runtime verified; genuine net outcomes absent |
 | WS3 Telegram BUY/SHORT signal alerts | **Code merged** at 015d2ce | No live send, schedule or duplicate-notifier resolution approved |
-| WS2 corrected unattended paper loop | **Draft PR #1**, branch m21-ws2-corrected-review @ 5d6654ddca989d2db25f59f4b46426e564ac27f5; code findings addressed, developer reports offline suite green | Operator merge permission, independent CI/review gates, separately approved genuine IBKR paper-adapter tests, gateway and activation |
+| WS2 corrected unattended paper loop | **Draft PR #1**, branch m21-ws2-corrected-review @ **0f3f9e6db860bb2359238c8b83283d0c93d76a4e** (v3.8: refreshed from main, market-state boundary, hardening R1–R3; previously 5d6654d); offline suite green (Claude-reported) | Operator merge permission, independent CI/review gates, separately approved genuine IBKR paper-adapter tests, gateway and activation |
 | Research architecture | Proposal **r2** (Issue #2). Offline research lanes (foundation, B integrity, A counterfactual, F data QA, C model lab, D genome/backtester, E offline agents, six-lane integration) **CODE_MERGED to main `80b4343`** (PRs #4–#11, operator-authorised, 27 Oct 2026) after three independent reviews and one comprehensive audit; TESTED_OFFLINE on synthetic data only (§3a) | NOT data-, runtime- or trading-verified; integrated verdict INCONCLUSIVE; real-data use needs approval (B01/E05) |
 | GitHub main | **80b4343db4a22413aa670efd32e24952d53e532e** (27 Oct 2026, merge of PR #11; previously 015d2ce). Tree identical to the reviewed integration head `a645a91`; 89 files changed vs 015d2ce, all under `research/`, `docs/research/`, `test_m21_research_*.py` plus test-only M17/M18 hygiene allow-lists; no `bot/`, `dashboard/`, `tools/`, `main.py`, `requirements.txt` or active workflow changes | No changes to main without separate explicit approval. Vercel auto-deployed the repo's web project (READY); that is NOT the trading runtime |
 | Last operator-reported VPS | Trader inactive; ibgateway failed; dashboard + Caddy running; no dashboard restart after WS1; no Telegram, no new IBKR orders; sync daemon off | Current runtime must be independently rechecked at activation, not guessed |
 | M21.2–M21.7, M22, M23 | Unfinished or only supporting infrastructure exists | Completion tasks follow |
+
+### 3a-0000. v3.9 — M21 finish line (28 Oct 2026)
+
+**Operator instruction (28 Oct, 08:46).** The operator asked for:
+- a fixed, measurable M21 definition of done;
+- a requirements matrix against the June roadmap, a remaining-work plan and a bottom-up estimate;
+- merge readiness for #12, #14 and #1, and a short decision list;
+- the WP1 daily-bar freshness fix.
+
+Then STOP. Excluded: merges, VPS, broker, orders, production DB, CI, Telegram.
+
+**The finish line now lives in one file:** [`docs/handoffs/M21_Finish_Line_2026-10-28.md`](M21_Finish_Line_2026-10-28.md). It is the **single authoritative M21 checklist** (its §6). It contains:
+- engineering / operational / performance gates A, B and C;
+- the requirements matrix (M21.U–M21.7 plus Appendix A);
+- the 71-task classification for M21 sign-off (none removed);
+- work packages WP5–WP19 and operator gates OP1–OP5, with dev-day estimates;
+- completion windows, merge readiness, and decisions G1–G4 (+ optional CI).
+
+**Planned windows** (estimates with stated assumptions, not deadlines; see §6 rule 6):
+- engineering ≈ 9 Dec 2026;
+- operational acceptance ≈ 11–16 Dec 2026;
+- full M21 acceptance ≈ 8–15 Jan 2027.
+
+**PR #12 (A01) @ `47e905709919ed11f3ab31bc4be0e058df2fce8e`:**
+- **Change:** an opt-in completed-bar staleness basis (`TruthPolicy.bar_basis="completed"`).
+  - Lag is measured from the close of the following (newer) bar, so a prior daily close is current for the whole next session.
+  - A forming bar is INVALID under this basis.
+  - The default (`in_progress`) is unchanged for every caller.
+- **Tests:** 7 new tests plus 1 default-regression test (the A01 suite now has 67). 6/6 targeted mutants killed.
+
+**Merge readiness.**
+- All four heads (#12, #1, #14, #13) were trial-merged locally onto `80b4343` with no conflicts. The local tree is `a5036df` and was not pushed.
+- 23 targets passed on it under Python 3.12.3 / NumPy 1.26.4. Claude-reported.
+
+**Scope frozen** to the June M21 text plus genuine safety dependencies, pending operator decision G1:
+- the completed-candle scanner (C01 §11) is pulled into M21 as WP6;
+- the rest of C01 stays an M22 hard blocker.
 
 ### 3a-000. v3.8 development record (28 Oct 2026)
 
@@ -269,13 +306,30 @@ Tests on the integration head: 14 targets, 292 tests OK (8 research suites = 213
 
 All **71** tasks (A01–E09) remain in §4 with their full statuses and original milestone references. ✅ marks the 4 tasks closed earlier. No task was removed. No milestone M21.1–M23.5 is complete.
 
+**v3.9:** the classification of each task for M21 sign-off is in `docs/handoffs/M21_Finish_Line_2026-10-28.md` §4:
+- 25 mandatory, still open;
+- 1 closeout task;
+- 1 decision;
+- 9 supporting, already delivered;
+- 14 not required for M21 sign-off;
+- 11 M22 tasks;
+- 10 M23 tasks.
+
+This classification changes no task's status.
+
 ## 4. Full remaining-work inventory — carry every unchecked item until proved CLOSED
 
 The task IDs below are **tracking IDs, not replacement milestone numbers**. A task is CLOSED only if GitHub SHA, exact test evidence and applicable runtime or broker evidence exist. Tasks can be developed in parallel in isolated branches; integration/promotion remains gated.
 
 ### A. Close the core M21.1 / M21.1extra loop
 
-- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (28 Oct 2026, v3.8): PR_PENDING — TESTED_OFFLINE on draft PR #12 @ `8013044`; the independent review confirmed the risk-decision provenance finding is resolved; awaiting merge decision.** v3.7 detail:
+- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (28 Oct 2026, v3.9): PR_PENDING — TESTED_OFFLINE on draft PR #12 @ `47e9057`.**
+- **v3.9 adds** an opt-in completed-bar staleness basis for the completed-candle scanner (WP6). Default behaviour is unchanged.
+- **Re-review:** only the delta `8013044..47e9057`.
+- **Provenance:** the risk-decision provenance finding was already resolved at `8013044`.
+- **Remaining evidence wiring:** WP5 in the finish-line doc.
+
+v3.8: TESTED_OFFLINE @ `8013044`. v3.7 detail:
 - **Contract:** pure `bot/scoring_truth`:
   - DST-correct session and bar-close semantics;
   - MISSING / INVALID / UNVERIFIED / STALE / INCOMPLETE / VALID per symbol × timeframe;
@@ -404,6 +458,12 @@ Previous: NOT_STARTED (27 Oct 2026).
 
 ## 5. Work order — parallelism without deadline promises
 
+> **v3.9:** M21 sequencing and acceptance are now defined in `docs/handoffs/M21_Finish_Line_2026-10-28.md`:
+> - §5: work packages WP1–WP19 and operator gates OP1–OP5;
+> - §6: the authoritative checklist.
+>
+> The lanes and principles below still apply.
+
 - **Immediate engineering lane 1:** finish review/paper integration preparation A01–A17 where OFFLINE possible; WS2 draft PR #1 kept isolated until operator approves merge, real paper gateway and runtime separately.
 - **Immediate research lane 2:** implement B03–B08 evidence/integrity **and simultaneously** B14–B19 sophisticated AI harness/ensembles/regime work on synthetic and already authorised public or repository data. Do not wait for real fills before coding/test harnesses.
 - **Immediate research lane 3:** implement B09/B10 strategy genome and parity, E agent mock/design, vendor/license memo B01/B02, and E08 documentation alignment on separate branches. Where data lacks coverage, report N/A and proceed with unblocked technical work.
@@ -418,7 +478,7 @@ Previous: NOT_STARTED (27 Oct 2026).
 3. Identify the exact current GitHub main, open PR heads, services, operator kill switch, data provenance and gateway state **only if reverified**; otherwise label last-known and date. Distinguish paper simulated trades, actual IBKR paper trades and eToro funded trades.
 4. State who is working on which non-overlapping branch, outstanding review findings, what may proceed without approval and the next explicit operator gate.
 5. Summarise the last applied change and its tests without restarting old broad audits; maintain links to original June roadmap, Issue #2, this handoff, audit backlog, and relevant pull requests.
-6. No time estimates, deadlines or invented percentages. Evidence-driven gates decide progression. **No paid purchases, credentials, private data export, broker calls, live/paper orders, dashboard/Telegram enablement, VPS deployment or merges without the matching separate permission.**
+6. No time estimates, deadlines or invented percentages. Evidence-driven gates decide progression. **Exception (operator request, 28 Oct 2026):** the bottom-up M21 estimate in the finish-line doc is allowed. It is labelled as an estimate with stated assumptions, re-estimated at each phase gate, and never treated as a deadline or a reason to skip a gate. **No paid purchases, credentials, private data export, broker calls, live/paper orders, dashboard/Telegram enablement, VPS deployment or merges without the matching separate permission.**
 7. **Hand off the FULL project**, not just the next sprint. Keep end-state functionality and unproved operational steps visible until accepted, even if current chat or engineering agent changes.
 
 ## 7. Links and current action
@@ -430,17 +490,23 @@ Previous: NOT_STARTED (27 Oct 2026).
 - **Working research report:** https://github.com/mikemitakidis/algotrading/blob/research/m21-autonomous-research-engine/docs/research/M21_autonomous_research_engine_proposal.md
 - **GitHub source:** ROADMAP.md; MILESTONE_STATUS.md; docs/NEXT_WORK_REGISTER.md.
 
-**Claude's next authorised action (resume point, v3.8):** **STOPPED for independent review.** Draft PRs await exact-head review and the operator's merge decisions:
-- #12 A01 (`8013044`);
-- #1 WS2 (`0f3f9e6`);
+**Claude's next authorised action (resume point, v3.9):** **STOPPED for review** of the M21 finish line (`docs/handoffs/M21_Finish_Line_2026-10-28.md`) and of the PR deltas:
+- #12 A01 (`47e9057`; delta `8013044..47e9057`);
+- #1 WS2 (`0f3f9e6`; delta `46c87ab..0f3f9e6`);
 - #13 C01 design (`6a8a690`);
 - #14 A02, stacked on #12 (`71bccd6`).
 
-**After review, in order:**
-1. Merge decisions: #12, then retarget #14 to `main`; #1; #13.
-2. The A01 fail-closed consequence for A-path, B1, WS3 and WS2 (evidence wiring or research-rank selection).
-3. An approved, read-only A02 replay on a copy of production data.
-4. C01 implementation phases, as approved (design §9): governor store, completed-candle scanner (with the A01 completed-bar staleness basis), reduce-only flatten, M14 on the scanner path.
+**After the operator's decisions G1–G4** (finish-line §8), follow finish-line §5 and §6:
+1. Merges #12 → #1 → #14 (retarget to `main`) → #13.
+2. WP5 / WP6 / WP7 / WP10 in lane L, with WP12 / WP11 in lane R.
+3. The OP1 read-only VPS session.
+4. The paper-loop activation gate (OP2 / OP3).
+
+C01 phases other than §11 (WP6) remain M22 and need a separate decision.
+
+v3.8 resume point:
+- review of #12 @ `8013044`, #1, #13 and #14;
+- then merges, the A01 fail-closed consequence, the A02 replay, and C01 phases as approved.
 
 Real-data, VPS, IBKR paper, Telegram, CI activation and any merge need separate approval. Do **not** merge or alter production.
 

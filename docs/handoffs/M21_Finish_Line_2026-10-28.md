@@ -1,0 +1,352 @@
+# M21 Finish Line — requirements, remaining work, estimate, merge readiness, decisions
+
+**Date:** 28 Oct 2026 (Europe/London) · **Repo:** mikemitakidis/algotrading · **main:** `80b4343db4a22413aa670efd32e24952d53e532e`
+**Scope source:** the 29 June 2026 canonical roadmap (“Algo_Trading_Bot_Canonical_Roadmap.docx”, v2.0) — sections M21.U, M21.1, M21.1extra, M21.2–M21.7, §5 learning loop, §8 safety rules, Appendix A. Task IDs (A01–E09) are from the canonical handoff register; **all 71 stay in the register** (see §4).
+**Status of this file:** the single authoritative M21 checklist (§6). It replaces separate plan documents; the canonical handoff links here.
+
+---
+
+## 0. In plain words (one screen)
+
+- **Where we are.** The foundations are built and well tested offline: scoring, the paper-loop code, safety gates, and the research engine (backtester, walk-forward tools, ML lab). Four pull requests are waiting for review and merge. None of it has run against real data or a real IBKR paper account yet.
+- **What M21 still needs.** Three things:
+  1. switch on the real paper loop, so it starts collecting genuine outcomes;
+  2. build the parts of the roadmap that don't exist yet: the **Promotion & Approval Model** (M21.3), **market context** (M21.6), and the four strategy templates running live with dashboard controls (Appendix A);
+  3. run the optimiser and the AI models (M21.2–M21.7) on **real** historical data, not synthetic.
+- **How long.** Remaining engineering is about **49 developer-days** plus about 10 for review fixes.
+  - **Engineering:** realistically **5–6 weeks (about 9 Dec 2026)**. One month (about 25 Nov) is possible only if every review needs a single round and approvals arrive within a day or two.
+  - **Full M21 acceptance:** realistically **mid-January 2027**. It needs real paper outcomes, and those take calendar time that code can't shorten.
+- **The biggest speed-up.** Start the paper loop in weeks 2–3. Don't wait for M21.2–M21.7: the outcome clock, not the code, is what limits full acceptance.
+- **Stopping the drift.** M21 scope is frozen to the June roadmap text plus genuine safety dependencies. Research ideas added later are kept in the register but marked **not required for M21 sign-off** (§4). Nothing is deleted.
+- **Your decisions.** §8 lists only six approvals, plus one optional one that would speed up reviews. They are grouped into four gates, so you aren't asked for each item separately.
+
+---
+
+## 1. The finish line (three separate gates, each measurable)
+
+### A. Engineering completion
+Engineering is complete when every item below holds:
+- **A-1.** Every mandatory work package in §5 is merged to `main` after an independent exact-head review, and every acceptance test listed for it passes. Python 3.12 / NumPy 1.26, C5a isolation.
+- **A-2.** The guards are green on the final `main`: C5a/C5b, M17/M18 G10, hygiene, quarantine.
+- **A-3.** There are zero open CRITICAL/HIGH review findings.
+- **A-4.** The safety boundaries are unchanged:
+  - no live-order path from M21 code;
+  - every broker-connected paper entry passes M14 and the trusted market clock;
+  - the kill switch works;
+  - scoring never grants execution.
+- **A-5.** The canonical docs are reconciled (E08): ROADMAP.md, MILESTONE_STATUS.md and the register match the code.
+
+### B. Operational acceptance (needs your approvals; see §8)
+- **B-1. Genuine historical data.**
+  - A read-only inventory of the VPS M16/M18 store is complete: coverage per symbol and timeframe, gaps, adjustment basis, and the universe as of each date.
+  - Real-bar `scanner_replica` parity is reported, and every mismatch is explained (A17/E05/B01).
+- **B-2. IBKR PAPER adapter.** These must be verified in a real paper session (A10, A11, A13):
+  - account/port isolation;
+  - bracket orderRef on every leg, and permIds;
+  - real fills and fees;
+  - crash/restart and reconnect drills;
+  - partial and late fills;
+  - coexistence with manual foreign orders.
+- **B-3. Unattended scheduled paper loop.** It runs for **10 consecutive trading days** with:
+  - zero duplicate orders and zero unknown exposure;
+  - every NEEDS_REVIEW resolved;
+  - a kill-switch drill passed;
+  - the market-clock gate observed across at least one closure or half day where the window allows (Thanksgiving is 26 Nov and the half day is 27 Nov 2026) (A12).
+- **B-4. Dashboard.** The D3 panel is live behind authentication, with metrics per template and honest N/A values (A05/A06). Phase-1 strategy controls work, with an audit trail and rollback (A16).
+- **B-5. Ledger.**
+  - The migration is deployed and the writer is enabled for paper.
+  - `account()` reports zero violations every day.
+  - Every paper trade can be traced from candidate → score → risk decision → intent → broker result → outcome (A02).
+- **B-6. Monitoring.** In a drill, the heartbeat, the gateway-down alarm and the stale-data alarm all fire, and the service restarts and recovers (A14 minimum).
+
+### C. Trading-performance validation (honest evaluation, NOT a profit target)
+A strategy that fails validation is a valid result. What does **not** count as completion: missing tests, invalid inputs, simulated results presented as real, or incomplete integration.
+- **C-1. Templates walk-forward on real data.** Each of the four templates is evaluated walk-forward and out of sample on real adjusted bars, with realistic costs:
+  - a purged walk-forward with an embargo, and a sealed final sample used once;
+  - a report card showing net expectancy with a confidence interval, win rate **and** average win vs average loss (the roadmap's win-rate-first principle), drawdown, CVaR, turnover and trade count;
+  - a verdict of PASS, FAIL or INCONCLUSIVE.
+- **C-2. Parameter choice (M21.2).** Chosen parameters sit on a plateau, not an isolated peak. Every trial is counted, deflated metrics are reported, and results are compared with no-trade and default-parameter baselines.
+- **C-3. AI models on real data.** M21.4, M21.5 and M21.7 are each compared out of sample against their baseline (take-all, global thresholds, global weights), with calibration reported. "No improvement" is recorded as such. A model is promoted only through the Promotion & Approval Model.
+- **C-4. Paper vs model.** After at least **20 trading days** of the paper loop:
+  - a score-vs-outcome report (did higher scores win more? This is the roadmap §5 step "compare predicted vs actual");
+  - paper fills vs simulated fills (slippage);
+  - a fee reconciliation;
+  - the sample size stated.
+- **C-5. Integrity.**
+  - Survivorship status is disclosed: either the bias is quantified or survivorship-free data is used.
+  - Corporate actions are handled.
+  - No synthetic result is presented as real, and every trial is in the registry.
+  - The integrated canary false-pass upper bound is ≤ 5 % for the exact pipeline.
+- **C-6. Governance demonstrated in paper.**
+  - One complete Promotion & Approval cycle in paper: proposal → tier → shadow → operator approval → applied → guard.
+  - An auto-revert drill.
+
+**M21 is fully accepted only when A + B + C are all met.** The "few hundred closed trades" in roadmap §6 is the gate for opening **eToro (M22)**, not for M21.
+
+---
+
+## 2. Requirements matrix (original roadmap → today)
+
+Status vocabulary:
+- CLOSED / CODE_MERGED / TESTED_OFFLINE / PR_PENDING / PARTIAL / DESIGN_ONLY / RUNTIME_UNVERIFIED / BLOCKED (approval) / NOT_STARTED.
+- **Mand.** = mandatory for M21 sign-off.
+
+### M21.U — Global Universe Foundation
+| ID | Requirement | Implemented | Missing | Status | Acceptance | Deps / permissions | Mand. |
+|---|---|---|---|---|---|---|---|
+| M21.U | U0→U4, UQ, UR, Runtime Registry, FOCUS_SIZE, Alpaca data path | Delivered historically (handoff §3; test_m21u* suites on main) | — | CLOSED | Historical closeout | — | Yes (done) |
+
+### M21.1 — Score Optimisation (incl. the scoring bridge)
+| ID | Requirement | Implemented | Missing | Status | Acceptance | Deps / permissions | Mand. |
+|---|---|---|---|---|---|---|---|
+| M21.1-a (A01) | Scanner signal → enriched context → M19 score | Bridge on main. A01 truthful contract on PR #12 @ `47e9057`: per-timeframe observation states, M14-verified risk authority, unknown inputs removed → M19 fails closed | Merge; real evidence sources wired (WP5) | PR_PENDING · TESTED_OFFLINE | A01 suite (67 tests). On a real scanner sample: every candidate is scored, and unknown inputs are listed, never invented | #12 merge; real sample via OP1 | Yes |
+| M21.1-b | Ranked output: composite score, component breakdown, confidence, reasons | M19 components and buckets; `research_rank_score` preserved (A01 T7) | Ranking surfaced per cycle in the ledger and a report on real signals | TESTED_OFFLINE | T7. A real-signal ranking report with ordered candidates and reasons | WP5, WP7 | Yes |
+| M21.1-c | Read-only; scoring never enables execution | A01 T8: `execution_eligible` always False; no submit imports | — | TESTED_OFFLINE | T8 | — | Yes (met) |
+| M21.1-d (A02) | Candidate decision audit: every stage, gate, risk decision and outcome joinable (roadmap §9 Trust Test) | Ledger, migration, flag-gated writer, accounting, legacy replay on PR #14 @ `71bccd6` | Runtime wiring (WP7); migration and flag (OP3); read-only replay on a production copy (OP1) | PR_PENDING · TESTED_OFFLINE | `account()` zero violations; candidate → outcome trace for every paper trade | #12/#14 merges; OP1, OP3 | Yes |
+| M21.1-e | Freshness truthful under the scanner's real bar semantics | Completed-bar basis added @ `47e9057` (opt-in; default unchanged) | Scanner switch to completed bars (WP6) | TESTED_OFFLINE | T2b (7 tests, 6/6 mutants killed); T-N matrix after WP6 | Decision G1 | Yes |
+
+### M21.1extra — run the live paper loop + dashboard panel + templates
+| ID | Requirement | Implemented | Missing | Status | Acceptance | Deps / permissions | Mand. |
+|---|---|---|---|---|---|---|---|
+| X-a (A03/A04/A09) | Scheduled cycle: focus → scan → score → decide → IBKR **paper** → record | C5 controls and D0–D2 CLOSED. WS2 on PR #1 @ `0f3f9e6`: scheduler, M14 risk gate, trusted market clock (R1–R3), outcome capture | Merge; selection by research rank (WP5); completed candles (WP6); activation (OP3) | PR_PENDING · RUNTIME_UNVERIFIED | WS2 suite (123 tests); B-3 soak | Merge, paper-gateway and schedule approvals | Yes |
+| X-b (A10) | Real IBKR paper adapter behaviour | Adapter code in #1 | Real paper session | BLOCKED (approval) | B-2 checklist | G3 | Yes |
+| X-c (A11) | Crash/exit reconciliation | Offline tests in #1 | Runtime drills | PR_PENDING / BLOCKED | Disconnect, restart, partial fill, late TP/SL drills | G3 | Yes |
+| X-d (A12) | Market clock and unattended scheduling | D1 guard; R1–R3 hardening | Live observation incl. holiday/half day | BLOCKED (approval) | B-3 | G3 | Yes |
+| X-e (A13) | Record entry, reason, score and outcome | Outcome capture in #1; D3 metrics on main | True fills and fees | PR_PENDING | Net P&L with fees, R-multiple, exit taxonomy, real-vs-sim flag | G3 | Yes |
+| X-f (A05/A06) | Dashboard: win rate, average win vs loss, trade count, drawdown **per strategy** | D3 merged; `paper_metrics_view` groups by strategy | Dashboard restart; per-template identity (WP8) | CODE_MERGED · RUNTIME_UNVERIFIED | B-4 | Restart approval (G3) | Yes |
+| X-g | Kill switch active; no eToro | Kill-switch suites; WS2 gate | Drill in the soak | TESTED_OFFLINE | Kill drill in B-3 | G3 | Yes |
+| X-h (A14) | Runs unattended | `gateway_health`, watchdog, heartbeat modules exist | Health/stale/gateway alarms and a restart drill (WP10) | NOT_STARTED (minimum) | B-6 | G3 | Yes (minimum). Full A14 → M22 C03 (decision G1) |
+| X-i (A15) | Loop runs a **selectable template** with SL/TP on every trade (Appendix A) | 4 templates in the research genome (synthetic); live loop = Template 1 | Templates 2–4 in the live path; template id on every signal, intent and outcome (WP8) | PARTIAL | Research↔live signal parity on identical bars; 100 % of trades carry template id + SL/TP | WP6 | Yes |
+| X-j (A16) | Appendix A **Phase 1**: templates selectable, parameters adjustable, champion picked on the dashboard | Single-strategy editor (`/api/strategy`, `data/strategy.json`) | Template selection; per-template parameters with bounds; versioning, audit, rollback; paper lane only (WP9) | NOT_STARTED | Validation-bound tests; audit row per change; rollback test; cannot touch a live lane | WP8 | Yes |
+| X-k (A17/E05) | Backtest and real-bar parity (trust in the record) | Synthetic parity 6,122/6,122 | Real-bar parity; coverage report (WP11) | BLOCKED (data approval) | B-1 | OP1, WP6 | Yes |
+| X-l (A07/A08) | Telegram BUY/SHORT alerts | Code merged | Activation | BLOCKED | — | Approval | **No**: not in the June M21 text (decision G1) |
+
+### M21.2 – M21.7
+| ID | Requirement (June text) | Implemented | Missing | Status | Acceptance | Deps / permissions | Mand. |
+|---|---|---|---|---|---|---|---|
+| M21.2 (B11; uses B09/B10) | Tune RSI/MACD/MA/ATR/volume/stops/targets/thresholds from real outcomes | Genome, portfolio backtester, search trials (synthetic) | Real-bar surfaces and plateaus per template; costs, liquidity, corporate actions (WP12, WP13) | PARTIAL | C-2 | WP11, WP12 | Yes |
+| M21.3-a (B12; uses B05–B08) | Walk-forward optimiser (optimise → test unseen → roll) | Purged WF, CPCV, DSR, PBO, SPA, trial registry, sealed holdout (local model), canaries | Optimiser driver on real data; integrated canary (WP13) | PARTIAL | C-1, C-5 | WP11, WP12 | Yes |
+| M21.3-b (B13; plus the auto-revert part of B23) | **Promotion & Approval Model**: GREEN/AMBER/RED tiers, shadow-first, change budget, auto-revert on decay; AMBER/RED never live without approval | Nothing | All of it (WP14) | NOT_STARTED | Tier classifier (incl. "tighter stop can raise losses" → not GREEN unless proven); shadow over N live signals before eligibility; budget of one change at a time, at most one a week; auto-revert fires on simulated decay; no AMBER/RED applied without an audited operator approval; RED cooling-off; C-6 | WP7, WP8, WP9 | Yes |
+| M21.4 (B16) | Meta-labelling: take / skip / size down | Lab (synthetic) | Real labels (counterfactual on real bars + paper outcomes); calibrated; shadow proposals (WP17) | CODE_MERGED (synthetic) | C-3; can only skip or size down, never up | WP11, WP13, WP7 | Yes |
+| M21.5 (B17) | Regime-aware thresholds | Lab regime models (synthetic) | Real regime features; per-regime thresholds walk-forward; shadow (WP16) | CODE_MERGED (synthetic) | C-3; detection lag modelled | WP15, WP13 | Yes |
+| M21.6 (B18) | VIX / breadth / sector / index trend / macro-news context | Sentiment confirm/block layer in the scanner; lab context features | Sources, point-in-time store, features, shadow risk throttle (WP15) | NOT_STARTED | Point-in-time tests (value at t uses only data published ≤ t); source outage → abstain; features in the ledger; throttle evaluated walk-forward | Data decision G4 | Yes |
+| M21.7 (B19) | Learned regime weights | Lab regime-conditioned models | Real-data out-of-fold weights vs global; bounded and drift-aware; shadow (WP18) | PARTIAL | C-3 | WP16, WP17 | Yes |
+| §5 loop | "Compare predicted vs actual" | — | Score-vs-outcome report from ledger joins | NOT_STARTED | C-4 | WP7 plus paper data | Yes |
+
+**Genuine safety dependency pulled into M21 from C01 (M22).** The scanner currently scores the forming (in-progress) bar, while the backtester and `scanner_replica` use completed bars. Paper outcomes then can't be compared with backtests (C-4), and real-bar parity (A17) can't pass by construction. So C01 §11 (the completed-candle scanner) is scheduled as **WP6**. The rest of C01 (governor store, reduce-only flatten, M14 on the legacy scanner path) stays an **M22 hard blocker**: the M21 paper loop uses only the WS2 path, which already applies M14 and the trusted clock.
+
+---
+
+## 3. What we are deliberately NOT adding to M21
+
+The following are not added: risk-aware portfolio construction (M23.3), research-agent integration (M23 D06), cross-market or alternative data (B24), and independent signing authority (B06 operational). They come either from Issue #2 or from later milestones, not the June M21 text. They stay tracked (§4). The paper loop keeps the existing M14 per-trade and exposure gates.
+
+## 4. The 71 tasks, classified for M21 sign-off (none removed)
+
+- **M21 mandatory, still open (25):**
+  - A: A01, A02, A06, A09, A10, A11, A12, A13, A14 (minimum), A15, A16, A17
+  - B: B01, B03 (real-data run), B08 (integrated canary), B10 (costs, liquidity, corporate actions), B11, B12, B13, B16, B17, B18, B19, B23 (auto-revert part)
+  - E: E05
+- **M21 closeout task (1):** E08, the docs reconciliation.
+- **Decision only (1):** B02, the vendor and survivorship decision (G4).
+- **M21 supporting, already delivered (9):**
+  - CLOSED: A03, A04.
+  - CODE_MERGED: A05, A07, B05, B06 (local policy model), B07, B09, B14.
+  - These are reused, not redone. The research part of A15 is also delivered, but A15 stays mandatory for its live-loop part.
+- **Not required for M21 sign-off (14, still tracked, status unchanged):**
+  - A08 (alerts activation).
+  - B04, B15, B20, B21, B22 (→ D06), B24.
+  - E01, E02, E03, E04, E06, E07, E09.
+  - Also outside the mandatory scope, although their tasks stay listed above: A14 beyond the minimum (→ C03), B06 operational independent signer, B23 beyond auto-revert (→ D02).
+- **M22 (C01–C11, 11) and M23 (D01–D10, 10):** unchanged. C01 §11 is pulled forward as WP6; everything else in C01 stays M22.
+- **Check:** 25 + 1 + 1 + 9 + 14 + 11 + 10 = **71**.
+
+Recommendation: do E07 (secret/backup permissions, metadata only) in the same read-only VPS session (OP1), because it is a cheap security fix. E09 (offline CI) is an optional accelerator; see G-opt.
+
+---
+
+## 5. Remaining work plan (priority order) and bottom-up estimate
+
+**Units.** A dev-day is one focused developer day. Review is the independent reviewer's effort. A fix allowance of about 20 % of engineering is held centrally. "Lane": L = loop/runtime lane, R = research/data lane, O = operations (operator-run). The L and R lanes run in parallel on separate branches.
+
+| WP | What | Tasks | Eng d | Review d | Depends on | Lane | External blocker | Earliest done | Planned |
+|---|---|---|---|---|---|---|---|---|---|
+| WP1 | A01 merge (provenance resolved; completed basis added) | A01 | done | 0.5 (delta `8013044..47e9057`) | — | L | Your merge approval | 30 Oct | 2 Nov |
+| WP3 | WS2 merge (R1–R3) | A09 | done | 0.5 (delta `46c87ab..0f3f9e6`) | — | L | Your merge approval | 30 Oct | 3 Nov |
+| WP2 | A02 merge (retarget to main after #12; merge `main` in, no rebase) | A02 | 0.25 | 0.5 | WP1 | L | Your merge approval | 2 Nov | 4 Nov |
+| WP4 | C01 design doc merge (M22 reference) | C01 | — | 0.25 | — | — | Your merge approval | 30 Oct | 4 Nov |
+| WP5 | Scoring evidence wiring | A01 (pending) | 3 | 1 | WP1, WP3 | L | — | 3 Nov | 6 Nov |
+| WP6 | Completed-candle scanner (C01 §11, T-N), `bar_basis="completed"`, fresh-quote entry + slippage guard | A17 prerequisite | 2.5 | 1 | WP1; G1 | L | Approval (protected scanner, C5b) | 4 Nov | 9 Nov |
+| WP10 | Minimal unattended monitoring | A14 (minimum) | 2 | 0.5 | WP3 | L | — | 4 Nov | 9 Nov |
+| WP12 | Cost / liquidity / corporate-action model | B10 | 2 | 0.5 | — | R | — | 3 Nov | 5 Nov |
+| WP7 | Ledger runtime wiring (flag-gated), score payloads, legacy replay report | A02 | 2 | 0.5 | WP2, WP5 | L | OP1 for replay | 6 Nov | 11 Nov |
+| WP11 | Real historical-data readiness | B01, E05, A17 | 3 | 1 | OP1, WP6 | R | VPS read-only approval | 9 Nov | 13 Nov |
+| WP8 | Templates 2–4 in the live path; template id end to end; D3 per template | A15 | 4 | 1 | WP6 | L | — | 11 Nov | 16 Nov |
+| WP9 | Dashboard strategy controls, Phase 1 | A16 | 3 | 1 | WP8 | L | — | 16 Nov | 20 Nov |
+| WP13 | Walk-forward optimiser on real data, per template | B11, B12, B08 | 5 | 1.5 | WP11, WP12 | R | — | 18 Nov | 23 Nov |
+| WP15 | Market context (M21.6) | B18 | 6 | 1.5 | G4 | R | Data-source decision and licences | 18 Nov | 24 Nov |
+| WP14 | Promotion & Approval Model + auto-revert | B13, B23 (part) | 6 | 2 | WP7, WP8, WP9 | L | — | 23 Nov | 27 Nov |
+| WP16 | Regime-aware thresholds on real data (shadow) | B17 | 2.5 | 1 | WP13, WP15 | R | — | 25 Nov | 30 Nov |
+| WP17 | Meta-labelling on real data (shadow) | B16, B03 | 3.5 | 1 | WP7, WP11, WP13 | R | — | 26 Nov | 2 Dec |
+| WP18 | Learned regime weights on real data (shadow) | B19 | 3 | 1 | WP16, WP17 | R | — | 1 Dec | 7 Dec |
+| WP19 | Docs reconciliation + M21 acceptance report | E08 | 1 | 0.5 | all | — | — | 2 Dec | 9 Dec |
+| **Total** | | | **≈ 48.75** (+ ≈ 10 fixes) | **≈ 17** | | | | | |
+
+What each work package contains:
+- **WP5:**
+  - a verified calendar built from the Alpaca calendar into a `SessionCalendar`;
+  - liquidity measured from bars;
+  - corporate-action state from M16 adjustment data, with suspected splits failing closed;
+  - WS2 selection by `research_rank_score` across data-quality gates, with M14 deciding execution.
+- **WP7:** a legacy replay report on a read-only production copy.
+- **WP8:** research↔live parity tests for the templates.
+- **WP9:** template selection and champion pick; parameter bounds; versioning, audit and rollback; paper lane only.
+- **WP10:** heartbeat and health; gateway-down and stale-data alarms; a restart-recovery drill.
+- **WP11:**
+  - a coverage report per timeframe and symbol;
+  - an adjusted-bar policy;
+  - real-bar parity for `scanner_replica`;
+  - survivorship bias quantified.
+- **WP12:**
+  - IBKR tiered commissions;
+  - spread and slippage by ADV and price;
+  - an ADV participation cap;
+  - a short-borrow flag;
+  - adjusted bars.
+- **WP13:**
+  - parameter surfaces and plateaus;
+  - a sealed holdout used once;
+  - the trial registry;
+  - an integrated canary run on the exact pipeline.
+- **WP14:**
+  - proposal records and the tier classifier;
+  - a shadow runner on live paper signals that places no orders;
+  - the change budget;
+  - an auto-revert guard with an alert;
+  - audited operator approval and RED cooling-off.
+- **WP15:**
+  - VIX (FRED VIXCLS / CBOE);
+  - SPY/QQQ trend and sector ETFs (Alpaca);
+  - breadth from our own universe;
+  - official FOMC/CPI/NFP calendars;
+  - earnings proximity (source per G4);
+  - news risk from the existing sentiment layer;
+  - point-in-time stamps, publication lag and revision policy;
+  - a shadow throttle.
+
+**Operations (your gates; Claude prepares runbooks and probes, you approve and run):**
+
+| Op | What | Needs | Planned |
+|---|---|---|---|
+| OP1 | One **read-only** VPS session: data inventory (B01/E05); copy of the signals DB for the A02 replay; M14 ingestion and `RISK_*` environment check (marked "VPS VERIFICATION REQUIRED"); `.env` backup permission metadata (E07). No writes. | G2 | Any day this week |
+| OP2 | IBKR **paper** gateway acceptance (A10, A11 runtime, A13) | G3; #1 merged; WP5 | 10–13 Nov |
+| OP3 | Activation in paper: dashboard restart (A06); A02 migration and flag; scheduled unattended loop (A12); monitoring (WP10) | G3; WP5–WP7, WP10 merged | ≈ 16 Nov |
+| OP4 | 10-trading-day soak (B-3) | OP3 | ≈ 16 Nov – 1 Dec |
+| OP5 | Deploy merged M21 features to the paper lane (templates, controls, promotion shadow), then one governance cycle (C-6) | G3 follow-up | ≈ 10–24 Dec |
+
+### Completion windows (from 28 Oct 2026)
+| Gate | Optimistic | **Planned** | Pessimistic | What drives it |
+|---|---|---|---|---|
+| A. Engineering complete | 25–27 Nov | **≈ 9 Dec 2026** | ≈ 23 Dec | About 49 dev-days of genuinely missing work: the Promotion model, M21.6 data, real-data walk-forward and the templates |
+| B. Operational acceptance | ≈ 1–4 Dec | **≈ 11–16 Dec 2026** | early Jan | Approval timing; the IBKR gateway (last known: **failed** on the VPS); the 10-day soak |
+| C. Full M21 acceptance | ≈ 16–18 Dec | **≈ 8–15 Jan 2027** | late Jan | At least 20 paper trading days after activation; one governance cycle; holidays (26–27 Nov, 25 Dec, 1 Jan) |
+
+**Why the one-month goal is tight.** About 49 dev-days of real work remain, and about a third of it is new capability that doesn't exist in any form yet. One month needs roughly 2.5 dev-days of output per working day, one review round per package, and decisions G1–G4 this week. That has happened on some days (26–28 Oct) but can't be assumed every day. The plan therefore says 5–6 weeks.
+
+**Critical paths.**
+1. **Engineering:** OP1 → WP11 → WP13 → WP16/WP17 → WP18 → WP19. The serial chain is about 15.5 dev-days plus five review rounds. WP15 feeds WP16, and WP14 waits for WP7–WP9.
+2. **Full acceptance:** merges → WP5/WP6/WP7/WP10 → OP2 → **OP3 activation** → 20 trading days → C-4. Every week activation slips moves full acceptance by a week.
+
+**Main risks.**
+- The IBKR gateway on the VPS was last reported failed (OP2 could slip).
+- Real intraday coverage gaps (E05) may force a smaller, honestly documented universe.
+- The earnings-calendar source and its licence (WP15).
+- More than two review rounds per package.
+- Holiday thin markets.
+- A paper-session finding that requires a code change (loops back to L).
+- Survivorship bias flattering backtests, which must be quantified (C-5).
+
+---
+
+## 6. Authoritative M21 checklist (update on every merge; link from Issue #3)
+
+**Phase 1 — close the open PRs**
+- [ ] WP1 #12 merged
+- [ ] WP3 #1 merged
+- [ ] WP2 #14 retargeted and merged
+- [ ] WP4 #13 merged
+
+**Phase 2 — make the loop real**
+- [ ] WP5
+- [ ] WP6
+- [ ] WP7
+- [ ] WP10
+- [ ] OP1
+- [ ] OP2
+- [ ] OP3 — **paper loop running**
+- [ ] OP4 soak (B-3)
+
+**Phase 3 — remaining M21 capability**
+- [ ] WP8
+- [ ] WP9
+- [ ] WP12
+- [ ] WP11 (B-1)
+- [ ] WP13 (C-1, C-2)
+- [ ] WP14 (C-6)
+- [ ] WP15
+- [ ] WP16
+- [ ] WP17
+- [ ] WP18 (C-3)
+
+**Closeout**
+- [ ] OP5
+- [ ] C-4 report
+- [ ] C-5 report
+- [ ] WP19 / E08
+- [ ] A-gate
+- [ ] B-gate
+- [ ] C-gate → **M21 ACCEPTED**
+
+---
+
+## 7. Immediate merge readiness (exact heads, 28 Oct)
+
+**Combined proof.** All four PR heads were trial-merged locally onto `main` `80b4343` in the order #12 → #1 → #14 → #13:
+- **Conflicts:** none.
+- **Resulting tree:** `a5036dfcdabe52ab25f8a9acce6933c101d524aa` (local only, not pushed).
+- **Tests:** 23 test targets on that tree under Python 3.12.3 / NumPy 1.26.4, with C5a isolation and a checkout outside `/tmp`: **all OK**.
+- **What the 23 covered:**
+  - A01, the bridge, group D, the A-path, alerts, B1 and A02;
+  - WS2 learning loop, D1 guard, D1 Alpaca source, D2 gates/dry-run/lifecycle, and D3 metrics (with Flask 3.1.0 from `requirements.txt` installed in the test environment);
+  - registry shadow-run, hygiene, quarantine, C5a, C5b, G10 ×2, research foundation and research integration.
+
+| PR | Head | Ready? | Remaining blockers |
+|---|---|---|---|
+| **#12 A01** | `47e905709919ed11f3ab31bc4be0e058df2fce8e` | **Yes, after a delta re-check.** | **Delta to re-check:** `8013044..47e9057` (5 files), the completed-bar basis. Default behaviour is unchanged, and the provenance finding was already resolved at `8013044`.<br>**Consequence of merging:** the A-path, B1, alerts and WS2 selection fail closed until WP5. Nothing runs in production, so this is safe. |
+| **#1 WS2** | `0f3f9e6db860bb2359238c8b83283d0c93d76a4e` | **Yes, after the R1–R3 check.** | **Check:** the reviewer verifies `2562c5c` + `0f3f9e6`.<br>**Scope:** merging the code ≠ paper acceptance (A10–A12 stay BLOCKED until G3).<br>**Rule:** merge `main` in normally (no rebase) if `main` moves first. |
+| **#14 A02** | `71bccd60900bf444e818a1e494c567ca498b37f7` | **Yes, once #12 is merged.** | **Steps:** retarget the base to `main`, merge `main` in (no rebase), re-run A02 and the guards.<br>**Kept as-is:** no migration is deployed and the writer stays OFF. |
+| #13 C01 (doc) | `6a8a690eea14a639836af3fbe48f563c83288d73` | **Yes** | Doc only. It remains the M22 hard-blocker design; implementation needs a separate decision (only §11 is pulled into M21, as WP6). |
+
+---
+
+## 8. Decision list (only what is genuinely needed)
+
+| Gate | Decision | Recommendation |
+|---|---|---|
+| **G1** | Approve this finish line and scope freeze:<br>• the §4 classification;<br>• the completed-candle scanner (WP6) pulled into M21;<br>• A14 split (minimum in M21, the rest in M22 C03);<br>• A08 Telegram alerts not required for M21 sign-off. | Approve |
+| **G2** | One **read-only** VPS session (OP1): data inventory, signals-DB copy for the A02 replay, M14/`RISK_*` checks, `.env` backup metadata. No writes. | Approve this week; it unblocks the real-data work |
+| **G3** | **Paper-loop activation gate**, given together once WP5–WP7 and WP10 are merged:<br>• merges #12 → #1 → #14 → #13 (after the delta re-checks);<br>• IBKR **PAPER** gateway sessions (OP2);<br>• dashboard restart, ledger migration and flag, unattended paper schedule (OP3). | Approve the merges now; approve OP2/OP3 when the runbook is presented |
+| **G4** | Data for M21.6 and survivorship:<br>(a) free sources only (FRED VIX, Alpaca ETFs, official macro calendars, a free earnings API to be verified), with survivorship bias quantified;<br>(b) buy survivorship-free data (≈ $29–199/month Massive, or Norgate). | (a) for M21; revisit before M22 |
+| G-opt | Activate the existing inactive offline CI (E09: no secrets, read-only) so reviewers rely on CI runs rather than Claude-reported results. | Optional; it would shorten every review round |
+
+Nothing else needs your approval for M21 engineering. Everything in §5 marked L or R is offline work on branches.
+
+## 9. Working process (to stop the drift)
+
+1. **Acceptance criteria are fixed in §2 and §5 before coding.** A package is done when its criteria pass, not when a reviewer runs out of ideas.
+2. **One review packet per PR:** acceptance checklist, the exact delta range, test commands and output. Re-review covers **only the delta and its direct dependents**.
+3. **Mutation testing** only for new safety gates (risk, market clock, order paths, promotion tiers): one run per PR, with no repeat campaigns.
+4. **At most two parallel lanes** (L and R), so reviews keep flowing.
+5. **Approvals come in gates G1–G4,** not item by item.
+6. **The canonical handoff is updated at phase gates,** not for every small correction. This checklist (§6) is updated on every merge, with one short Issue #3 comment.
+7. **New ideas** go to a "post-M21" list unless they are a genuine safety dependency. Adding one to M21 needs your explicit decision.
