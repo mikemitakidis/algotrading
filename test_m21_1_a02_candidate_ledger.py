@@ -357,6 +357,33 @@ class L4_Accounting(unittest.TestCase):
         self.assertFalse(rep.ok)
 
 
+class L4b_JoinIntegrity(unittest.TestCase):
+    def test_mismatched_joins_detected(self):
+        path = os.path.join(tmpdir(self), "legacy.db")
+        ids = legacy_fixture(path)
+        with sqlite3.connect(path) as c:
+            migrate(c, now_utc=NOW)
+            intents = dict(c.execute("SELECT signal_id, id FROM execution_intents"))
+            outs = dict(c.execute("SELECT signal_id, id FROM signal_outcomes"))
+        w = writer(path)
+        good = open_one(w, "WIN")
+        self.assertTrue(w.link(good, signal_id=ids["WIN"], intent_id=intents[ids["WIN"]],
+                               outcome_id=outs[ids["WIN"]]))
+        bad = open_one(w, "RREJ")
+        self.assertTrue(w.link(bad, signal_id=ids["RREJ"], intent_id=intents[ids["UNRDY"]],
+                               outcome_id=outs[ids["OPEN"]], risk_decision_id="nope"))
+        ghost = open_one(w, "GHOST")
+        self.assertTrue(w.link(ghost, signal_id=987654))
+        with sqlite3.connect(path) as c:
+            rep = account(c)
+        text = "\n".join(rep.violations)
+        self.assertNotIn(good, text)
+        self.assertIn("%s: intent_id" % bad, text)
+        self.assertIn("%s: outcome_id" % bad, text)
+        self.assertIn("%s: risk_decision_id not in risk_decisions" % bad, text)
+        self.assertIn("%s: signal_id 987654 not in signals" % ghost, text)
+
+
 # ═════════════════════════════ legacy replay ═══════════════════════════════
 
 class L5_LegacyReplay(unittest.TestCase):
@@ -405,7 +432,9 @@ class L5_LegacyReplay(unittest.TestCase):
         self.assertFalse(any(k.startswith("conflict") for k in b["writer_stats"]))
 
     def test_paths_refused(self):
-        for out in ("relative/ledger.db", os.path.join(str(REPO), "ledger.db"), self.src):
+        for out in ("relative/ledger.db", os.path.join(str(REPO), "ledger.db"), self.src,
+                    "/var/tmp/a02_ledger.db", "/home/a02_ledger.db",
+                    "/tmp/../var/tmp/a02_ledger.db", "/tmp/a02_no_such_dir/ledger.db"):
             with self.assertRaises(ValueError):
                 self.R.replay(self.src, out, now_utc=NOW)
         with self.assertRaises(ValueError):
