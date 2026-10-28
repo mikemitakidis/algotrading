@@ -106,7 +106,7 @@ def verify_market_open(market_state: Callable[[], Any], *, now: datetime,
         return False, "market_state_time_invalid"
     if fetched - now > timedelta(seconds=_MAX_CLOCK_SKEW_SEC):
         return False, "market_state_from_future"
-    if now - fetched > timedelta(seconds=min(max_age_sec, MAX_MARKET_STATE_AGE_SEC)):
+    if now - fetched > timedelta(seconds=max_age_sec):
         return False, "market_state_stale"
     if decision.next_close_utc is None:
         return False, "market_session_close_missing"
