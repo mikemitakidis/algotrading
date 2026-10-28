@@ -84,6 +84,10 @@ class CandidateLedgerWriter:
 
     # ── internals ──
     def _run(self, fn):
+        """Run ``fn`` in ONE immediate write transaction: every check it reads
+        (already closed? stages present? link set?) and every row it writes
+        happen under the same write lock, so concurrent writers serialise
+        instead of interleaving check and write."""
         if not self.enabled:
             self.stats["skipped:disabled"] += 1
             return None
@@ -93,12 +97,14 @@ class CandidateLedgerWriter:
             self.stats["error:%s" % type(exc).__name__] += 1
             return None
         try:
+            conn.isolation_level = None             # explicit transaction control
+            conn.execute("BEGIN IMMEDIATE")
             out = fn(conn)
-            conn.commit()
+            conn.execute("COMMIT")
             return out
         except Exception as exc:
             try:
-                conn.rollback()
+                conn.execute("ROLLBACK")
             except Exception:
                 pass
             self.stats["error:%s" % type(exc).__name__] += 1
