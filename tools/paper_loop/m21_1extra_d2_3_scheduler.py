@@ -75,27 +75,40 @@ def _simulated_parts(args):
                 candidate_provider=provider)
 
 
-def _scanner_provider(focus_size: int):
-    """Real candidates: scanner signals scored by the M19 bridge (read-only)."""
+def _scanner_provider(focus_size: int, allow_short: bool = False):
+    """Real candidates (WP5): scanner signals -> observed evidence (Alpaca
+    trading calendar, completed daily bars, corporate-action record, the
+    provider's own price basis) -> truthful M19 research rank -> fail-closed
+    selection. Only candidates with no data-quality block are offered, ranked
+    by research rank; M14 (the loop's risk gate) still decides every entry.
+    Read-only: fetches market data and reference data, writes nothing."""
     def provider(now):
+        import logging
+        import os
+        from bot.data import fetch_bars
+        from bot.market_clock.calendar_feed import fetch_calendar
+        from bot.providers.alpaca_corporate_actions import fetch_price_scale_actions
         from bot.scanner import scan_cycle
         from bot.universe.active_selection import get_scan_ready_symbols
-        from tools.signal_scoring.scanner_bridge import score_signal
-        from bot.paper_loop_d2.candidates import candidate_from_scored_signal, InvalidCandidate
+        from tools.signal_scoring.evidence import (
+            build_cycle_evidence, loop_candidates, rank_candidates, research_report,
+        )
         focus = get_scan_ready_symbols()[:focus_size]
         config = {"strategy": "default",
                   "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2, "min_valid_tfs": 1}}
-        signals, _meta = scan_cycle(focus, config, conn=None, cycle_id=0)
-        out = []
-        for sig in signals:
-            sc = score_signal(sig)
-            if sc.execution_eligible is not False:
-                raise AssertionError("scoring must stay research-grade")
-            try:
-                out.append(candidate_from_scored_signal(sig, {"final_score_100": float(sc.final_score_100)}))
-            except InvalidCandidate:
-                continue
-        return out
+        signals, meta = scan_cycle(focus, config, conn=None, cycle_id=0)
+        ce = build_cycle_evidence(
+            signals=signals, meta=meta, now_utc=now,
+            fetch_daily=lambda syms: fetch_bars(syms, "6mo", "1d"),
+            fetch_calendar=fetch_calendar, fetch_actions=fetch_price_scale_actions,
+            provider_name=os.getenv("DATA_PROVIDER", "yfinance"))
+        ranked = rank_candidates(signals, ce, allow_short=allow_short)
+        rep = research_report(ranked)
+        logging.getLogger(__name__).info(
+            "[WP5] research ranking: %d selectable, %d blocked, reasons=%s",
+            rep["selectable"], rep["blocked"], rep["block_reason_counts"])
+        cands, _notes = loop_candidates(ranked)
+        return cands
     return provider
 
 
