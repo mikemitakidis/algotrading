@@ -44,7 +44,10 @@ REPO = Path(__file__).resolve().parent
 # Every baseline revision a guard compares a drifted file against.
 _GUARD_BASELINES = {
     "bot/scanner.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
-                       "d73a04a", "ceb8cd5"),
+                       "d73a04a", "ceb8cd5",
+                       # M21.1 A01: the M20 guards' baseline (M19 head) holds
+                       # the Group D blob, recorded as also_from.
+                       "e823fe6"),
     "bot/signal_scoring/gates.py": ("e823fe6", "5cdd083"),
     "bot/brokers/ibkr_broker.py": ("e823fe6",),
     "dashboard/app.py": ("e823fe6",),
@@ -122,10 +125,45 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
 
     def test_every_guard_baseline_holds_from_blob(self):
         for rel, baselines in _GUARD_BASELINES.items():
+            e = PB.APPROVED_CHANGES[rel]
             for b in baselines:
                 with self.subTest(rel=rel, baseline=b):
-                    self.assertEqual(PB.rev_blob(b, rel),
-                                     PB.APPROVED_CHANGES[rel].from_blob)
+                    self.assertIn(PB.rev_blob(b, rel),
+                                  (e.from_blob,) + tuple(e.also_from))
+
+    def test_also_from_is_only_the_recorded_group_d_approval(self):
+        # Chained approvals are explicit: only scanner.py has one, and its
+        # intermediate blob is exactly what the Group D commit produced.
+        chained = {rel: e.also_from for rel, e in PB.APPROVED_CHANGES.items()
+                   if e.also_from}
+        self.assertEqual(chained, {"bot/scanner.py":
+                                   ("4317e57e72f9d8d862607a8e3f155cc53f4ecd3d",)})
+        self.assertEqual(_git("rev-parse", "85c5092037c2e74a4f6ba8cf3e5d364a0dabc057"
+                              ":bot/scanner.py")[1],
+                         "4317e57e72f9d8d862607a8e3f155cc53f4ecd3d")
+
+    def test_scanner_a01_transition_is_metadata_only(self):
+        # From the Group D content, A01 adds the as-of helper, one dict, one
+        # assignment and one meta key; it removes nothing.
+        e = PB.APPROVED_CHANGES["bot/scanner.py"]
+        rc, out = _git("diff", "--unified=0", e.also_from[0], e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:].strip() for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        code = [l for l in added if l and not l.startswith(("#", '"""', "Metadata only"))]
+        self.assertEqual(removed, [])
+        self.assertEqual(code, [
+            "def _bar_start_iso(df):",
+            "try:",
+            "return df.index[-1].isoformat()",
+            "except Exception:",
+            "return None",
+            "bar_asof      = {}   # A01: sym -> {tf_label -> UTC start of the bar used}",
+            "bar_asof.setdefault(sym, {})[tf_label] = _bar_start_iso(df)",
+            "'bar_asof':       bar_asof,   # A01: read-only as-of metadata",
+        ])
 
     def test_checkout_holds_to_blob(self):
         for rel, e in PB.APPROVED_CHANGES.items():
@@ -185,6 +223,29 @@ class TestHelperSemantics(unittest.TestCase):
     def _ok(self, baseline=None, rel="f.py", target=None):
         return PB.is_approved_change(baseline or self.base, rel, self.repo,
                                      self.table, target)
+
+    def test_chained_transition_accepts_only_listed_intermediates(self):
+        # v1 -> v2 (first approval) -> v3 (second approval): a baseline at v1
+        # or v2 is excused only if v2 is listed in also_from; an unlisted
+        # intermediate (v2b) and any drift from v3 are still refused.
+        mid = self.approved
+        v3 = self._commit("v3\n")
+        chained = {"f.py": PB.ApprovedChange(
+            from_blob=self._blob("v1\n"), to_blob=self._blob("v3\n"),
+            commit=v3, approval="test", also_from=(self._blob("v2\n"),))}
+        unchained = {"f.py": chained["f.py"]._replace(also_from=())}
+        ok = lambda b, tbl: PB.is_approved_change(b, "f.py", self.repo, tbl)  # noqa: E731
+        self.assertTrue(ok(self.base, chained))
+        self.assertTrue(ok(mid, chained))
+        self.assertTrue(ok(self.base, unchained))
+        self.assertFalse(ok(mid, unchained))
+        self._commit("v2b\n")
+        other_mid = self._g("rev-parse", "HEAD")
+        (self.repo / "f.py").write_text("v3\n")
+        self.assertFalse(ok(other_mid, chained))
+        (self.repo / "f.py").write_text("v3 drift\n")
+        self.assertFalse(ok(mid, chained))
+        self.assertFalse(ok(self.base, chained))
 
     def test_exact_transition_is_excused(self):
         self.assertTrue(self._ok())

@@ -15,12 +15,20 @@ Covers ChatGPT's required proofs (1-12):
  11. summary includes all required fields
  12. AST import guard: no eToro / ibkr_broker / paper_broker submit / live /
      Telegram / main.py / scheduler
+
+A01 (truthful scoring contract): the bridge no longer assumes freshness,
+Risk Authority 'ok', raw-price safety etc., and run_once has no evidence
+source, so by default every candidate is M19-BLOCKED and nothing is eligible
+(TestA01FailClosed). Tests of the downstream simulation logic therefore score
+through ``evidenced_score_signal``: real M19 scoring with complete A01 fixture
+evidence.
 """
 from __future__ import annotations
 
 import ast
 import dataclasses
 import unittest
+from unittest import mock
 
 # M21 C5a: keep this test process (and its Python children) off production
 # runtime files, secrets (.env) and brokers. See _test_isolation.py.
@@ -32,6 +40,8 @@ from bot.signal_scoring import (
 )
 from bot.signal_scoring import keys as K
 from tools.signal_scoring.scanner_bridge import enrich_signal, score_signal
+from test_m21_1_a01_scoring_truth import (  # A01 fixture evidence (test helper)
+    ASOF, evidenced_score_signal, full_evidence)
 from bot.runtime.m21_1extra_research_paper_decision import (
     decide_research_paper_eligibility,
 )
@@ -52,8 +62,28 @@ def _sig(symbol="AAA", entry=100.0, stop=95.0, target=115.0, rsi=62.0,
 
 
 def _clean_research_scored(symbol="AAA"):
-    return score_signal(_sig(symbol), profile=ScoringProfile.RESEARCH,
-                        avg_dollar_volume=100.0 * 500000)
+    return evidenced_score_signal(_sig(symbol), profile=ScoringProfile.RESEARCH,
+                                  avg_dollar_volume=100.0 * 500000)
+
+
+class _Evidenced(unittest.TestCase):
+    """run_once scores with complete A01 fixture evidence."""
+
+    def setUp(self):
+        p = mock.patch.object(A, "score_signal", evidenced_score_signal)
+        p.start()
+        self.addCleanup(p.stop)
+
+
+class TestA01FailClosed(unittest.TestCase):
+    def test_without_evidence_nothing_is_eligible(self):
+        summary = A.run_once(A.fixture_signals(), exit_plan=A._fixture_exit_plan(),
+                             kill_switch_active=False)
+        self.assertEqual(summary.research_paper_eligible_count, 0)
+        self.assertEqual(summary.opened_positions, 0)
+        rejected = [o for o in summary.outcomes if o.stage == "rejected"]
+        self.assertTrue(rejected)
+        self.assertTrue(all(o.rejection_reason == "real_safety_block" for o in rejected))
 
 
 class TestEligibilityRule(unittest.TestCase):
@@ -73,22 +103,23 @@ class TestEligibilityRule(unittest.TestCase):
 
     def test_3_missing_liquidity_rejected(self):
         # scanner-shaped, no avg_volume, no liquidity supplied
-        sc = score_signal(_sig(with_vol=False), profile=ScoringProfile.RESEARCH)
+        sc = evidenced_score_signal(_sig(with_vol=False), profile=ScoringProfile.RESEARCH)
         d = decide_research_paper_eligibility(sc)
         self.assertFalse(d.research_paper_eligible)
         self.assertEqual(d.reason, "real_safety_block")
         self.assertIn("missing_context_key", d.rejected_blocks)
 
     def test_4_stale_data_rejected(self):
-        ci = enrich_signal(_sig(), avg_dollar_volume=5e7, stale=True,
-                           data_freshness_minutes=999)
+        # A01: staleness is measured from bar records, not asserted by kwargs
+        ci = enrich_signal(_sig(), avg_dollar_volume=5e7, **full_evidence(
+            "AAA", bar_asof=dict(ASOF, **{"15m": "2026-10-27T17:00:00+00:00"})))
         sc = score_candidate(ci, default_config(profile=ScoringProfile.RESEARCH))
         d = decide_research_paper_eligibility(sc)
         self.assertFalse(d.research_paper_eligible)
         self.assertIn("stale_data", d.rejected_blocks)
 
     def test_5_risk_authority_blocked_rejected(self):
-        ci = enrich_signal(_sig(), avg_dollar_volume=5e7)
+        ci = enrich_signal(_sig(), avg_dollar_volume=5e7, **full_evidence("AAA"))
         rp = dict(ci.risk_preview)
         rp["risk_authority_status"] = "blocked"
         ci = dataclasses.replace(ci, risk_preview=rp)
@@ -98,7 +129,7 @@ class TestEligibilityRule(unittest.TestCase):
         self.assertTrue(d.rejected_blocks)  # a real block is present
 
     def test_6_pit_adjusted_price_risk_rejected(self):
-        ci = enrich_signal(_sig(), avg_dollar_volume=5e7)
+        ci = enrich_signal(_sig(), avg_dollar_volume=5e7, **full_evidence("AAA"))
         ml = dict(ci.ml_context)
         ml["price_adjustment_mode"] = "adjusted"
         ml["allow_adjusted_prices_for_ml"] = False
@@ -109,15 +140,15 @@ class TestEligibilityRule(unittest.TestCase):
         self.assertIn("adjusted_price_pit_risk", d.rejected_blocks)
 
     def test_short_side_rejected(self):
-        sc = score_signal(_sig(direction="short"),
-                          profile=ScoringProfile.RESEARCH,
-                          avg_dollar_volume=5e7)
+        sc = evidenced_score_signal(_sig(direction="short", stop=105.0, target=85.0),
+                                    profile=ScoringProfile.RESEARCH,
+                                    avg_dollar_volume=5e7)
         d = decide_research_paper_eligibility(sc)
         self.assertFalse(d.research_paper_eligible)
         self.assertEqual(d.reason, "not_long_side")
 
 
-class TestKillSwitchAndIdempotency(unittest.TestCase):
+class TestKillSwitchAndIdempotency(_Evidenced):
     def test_7_kill_switch_blocks_open(self):
         summary = A.run_once(A.fixture_signals(),
                              exit_plan=A._fixture_exit_plan(),
@@ -140,7 +171,7 @@ class TestKillSwitchAndIdempotency(unittest.TestCase):
                             for o in summary.outcomes))
 
 
-class TestCloseOutcomes(unittest.TestCase):
+class TestCloseOutcomes(_Evidenced):
     def test_9_sl_close_is_loss_with_correct_pnl_and_r(self):
         summary = A.run_once([_sig("LOSER", entry=50.0, stop=48.0,
                                     target=56.0)],
@@ -220,7 +251,7 @@ class TestImportSafety(unittest.TestCase):
         self.assertNotIn("4001", src)
 
 
-class TestLiveKillSwitchDelegation(unittest.TestCase):
+class TestLiveKillSwitchDelegation(_Evidenced):
     """run_live must NOT force kill_switch_active=False; it must delegate to the
     real kill-switch state via run_once(kill_switch_active=None)."""
 
