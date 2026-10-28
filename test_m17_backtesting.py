@@ -2128,6 +2128,51 @@ class G4_ScannerReplicaIntegration(unittest.TestCase):
         })
         return {"1D": df_1d, "4H": df_4h, "1H": df_1h, "15m": df_15m}
 
+    @staticmethod
+    def _close_stamped(per_tf):
+        """The same series re-stamped at regular-session bar CLOSES
+        (09:45..16:00 New York for 15m, 10:30..16:00 for 1H, 13:30/16:00
+        for 4H, 16:00 for 1D): what the multi-TF path requires (M21
+        review of PR #20). The 24h fixture above is start/pre-market
+        stamped and is refused by load_multi_tf_bars."""
+        closes = {"15m": ["%02d:%02d" % divmod(9 * 60 + 30 + 15 * k, 60) for k in range(1, 27)],
+                  "1H": ["10:30", "11:30", "12:30", "13:30", "14:30", "15:30", "16:00"],
+                  "4H": ["13:30", "16:00"], "1D": ["16:00"]}
+        out = {}
+        for tf, df in per_tf.items():
+            per_day, n = closes[tf], len(df)
+            days = pd.bdate_range("2024-01-02", periods=n // len(per_day) + 2)
+            ts = [pd.Timestamp("%s %s" % (d.date(), hm), tz="America/New_York").tz_convert("UTC")
+                  for d in days for hm in per_day][:n]
+            df = df.copy()
+            df["ts_utc"] = pd.DatetimeIndex(ts)
+            out[tf] = df
+        return out
+
+    def test_start_stamped_multi_tf_bars_are_refused(self):
+        """The 24h fixture carries stamps at or before the 09:30 New York
+        open (bar starts / pre-market): the real-data multi-TF loader
+        refuses it instead of leaking unfinished higher-TF bars."""
+        from bot.backtesting.mtf_context import StartStampedBarsError
+        per_tf = self._strict_uptrend_bars(n_15m=600)
+        cov_by_tf = {tf: self._cov(tf) for tf in per_tf}
+        cfg = parse_config_dict({
+            "request": {"symbol": "AAPL", "timeframe": "15m", "start": "2024-01-02", "end": "2024-01-08"},
+            "data": {"adjusted": True, "provider": "yfinance"},
+            "strategy": {"name": "scanner_replica",
+                         "params": {"timeframes": ["1D", "4H", "1H", "15m"], "anchor_tf": "15m",
+                                    "confluence": {"min_valid_tfs": 3}, "long": _LIVE_DEFAULTS["long"],
+                                    "short": _LIVE_DEFAULTS["short"]}},
+            "execution": {"allow_short": False, "max_position_pct": 1.0},
+        })
+        fake = MagicMock()
+        fake.get_coverage = MagicMock(side_effect=lambda symbol, timeframe, *, provider=None: cov_by_tf[timeframe])
+        fake.get_bars = MagicMock(side_effect=lambda *, symbol, timeframe, start_utc, end_utc, provider, adjusted:
+                                  per_tf[timeframe])
+        with patch.object(data_loader, "_m16_store", fake):
+            with self.assertRaises(StartStampedBarsError):
+                _runner_run(cfg)
+
     def _cov(self, tf):
         c = _good_coverage(start="2023-01-01", end="2025-01-01")
         c["timeframe"] = tf
@@ -2137,7 +2182,7 @@ class G4_ScannerReplicaIntegration(unittest.TestCase):
         """End-to-end through runner.run with scanner_replica and the
         4-TF fixture above. Strict mode (allow_partial_tfs=False)
         because all TFs have full coverage."""
-        per_tf = self._strict_uptrend_bars(n_15m=600)
+        per_tf = self._close_stamped(self._strict_uptrend_bars(n_15m=600))
         cov_by_tf = {tf: self._cov(tf) for tf in per_tf}
         cfg = parse_config_dict({
             "request": {"symbol": "AAPL", "timeframe": "15m",
@@ -2184,7 +2229,7 @@ class G4_ScannerReplicaIntegration(unittest.TestCase):
         downtrending fixture the strategy emits 0 short trades —
         because it never emits SIG_ENTRY with direction='short'."""
         # Build a downtrending fixture
-        per_tf = self._strict_uptrend_bars(n_15m=600)
+        per_tf = self._close_stamped(self._strict_uptrend_bars(n_15m=600))
         for tf in per_tf:
             df = per_tf[tf]
             # Reverse the trend

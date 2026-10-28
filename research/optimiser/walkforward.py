@@ -54,7 +54,8 @@ import numpy as np
 import pandas as pd
 
 from research.common.hashing import digest
-from research.economics.model import (CorporateActions, EconomicsModel, FillBar, TradeSpec, liquidity_asof,
+from research.economics.model import INCONCLUSIVE as ECON_INCONCLUSIVE
+from research.economics.model import (NO_FILL, CorporateActions, EconomicsModel, FillBar, TradeSpec, liquidity_asof,
                                       price_trade)
 from research.genome import engine as E
 from research.genome import search as SR
@@ -235,6 +236,11 @@ def _oos(genome, bars, tl, w, cfg, membership, actions, *, model=None, size_mult
     r = _net_daily(res, priced, tl, w)
     filled = [te for _, te in priced if te.priced]
     return {"returns": r, "n_trades": len(filled), "n_unfilled": len(priced) - len(filled),
+            # kept apart (review of PR #19): a NO_FILL never happened; an INCONCLUSIVE trade was entered but
+            # its exit price is unknown (halted / zero-volume exit bar, unverified raw basis)
+            "n_no_fill": sum(te.status == NO_FILL for _, te in priced),
+            "n_inconclusive": sum(te.status == ECON_INCONCLUSIVE for _, te in priced),
+            "n_exit_capacity_breach": sum("exit_capacity_breach" in te.flags for te in filled),
             "net_usd": float(sum(te.net_pnl for te in filled)),
             "net_r": [te.net_r for te in filled if np.isfinite(te.net_r)],
             "capped": sum(te.status == "CAPPED" for te in filled), "res": res, "priced": priced}
@@ -245,6 +251,21 @@ def _sharpe_ann(r) -> float:
     return float(r.mean() / r.std(ddof=1) * math.sqrt(252)) if len(r) > 2 and r.std(ddof=1) > 0 else 0.0
 
 
+def require_close_stamped(bars: Mapping[str, pd.DataFrame]) -> None:
+    """Real bars must be WP11 ``to_close_stamped`` output: every row carries a
+    ``bar_open_ts`` strictly before its ``ts_utc`` (the close). Raw M16 rows
+    (stamped at the bar START, no ``bar_open_ts``) are refused — fail closed
+    (review of PR #20)."""
+    for s in sorted(bars):
+        b = bars[s]
+        if "bar_open_ts" not in b.columns:
+            raise ValueError("real bars for %s carry no bar_open_ts: convert M16 start stamps with "
+                             "research.dataqa.stamps.to_close_stamped first" % s)
+        bo, ts = pd.to_datetime(b["bar_open_ts"], utc=True), pd.to_datetime(b["ts_utc"], utc=True)
+        if bo.isna().any() or ts.isna().any() or (bo >= ts).any():
+            raise ValueError("real bars for %s: bar_open_ts must be strictly before every ts_utc (close)" % s)
+
+
 # ── per-template run ─────────────────────────────────────────────────────────
 def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig, *, ledger: Ledger,
                  data_seed: int, sealed: Optional[SealedHistory] = None,
@@ -252,6 +273,8 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
                  actions: Optional[Mapping[str, CorporateActions]] = None, origin: str = "synthetic") -> Dict:
     if origin not in ("synthetic", "real"):
         raise ValueError("origin must be 'synthetic' or 'real'")
+    if origin == "real":
+        require_close_stamped(bars)
     family = "wf:%s" % template
     axes = cfg.axes_for(template)
     genomes, n_invalid = SR.grid(template, axes)
@@ -287,6 +310,8 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
                           "chosen_plateau": sel["best_plateau"]["plateau"],
                           "isolated_peak": sel["best_isolated"], "train_points": int(len(df)),
                           "oos_trades": o["n_trades"], "oos_unfilled": o["n_unfilled"], "oos_capped": o["capped"],
+                          "oos_no_fill": o["n_no_fill"], "oos_inconclusive": o["n_inconclusive"],
+                          "oos_exit_capacity_breach": o["n_exit_capacity_breach"],
                           "oos_net_usd": o["net_usd"], "oos_sharpe": _sharpe_ann(o["returns"]),
                           "default_sharpe": _sharpe_ann(d["returns"]), "stress_net_sharpe": _sharpe_ann(st["returns"]),
                           "buy_and_hold_sharpe": bh["sharpe_ann"]})
@@ -309,6 +334,9 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
         pbo_note = str(exc)
     summary = {
         "oos_days": int(len(R)), "oos_trades": int(trades), "oos_sharpe_ann": _sharpe_ann(R),
+        "oos_no_fill": int(sum(f["oos_no_fill"] for f in fold_rows)),
+        "oos_inconclusive": int(sum(f["oos_inconclusive"] for f in fold_rows)),
+        "oos_exit_capacity_breach": int(sum(f["oos_exit_capacity_breach"] for f in fold_rows)),
         "oos_mean_net_r": float(np.mean(net_r)) if net_r else float("nan"),
         "default_params_oos_sharpe_ann": _sharpe_ann(np.concatenate(oos_def_r)) if oos_def_r else 0.0,
         "stress_oos_sharpe_ann": _sharpe_ann(np.concatenate(oos_stress_r)) if oos_stress_r else 0.0,
@@ -353,6 +381,11 @@ def _verdict(s: Dict, cfg: WFConfig) -> Tuple[str, List[str]]:
         return FAIL, ["no_oos_edge_after_costs"]
     if s["stress_oos_sharpe_ann"] <= 0:
         return FAIL, ["edge_does_not_survive_%gx_costs" % s["stress_multiplier"]]
+    if s.get("oos_exit_capacity_breach", 0):
+        reasons.append("exit_capacity_breach_trades_%d" % s["oos_exit_capacity_breach"])
+    if s.get("oos_inconclusive", 0):
+        # entered trades whose exit price is unknown cannot support a PASS
+        return INCONCLUSIVE, reasons + ["oos_trades_with_unknown_exit_price_%d" % s["oos_inconclusive"]]
     if s["pbo"] is None:
         reasons.append("pbo_unavailable")
     if s["dsr"] is None or not (s["dsr"]["dsr"] >= cfg.dsr_min):
@@ -379,10 +412,12 @@ def _holdout(template, cfg, *, ledger, family, sealed: SealedHistory, research, 
     w = Window(lo, len(ftl) - 1)
     o = _oos(pick, full, ftl, w, cfg, None, actions)
     st = _oos(pick, full, ftl, w, cfg, None, actions, model=cfg.economics.scale(cfg.stress))
-    ok = o["n_trades"] >= max(5, cfg.min_oos_trades // 4)
+    ok = o["n_trades"] >= max(5, cfg.min_oos_trades // 4) and o["n_inconclusive"] == 0
     status = (INCONCLUSIVE if not ok else PASS if (_sharpe_ann(o["returns"]) > 0 and _sharpe_ann(st["returns"]) > 0)
               else FAIL)
     return {"status": status, "genome": dict(pick.p), "genome_id": pick.genome_id, "trades": o["n_trades"],
+            "no_fill": o["n_no_fill"], "inconclusive": o["n_inconclusive"],
+            "exit_capacity_breach": o["n_exit_capacity_breach"],
             "net_usd": o["net_usd"], "sharpe_ann": _sharpe_ann(o["returns"]),
             "stress_sharpe_ann": _sharpe_ann(st["returns"]),
             "n_trials_family_at_holdout": int(ledger.family_trial_count(family)),
@@ -393,7 +428,11 @@ def run(bars: Mapping[str, pd.DataFrame], cfg: WFConfig = WFConfig(), *, ledger:
         origin: str = "synthetic", membership: Optional[Mapping[str, np.ndarray]] = None,
         actions: Optional[Mapping[str, CorporateActions]] = None, holdout_name: str = "wf-holdout") -> Dict:
     """All templates. ``bars``: close-stamped daily bars per symbol (WP11
-    ``to_close_stamped`` output for real data)."""
+    ``to_close_stamped`` output for real data, enforced)."""
+    if origin not in ("synthetic", "real"):
+        raise ValueError("origin must be 'synthetic' or 'real'")
+    if origin == "real":
+        require_close_stamped(bars)
     tl = timeline_of(bars)
     seal_ts = tl[int(len(tl) * (1.0 - cfg.holdout_frac))]
     sealed = SealedHistory(ledger, holdout_name, bars, seal_ts)
@@ -417,4 +456,4 @@ def _cfg_dict(cfg: WFConfig) -> Dict:
 
 
 __all__ = ["PASS", "FAIL", "INCONCLUSIVE", "HOLDOUT_NOT_RUN", "DEFAULT_AXES", "WFConfig", "SealedHistory", "Window",
-           "timeline_of", "folds", "reprice", "net_equity", "run_template", "run"]
+           "timeline_of", "folds", "reprice", "net_equity", "require_close_stamped", "run_template", "run"]

@@ -24,6 +24,13 @@ support a PASS. ``pipeline_identity`` names the frozen pipeline a battery
 calibrates (search family + code identity); the report card accepts a battery
 only for the exact pipeline it evaluates.
 
+A plan may also carry ``experiment``: the canonical identity of the whole
+experiment (pipeline code, configuration and search space, data-generation
+protocol, null and positive designs, thresholds and seed schedule). It is
+part of the plan digest and is recorded with its own digest; the report card
+then requires it to equal the experiment the evaluation states (PR #24
+review). Plans without it hash exactly as before.
+
 Negative-control helpers (label block-permutation, placebo events, circular
 shifts) build nulls from real data, where synthetic nulls are not enough.
 """
@@ -69,8 +76,11 @@ class BatteryPlan:
     min_power: float = 0.8
     base_seed: int = 1000
     required_effects: Tuple[float, ...] = ()     # default: the largest declared effect
+    experiment: Optional[Dict[str, Any]] = field(default=None, hash=False)
 
     def __post_init__(self):
+        if self.experiment is not None and not isinstance(self.experiment, dict):
+            raise ValueError("experiment must be a canonical mapping")
         if self.n_nulls < 1:
             raise ValueError("n_nulls must be >= 1")
         if self.effect_sizes and self.n_per_effect < 1:
@@ -86,9 +96,27 @@ class BatteryPlan:
             return tuple(self.required_effects)
         return (max(self.effect_sizes),) if self.effect_sizes else ()
 
+    def _body(self) -> Dict[str, Any]:
+        d = asdict(self)
+        if d["experiment"] is None:
+            d.pop("experiment")                  # plans without an experiment hash exactly as before
+        return d
+
     @property
     def digest(self) -> str:
-        return digest(asdict(self))
+        return digest(self._body())
+
+    @property
+    def experiment_digest(self) -> Optional[str]:
+        return digest(self.experiment) if self.experiment is not None else None
+
+    def record(self) -> Dict[str, Any]:
+        """The ledger payload: the plan body, its digest and (when present)
+        the experiment digest."""
+        d = self._body()
+        if self.experiment is not None:
+            d["experiment_digest"] = self.experiment_digest
+        return dict(d, plan_digest=self.digest)
 
     def min_nulls_for_target(self) -> int:
         """Smallest n with zero passes bounding the false-pass rate at the target."""
@@ -131,7 +159,7 @@ def run_battery(plan: BatteryPlan, pipeline: Callable[[Any], PipelineDecision],
         if ledger.entries("control_battery_plan", plan.digest) or ledger.entries("control_battery_result", plan.digest):
             raise LedgerError("battery plan %s was already used; register a new plan (new name or seed)"
                               % plan.digest[:12])
-        ledger.append("control_battery_plan", {**asdict(plan), "plan_digest": plan.digest}, ref_id=plan.digest)
+        ledger.append("control_battery_plan", plan.record(), ref_id=plan.digest)
     passes = 0
     for i in range(plan.n_nulls):
         d = pipeline(make_null(child_seed(plan.base_seed, plan.name, "null", str(i))))
