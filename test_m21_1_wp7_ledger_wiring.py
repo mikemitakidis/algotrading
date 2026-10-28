@@ -25,7 +25,9 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import _test_isolation  # noqa: E402  (M21 C5a)
@@ -37,8 +39,9 @@ from bot.candidate_ledger import (  # noqa: E402
 from bot.candidate_ledger.loop_sink import (  # noqa: E402
     LoopLedger, journal_consistency, outcome_label,
 )
+from bot.candidate_ledger import loop_sink as L  # noqa: E402
 from bot.paper_loop_d2.journal import LoopJournal  # noqa: E402
-from test_m21_1extra_d2_3_learning_loop import LoopHarness, cand  # noqa: E402
+from test_m21_1extra_d2_3_learning_loop import LoopHarness, cand, entry_orders  # noqa: E402
 
 NOW = "2026-10-28T09:00:00+00:00"
 
@@ -359,6 +362,207 @@ class W5_ConsistencyChecks(unittest.TestCase):
         self.assertEqual(outcome_label({"exit_reason": "x", "realized_pnl": 0.0}), "LOSS")
 
 
+class M14Store:
+    """A risk_decisions table with M14's own schema (bot.flywheel)."""
+
+    def __init__(self, tc):
+        from bot.flywheel import RISK_DECISIONS_SCHEMA
+        self.dir = tempfile.mkdtemp(prefix="wp7m14_")
+        tc.addCleanup(shutil.rmtree, self.dir, True)
+        self.path = os.path.join(self.dir, "signals.db")
+        with sqlite3.connect(self.path) as c:
+            c.execute(RISK_DECISIONS_SCHEMA)
+
+    def add(self, did, *, taken_at, symbol="QQQ", side="long", amount=1000.0, leverage=1,
+            scope="ibkr_paper", action="trade_open", result="allow", request_json=None):
+        req = request_json if request_json is not None else json.dumps(
+            {"symbol": symbol, "amount_usd": amount, "side": side, "leverage": leverage})
+        with sqlite3.connect(self.path) as c:
+            c.execute("INSERT INTO risk_decisions (decision_id, taken_at, broker_scope, requested_action, "
+                      "request_json, result, authority_before, authority_after, reason_codes, source, "
+                      "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      (did, taken_at, scope, action, req, result, "AUTO_ALLOWED", "AUTO_ALLOWED", "[]", "auto",
+                       taken_at))
+
+
+class W7_RiskProvenance(unittest.TestCase):
+    """Review 5686442374: an order in the journal is never turned into an M14 PASS."""
+
+    PLAN = datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        self.db = LedgerDB(self)
+        self.m14 = M14Store(self)
+        jdir = tempfile.mkdtemp(prefix="wp7j_")
+        self.addCleanup(shutil.rmtree, jdir, True)
+        self.jpath = os.path.join(jdir, "journal.db")
+        self.journal = LoopJournal(self.jpath)
+        self.n = 0
+
+    def order(self, did="dec-q", symbol="QQQ", qty=10.0, ref=100.0, state=None):
+        """A journal order for a candidate the ledger knows only as scanned."""
+        self.n += 1
+        ts = (self.PLAN - timedelta(minutes=5 + self.n)).isoformat()
+        w = self.db.writer()
+        cid = w.open_candidate(symbol=symbol, direction="long", strategy_id="trend_v1", decision_ts_utc=ts,
+                               cycle_key="slot:%d" % self.n, cycle_id=None, scanner_stage="loop_candidate",
+                               at_utc=ts, payload={})
+        ref_ = "slot:%d|%s" % (self.n, symbol)
+        self.journal.plan_order(client_ref=ref_, cycle_key="slot:%d" % self.n, strategy_id="trend_v1",
+                                symbol=symbol, direction="long", qty=qty, entry_ref_price=ref, stop_loss=ref * 0.95,
+                                take_profit=ref * 1.1, score=80, data_source="simulated", risk_decision_id=did,
+                                equity_at_entry=100000.0, now=self.PLAN, order_ref="o-%d" % self.n,
+                                candidate_id=cid)
+        if state:
+            with sqlite3.connect(self.jpath) as c:
+                c.execute("UPDATE loop_orders SET state=? WHERE client_ref=?", (state, ref_))
+        return cid
+
+    def risk(self, cid):
+        return self.db.payload(cid, "risk_evaluated")
+
+    def linked(self, cid):
+        return self.db.rows("SELECT risk_decision_id FROM candidate_ledger WHERE candidate_id=?", cid)[0][0]
+
+    def test_without_an_m14_store_backfill_is_inferred_never_a_pass(self):
+        cid = self.order()
+        res = self.db.sink().reconcile(self.jpath, self.PLAN)
+        self.assertEqual(res.get("backfilled:risk_evaluated:RECONSTRUCTED_INFERRED"), 1)
+        p = self.risk(cid)
+        self.assertEqual((p["verdict"], p["evidence"], p["risk_decision_id"]),
+                         ("unverified", "RECONSTRUCTED_INFERRED", None))
+        self.assertEqual(p["journal_risk_decision_id"], "dec-q")
+        self.assertFalse(L.authorising(p))
+        self.assertIsNone(self.linked(cid))
+        with sqlite3.connect(self.db.path) as lc, sqlite3.connect(self.jpath) as jc:
+            rep = journal_consistency(lc, jc)
+        self.assertEqual(rep.risk_evidence["RECONSTRUCTED_INFERRED"], 1)
+        self.assertIn("not an M14 PASS", rep.non_authorising_risk[0])
+
+    def test_matching_persisted_decision_is_verified_and_linked(self):
+        self.m14.add("dec-q", taken_at=(self.PLAN - timedelta(minutes=1)).isoformat(), amount=1000.0)
+        cid = self.order()
+        res = L.LoopLedger(self.db.writer(), m14_db=self.m14.path).reconcile(self.jpath, self.PLAN)
+        self.assertEqual(res.get("backfilled:risk_evaluated:VERIFIED"), 1)
+        p = self.risk(cid)
+        self.assertEqual((p["verdict"], p["evidence"], p["risk_decision_id"]), ("pass", "VERIFIED", "dec-q"))
+        self.assertEqual(self.linked(cid), "dec-q")
+
+    def test_invented_or_contradictory_approvals_are_never_accepted(self):
+        before = (self.PLAN - timedelta(minutes=1)).isoformat()
+        cases = {
+            "decision_not_in_m14_store": ("dec-missing", None),
+            "m14_decision_not_allow:block": ("d-block", dict(result="block")),
+            "decision_for_other_symbol": ("d-sym", dict(symbol="SPY")),
+            "decision_for_other_side": ("d-side", dict(side="short")),
+            "decision_scope_mismatch:ibkr_live": ("d-scope", dict(scope="ibkr_live")),
+            "decision_not_trade_open:trade_close": ("d-act", dict(action="trade_close")),
+            "decision_amount_below_order_notional": ("d-amt", dict(amount=999.0)),
+            "decision_leverage_2": ("d-lev", dict(leverage=2)),
+            "decision_payload_unreadable": ("d-json", dict(request_json="{not json")),
+            "decision_taken_after_the_order_was_planned": ("d-late", dict(taken_at=(
+                self.PLAN + timedelta(seconds=1)).isoformat())),
+            "decision_older_than_600s_before_planning": ("d-old", dict(taken_at=(
+                self.PLAN - timedelta(minutes=11)).isoformat())),
+            "no_decision_id_in_journal": (None, None),
+        }
+        cids = {}
+        for i, (why, (did, kw)) in enumerate(cases.items()):
+            sym = "Q%02d" % i                                   # one active order per symbol
+            if kw is not None:
+                self.m14.add(did, **dict(dict(taken_at=before, symbol=sym), **kw))
+            cids[why] = self.order(did=did, symbol=sym)
+        sink = L.LoopLedger(self.db.writer(), m14_db=self.m14.path)
+        res = sink.reconcile(self.jpath, self.PLAN)
+        self.assertEqual(res.get("backfilled:risk_evaluated:UNVERIFIED"), len(cases))
+        for why, cid in cids.items():
+            p = self.risk(cid)
+            self.assertEqual((p["verdict"], p["evidence"], p["reason"]), ("unverified", "UNVERIFIED", why), why)
+            self.assertIsNone(p["risk_decision_id"])
+            self.assertIsNone(self.linked(cid))
+            self.assertFalse(L.authorising(p))
+        # replay is idempotent: nothing new, nothing upgraded
+        n = self.db.rows("SELECT COUNT(*) FROM candidate_ledger_events")[0][0]
+        self.assertFalse(any(k.startswith("backfilled") for k in sink.reconcile(self.jpath, self.PLAN)))
+        self.assertEqual(self.db.rows("SELECT COUNT(*) FROM candidate_ledger_events")[0][0], n)
+
+    def test_unreadable_store_is_inferred_not_verified(self):
+        Path(self.m14.path).write_bytes(b"garbage" * 64)
+        cid = self.order()
+        L.LoopLedger(self.db.writer(), m14_db=self.m14.path).reconcile(self.jpath, self.PLAN)
+        self.assertEqual((self.risk(cid)["evidence"], self.risk(cid)["reason"]),
+                         ("RECONSTRUCTED_INFERRED", "m14_store_unreadable:DatabaseError"))
+
+    def test_inferred_risk_can_never_authorise_an_intent(self):
+        cid = self.order()
+        sink = self.db.sink()
+        sink.reconcile(self.jpath, self.PLAN)
+        c = SimpleNamespace(candidate_id=cid, symbol="QQQ")
+        self.assertFalse(sink.intent(c, client_ref="x", order_ref="o", data_source="sim", now=self.PLAN,
+                                     cycle_key="slot:1"))
+        self.assertEqual(sink.stats["intent_blocked:risk_evidence_RECONSTRUCTED_INFERRED"], 1)
+
+    def test_live_pass_without_a_decision_id_blocks_the_entry(self):
+        h = with_ledger(self, LoopHarness(self), self.db)
+        h.risk = (True, None, None)
+        r = h.tick()
+        self.assertEqual(r["entry_block"], "ledger_audit_unavailable")
+        self.assertEqual(h.orders(), [])
+        self.assertEqual(entry_orders(h.broker), 0)
+        a = make_candidate_id("AAA", h.clock().isoformat(), "long", "trend_v1")
+        p = self.db.payload(a, "risk_evaluated")            # recorded, but never as a pass
+        self.assertEqual((p["verdict"], p["evidence"], p["reason"]),
+                         ("unverified", "UNVERIFIED", "pass_without_m14_decision_id"))
+        self.assertNotIn("intent_logged", self.db.stages(a))
+
+    def test_reconstruction_never_changes_a_terminal_and_reports_contradictions(self):
+        cid = self.order(state="REJECTED")
+        w = self.db.writer()
+        w.record(cid, "risk_evaluated", at_utc=self.PLAN.isoformat(),
+                 payload=dict(L.risk_payload(False, "risk:blocked", {}), risk_decision_id="dec-x",
+                              evidence="M14_LIVE"))
+        w.close(cid, "risk_rejected", at_utc=self.PLAN.isoformat(), reason_codes=["risk:blocked"])
+        res = self.db.sink().reconcile(self.jpath, self.PLAN)
+        self.assertEqual(self.db.terminal(cid), "risk_rejected")
+        self.assertEqual(res.get("contradiction:risk_rejected_but_ordered"), 1)
+        self.assertEqual(res.get("contradiction:terminal"), 1)
+        # a live pass whose decision id differs from the journal's is a contradiction, not repaired
+        cid2 = self.order(did="dec-journal", symbol="RRR")
+        w.record(cid2, "risk_evaluated", at_utc=self.PLAN.isoformat(),
+                 payload=dict(L.risk_payload(True, None, {}), risk_decision_id="dec-live", evidence="M14_LIVE"))
+        res = self.db.sink().reconcile(self.jpath, self.PLAN)
+        self.assertEqual(res.get("contradiction:risk_decision_id"), 1)
+        self.assertEqual(self.risk(cid2)["risk_decision_id"], "dec-live")
+
+    def test_legacy_fabricated_backfill_is_classified_inferred(self):
+        legacy = dict(L.risk_payload(True, None, {}), risk_decision_id="dec-1", source="journal_reconcile")
+        self.assertEqual(L.risk_evidence(legacy), "RECONSTRUCTED_INFERRED")
+        self.assertFalse(L.authorising(legacy))
+        self.assertEqual(L.risk_evidence(dict(L.risk_payload(True, None, {}), risk_decision_id="d")), "M14_LIVE")
+        self.assertEqual(L.risk_evidence({"verdict": "pass", "evidence": "TRUST_ME"}), "UNVERIFIED")
+        self.assertFalse(L.authorising({"verdict": "pass", "evidence": "TRUST_ME"}))
+
+    def test_verifier_rejects_a_record_for_another_decision(self):
+        order = {"risk_decision_id": "dec-a", "symbol": "QQQ", "direction": "long", "qty": 1.0,
+                 "entry_ref_price": 10.0, "planned_at_utc": self.PLAN.isoformat()}
+        rec = {"decision_id": "dec-b", "taken_at": self.PLAN.isoformat(), "broker_scope": "ibkr_paper",
+               "requested_action": "trade_open", "result": "allow",
+               "request_json": json.dumps({"symbol": "QQQ", "side": "long", "amount_usd": 10.0, "leverage": 1})}
+        self.assertEqual(L.verify_m14_decision(order, rec), ("UNVERIFIED", "record_for_other_decision"))
+        self.assertEqual(L.verify_m14_decision(order, dict(rec, decision_id="dec-a"))[0], "VERIFIED")
+
+    def test_m14_reader_is_read_only(self):
+        src = (Path(__file__).resolve().parent / "bot/candidate_ledger/loop_sink.py").read_text()
+        self.assertIn("mode=ro", src)
+        self.assertIn("PRAGMA query_only = ON", src)
+        for bad in ("INSERT INTO risk_decisions", "UPDATE risk_decisions", "DELETE FROM risk_decisions"):
+            self.assertNotIn(bad, src)
+        self.assertIsNone(L.read_m14_decision(self.m14.path, "nope"))
+        with self.assertRaises(sqlite3.Error):
+            L.read_m14_decision(os.path.join(self.m14.dir, "absent.db"), "x")
+        self.assertFalse(os.path.exists(os.path.join(self.m14.dir, "absent.db")))
+
+
 class W6_ScanStageRecords(unittest.TestCase):
     def test_scored_blocked_and_scanner_rejects(self):
         import test_m21_1_wp5_evidence as W
@@ -404,7 +608,7 @@ class W6_ScanStageRecords(unittest.TestCase):
         src = (Path(__file__).resolve().parent /
                "tools/paper_loop/m21_1extra_d2_3_scheduler.py").read_text()
         self.assertIn("enabled=ledger_enabled_from_env()", src)
-        self.assertIn("ledger=LoopLedger(writer)", src)
+        self.assertIn("ledger=LoopLedger(writer, m14_db=signals_db)", src)
         self.assertIn('sqlite3.connect(":memory:")', src)
 
 
