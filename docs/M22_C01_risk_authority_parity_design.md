@@ -2,9 +2,10 @@
 
 **Status: DESIGN ONLY.**
 - No code, configuration or broker behaviour is changed by this document.
-- Basis: `main` @ `80b4343`, plus the WS2 risk gate in draft PR #1 @ `46c87ab` and the A01 contract in draft PR #12 @ `8013044`.
+- Basis: `main` @ `80b4343`, plus the WS2 risk gate in draft PR #1 @ `0f3f9e6` and the A01 contract in draft PR #12 @ `8013044`.
 - Anything that can only be confirmed on the VPS is labelled **VPS VERIFICATION REQUIRED**.
 - **Revision 2 (28 Oct 2026)** adopts the six policies P-1..P-6 proposed in the independent checkpoint (Issue #3 comment 6463489608) and forwarded by the operator. See **§10**, which also lists how they change §6–§9. Adopting a policy in this design is **not** permission to change live risk code; every implementation phase still needs review and approval.
+- **Revision 3 (28 Oct 2026)** records the operator's **final C01 design decisions** (§10). It adds the completed-candle evaluation design (**§11**) and the reduce-only flatten pathway with closed-market broker semantics (**§12**), and specifies the governor-state store (§7 IP-4). Still design only: nothing here changes the live execution path.
 
 C01 stays a **hard blocker for M22 live-trading readiness** until this design is implemented, tested and independently reviewed.
 
@@ -198,13 +199,21 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
 3. **IP-3, market state.** Reuse the A09 `verify_market_open` (fresh, typed D1 decision) to compute `market_open`. Separately, M14's default should change from `True` to "required, no default". That is an M14 change with its own tests.
 4. **IP-4, authority source (P-3).** The scanner's `current_authority` is read from **persisted governor state**, never a constant.
    - **Today no such store exists.** `GovernorState` is "persisted by the caller" (`governor.py:79`) and no caller persists it. WS2 presents a constant `AUTO_ALLOWED`; the eToro CLI takes `--authority` from the operator.
-   - **Required: an additive per-scope governor-state store**, with exactly two writers:
+   - **Required: an additive per-scope governor-state store** (schema below), with exactly two writers:
      - `governor.propose()` after each audited decision (downgrade-only);
      - `apply_manual_reset()` as an operator-signed, audited `manual_reset` event, the only path that raises authority.
    - **Readers fail closed:** if the row is missing or unreadable, the auto lane runs at `SIGNAL_ONLY`.
    - A downgrade (kill, loss latch, drawdown, unknown data) is therefore honoured on the very next decision.
    - **WS2's constant must be replaced** before WS2 runs unattended.
-5. **IP-5, signal truth (A01, PR #12) (P-4).** The `TruthReport` gates every new entry before risk.
+   - **Store schema** (additive, migrations as code, deployment needs approval):
+     - `risk_governor_state(broker_scope TEXT PRIMARY KEY CHECK (scope in the four M14 scopes), authority TEXT NOT NULL CHECK (authority in OFF..AUTO_ALLOWED), latched_day_utc TEXT, latched_reasons_json TEXT NOT NULL DEFAULT '[]', manual_reset_required INTEGER NOT NULL CHECK (0/1), fresh_consecutive_count INTEGER NOT NULL DEFAULT 0, updated_at_utc TEXT NOT NULL, updated_by TEXT NOT NULL CHECK (updated_by IN ('governor_propose','manual_reset')), source_decision_id TEXT NOT NULL, version INTEGER NOT NULL)`;
+     - `risk_governor_events(event_id TEXT PRIMARY KEY, broker_scope, authority_before, authority_after, cause, decision_id, actor, at_utc, expires_at_utc)`: append-only history.
+   - **Writer rules:**
+     - `governor_propose` may only **lower** authority (it asserts `after <= before`);
+     - `manual_reset` is the only raise, needs an operator actor, and is written in the same transaction as its `risk_decisions` `manual_reset` row;
+     - writes are compare-and-swap on `version`.
+   - **Reader rule:** a row that is missing, unreadable, references an unknown decision, or has an invalid authority yields `SIGNAL_ONLY` for the auto lane.
+5. **IP-5, signal truth (A01, PR #12) (P-4).** The `TruthReport` gates every new entry before risk. Completed-candle details are in **§11**.
    - **Blocking states:** any required timeframe MISSING, INVALID, UNVERIFIED, STALE or **INCOMPLETE**; an UNVERIFIED risk decision; a corporate action that is not VERIFIED_CLEAN; a missing calendar.
    - **Consequence: the scanner must decide on closed bars.** Today it scores the in-progress bar (`compute_features` uses the last row), so during the session almost every timeframe is INCOMPLETE and every entry would block. The scanner has to decide on the **last closed bar** of each timeframe, by dropping the in-progress row before `compute_features`. That is a scanner change: a C5b transition with its own review, a parity report on signal counts, and no change to the strategy rules.
 6. **IP-6, traceability (A02).** An additive `risk_decision_id` on `execution_intents`, plus the candidate ledger linking candidate → score → decision → intent → outcome.
@@ -218,7 +227,7 @@ Every row is a **block** with a stable reason code. Nothing here may fall back t
        - no order can create or increase exposure;
        - every attempt writes an audit record (`requested_action='trade_close'` + `reduce_only=true` + position evidence) before submit.
      - **Not blocked by entry gates:** it works through the kill switches, loss latches, drawdown and authority below `ONE_SHOT_MANUAL` (`trade_close` needs only `PAPER_ONLY`).
-     - **Closed market:** queue for the next open or follow an explicit, reviewed closed-market rule. Never a silent market order.
+     - **Closed market:** follows the closed-market broker semantics in **§12**. No order is transmitted while the trusted clock says closed; an audited pending request is executed at the first verified open. Never a silent market order.
      - **Blocked only when reduce-only cannot be proven:** position unknown, stale or ambiguous → NEEDS_REVIEW.
 9. **IP-9, ingestion.** M14 `data_staleness` needs M14.C/D ingestion of PnL and exposure for every scope. **VPS VERIFICATION REQUIRED:** whether ingestion runs, its freshness, and the current `RISK_*` env and `BROKER` values.
 10. **IP-10, daily-loss override (P-6).** `RISK_ALLOW_DAILY_LOSS_OVERRIDE` must have **no effect on automatic entries**.
@@ -330,27 +339,124 @@ Each must pass all three checks below, or it loses the exemption.
 
 ---
 
-## 10. Policies adopted in revision 2 (P-1..P-6)
+## 10. Policies and final operator decisions (revision 3)
 
-These come from the independent checkpoint (Issue #3, comment 6463489608) and were forwarded by the operator for this design. They are design policies only: implementing each one is a separate, reviewed and approved phase (§9).
+Revision 2 adopted P-1..P-6 from the independent checkpoint (Issue #3, comment 6463489608). In revision 3 the operator confirmed them as the **final C01 design decisions D-1..D-6**. These are design decisions only: each implementation phase (§9) still needs its own review and approval, and nothing changes the live execution path until then.
 
-| id | policy | design consequence | where |
+| decision | final design decision | design consequence | where |
 |---|---|---|---|
-| **P-1** | Broker-connected paper and live orders require M14. | Every path that can reach a broker adapter goes through the M14 preflight (IP-1). The broker adapters verify a fresh, matching allow decision (IP-7). | §7 IP-1, IP-2, IP-7; T-A, T-E, T-G |
-| **P-2** | Pure local simulation may be exempt only with a provable no-broker/no-network boundary. | Exemption candidates: local `PaperBroker`, WS2 simulated mode, M20.I paper loop, A-path sim, B1 dry-run. Each needs AST + runtime + exact-type proof. `PaperEtoroBroker` is **not** exempt (it can reach `EtoroClient` GETs). | §7 IP-2; T-J |
-| **P-3** | Scanner authority comes from persisted governor state. | A new governor-state store with two writers (`propose`, `apply_manual_reset`). Missing state → `SIGNAL_ONLY`. The WS2 constant and the eToro CLI argument are replaced. | §6; §7 IP-4; §9 4a; T-E, T-M |
-| **P-4** | Unknown, stale or incomplete inputs block new entries. | A01 states (incl. INCOMPLETE), the calendar, an unverified risk decision, the market clock, quote/spread (now mandatory), P&L/exposure and risk state all block entries. The scanner moves to closed-bar evaluation. **Risk-reducing flatten is exempt.** | §6; §7 IP-3, IP-5; §9 4b; T-D, T-M |
-| **P-5** | One-shot entries require M14; flatten uses a separate audited reduce-only pathway. | B2b runs the preflight with governor authority ≥ `ONE_SHOT_MANUAL`. Flatten gets a dedicated `trade_close` / reduce-only path that works through kill switches and latches, and fails to NEEDS_REVIEW only when reduce-only cannot be proven. | §6; §7 IP-8; §9 4c; T-F, T-K |
-| **P-6** | Remove silent daily-loss overrides for automatic entries. | `RISK_ALLOW_DAILY_LOSS_OVERRIDE` has no effect on the auto lane. An exception is only a short-lived, operator-signed audit event, for manual one-shot entries. | §6; §7 IP-10; §9 4; T-L |
+| **D-1** (P-2) | **Retain pure local simulation only behind a provable no-broker/no-network boundary.** | The local JSONL `PaperBroker`, WS2 simulated mode, the M20.I loop, the A-path sim and the B1 dry-run are kept. Each is exempt only while T-J passes (AST, runtime and exact-type proof); a failing proof removes the exemption. `PaperEtoroBroker` is **not** exempt. | §7 IP-2; T-J |
+| **D-2** (P-1) | **All broker-connected paper and live entries require M14.** | The preflight on every broker-reaching entry path (IP-1), and the broker-boundary decision check (IP-7). | §7 IP-1, IP-2, IP-7; T-A, T-E, T-G |
+| **D-3** (P-3) | **Scanner authority comes from persisted governor state.** | The governor-state store (schema in IP-4); missing or invalid state yields `SIGNAL_ONLY`. | §6; §7 IP-4; §9 4a; T-M |
+| **D-4** (P-4) | **Scanner decisions are made on completed candles.** Unknown, stale or incomplete inputs block new entries. | The completed-candle design in **§11**, with tests for every supported timeframe and session situation (**T-N**). A01 gains a completed-bar staleness basis. | §6; §7 IP-5; **§11**; §9 4b |
+| **D-5** (P-5) | **Flatten uses a separately audited reduce-only pathway with closed-market broker semantics.** One-shot entries require M14. | The pathway in **§12** (state machine, broker semantics, audit schema, **T-K**). | §7 IP-8; **§12**; §9 4c |
+| **D-6** (P-6) | **No silent daily-loss overrides for automatic entries.** | The env override has no effect on the auto lane. Exceptions are only short-lived, operator-signed audit events, for manual one-shot entries. | §6; §7 IP-10; §9 4; T-L |
 
-**Still open for the operator:**
-1. **The closed-market rule for flatten** (P-5): queue for the next open, or a reviewed alternative.
-2. **Whether to keep the local JSONL `paper` broker at all**, once T-J has decided its exemption.
-3. **The scanner's switch to closed-bar evaluation** (P-4): approval of the C5b transition and of the expected drop in intraday signal count.
-4. **VPS verification** of M14 ingestion, the `RISK_*` env values and `BROKER` (IP-9).
+**Remaining items: approvals and verification only, no open design decisions.**
+1. **VPS verification:** that M14 ingestion runs and is fresh, plus the `RISK_*` env values and `BROKER` (IP-9).
+2. **Approval of each implementation phase** in §9. The schema deployments (governor store, flatten audit) and the scanner C5b transition need explicit approval.
 
 **Dependencies:**
-- **A01** (PR #12 @ `8013044`) for IP-5 and verified risk-decision provenance.
+- **A01** (PR #12 @ `8013044`) for IP-5 and risk-decision provenance; §11 needs its completed-bar staleness basis.
 - **A02** (candidate ledger) for IP-6.
-- **A09** (PR #1 @ `46c87ab`) for the verified-market-state pattern used in IP-3.
-- **VPS verification** of M14 ingestion and the `RISK_*` env values (IP-9).
+- **A09** (PR #1 @ `0f3f9e6`) for the trusted-clock market-state boundary used in IP-3 and §12.
+- **VPS verification** (IP-9).
+
+---
+
+## 11. Completed-candle (closed-bar) evaluation design (D-4)
+
+**Today:** `bot/scanner.py` computes features on the provider's last row (`compute_features` uses `iloc[-1]`). During a session that row is usually the bar still forming. Under D-4 every entry decision must instead be made on **completed** bars.
+
+**Rule.**
+- For each enabled timeframe, the scanner evaluates the **last bar whose close is at or before the decision time**.
+- The close is computed by A01's session-aware `bar_timing` against a **verified exchange calendar**.
+- The in-progress row, if the provider returned one, is dropped **before** `compute_features`.
+- The scanner records which completed bar it used: its start and close (an extension of the A01 `bar_asof` metadata).
+- **Decision time** = the scan's evaluation time. The candidate's `decision_ts_utc` (A02) is the close of the finest-timeframe completed bar.
+
+**Per timeframe.** Bar starts are UTC; the session is the regular 09:30–16:00 America/New_York session, with early closes and holidays taken from the calendar.
+
+| timeframe | source | completed when | session handling |
+|---|---|---|---|
+| 15m | provider 15m | `min(start + 15 min, session close)` ≤ decision time | Bars outside the regular session are INVALID. On an early-close day the last bar ends at the early close. |
+| 1H | provider 1h | `min(start + 60 min, session close)` ≤ decision time | The grid differs by provider (yfinance :30 bars, Alpaca clock-hour bars). The last bar of the day is partial (e.g. 15:30–16:00) and completes at the session close. |
+| 4H | `resample('4h')` of 1H (UTC buckets) | the last constituent 1H bar has closed (exact when the base grid is known; otherwise the conservative upper bound `bucket end + 1 h`, capped at the session close) | Bucket composition shifts with DST (EDT vs EST). Buckets after the close are INVALID. |
+| 1D | provider 1d | the session close (early close honoured) | During the session the completed daily bar is the **previous session's**. Holidays and weekends produce no bar. |
+
+**Staleness basis for completed bars** (required A01 extension).
+- Today A01 measures lag from when the **next bar starts**. Applied to completed bars, that would mark yesterday's completed daily bar STALE 30 minutes into every session.
+- Completed-bar mode measures lag from when the **next bar completes**. A bar is STALE only if a newer bar has **closed** more than `max_lag` ago without being used.
+- INCOMPLETE cannot occur for a correctly selected bar. If it does, the selection is defective and the entry blocks.
+
+**Session rules for entries** (research scoring continues regardless):
+- **Pre-open and after-close:** no entries (the trusted market clock says closed). Scans may still score for research, but no entry follows.
+- **First interval of the session:** no entry until the 15m timeframe has a completed bar **from the current session**. This protects against deciding on the previous session's close and the opening auction.
+- **Holidays and weekends:** no entries (clock closed). Daily bars must never be dated on a closed day; such a bar is INVALID.
+- **Early-close days:** bars that would start after the early close are INVALID; the daily bar completes at the early close.
+- **DST weeks:** sessions move by an hour in UTC, and 4H bucket membership changes. All boundaries come from the calendar and tz database, never fixed UTC hours.
+- **Missing or halted bars:** a missing completed bar leaves that timeframe MISSING or STALE, so the entry blocks.
+
+**Entry price.** The decision bar's close and ATR define the setup: stop and target. The **order price** comes from a fresh live quote with mandatory quote age and spread checks (P-4). A slippage guard compares the quote with the decision close and blocks if the gap is larger than a configured multiple of ATR.
+
+**T-N: completed-candle test matrix** (deterministic fixtures, verified-calendar fixture).
+- **Every timeframe:** 15m, 1H (both :30 and clock-hour grids), 4H (known and unknown base grid), 1D.
+- **Every situation:** pre-open, first 15 minutes, mid-session, the final partial hour, after-close, weekend, holiday, early-close day (before and after the early close), and both DST transition weeks.
+- **Each case asserts:**
+  - which bar is selected and its close;
+  - the in-progress row is excluded;
+  - the completed-bar staleness result;
+  - the entry or no-entry outcome.
+- **Plus:**
+  - parity: the scanner's selected bars equal the M17 backtest's completed-bar convention on the same fixture data;
+  - a signal-count report (completed-bar vs current behaviour) on fixtures, for the C5b review;
+  - entries block when the calendar is missing or out of coverage.
+
+---
+
+## 12. Reduce-only flatten pathway with closed-market broker semantics (D-5)
+
+The entry preflight is fixed to `trade_open`, and every M14 entry gate would also block a close. Flatten therefore gets its own audited, reduce-only pathway. **Entries can never use it** (AST guard).
+
+**Invariants:**
+1. **Reduce-only:** the order side is opposite to the current broker position. Its quantity is ≤ the current position, re-read immediately before submit. No order may create, increase or flip exposure.
+2. **Audit before action:** every request and every state change is written before any broker call.
+3. **Independent of entry gates:** kill switches, daily-loss latches, drawdown, `ONE_SHOT_MANUAL`-level authority and exposure caps **do not** block a flatten. `trade_close` needs only `PAPER_ONLY`.
+4. **Fail to review, never to exposure:** if reduce-only cannot be proven, the request goes to `NEEDS_REVIEW` and no order is sent. That covers a position that is unknown, stale or ambiguous, or an unclear position after an unexpected fill.
+
+**States:**
+- `REQUESTED` → `PENDING_MARKET_OPEN` (market closed) or `READY`.
+- `READY` → `CHILDREN_CANCELLED` → `SUBMITTED`.
+- `SUBMITTED` → `FILLED`, or `PARTIAL` → re-verify → `READY`.
+- Any state → `NEEDS_REVIEW`.
+- Any state → `CANCELLED` (operator only).
+
+**Closed-market broker semantics** (decided):
+- **No order is transmitted while the trusted market clock (A09 boundary) says closed.** That covers pre-market, after-hours, weekends, holidays and after an early close. The request is persisted as `PENDING_MARKET_OPEN`, with no broker queueing.
+- **At the first verified-open tick:**
+  1. re-read the broker position;
+  2. cancel the symbol's working child orders (bracket TP/SL legs) and confirm the cancellation;
+  3. submit **one** reduce-only order:
+     - a market order with `tif=DAY` and `outsideRth=False`;
+     - quantity = `min(requested, current position)`;
+     - order reference `<request_id>:FLAT`.
+- **Not used without separate approval:** `GTC`, `OPG` (market-on-open), `MOC`, extended-hours routing. Each would hand execution timing to the broker while the system cannot observe the market.
+- **While the market is open:** the same steps run immediately.
+- **Halt or broker rejection:** stay `READY` with bounded retries, then `NEEDS_REVIEW` with an alert after the configured limit. Never switch order type automatically.
+- **Partial fill:** re-read the position before any further order. A second order may only cover the **remaining** position.
+- **IBKR has no native reduce-only flag for equities.** Reduce-only is enforced by the pre-submit position re-read, the quantity cap, a single working flatten order per symbol (uniqueness on `request_id` + symbol), and post-fill reconciliation. Any overfill or position flip goes to `NEEDS_REVIEW` with an immediate alert.
+
+**Audit schema** (additive; migrations as code; deployment needs approval):
+- `flatten_requests(request_id TEXT PRIMARY KEY, broker_scope TEXT NOT NULL, symbol TEXT NOT NULL, position_side TEXT NOT NULL, requested_qty REAL NOT NULL, position_qty_at_request REAL, reason TEXT NOT NULL, actor TEXT NOT NULL, requested_at_utc TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('REQUESTED','PENDING_MARKET_OPEN','READY','CHILDREN_CANCELLED','SUBMITTED','PARTIAL','FILLED','NEEDS_REVIEW','CANCELLED')), market_state_reason TEXT, order_ref TEXT, risk_decision_id TEXT, updated_at_utc TEXT NOT NULL)`, plus `CREATE UNIQUE INDEX flatten_one_active ON flatten_requests(broker_scope, symbol) WHERE state NOT IN ('FILLED','CANCELLED')`: one active request per symbol and scope.
+- `flatten_events(event_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, from_state, to_state, at_utc, broker_position_qty, order_qty, broker_status, note)`: append-only.
+- Each submit also writes an M14 `risk_decisions` row with `requested_action='trade_close'` and `request_json` carrying `reduce_only=true`, `position_qty` and `order_qty`.
+
+**T-K (expanded):**
+- **Succeeds** under: active kill switches, the loss latch, drawdown, `PAPER_ONLY` authority.
+- **Market closed** (after-hours, weekend, holiday, after an early close): `PENDING_MARKET_OPEN` with **zero broker calls**. At the first verified open: cancel children, then one DAY market order with `outsideRth=False`.
+- **Refused** to `NEEDS_REVIEW` with no order: unknown, stale or ambiguous position; quantity > position; same-side request; a second active request for the symbol.
+- **Partial fill:** only the remainder is ordered.
+- **Overfill or flip:** `NEEDS_REVIEW` plus an alert.
+- **Halt rejection:** bounded retries, then `NEEDS_REVIEW`.
+- **Audit-before-action** ordering is verified.
+- **AST:** no entry path imports the flatten pathway, and it uses no `GTC`, `OPG`, `MOC` or `outsideRth=True`.
