@@ -104,6 +104,13 @@ class S3_PlantedRegime(Lab):
         self.assertEqual(never["comparison_vs_global_threshold"].get("new_total"),
                          never["comparison_vs_global_threshold"].get("ref_total"))
 
+    def test_unknown_regime_always_uses_the_global_threshold(self):
+        b = C.regime_thresholds(self.ds, self.m.bars, replace(self.cfg, regime_lag=250, min_regime_trades=5),
+                                res=self.res)
+        self.assertGreater(b["by_regime"]["unknown"]["oof_events"], 0)    # a long lag leaves early events unknown
+        for row in b["thresholds_by_fold"]:
+            self.assertEqual(row["unknown"], row["global"])
+
     def test_detection_lag_is_a_shift(self):
         r0 = C.lagged_regime(self.ds, self.m.bars, 0)
         r1 = C.lagged_regime(self.ds, self.m.bars, 1)
