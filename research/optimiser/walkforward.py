@@ -204,9 +204,9 @@ def reprice(res: E.EngineResult, bars: Mapping[str, pd.DataFrame], genome: Genom
     return out
 
 
-def _net_daily(res: E.EngineResult, priced, tl, w: Window) -> np.ndarray:
-    """Daily net returns inside the window: gross engine equity minus each
-    trade's economics cost (booked at exit), minus the gross P&L of trades the
+def net_equity(res: E.EngineResult, priced, tl, w: Window) -> pd.Series:
+    """Net equity up to the window end: gross engine equity minus each trade's
+    economics cost (booked at exit), minus the gross P&L of trades the
     economics model could not fill (they never happened)."""
     eq = res.equity.reindex(tl[: w.hi + 1]).ffill()
     adj = pd.Series(0.0, index=eq.index)
@@ -218,8 +218,12 @@ def _net_daily(res: E.EngineResult, priced, tl, w: Window) -> np.ndarray:
             adj.loc[at] -= te.total_cost - te.dividend_cash
         else:
             adj.loc[at] -= t.pnl_absolute
-    net = eq + adj.cumsum()
-    seg = net.iloc[max(w.lo - 1, 0): w.hi + 1]
+    return eq + adj.cumsum()
+
+
+def _net_daily(res: E.EngineResult, priced, tl, w: Window) -> np.ndarray:
+    """Daily net returns inside the window (see ``net_equity``)."""
+    seg = net_equity(res, priced, tl, w).iloc[max(w.lo - 1, 0): w.hi + 1]
     return seg.pct_change().dropna().to_numpy()
 
 
@@ -278,7 +282,9 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
         trades += o["n_trades"]
         fold_rows.append({"fold": k, "train": [str(tl[tr.lo]), str(tl[tr.hi])], "test": [str(tl[te.lo]),
                                                                                           str(tl[te.hi])],
-                          "chosen": dict(chosen.p), "chosen_plateau": sel["best_plateau"]["plateau"],
+                          "chosen": dict(chosen.p), "chosen_genome_id": chosen.genome_id,
+                          "plateau_pick_genome_id": sel["best_plateau"]["genome_id"],
+                          "chosen_plateau": sel["best_plateau"]["plateau"],
                           "isolated_peak": sel["best_isolated"], "train_points": int(len(df)),
                           "oos_trades": o["n_trades"], "oos_unfilled": o["n_unfilled"], "oos_capped": o["capped"],
                           "oos_net_usd": o["net_usd"], "oos_sharpe": _sharpe_ann(o["returns"]),
@@ -411,4 +417,4 @@ def _cfg_dict(cfg: WFConfig) -> Dict:
 
 
 __all__ = ["PASS", "FAIL", "INCONCLUSIVE", "HOLDOUT_NOT_RUN", "DEFAULT_AXES", "WFConfig", "SealedHistory", "Window",
-           "timeline_of", "folds", "reprice", "run_template", "run"]
+           "timeline_of", "folds", "reprice", "net_equity", "run_template", "run"]

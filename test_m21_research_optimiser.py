@@ -140,6 +140,9 @@ class O4_Economics(unittest.TestCase):
         self.assertEqual(d["n_trades"], a["n_trades"] - 1)
         te0 = [te for t, te in a["priced"] if t is t0][0]
         self.assertAlmostEqual(d["net_usd"], a["net_usd"] - te0.net_pnl, places=6)
+        ea = W.net_equity(a["res"], a["priced"], self.tl, self.te)
+        ed = W.net_equity(d["res"], d["priced"], self.tl, self.te)
+        self.assertAlmostEqual(ea.iloc[-1] - ed.iloc[-1], te0.net_pnl, places=4)   # its gross P&L is gone too
 
     def test_size_sensitivity_grows_less_than_linearly(self):
         a = W._oos(self.g, self.bars, self.tl, self.te, self.cfg, None, None, size_mult=1.0)
@@ -192,6 +195,8 @@ class O6_EndToEnd(unittest.TestCase):
             self.assertEqual(r["holdout"]["status"], W.HOLDOUT_NOT_RUN)
         for f in r["folds"]:
             self.assertGreaterEqual(f["chosen_plateau"], f["isolated_peak"]["plateau"])
+            self.assertEqual(f["chosen_genome_id"], f["plateau_pick_genome_id"])      # the plateau, not the peak
+        self.assertTrue(any(f["chosen_genome_id"] != f["isolated_peak"]["genome_id"] for f in r["folds"]))
         self.assertEqual(len(self.L.entries("wf_run", "wf:mean_reversion")), 1)
 
     def test_deterministic(self):
