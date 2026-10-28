@@ -10610,6 +10610,11 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_wp6_completed_candles.py",
             "bot/providers/alpaca_corporate_actions.py",
             "test_m21_1_wp5_evidence.py",
+            "bot/monitoring/__init__.py",
+            "bot/monitoring/alarms.py",
+            "bot/monitoring/checks.py",
+            "bot/monitoring/probe.py",
+            "test_m21_1_wp10_monitoring.py",
             "docs/M21_1_A02_candidate_ledger_plan.md",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
