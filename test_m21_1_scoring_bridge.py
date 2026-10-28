@@ -34,7 +34,7 @@ _test_isolation.install()
 
 from bot.signal_scoring import ScoringProfile
 from bot.signal_scoring import keys as K
-from bot.scoring_truth import CorporateActionRecord, RiskDecisionRef
+from bot.scoring_truth import CorporateActionRecord
 from tools.signal_scoring.scanner_bridge import enrich_signal, score_signal
 from tools.signal_scoring import score_rank_harness as H
 
@@ -42,15 +42,17 @@ _TS = "2026-06-26T15:00:00+00:00"
 
 
 def _evidence(symbol="AAA", side="long", **over):
-    """Complete fixture evidence (simulated calendar; after-close bars; a
-    validated M14 approval; raw prices with a verified clean record)."""
+    """Complete fixture evidence (simulated calendar; after-close bars; an
+    M14 approval recorded in a FIXTURE audit DB and read back through the
+    trusted read-only store; raw prices with a verified clean record)."""
+    from test_m21_1_a01_scoring_truth import approval, store   # A01 test helpers
     kw = dict(
         evaluated_at_utc="2026-06-26T20:30:00+00:00",
         calendar=H.FIXTURE_CALENDAR,
         bar_asof={"1D": "2026-06-26T04:00:00+00:00", "4H": "2026-06-26T16:00:00+00:00",
                   "1H": "2026-06-26T19:30:00+00:00", "15m": "2026-06-26T19:45:00+00:00"},
-        risk_decision=RiskDecisionRef("m14_risk_authority", "fixture-1", "approved",
-                                      symbol, side, "2026-06-26T20:20:00+00:00"),
+        risk_decision=approval(symbol, side, at="2026-06-26T20:20:00+00:00"),
+        risk_decision_store=store(),
         price_basis="raw", detector_suspected=False,
         corporate_action_record=CorporateActionRecord(
             symbol, "2026-06-01T00:00:00+00:00", "2026-06-27T00:00:00+00:00", (),

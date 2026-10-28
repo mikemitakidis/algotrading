@@ -9,10 +9,17 @@ REMOVES every gate key whose value is unknown, so M19 fails closed with
 
 Nothing here can authorise execution: it produces descriptive data only,
 imports no broker / risk / runtime module, and never sets a value that M19
-would read as an approval without the matching evidence. In particular the
-Risk Authority status is 'ok' only for a validated, matching, unexpired
-approval from an accepted source; any matching block is 'blocked'; everything
-else is UNKNOWN (key removed).
+would read as an approval without the matching evidence.
+
+Risk Authority provenance: a ``RiskDecisionRef`` is only a POINTER (decision
+id + the scope and notional the candidate would trade); it is never evidence.
+The status is 'ok' / 'blocked' only from a ``PersistedRiskDecision`` -- the
+row M14 itself wrote to ``risk_decisions`` -- read by the bridge through its
+trusted read-only store, and only when that row matches this candidate
+(trade_open, scope, symbol, side, leverage, approved notional covering the
+intended notional, decided after the signal, before evaluation, unexpired).
+A reference with no trusted record (caller attestation only), an id M14 never
+recorded, or any mismatch is UNVERIFIED: the key is removed and M19 blocks.
 """
 from __future__ import annotations
 
@@ -50,8 +57,10 @@ class TruthPolicy:
     specs: Mapping[str, TimeframeSpec] = field(default_factory=lambda: dict(DEFAULT_SPECS))
     max_lag_minutes: float = 30.0
     count_incomplete_as_available: bool = False
-    accepted_risk_sources: Tuple[str, ...] = ("m14_risk_authority",)
+    accepted_risk_scopes: Tuple[str, ...] = ("ibkr_paper", "ibkr_live",
+                                             "etoro_paper", "etoro_real")
     max_risk_decision_age_minutes: float = 15.0
+    max_leverage: int = 1
 
 
 # ── schema ──────────────────────────────────────────────────────────────────
@@ -123,65 +132,106 @@ class RiskAuthorityState(str, enum.Enum):
 
 @dataclass(frozen=True)
 class RiskDecisionRef:
-    """Reference to an actual risk decision for this candidate. Building one
-    is the caller's claim that the decision exists; it is still validated
-    (source, symbol, side, timing) before it can mean 'ok'."""
+    """A POINTER to an M14 decision for this candidate -- never evidence.
+    ``broker_scope`` and ``notional_usd`` are what the candidate would trade;
+    the persisted decision must cover them."""
 
-    source: str
     decision_id: str
-    outcome: str            # "approved" | "blocked"
-    symbol: str
-    side: str
-    decided_at_utc: Any
+    broker_scope: str
+    notional_usd: float
+
+
+@dataclass(frozen=True)
+class PersistedRiskDecision:
+    """One ``risk_decisions`` row exactly as M14's audit surface wrote it,
+    produced only by a trusted read-only store (see
+    ``tools/signal_scoring/risk_decision_store.py``)."""
+
+    decision_id: str
+    taken_at_utc: str
+    broker_scope: str
+    requested_action: str
+    result: str                       # 'allow' | 'block' | 'downgrade_then_block'
+    authority_after: str
+    audit_source: str                 # risk_decisions.source
+    symbol: Optional[str]
+    side: Optional[str]
+    amount_usd: Optional[float]
+    leverage: Optional[int]
+    store: str                        # which trusted store read it
 
 
 @dataclass(frozen=True)
 class RiskAuthorityTruth:
     state: RiskAuthorityState
     reason: str
-    source: Optional[str] = None
+    store: Optional[str] = None
     decision_id: Optional[str] = None
 
 
-def evaluate_risk_decision(ref: Any, *, symbol: str, side: Optional[str],
+def evaluate_risk_decision(ref: Any, *, record: Any, symbol: str, side: Optional[str],
                            signal_ts: Optional[datetime],
                            evaluated_at: Optional[datetime],
-                           policy: TruthPolicy) -> RiskAuthorityTruth:
+                           policy: TruthPolicy,
+                           lookup_note: Optional[str] = None) -> RiskAuthorityTruth:
     if ref is None:
         return RiskAuthorityTruth(RiskAuthorityState.NOT_EVALUATED,
                                   "no_risk_decision_for_candidate")
     if not isinstance(ref, RiskDecisionRef):
         return RiskAuthorityTruth(RiskAuthorityState.UNVERIFIED,
                                   "not_a_risk_decision_reference")
-    src, did = str(ref.source), str(ref.decision_id)
-    def u(reason):
-        return RiskAuthorityTruth(RiskAuthorityState.UNVERIFIED, reason, src, did)
-    if str(ref.symbol).strip().upper() != str(symbol).strip().upper():
-        return u("decision_for_other_symbol")
-    if ref.outcome == "blocked":   # a matching block is never ignored
-        return RiskAuthorityTruth(RiskAuthorityState.BLOCKED, "risk_decision_blocked",
-                                  src, did)
-    if ref.outcome != "approved":
-        return u("unknown_decision_outcome")
-    if str(ref.side).strip().lower() != str(side or "").strip().lower():
-        return u("decision_for_other_side")
-    if src not in policy.accepted_risk_sources:
-        return u("source_not_accepted_as_risk_authority:%s" % src)
-    if not did.strip():
-        return u("decision_id_missing")
+    did = str(ref.decision_id)
+
+    def u(reason, store=None):
+        return RiskAuthorityTruth(RiskAuthorityState.UNVERIFIED, reason, store, did)
+    if record is None:
+        return u(lookup_note or "not_verified_against_m14_audit")
+    if not isinstance(record, PersistedRiskDecision):
+        return u("untrusted_decision_record")
+    st = record.store
+    if record.decision_id != did or not did.strip():
+        return u("record_for_other_decision", st)
+    if record.requested_action != "trade_open":
+        return u("decision_not_trade_open:%s" % record.requested_action, st)
+    if (record.broker_scope != ref.broker_scope
+            or record.broker_scope not in policy.accepted_risk_scopes):
+        return u("decision_scope_mismatch", st)
+    if record.symbol is None or record.side is None:
+        return u("decision_payload_unreadable", st)
+    if record.symbol.strip().upper() != str(symbol).strip().upper():
+        return u("decision_for_other_symbol", st)
+    if record.side.strip().lower() != str(side or "").strip().lower():
+        return u("decision_for_other_side", st)
+    if record.result in ("block", "downgrade_then_block"):
+        # a verified, matching M14 block for this candidate
+        return RiskAuthorityTruth(RiskAuthorityState.BLOCKED, "m14_decision_blocked", st, did)
+    if record.result != "allow":
+        return u("decision_result_unknown", st)
+    want = ref.notional_usd
+    if (isinstance(want, bool) or not isinstance(want, (int, float))
+            or not math.isfinite(want) or want <= 0):
+        return u("intended_notional_invalid", st)
+    got = record.amount_usd
+    if (isinstance(got, bool) or not isinstance(got, (int, float))
+            or not math.isfinite(got) or got <= 0):
+        return u("approved_amount_invalid", st)
+    if want > got + 1e-9:
+        return u("intended_notional_exceeds_approved", st)
+    if record.leverage is None or record.leverage > policy.max_leverage:
+        return u("decision_leverage_not_allowed", st)
     if evaluated_at is None or signal_ts is None:
-        return u("no_evaluation_or_signal_time")
+        return u("no_evaluation_or_signal_time", st)
     try:
-        at = parse_utc(ref.decided_at_utc)
+        at = parse_utc(record.taken_at_utc)
     except ValueError:
-        return u("decision_time_invalid")
+        return u("decision_time_invalid", st)
     if at > evaluated_at:
-        return u("decision_after_evaluation")
+        return u("decision_after_evaluation", st)
     if at < signal_ts:
-        return u("decision_predates_signal")
+        return u("decision_predates_signal", st)
     if evaluated_at - at > timedelta(minutes=policy.max_risk_decision_age_minutes):
-        return u("decision_expired")
-    return RiskAuthorityTruth(RiskAuthorityState.OK, "validated_risk_approval", src, did)
+        return u("decision_expired", st)
+    return RiskAuthorityTruth(RiskAuthorityState.OK, "verified_m14_approval", st, did)
 
 
 # ── report ──────────────────────────────────────────────────────────────────
@@ -225,7 +275,7 @@ class TruthReport:
             "observations": (None if self.observations is None
                              else [o.to_dict() for o in self.observations]),
             "risk": {"state": self.risk.state.value, "reason": self.risk.reason,
-                     "source": self.risk.source, "decision_id": self.risk.decision_id},
+                     "store": self.risk.store, "decision_id": self.risk.decision_id},
             "corporate_action": {"state": self.corporate_action.state.value,
                                  "price_basis": self.corporate_action.price_basis.value,
                                  "reason": self.corporate_action.reason},
@@ -239,6 +289,8 @@ def build_truth(signal: Mapping[str, Any], *,
                 bar_asof: Optional[Mapping[str, Any]] = None,
                 calendar: Optional[SessionCalendar] = None,
                 risk_decision: Any = None,
+                risk_decision_record: Any = None,
+                risk_lookup_note: Optional[str] = None,
                 price_basis: Any = None,
                 detector_suspected: Optional[bool] = None,
                 corporate_action_record: Optional[CorporateActionRecord] = None,
@@ -314,8 +366,10 @@ def build_truth(signal: Mapping[str, Any], *,
                             "per-symbol %s observations" % "/".join(sorted(s.value for s in ok_states))))
 
     # risk authority
-    risk = evaluate_risk_decision(risk_decision, symbol=symbol, side=side,
-                                  signal_ts=sts, evaluated_at=ev, policy=policy)
+    risk = evaluate_risk_decision(risk_decision, record=risk_decision_record,
+                                  symbol=symbol, side=side, signal_ts=sts,
+                                  evaluated_at=ev, policy=policy,
+                                  lookup_note=risk_lookup_note)
     rp = "risk_preview"
     if risk.state == RiskAuthorityState.OK:
         F.append(FieldTruth(rp, K.RISK_AUTHORITY_STATUS, MEASURED, "ok", risk.reason))

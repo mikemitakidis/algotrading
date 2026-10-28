@@ -13,9 +13,14 @@ defaulted to a passing value. In particular (replacing the pre-A01 defaults):
   - schema_match: measured (signal fields + bar records); else UNKNOWN
   - available_timeframes: per-symbol count of VALID observations (not the
     scanner's cycle-global count); else UNKNOWN
-  - risk_authority_status: 'ok' ONLY from a validated, matching, unexpired
-    approval (``RiskDecisionRef``) from an accepted source; any matching
-    block is 'blocked'; otherwise UNKNOWN. Never 'ok' by default.
+  - risk_authority_status: 'ok' / 'blocked' ONLY from the decision M14
+    persisted in ``risk_decisions``, read back here through the trusted
+    read-only ``ReadOnlyM14DecisionStore`` and matched to this candidate
+    (trade_open, scope, symbol, side, leverage, approved notional >= intended,
+    decided after the signal, before evaluation, unexpired). A
+    ``RiskDecisionRef`` is only a pointer: without that store, for an id M14
+    never recorded, or on any mismatch the status is UNKNOWN (UNVERIFIED).
+    Callers cannot hand the bridge a decision record. Never 'ok' by default.
   - risk_preview_available: as computed by the M19 adapter (reward/risk
     derivable from the signal's levels); never forced True
   - price basis / corporate actions: from the provider's price basis plus
@@ -43,7 +48,8 @@ from bot.signal_scoring import (
     score_candidate,
     ScoringProfile,
 )
-from bot.scoring_truth import TruthReport, apply_truth, build_truth
+from bot.scoring_truth import RiskDecisionRef, TruthReport, apply_truth, build_truth
+from tools.signal_scoring.risk_decision_store import ReadOnlyM14DecisionStore
 
 
 def _derive_avg_dollar_volume(signal: Mapping) -> Optional[float]:
@@ -60,6 +66,26 @@ def _derive_avg_dollar_volume(signal: Mapping) -> Optional[float]:
         return None
 
 
+def _verify_risk_decision(ref, store):
+    """Read the referenced decision back from M14's audit table. Only the
+    exact trusted store type is used (no duck-typed or subclassed store)."""
+    if ref is None:
+        return None, None
+    if not isinstance(ref, RiskDecisionRef):
+        return None, "not_a_risk_decision_reference"
+    if store is None:
+        return None, "no_trusted_decision_store:caller_attestation_only"
+    if type(store) is not ReadOnlyM14DecisionStore:
+        return None, "untrusted_decision_store"
+    try:
+        record = store.fetch(ref.decision_id)
+    except Exception as exc:
+        return None, "decision_store_error:%s" % type(exc).__name__
+    if record is None:
+        return None, "decision_not_found_in_m14_audit"
+    return record, None
+
+
 def enrich_signal_with_truth(
     signal: Mapping,
     *,
@@ -67,6 +93,7 @@ def enrich_signal_with_truth(
     bar_asof: Optional[Mapping[str, Any]] = None,
     calendar=None,
     risk_decision=None,
+    risk_decision_store=None,
     price_basis=None,
     detector_suspected: Optional[bool] = None,
     corporate_action_record=None,
@@ -85,9 +112,12 @@ def enrich_signal_with_truth(
         liquidity["avg_dollar_volume_20d"] = adv_dollar
 
     ci = adapter_from_scanner_signal(signal, liquidity=liquidity)
+    record, note = _verify_risk_decision(risk_decision, risk_decision_store)
     truth = build_truth(
         signal, evaluated_at=evaluated_at_utc, bar_asof=bar_asof,
-        calendar=calendar, risk_decision=risk_decision, price_basis=price_basis,
+        calendar=calendar, risk_decision=risk_decision,
+        risk_decision_record=record, risk_lookup_note=note,
+        price_basis=price_basis,
         detector_suspected=detector_suspected,
         corporate_action_record=corporate_action_record,
         lookback_start=lookback_start_utc,

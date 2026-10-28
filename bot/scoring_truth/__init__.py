@@ -23,7 +23,7 @@ from bot.scoring_truth.corporate_actions import (  # noqa: F401
     provider_price_basis, suspect_split,
 )
 from bot.scoring_truth.contract import (  # noqa: F401
-    DECLARED, MEASURED, UNKNOWN, FieldTruth, RiskAuthorityState,
+    DECLARED, MEASURED, UNKNOWN, FieldTruth, PersistedRiskDecision, RiskAuthorityState,
     RiskAuthorityTruth, RiskDecisionRef, SchemaCheck, TruthPolicy,
     TruthReport, apply_truth, build_truth, check_signal_schema,
     evaluate_risk_decision,

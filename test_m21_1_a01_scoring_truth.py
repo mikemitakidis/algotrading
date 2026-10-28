@@ -18,11 +18,17 @@ trading holidays, early closes and DST transitions. Proves:
 The calendars below are TEST FIXTURES, not verified exchange calendars.
 """
 import ast
+import atexit
 import dataclasses
 import hashlib
+import json
 import math
+import os
+import shutil
 import socket
+import sqlite3
 import subprocess
+import tempfile
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -37,7 +43,8 @@ import pandas as pd
 from bot.scoring_truth import (
     BarOutOfSession, CalendarError, CorporateActionRecord,
     CorporateActionState, ObservationState, PriceBasis, RiskAuthorityState,
-    RiskDecisionRef, SessionCalendar, TimeframeSpec, TruthPolicy, UNKNOWN,
+    PersistedRiskDecision, RiskDecisionRef, SessionCalendar, TimeframeSpec,
+    TruthPolicy, UNKNOWN, evaluate_risk_decision,
     bar_timing, build_truth, check_signal_schema, classify_corporate_action,
     classify_observation, provider_price_basis, suspect_split,
 )
@@ -48,6 +55,9 @@ from bot.signal_scoring import default_config, score_candidate
 from tools.signal_scoring.scanner_bridge import (
     TruthfulScore, enrich_signal, enrich_signal_with_truth, score_signal,
     score_signal_with_truth,
+)
+from tools.signal_scoring.risk_decision_store import (
+    DecisionStoreError, ReadOnlyM14DecisionStore,
 )
 
 REPO = Path(__file__).resolve().parent
@@ -93,9 +103,59 @@ def sig(symbol="AAA", direction="long", **kw):
     return d
 
 
-def approval(symbol="AAA", side="long", at="2026-10-27T20:55:00+00:00",
-             source="m14_risk_authority", outcome="approved", did="dec-1"):
-    return RiskDecisionRef(source, did, outcome, symbol, side, at)
+_M14_DB = {}
+_DEFAULT_REQ = object()
+
+
+def m14_db():
+    """A temporary FIXTURE M14 audit database (flywheel + M14 tables), created
+    once per process and removed at exit. Never a production database."""
+    env = os.environ.get("A01_FIXTURE_M14_DB")
+    if "path" not in _M14_DB and env and os.path.isfile(env):
+        _M14_DB["path"] = env          # pre-created by a parent test process
+    if "path" not in _M14_DB:
+        from bot.flywheel import init_flywheel_tables
+        d = tempfile.mkdtemp(prefix="a01_m14_audit_")
+        atexit.register(shutil.rmtree, d, True)
+        path = os.path.join(d, "audit.db")
+        with sqlite3.connect(path) as c:
+            init_flywheel_tables(c)
+        _M14_DB["path"] = path
+    return _M14_DB["path"]
+
+
+def store(path=None):
+    return ReadOnlyM14DecisionStore(path or m14_db())
+
+
+def record_decision(symbol="AAA", side="long", *, at="2026-10-27T20:55:00+00:00",
+                    scope="ibkr_paper", action="trade_open", result="allow",
+                    amount=1_000_000.0, leverage=1, request=_DEFAULT_REQ, did=None,
+                    path=None):
+    """Write one risk_decisions row into the FIXTURE audit DB, in the shape
+    bot/risk_authority/audit_decisions.write_decision persists."""
+    req = (json.dumps({"symbol": symbol, "amount_usd": amount, "side": side,
+                       "leverage": leverage}, separators=(",", ":"))
+           if request is _DEFAULT_REQ else request)
+    did = did or "fx|%s" % hashlib.sha256(repr(
+        (symbol, side, at, scope, action, result, amount, leverage, req)).encode()).hexdigest()[:24]
+    with sqlite3.connect(path or m14_db()) as c:
+        c.execute("INSERT OR REPLACE INTO risk_decisions (decision_id, taken_at, "
+                  "broker_scope, requested_action, request_json, result, "
+                  "authority_before, authority_after, reason_codes, recovery_paths, "
+                  "snapshot_id, source, actor, explainer, created_at) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (did, at, scope, action, req, result, "AUTO_ALLOWED",
+                   "AUTO_ALLOWED" if result == "allow" else "SIGNAL_ONLY",
+                   "[]" if result == "allow" else '["global_kill"]', "{}", None,
+                   "auto", "a01_fixture", "fixture", at))
+    return did
+
+
+def approval(symbol="AAA", side="long", *, notional=1000.0, ref_scope=None, **row):
+    """Record a fixture decision and return the POINTER to it."""
+    did = record_decision(symbol, side, **row)
+    return RiskDecisionRef(did, ref_scope or row.get("scope", "ibkr_paper"), notional)
 
 
 def clean_record(symbol="AAA", events=()):
@@ -106,7 +166,9 @@ def clean_record(symbol="AAA", events=()):
 
 def full_evidence(symbol="AAA", side="long", **over):
     kw = dict(evaluated_at_utc=EV, bar_asof=dict(ASOF), calendar=CAL,
-              risk_decision=approval(symbol, side), price_basis="raw",
+              risk_decision=(over.pop("risk_decision") if "risk_decision" in over
+                             else approval(symbol, side)),
+              risk_decision_store=store(), price_basis="raw",
               detector_suspected=False, corporate_action_record=clean_record(symbol),
               lookback_start_utc=LOOKBACK, production_thinness_status="ok")
     kw.update(over)
@@ -354,10 +416,18 @@ class T3_CorporateActions(unittest.TestCase):
 # ═══════════════════════════ risk authority ═════════════════════════════════
 
 class T4_RiskAuthority(unittest.TestCase):
-    def _state(self, ref, symbol="AAA", side="long"):
-        _, tr = enrich_signal_with_truth(sig(symbol, side),
-                                         **full_evidence(symbol, side, risk_decision=ref))
+    """Risk Authority provenance: only a decision M14 persisted, read back
+    through the trusted read-only store and matched to the candidate, counts."""
+
+    def _risk(self, ref, symbol="AAA", side="long", **over):
+        over.setdefault("risk_decision_store", store())
+        _, tr = enrich_signal_with_truth(
+            sig(symbol, side), **full_evidence(symbol, side, risk_decision=ref, **over))
         return tr.risk
+
+    def assertUnverified(self, risk, reason):
+        self.assertEqual(risk.state, RiskAuthorityState.UNVERIFIED, risk)
+        self.assertTrue(risk.reason.startswith(reason), risk.reason)
 
     def test_no_decision_is_not_ok(self):
         for prof in (ScoringProfile.RESEARCH, ScoringProfile.STRICT):
@@ -369,35 +439,191 @@ class T4_RiskAuthority(unittest.TestCase):
             self.assertEqual(ts.scored.decision_bucket.value, "BLOCKED")
             self.assertIn("missing_context_key", ts.scored.hard_gate_failures)
 
-    def test_forged_references_rejected(self):
+    def test_invented_approval_id_cannot_pass(self):
+        # REGRESSION (review 5679297098): a syntactically valid pointer to a
+        # decision M14 never recorded must not yield 'ok', even with a real
+        # store whose database holds other genuine approvals.
+        approval("AAA", "long")                         # a real row exists
+        invented = RiskDecisionRef("3f2b8c1e-0000-4000-8000-000000000000",
+                                   "ibkr_paper", 1000.0)
+        for prof in (ScoringProfile.RESEARCH, ScoringProfile.STRICT):
+            ts = score_signal_with_truth(sig(), profile=prof,
+                                         **full_evidence(risk_decision=invented))
+            self.assertUnverified(ts.truth.risk, "decision_not_found_in_m14_audit")
+            self.assertEqual(ts.scored.decision_bucket.value, "BLOCKED")
+            self.assertIn("missing_context_key", ts.scored.hard_gate_failures)
+        ci, _ = enrich_signal_with_truth(sig(), **full_evidence(risk_decision=invented))
+        self.assertNotIn(K.RISK_AUTHORITY_STATUS, ci.risk_preview)
+
+    def test_caller_attestation_alone_is_unverified(self):
+        ref = approval()
+        self.assertUnverified(self._risk(ref, risk_decision_store=None),
+                              "no_trusted_decision_store")
         for forged in ("ok", {"outcome": "approved"}, True, ("m14", "1", "approved")):
-            self.assertEqual(self._state(forged).state, RiskAuthorityState.UNVERIFIED)
+            self.assertUnverified(self._risk(forged), "not_a_risk_decision_reference")
 
-    def test_approval_validation(self):
-        self.assertEqual(self._state(approval()).state, RiskAuthorityState.OK)
-        bad = {
-            "legacy_source": approval(source="legacy_risk_manager"),
-            "other_symbol": approval(symbol="BBB"),
-            "other_side": approval(side="short"),
-            "expired": approval(at="2026-10-27T20:40:00+00:00"),
-            "future": approval(at="2026-10-27T21:00:01+00:00"),
-            "predates": approval(at="2026-10-27T20:49:59+00:00"),
-            "no_id": approval(did=" "),
-            "naive_time": approval(at="2026-10-27T20:55:00"),
-            "odd_outcome": approval(outcome="ok"),
+    def test_untrusted_stores_and_records_rejected(self):
+        ref = approval()
+        good = store().fetch(ref.decision_id)
+        self.assertIsInstance(good, PersistedRiskDecision)
+
+        class DuckStore:
+            def fetch(self, _):
+                return good
+
+        class SubStore(ReadOnlyM14DecisionStore):
+            def fetch(self, _):
+                return good
+        for bad in (DuckStore(), SubStore(m14_db()), m14_db()):
+            self.assertUnverified(self._risk(ref, risk_decision_store=bad),
+                                  "untrusted_decision_store")
+        # the bridge takes no caller-supplied record at all
+        with self.assertRaises(TypeError):
+            enrich_signal(sig(), risk_decision=ref, risk_decision_record=good)
+        # the pure contract rejects look-alike records
+        for rec in (dict(good.__dict__), SimpleRecord(**good.__dict__)):
+            r = evaluate_risk_decision(ref, record=rec, symbol="AAA", side="long",
+                                       signal_ts=U(TS), evaluated_at=EV, policy=TruthPolicy())
+            self.assertUnverified(r, "untrusted_decision_record")
+
+    def test_verified_approval_is_ok(self):
+        r = self._risk(approval())
+        self.assertEqual((r.state, r.reason), (RiskAuthorityState.OK, "verified_m14_approval"))
+        self.assertEqual(r.store, ReadOnlyM14DecisionStore.STORE)
+        ci, _ = enrich_signal_with_truth(sig(), **full_evidence())
+        self.assertEqual(ci.risk_preview[K.RISK_AUTHORITY_STATUS], "ok")
+
+    def test_bound_parameters_must_match(self):
+        cases = {
+            "decision_for_other_symbol": dict(ref=approval("BBB")),
+            "decision_for_other_side": dict(ref=approval("AAA", "short")),
+            "decision_scope_mismatch": dict(ref=approval(scope="ibkr_live",
+                                                         ref_scope="ibkr_paper")),
+            "intended_notional_exceeds_approved": dict(ref=approval(amount=500.0,
+                                                                    notional=500.01)),
+            "decision_leverage_not_allowed": dict(ref=approval(leverage=2)),
+            "decision_not_trade_open": dict(ref=approval(action="trade_close")),
+            "decision_payload_unreadable": dict(ref=approval(request="not json")),
+            "approved_amount_invalid": dict(ref=approval(amount=0.0)),
+            "decision_predates_signal": dict(ref=approval(at="2026-10-27T20:49:59+00:00")),
+            "decision_after_evaluation": dict(ref=approval(at="2026-10-27T21:00:01+00:00")),
+            "decision_time_invalid": dict(ref=approval(at="2026-10-27T20:55:00")),
         }
-        for name, ref in bad.items():
-            self.assertEqual(self._state(ref).state, RiskAuthorityState.UNVERIFIED, name)
+        for reason, c in cases.items():
+            self.assertUnverified(self._risk(c["ref"]), reason)
+        # expiry: decided after an earlier signal, but > 15 min before evaluation
+        _, tr = enrich_signal_with_truth(
+            sig(timestamp="2026-10-27T20:30:00+00:00"),
+            **full_evidence(risk_decision=approval(at="2026-10-27T20:40:00+00:00")))
+        self.assertUnverified(tr.risk, "decision_expired")
+        narrow = TruthPolicy(accepted_risk_scopes=("ibkr_paper",))
+        self.assertUnverified(self._risk(approval(scope="etoro_paper"), policy=narrow),
+                              "decision_scope_mismatch")
+        for bad_notional in (0.0, -1.0, float("nan"), True):
+            ref = dataclasses.replace(approval(), notional_usd=bad_notional)
+            self.assertUnverified(self._risk(ref), "intended_notional_invalid")
 
-    def test_matching_block_always_blocks(self):
-        for ref in (approval(outcome="blocked"),
-                    approval(outcome="blocked", source="legacy_risk_manager",
-                             at="2026-10-01T00:00:00+00:00")):
-            self.assertEqual(self._state(ref).state, RiskAuthorityState.BLOCKED)
+    def test_verified_block_blocks(self):
+        for result in ("block", "downgrade_then_block"):
+            ref = approval(result=result)
+            self.assertEqual(self._risk(ref).state, RiskAuthorityState.BLOCKED)
             sc = score_signal(sig(), **full_evidence(risk_decision=ref))
             self.assertIn("risk_authority_blocked", sc.hard_gate_failures)
-        self.assertEqual(self._state(approval(symbol="ZZZ", outcome="blocked")).state,
-                         RiskAuthorityState.UNVERIFIED)
+
+    def test_store_failures_fail_closed(self):
+        d = tempfile.mkdtemp(prefix="a01_store_")
+        self.addCleanup(shutil.rmtree, d, True)
+        missing = os.path.join(d, "missing.db")
+        self.assertIsNone(store(missing).fetch("x"))
+        self.assertFalse(os.path.exists(missing))           # never created
+        self.assertUnverified(self._risk(approval(), risk_decision_store=store(missing)),
+                              "decision_not_found_in_m14_audit")
+        empty = os.path.join(d, "empty.db")
+        sqlite3.connect(empty).close()
+        garbage = os.path.join(d, "garbage.db")
+        Path(garbage).write_bytes(b"not a database" * 100)
+        for p in (empty, garbage):
+            with self.assertRaises(DecisionStoreError):
+                store(p).fetch("x")
+            self.assertUnverified(self._risk(approval(), risk_decision_store=store(p)),
+                                  "decision_store_error")
+        self.assertIsNone(store().fetch(""))
+        self.assertIsNone(store().fetch(None))
+
+    def test_store_is_read_only(self):
+        ref = approval()
+        path = m14_db()
+        before = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        self.assertIsNotNone(store().fetch(ref.decision_id))
+        self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), before)
+        conn = store()._connect()
+        try:
+            with self.assertRaises(sqlite3.OperationalError):
+                conn.execute("DELETE FROM risk_decisions")
+        finally:
+            conn.close()
+        src = (REPO / "tools" / "signal_scoring" / "risk_decision_store.py").read_text()
+        sql = [n.value for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n.value.lstrip().upper().startswith(("SELECT", "PRAGMA", "INSERT",
+                                                        "UPDATE", "DELETE", "CREATE",
+                                                        "DROP", "ALTER", "ATTACH",
+                                                        "REPLACE", "VACUUM"))]
+        self.assertEqual(sorted(s.split()[0].upper() for s in sql), ["PRAGMA", "SELECT"])
+        self.assertIn("mode=ro", src)
+
+    def test_real_m14_preflight_decision_end_to_end(self):
+        # The genuine M14 engine writes the decision on a fixture DB; the
+        # bridge reads it back and binds it to the candidate.
+        import test_m14_f_preflight as F
+        from bot.broker_allocation import save_policy
+        from bot.risk_authority import Authority, run_risk_preflight
+        from bot.risk_authority.engine import TradeRequest
+        out = {}
+        for name, overrides in (("allow", {}), ("kill", {"global.kill_switch": True})):
+            fx = F._DB()
+            self.addCleanup(fx.cleanup)
+            with fx.conn() as c:
+                save_policy(c, F._valid_policy(**overrides))
+                F._seed_fresh_all_scopes(c)
+            with fx.conn() as c:
+                res = run_risk_preflight(
+                    c, broker_scope="ibkr_paper",
+                    request=TradeRequest(symbol="AAA", amount_usd=100.0, side="long",
+                                         sl=95.0, tp=115.0),
+                    current_authority=Authority.AUTO_ALLOWED, actor="a01_test",
+                    audit_source="auto", market_open=True)
+            out[name] = (fx.path, res)
+        path, res = out["allow"]
+        self.assertTrue(res.allowed)
+        rec = store(path).fetch(res.decision_id)
+        at = U(rec.taken_at_utc)
+        s = sig(timestamp=(at - timedelta(minutes=1)).isoformat())
+        kw = dict(evaluated_at_utc=at + timedelta(minutes=1), risk_decision_store=store(path))
+        _, tr = enrich_signal_with_truth(
+            s, risk_decision=RiskDecisionRef(res.decision_id, "ibkr_paper", 100.0), **kw)
+        self.assertEqual(tr.risk.state, RiskAuthorityState.OK)
+        _, tr = enrich_signal_with_truth(
+            s, risk_decision=RiskDecisionRef(res.decision_id, "ibkr_paper", 100.01), **kw)
+        self.assertUnverified(tr.risk, "intended_notional_exceeds_approved")
+        _, tr = enrich_signal_with_truth(
+            s, risk_decision=RiskDecisionRef("not-" + res.decision_id, "ibkr_paper", 100.0),
+            **kw)
+        self.assertUnverified(tr.risk, "decision_not_found_in_m14_audit")
+        path, res = out["kill"]
+        self.assertFalse(res.allowed)
+        rec = store(path).fetch(res.decision_id)
+        at = U(rec.taken_at_utc)
+        _, tr = enrich_signal_with_truth(
+            sig(timestamp=(at - timedelta(minutes=1)).isoformat()),
+            risk_decision=RiskDecisionRef(res.decision_id, "ibkr_paper", 100.0),
+            evaluated_at_utc=at + timedelta(minutes=1), risk_decision_store=store(path))
+        self.assertEqual(tr.risk.state, RiskAuthorityState.BLOCKED)
+
+
+class SimpleRecord:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
 
 
 # ═══════════════════════════ schema / missing values ════════════════════════
@@ -616,14 +842,15 @@ class T7_RankingPreserved(unittest.TestCase):
 
 # ═══════════════════════════ execution safety ═══════════════════════════════
 
-_SCENARIOS = [dict(), full_evidence(), full_evidence(risk_decision=None),
+def _scenarios():
+    return [dict(), full_evidence(), full_evidence(risk_decision=None),
               full_evidence(model_readiness_passed=True),
               full_evidence(bar_asof={}), full_evidence(detector_suspected=True)]
 
 
 class T8_NoExecutionAuthority(unittest.TestCase):
     def test_execution_never_eligible(self):
-        for kw in _SCENARIOS:
+        for kw in _scenarios():
             for prof in (ScoringProfile.RESEARCH, ScoringProfile.STRICT):
                 for s in SET:
                     ts = score_signal_with_truth(s, profile=prof, **kw)
@@ -680,7 +907,7 @@ class T8_NoExecutionAuthority(unittest.TestCase):
             raise AssertionError("I/O attempted during scoring")
         with mock.patch.object(socket, "socket", boom), \
                 mock.patch.object(subprocess, "Popen", boom):
-            for kw in _SCENARIOS:
+            for kw in _scenarios():
                 score_signal_with_truth(sig(), **kw)
 
 

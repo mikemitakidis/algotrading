@@ -698,8 +698,12 @@ svc = SignalAlertService(outbox=AlertOutbox(os.path.join(d, "a.db")), transport=
 r = svc.run_cycle(sigs)
 print(json.dumps({"sent": len(r["delivery"]["sent"]), "modules": sorted(sys.modules)}))
 """ % str(REPO)
-        p = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), capture_output=True,
-                           text=True, timeout=120)
+        # A01: the fixture M14 audit DB is created here, so the child process
+        # only reads it (and never imports bot.flywheel itself).
+        from test_m21_1_a01_scoring_truth import m14_db
+        with mock.patch.dict(os.environ, {"A01_FIXTURE_M14_DB": m14_db()}):
+            p = subprocess.run([sys.executable, "-c", code], cwd=str(REPO),
+                               capture_output=True, text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr[-3000:])
         res = json.loads(p.stdout.strip().splitlines()[-1])
         self.assertEqual(res["sent"], 4)
