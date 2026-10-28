@@ -92,6 +92,8 @@ class X2_Parsers(Base):
         self.assertEqual(old[0].published_at_utc, datetime(2026, 10, 30, 10, 0, tzinfo=UTC))
         self.assertEqual(old[0].publication_basis, "assumed_lag")
         self.assertLessEqual(old[-1].published_at_utc, T)
+        far, _ = SRC.parse_fred_csv(FRED, "VIXCLS", retrieved_at=T, assumed_lag=timedelta(hours=48))
+        self.assertEqual(far[-1].published_at_utc, T)                  # never later than we actually had it
 
     def test_fred_csv_refusals(self):
         for text in ("date,value\n2026-11-02,1\n", FRED + "2026-11-04,x\n", FRED + "2027-01-04,20\n",
