@@ -164,8 +164,8 @@ class K4_IntegrityFallback(Base):
     def test_tampered_active_row_falls_back_to_last_good(self):
         v1 = self.live()
         v2 = self.live(cfg(params={"mean_reversion": {"rsi_entry": 35.0}}))
-        evil = cfg(params={"mean_reversion": {"rsi_entry": 44.0}})
-        self._tamper(v2, config_json=json.dumps(evil))
+        evil = K.validate_config(cfg(params={"mean_reversion": {"rsi_entry": 44.0}}))   # valid, in bounds
+        self._tamper(v2, config_json=K.canonical(evil))                 # only the digest can catch this
         a = K.read_active(self.path)
         self.assertEqual((a.version, a.source), (v1, K.SOURCE_LAST_GOOD))
         self.assertIn("version_%d_failed_integrity" % v2, a.fallback_reasons)
