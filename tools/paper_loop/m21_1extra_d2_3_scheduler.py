@@ -75,7 +75,8 @@ def _simulated_parts(args):
                 candidate_provider=provider)
 
 
-def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=None):
+def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=None,
+                      shadow_store=None):
     """Real candidates (WP5 + WP6): a verified Alpaca trading calendar ->
     completed-bar scan (C01 §11: only bars proven complete at the decision
     time; no calendar -> no signals) -> observed evidence (completed daily
@@ -162,8 +163,27 @@ def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=
         log.info("[WP5] research ranking: %d selectable, %d blocked, reasons=%s",
                  rep["selectable"], rep["blocked"], rep["block_reason_counts"])
         cands, _notes = loop_candidates(ranked)
+        if shadow_store is not None and completion is not None:
+            # M21 WP8: templates 2-4 judge the newest completed daily bar in SHADOW.
+            # Never affects the candidates above; a failure here is logged and ignored.
+            try:
+                from tools.signal_scoring.template_shadow import run_template_shadow
+                res = run_template_shadow(shadow_store, fetch_bars(focus, "1y", "1d") or {}, completion,
+                                          now=now)
+                log.info("[WP8] template shadow: recorded=%d already=%d skipped=%d", res["recorded"],
+                         res["already_recorded"], len(res["skipped"]))
+            except Exception as exc:
+                log.warning("[WP8] template shadow skipped (%s)", type(exc).__name__)
         return cands
     return provider
+
+
+def _template_shadow_store():
+    """M21 WP8: the template shadow record, ON only with TEMPLATE_SHADOW_ENABLED=1."""
+    from bot.templates.shadow import ShadowStore, shadow_enabled_from_env
+    if not shadow_enabled_from_env():
+        return None
+    return ShadowStore(str(REPO / "data" / "template_shadow.db"))
 
 
 def _ibkr_parts(args):
@@ -198,7 +218,8 @@ def _ibkr_parts(args):
                 kill_switch_active=is_kill_switch_active,
                 risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
                                                    market_state=make_market_state_provider()),
-                candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer),
+                candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer,
+                                                     shadow_store=_template_shadow_store()),
                 ledger=LoopLedger(writer))
 
 

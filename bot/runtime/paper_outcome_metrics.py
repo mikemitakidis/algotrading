@@ -45,6 +45,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from urllib.parse import quote
 
+from bot.templates.ids import template_of
+
 # Real broker-paper fills only. Simulated / fixture sources never count.
 GENUINE_DATA_SOURCES = frozenset({"ibkr_paper"})
 UNATTRIBUTED = "unattributed"
@@ -226,14 +228,18 @@ def compute_paper_metrics(db_path: Optional[str] = None) -> Dict[str, Any]:
     all_rows = outcomes or []
     genuine = [r for r in all_rows if is_genuine_outcome(r)]
     by_strategy: Dict[str, List[Dict[str, Any]]] = {}
+    by_template: Dict[str, List[Dict[str, Any]]] = {}
     for r in genuine:
         by_strategy.setdefault(r.get("strategy_id") or UNATTRIBUTED, []).append(r)
+        # M21 WP8: per template (A05/A06); parameter variants of one template pool here
+        by_template.setdefault(template_of(r.get("strategy_id")) or UNATTRIBUTED, []).append(r)
 
     result.update({
         "outcomes_table_present": outcomes is not None,
         "edge_outcomes": {
             "overall": edge_metrics(genuine),
             "by_strategy": {k: edge_metrics(v) for k, v in sorted(by_strategy.items())},
+            "by_template": {k: edge_metrics(v) for k, v in sorted(by_template.items())},
             "rows_total": len(all_rows),
             "rows_genuine": len(genuine),
             "excluded_non_genuine": len(all_rows) - len(genuine),
