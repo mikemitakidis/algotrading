@@ -1,5 +1,5 @@
 # Algo Trading — FULL Canonical Project Handoff & Completion Register
-**Snapshot:** 26 October 2026, **status refresh 27 October 2026 (v3.6) Europe/London** · **Version:** 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343` by the operator; statuses re-baselined; next work package; scope unchanged from 3.0) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
+**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.7) Europe/London** · **Version:** 3.7 (28 Oct 2026: approved offline package WP1/WP3/WP4 delivered as draft PRs #12/#1/#13, independent checkpoint corrections applied; `main` unchanged at `80b4343`; scope unchanged from 3.0) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
 
 > **Permanent rule:** This handoff covers every remaining capability from the June 2026 canonical roadmap through M23 and the two-broker operating objective, plus all still-open technical debt and the new advanced AI/self-development research architecture. **No delivery deadlines or calendar estimates.** Work proceeds by dependencies, testing evidence and operator approvals. Preserve original milestone names and numbers. A GitHub merge, a VPS deployment, a runtime activation and an independently validated trading edge are FOUR DIFFERENT STATES.
 
@@ -35,6 +35,48 @@ Build a sophisticated continuously learning trading research-and-execution platf
 | GitHub main | **80b4343db4a22413aa670efd32e24952d53e532e** (27 Oct 2026, merge of PR #11; previously 015d2ce). Tree identical to the reviewed integration head `a645a91`; 89 files changed vs 015d2ce, all under `research/`, `docs/research/`, `test_m21_research_*.py` plus test-only M17/M18 hygiene allow-lists; no `bot/`, `dashboard/`, `tools/`, `main.py`, `requirements.txt` or active workflow changes | No changes to main without separate explicit approval. Vercel auto-deployed the repo's web project (READY); that is NOT the trading runtime |
 | Last operator-reported VPS | Trader inactive; ibgateway failed; dashboard + Caddy running; no dashboard restart after WS1; no Telegram, no new IBKR orders; sync daemon off | Current runtime must be independently rechecked at activation, not guessed |
 | M21.2–M21.7, M22, M23 | Unfinished or only supporting infrastructure exists | Completion tasks follow |
+
+### 3a-00. v3.7 development record — approved offline package (27–28 Oct 2026)
+
+**Approval:** the operator's "approved next offline development phase" (27 Oct 19:04).
+- Approved work: WP1 (A01), WP3 (A09), WP4 (C01 design); WP2 (A02) only after the WP1 contract stabilises.
+- Excluded: merges, VPS, broker, Telegram, CI, production DB, spending.
+
+**Status:**
+- **Nothing is merged.** `main` = `80b4343db4a22413aa670efd32e24952d53e532e`.
+- All PRs are draft, with zero unpushed commits.
+
+| WP | PR (draft) | branch | head | state |
+|---|---|---|---|---|
+| WP1 A01 truthful scanner → M19 scoring contract | #12 | `m21.1/a01-scoring-truth` | **`8013044`** (`6242bde` contract, `3f1fb1e` C5b transition, `8013044` risk-decision provenance fix) | TESTED_OFFLINE; awaiting exact-head re-review |
+| WP3 A09 WS2 refresh + market-state boundary | #1 | `m21-ws2-corrected-review` | **`46c87ab`** (`8242a12` merge of main, `46c87ab` boundary fix) | TESTED_OFFLINE; exact-head audit posted; merge needs separate approval |
+| WP4 C01 parity design (design only) | #13 | `docs/m22-c01-risk-parity-design` | **`4584a3a`** (`bfd9fdc` design, `4584a3a` revision 2: policies P-1..P-6) | DESIGN ONLY |
+
+**Independent checkpoint (ChatGPT, Issue #3 comment 6463489608), 28 Oct.** The WP1 structure, the WP3 boundary and the WP4 design-only scope were confirmed. Each follow-up was addressed:
+- **WP1 (review 5679297098):** a caller-built `RiskDecisionRef` could claim an M14 approval.
+  - **Fixed in `8013044`.** The reference is now only a pointer. A decision counts only when it is read back from M14's `risk_decisions` through `ReadOnlyM14DecisionStore` (SQLite `mode=ro` + `query_only`, one SELECT) and matches the candidate: `trade_open`, scope, symbol, side, leverage, approved notional ≥ intended, timing.
+  - Otherwise it is UNVERIFIED and M19 blocks.
+  - Regression: an invented but valid id cannot pass. 9/9 provenance mutants killed.
+- **WP3:** exact-head audit posted (PR #1 comment 6463712926).
+  - Evidence: 121 WS2 tests plus the D1/D2 suites and guards OK; 6/6 mutants killed.
+  - Three LOW residuals (R1 typed-not-provenanced decision, R2 unbounded max-age configuration, R3 no `next_close`) are proposed as hardening for operator approval and were not applied.
+- **WP4:** revision 2 adopts policies P-1..P-6:
+  - M14 for broker-connected paper/live;
+  - a provable no-broker/no-network boundary for any simulation exemption;
+  - governor-persisted authority (no store exists yet);
+  - unknown/stale/incomplete inputs block entries, which implies closed-bar scanner evaluation;
+  - one-shot entries via M14, and flatten via a separate audited reduce-only path;
+  - no silent daily-loss override for automatic entries.
+
+**Consequence of A01 (operator decision pending):** callers that score without evidence now fail closed. These are the A-path sim, B1 dry-run, WS3 alerts and, after A01 merges, the WS2 scheduler.
+
+**Test evidence (Python 3.12.3 / NumPy 1.26.4, C5a isolation, Claude-reported; not independently re-run):**
+- **WP1 @ `8013044`:**
+  - 14 targets OK (A01 59 tests);
+  - the 48 scanner-pin guard tests were run at `3f1fb1e`, before the provenance fix;
+  - mutants: 10/10 at `3f1fb1e` and 9/9 at `8013044`.
+- **WP3 @ `46c87ab`:** WS2 121 tests, D1 48, D2 gates 22, D2.0 33, D2 lifecycle 25, plus guards; 6/6 mutants killed.
+- **Sandbox artifact:** path-guard tests that reject repo paths fail only when the checkout lives under `/tmp`; they pass outside it.
 
 ### 3a-0. v3.6 merge record — M21 research lanes on `main` (27 Oct 2026)
 
@@ -164,7 +206,7 @@ Tests on the integration head: 14 targets, 292 tests OK (8 research suites = 213
 | milestone | verdict (v3.6) | tasks: status |
 |---|---|---|
 | M1–M20, M21.U | — | Foundations in main (historical, closed with known deferred follow-ups): see §3 |
-| M21.1 scoring / candidate audit | **NOT COMPLETE** — A01 not started; A02 partial | **A01** NOT_STARTED · **A02** PARTIAL |
+| M21.1 scoring / candidate audit | **NOT COMPLETE** — A01 on draft PR #12 (tested offline, not merged); A02 partial | **A01** PR_PENDING · **A02** PARTIAL |
 | M21.1extra (C5a/C5b, D0–D3, WS1–WS3, paper loop, monitoring, dashboard, real-bar parity) | **NOT COMPLETE** — code for C5, D0–D2, WS1, WS3 merged; WS2 (PR #1) pending; runtime/paper acceptance blocked on approval | **A03** ✅ CLOSED · **A04** ✅ CLOSED · **A05** ✅ CODE_MERGED · **A06** RUNTIME_UNVERIFIED · **A07** ✅ CODE_MERGED · **A08** BLOCKED · **A09** PR_PENDING · **A10** BLOCKED · **A11** PR_PENDING · **A12** BLOCKED · **A13** PR_PENDING · **A14** NOT_STARTED · **A16** NOT_STARTED · **A17** CODE_MERGED |
 | Four starter templates (June roadmap) | research CODE_MERGED; not data-verified | **A15** CODE_MERGED |
 | M21.2 parameter optimisation | foundations merged; **not complete** | **B09** CODE_MERGED · **B10** CODE_MERGED · **B11** PARTIAL |
@@ -174,7 +216,7 @@ Tests on the integration head: 14 targets, 292 tests OK (8 research suites = 213
 | M21.6 market context | **not started** (lab context features are research inputs only) | **B18** NOT_STARTED |
 | M21.7 learned regime weights | partial research; **not complete** | **B19** PARTIAL |
 | Evidence and advanced-AI research capabilities (Issue #2) | core lanes merged; real-data and runtime validation outstanding | **B01** CODE_MERGED · **B02** CODE_MERGED · **B03** CODE_MERGED · **B04** CODE_MERGED · **B14** CODE_MERGED · **B15** CODE_MERGED · **B20** PARTIAL · **B21** CODE_MERGED · **B22** CODE_MERGED · **B23** NOT_STARTED · **B24** NOT_STARTED |
-| M22.1–M22.6 controlled real-money readiness (NO live authorisation; C01 HARD blocker) | **not started** | **C01** NOT_STARTED · **C02** NOT_STARTED · **C03** NOT_STARTED · **C04** NOT_STARTED · **C05** NOT_STARTED · **C06** NOT_STARTED · **C07** NOT_STARTED · **C08** NOT_STARTED · **C09** NOT_STARTED · **C10** NOT_STARTED · **C11** NOT_STARTED |
+| M22.1–M22.6 controlled real-money readiness (NO live authorisation; C01 HARD blocker) | **not started** (C01 design only, PR #13) | **C01** DESIGN_ONLY · **C02** NOT_STARTED · **C03** NOT_STARTED · **C04** NOT_STARTED · **C05** NOT_STARTED · **C06** NOT_STARTED · **C07** NOT_STARTED · **C08** NOT_STARTED · **C09** NOT_STARTED · **C10** NOT_STARTED · **C11** NOT_STARTED |
 | M23.1–M23.5 | **not started** | **D01** NOT_STARTED · **D02** NOT_STARTED · **D03** NOT_STARTED · **D04** NOT_STARTED · **D05** NOT_STARTED |
 | M23 extended (autonomous R&D, uncertainty economics, twin, audit, acceptance) | offline foundations only | **D06** PARTIAL · **D07** CODE_MERGED · **D08** NOT_STARTED · **D09** NOT_STARTED · **D10** NOT_STARTED |
 | Carry-forward audit / data / security / governance | mostly open | **E01** NOT_STARTED · **E02** NOT_STARTED · **E03** NOT_STARTED · **E04** NOT_STARTED · **E05** PARTIAL · **E06** NOT_STARTED · **E07** BLOCKED · **E08** NOT_STARTED · **E09** PARTIAL |
@@ -187,15 +229,36 @@ The task IDs below are **tracking IDs, not replacement milestone numbers**. A ta
 
 ### A. Close the core M21.1 / M21.1extra loop
 
-- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (27 Oct 2026): NOT_STARTED.**
-- [ ] **A02 · M21.1 candidate decision audit.** Persist every candidate stage, M19 gates/reasons, paper risk decision and outcomes with stable join IDs; distinguish rejected, watch, eligible, blocked and skipped; instrument effective data coverage. **Status (27 Oct 2026, v3.6): PARTIAL — CODE_MERGED (research foundations) / NOT_STARTED (production persistence).** Stage taxonomy, lane-A candidate ids, counterfactual labels and engine decision records are on main (`80b4343`); production persistence of scanner → M19 → risk → outcome join ids is the next work package (§5). History: Stage taxonomy + read-only `candidate_snapshots` adapter + labels for every stage in PR #6 @ 3398de4 (offline). Production persistence of M19/Risk join IDs not started; real export needs approval.
+- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (28 Oct 2026, v3.7): PR_PENDING — TESTED_OFFLINE on draft PR #12 @ `8013044`.**
+- **Contract:** pure `bot/scoring_truth`:
+  - DST-correct session and bar-close semantics;
+  - MISSING / INVALID / UNVERIFIED / STALE / INCOMPLETE / VALID per symbol × timeframe;
+  - conservative corporate actions;
+  - Risk Authority verified against M14's persisted decisions through a read-only store.
+- **Fail-closed:** unknown inputs are removed, so M19 blocks.
+- **Scanner as-of record:** metadata only, via a C5b transition.
+- **Ranking:** preserved as `research_rank_score`.
+- **Pending:**
+  - exact-head re-review and the operator's merge decision;
+  - real evidence sources (verified calendar, M14 decisions for scanner candidates, corporate-action data);
+  - the fail-closed consequence for consumers.
+
+Previous: NOT_STARTED (27 Oct 2026).
+- [ ] **A02 · M21.1 candidate decision audit.** Persist every candidate stage, M19 gates/reasons, paper risk decision and outcomes with stable join IDs; distinguish rejected, watch, eligible, blocked and skipped; instrument effective data coverage. **Status (28 Oct 2026, v3.7): PARTIAL — CODE_MERGED (research foundations) / NOT_STARTED (production persistence); WP2 waits for the A01 contract (PR #12) to be reviewed.** v3.6: Stage taxonomy, lane-A candidate ids, counterfactual labels and engine decision records are on main (`80b4343`); production persistence of scanner → M19 → risk → outcome join ids is the next work package (§5). History: Stage taxonomy + read-only `candidate_snapshots` adapter + labels for every stage in PR #6 @ 3398de4 (offline). Production persistence of M19/Risk join IDs not started; real export needs approval.
 - [x] **A03 · M21.1extra C5a/C5b controls.** October protected-file/test-isolation work merged. Preserve exact content-transition pins, no generic guard weakening. **Status (27 Oct 2026): CLOSED.** Merged earlier (main 015d2ce).
 - [x] **A04 · M21.1extra D0, D1, supervised D2 foundation.** Already shipped historically; do not confuse supervised proof with unattended activity. **Status (27 Oct 2026): CLOSED.** Historical delivery.
 - [x] **A05 · M21.1extra D3 WS1 code delivery.** Read-only authenticated performance metrics, honest N/A, fees and drawdown merged; runtime proof still in A06. **Status (27 Oct 2026): CODE_MERGED.** main 015d2ce; runtime proof is A06.
 - [ ] **A06 · D3 dashboard operational acceptance.** Separately approved restart/deploy, authenticated GET-only dashboard/mobile inspection, genuine-vs-simulated and pending-fee N/A displays, no write/broker route, service/health unchanged. **Status (27 Oct 2026): RUNTIME_UNVERIFIED / needs approval.** Dashboard restart not approved.
 - [x] **A07 · WS3 signal-alert code.** Signals-only Telegram outbox/cooldown/expiry/retry implementation merged; activation remains A08. **Status (27 Oct 2026): CODE_MERGED.** main 015d2ce; activation is A08.
 - [ ] **A08 · WS3 operational signal alerting.** Decide separate credentials and bot .env notifier overlap to prevent duplicates; dry-run/controlled send and scheduled source only after operator permission. Confirm BUY versus SHORT, stale signals, dedup, restart safety, security and observability. **Status (27 Oct 2026): BLOCKED (approval).** Credentials/duplicate-notifier decision + send permission.
-- [ ] **A09 · WS2 controlled code integration.** Exact-head independent review of draft PR #1 (5d6654d), safeguarded fast-forward/merge only upon operator approval; no broker actions from code merge. **Status (27 Oct 2026, v3.6): PR_PENDING (refresh required).** Draft PR #1 @ 5d6654d: the three findings were reported corrected by an independent focused re-review (26 Oct). It is now 92 commits behind main; a trial merge with main is clean. It needs a normal merge-from-main refresh, the WS2 suite re-run on the refreshed head, an exact-head review, then the operator's separate merge decision. History: Draft PR #1 @ 5d6654d awaiting independent re-review + operator merge decision.
+- [ ] **A09 · WS2 controlled code integration.** Exact-head independent review of draft PR #1 (5d6654d), safeguarded fast-forward/merge only upon operator approval; no broker actions from code merge. **Status (28 Oct 2026, v3.7): PR_PENDING — refreshed and TESTED_OFFLINE @ `46c87ab`.**
+- `8242a12` is a normal merge of `main` `80b4343`.
+- `46c87ab`: the risk gate now verifies a fresh, typed D1 market decision on every call, so it cannot be bypassed by direct invocation, a closed market, a holiday, or a stale or unavailable clock.
+- The exact-head audit was posted with LOW residuals R1–R3.
+- The merge needs the operator's separate approval.
+- Interaction: WS2 selects nothing once A01 merges, until evidence or research-rank selection is wired.
+
+v3.6: Draft PR #1 @ 5d6654d: the three findings were reported corrected by an independent focused re-review (26 Oct). It is now 92 commits behind main; a trial merge with main is clean. It needs a normal merge-from-main refresh, the WS2 suite re-run on the refreshed head, an exact-head review, then the operator's separate merge decision. History: Draft PR #1 @ 5d6654d awaiting independent re-review + operator merge decision.
 - [ ] **A10 · WS2 IBKR adapter acceptance.** On separately approved PAPER gateway only: verify account/port isolation, bracket orderRef across legs, permIds, completed/open order visibility across client IDs, real market data type/timestamps, broker errors, true paper fills/fees, and manual foreign-order coexistence. No real-money order. **Status (27 Oct 2026): BLOCKED (approval).** Needs separately approved IBKR PAPER gateway session.
 - [ ] **A11 · WS2 crash/exit reconciliation acceptance.** Prove pending-submit and pending-flatten uncertainty survive disconnect/restart, no duplicate entry/close, late take-profit/stop and flatten fill, partial fills, fee delays, expired broker history, manual intervention on NEEDS_REVIEW, broker-owned-only cancellations and safe kill-switch. **Status (27 Oct 2026): PR_PENDING (offline) / BLOCKED (runtime).** Offline crash/reconciliation tests in PR #1; runtime acceptance needs paper gateway approval.
 - [ ] **A12 · WS2 scheduler/market clock and operational gating.** Isolated test → authorised paper shadow/read-only probe → explicit permission for unattended PAPER schedule. Multiple sessions, holidays, half-days, DST, market halts, rate limits, clock skew; D0 expiry and account equity/source freshness. Bot remains off absent approval. **Status (27 Oct 2026): BLOCKED (approval).**
@@ -236,7 +299,16 @@ The task IDs below are **tracking IDs, not replacement milestone numbers**. A ta
 
 The June document groups M22.1–M22.6 without fixing a complete subnumber-to-deliverable mapping. **Retain M22.1–M22.6 exactly; reconcile precise sub-numbering with repo before implementation.** The following are required acceptance tasks under the M22 family, not an invented renumbering.
 
-- [ ] **C01 · M14 scanner-path Risk Authority parity — HARD BLOCKER.** Every scanner-driven submit path must invoke or meet/exceed the full M14 gate set: broker/global capital, broker daily loss, combined exposure, drawdown throttle, per-symbol/sector concentration, quote/spread and data freshness, kill switches and unified policy-invalid semantics; AST and runtime tests. **Status (27 Oct 2026): NOT_STARTED — HARD BLOCKER for M22.**
+- [ ] **C01 · M14 scanner-path Risk Authority parity — HARD BLOCKER.** Every scanner-driven submit path must invoke or meet/exceed the full M14 gate set: broker/global capital, broker daily loss, combined exposure, drawdown throttle, per-symbol/sector concentration, quote/spread and data freshness, kill switches and unified policy-invalid semantics; AST and runtime tests. **Status (28 Oct 2026, v3.7): DESIGN ONLY — draft PR #13 @ `4584a3a`; implementation NOT_STARTED — HARD BLOCKER for M22.**
+- **The design (`docs/M22_C01_risk_authority_parity_design.md`) contains:**
+  - a 25-row gate parity matrix;
+  - CRITICAL findings: no M14 decision on the scanner path; unverified market state (M14 `market_open` defaults to True); legacy fail-open on DB read errors;
+  - the fail-closed table, IP-1..IP-10 and tests T-A..T-M;
+  - a phased migration (`legacy AND M14`, never OR);
+  - revision-2 policies P-1..P-6.
+- **Still open:** the flatten closed-market rule; whether to keep the local JSONL paper broker; approval of the closed-bar scanner change; VPS verification of M14 ingestion.
+
+Previous: NOT_STARTED (27 Oct 2026).
 - [ ] **C02 · Paper/live separation.** Broker accounts, ports, keys, data, signals, execution permissions, model promotion and kill switches separated; eToro live cannot be enabled by a research environment flag or paper-only workflow. **Status (27 Oct 2026): NOT_STARTED.**
 - [ ] **C03 · Production hardening.** Supervisors/auto-recovery, IBKR reconnection, stale price and positions rejection, external monitoring, safe deploy/rollback, test-in-isolation discipline, secrets/file permission audit, rotation/backup/restore drills, no unexpected auto-sync or restart on push. **Status (27 Oct 2026): NOT_STARTED.**
 - [ ] **C04 · Recovery under partial broker truth.** UNKNOWN orders/fills, double-submit prevention, account-wide manual activity separation, trade ownership, cancellations, OCO/bracket orphan detection, fee reconciliation and break-glass operator flow, fail closed. **Status (27 Oct 2026): NOT_STARTED.**
@@ -301,13 +373,13 @@ The June document groups M22.1–M22.6 without fixing a complete subnumber-to-de
 - **Working research report:** https://github.com/mikemitakidis/algotrading/blob/research/m21-autonomous-research-engine/docs/research/M21_autonomous_research_engine_proposal.md
 - **GitHub source:** ROADMAP.md; MILESTONE_STATUS.md; docs/NEXT_WORK_REGISTER.md.
 
-**Claude's next authorised action (resume point, v3.6):** the M21 research lanes are merged (`80b4343`). **No implementation starts until the operator agrees the next work package.**
+**Claude's next authorised action (resume point, v3.7):** **STOPPED for independent review.** Draft PRs #12 (`8013044`), #1 (`46c87ab`) and #13 (`4584a3a`) await exact-head re-review. No merge has been requested.
 
-The proposed package, offline and staged:
-1. **WP1 — M21.1 A01:** scanner → M19 truth contract and fixtures. Signal as-of and bar timestamps; freshness computed, never defaulted; the tool's hard-coded `risk_authority_status='ok'`, `available_tfs=4`, `data_freshness_minutes=5` and `adjusted_price_pit_risk=False` replaced by observed values or explicit unavailability; deterministic parity fixtures; research scores never grant execution.
-2. **WP2 — M21.1 A02:** candidate-decision ledger. Production-side persistence design and offline implementation joining `candidate_snapshots` → M19 score → Risk decision → intent → outcome with lane-A candidate ids.
-3. **WP3 — A09:** PR #1 refresh by normal merge from `main`, re-run, exact-head review.
-4. **C01 design spike:** scanner-path M14 Risk Authority parity, design only.
+**After review, in order:**
+1. Operator decisions on the A01 fail-closed consequence and the C01 open items (§4 C01).
+2. **WP2 — M21.1 A02:** the candidate-decision ledger, built on the reviewed A01 contract. Additive migrations as code, an inactive-by-default writer, offline fixtures, a separate draft PR.
+3. Optional WS2 hardening R1–R3, if approved.
+4. C01 implementation phases, only as approved (§9 of the design).
 
 Real-data, VPS, IBKR paper, Telegram, CI activation and any merge need separate approval. Do **not** merge or alter production.
 
