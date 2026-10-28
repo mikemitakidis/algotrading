@@ -10434,6 +10434,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m18_ml.py",
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
+            # Canonical project handoff (documentation only).
+            "docs/handoffs/Algo_Trading_Full_Canonical_Handoff_2026-10-26.md",
             "docs/NEXT_WORK_REGISTER.md",
             # M18 recovery-scope artifacts (this branch reconstructs
             # M18 from transcripts; these document/support that effort).

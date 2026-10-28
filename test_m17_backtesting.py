@@ -4193,6 +4193,8 @@ class G10_Hygiene(unittest.TestCase):
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
             "docs/NEXT_WORK_REGISTER.md",
+            # Canonical project handoff (documentation only).
+            "docs/handoffs/Algo_Trading_Full_Canonical_Handoff_2026-10-26.md",
             # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",

@@ -1,5 +1,5 @@
 # Algo Trading — FULL Canonical Project Handoff & Completion Register
-**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.7) Europe/London** · **Version:** 3.7 (28 Oct 2026: approved offline package WP1/WP3/WP4 delivered as draft PRs #12/#1/#13, independent checkpoint corrections applied; `main` unchanged at `80b4343`; scope unchanged from 3.0) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
+**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.8) Europe/London** · **Version:** 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
 
 > **Permanent rule:** This handoff covers every remaining capability from the June 2026 canonical roadmap through M23 and the two-broker operating objective, plus all still-open technical debt and the new advanced AI/self-development research architecture. **No delivery deadlines or calendar estimates.** Work proceeds by dependencies, testing evidence and operator approvals. Preserve original milestone names and numbers. A GitHub merge, a VPS deployment, a runtime activation and an independently validated trading edge are FOUR DIFFERENT STATES.
 
@@ -35,6 +35,52 @@ Build a sophisticated continuously learning trading research-and-execution platf
 | GitHub main | **80b4343db4a22413aa670efd32e24952d53e532e** (27 Oct 2026, merge of PR #11; previously 015d2ce). Tree identical to the reviewed integration head `a645a91`; 89 files changed vs 015d2ce, all under `research/`, `docs/research/`, `test_m21_research_*.py` plus test-only M17/M18 hygiene allow-lists; no `bot/`, `dashboard/`, `tools/`, `main.py`, `requirements.txt` or active workflow changes | No changes to main without separate explicit approval. Vercel auto-deployed the repo's web project (READY); that is NOT the trading runtime |
 | Last operator-reported VPS | Trader inactive; ibgateway failed; dashboard + Caddy running; no dashboard restart after WS1; no Telegram, no new IBKR orders; sync daemon off | Current runtime must be independently rechecked at activation, not guessed |
 | M21.2–M21.7, M22, M23 | Unfinished or only supporting infrastructure exists | Completion tasks follow |
+
+### 3a-000. v3.8 development record (28 Oct 2026)
+
+**Operator instruction (28 Oct, 08:03).** The independent reviewer confirmed that **PR #12's risk-decision provenance finding is resolved at `8013044`**. Then:
+1. harden PR #1 (R1–R3);
+2. finalise the C01 decisions;
+3. prepare and start A02 offline;
+4. verify, push, update this handoff, and STOP.
+
+Excluded: merges, VPS access, broker sessions, orders, production DB writes, CI, Telegram.
+
+**Status:**
+- **Nothing is merged.** `main` = `80b4343db4a22413aa670efd32e24952d53e532e`.
+- All PRs are draft, with zero unpushed commits.
+
+| item | PR (draft) | head | state |
+|---|---|---|---|
+| A01 truthful scoring contract | #12 | **`80130441309b6023f243e9a3ad268cae5b13aa0d`** (unchanged) | TESTED_OFFLINE; provenance finding resolved per review; awaiting merge decision |
+| A09 WS2 refresh + market-state boundary + hardening R1–R3 | #1 | **`0f3f9e6db860bb2359238c8b83283d0c93d76a4e`** (`2562c5c` hardening, `0f3f9e6` redundant-clamp removal) | TESTED_OFFLINE |
+| C01 parity design, rev 3: final decisions D-1..D-6 | #13 | **`6a8a690eea14a639836af3fbe48f563c83288d73`** (`8c6b050` rev 3, `6a8a690` G10 allowlist fix) | DESIGN ONLY |
+| A02 candidate-decision ledger (offline, flag-gated, not wired) | #14, stacked on #12 | **`71bccd60900bf444e818a1e494c567ca498b37f7`** | TESTED_OFFLINE; nothing deployed or enabled |
+
+**PR #1, R1–R3:**
+- **R1:** the gate only accepts a `TrustedMarketStateProvider` (exact type), built only from exact `AlpacaClockSource` instances; the decision must name source `alpaca` with status ok.
+- **R2:** an absolute 30 s ceiling, enforced at construction and in the helper; a limit can only tighten.
+- **R3:** a session close that is valid, in the future and ≤ 24 h ahead is required.
+- **Tests:** they drive the real Alpaca source (HTTP stubbed) and the real D1 guard. WS2 123 tests, boundary 15, D1 48 + 56, D2 suites, guards: all OK outside `/tmp`. All targeted mutants killed; one equivalent mutant removed as dead code.
+
+**C01 rev 3:**
+- **Decisions D-1..D-6 final:** the simulation boundary; M14 for broker-connected entries; governor-persisted authority (store schema specified); completed candles (new §11 with test matrix T-N); reduce-only flatten with closed-market broker semantics (new §12); no silent daily-loss override.
+- **Finding:** A01 needs a completed-bar staleness basis (lag from the next bar's close).
+- **Fixes:** the doc branch now registers its file in the M17/M18 G10 allowlists, so G10 passes. This handoff branch received the same fix.
+
+**A02 (PR #14):**
+- **Ids and stages:** lane-A-identical candidate ids; seven stages; nine terminal kinds.
+- **Schema:** additive (`candidate_ledger`, `candidate_ledger_events`, `candidate_ledger_meta`). The migration is explicit, idempotent, all-or-nothing and version-checked, and touches no existing table.
+- **Writer:** off by default (`CANDIDATE_LEDGER_ENABLED=1` exactly); never creates schema; uses its own connection; idempotent; order-checked; never raises.
+- **`account()`:** stage accounting plus join integrity.
+- **Offline legacy replay:** read-only source, output under `/tmp` only.
+- **Plan:** `docs/M21_1_A02_candidate_ledger_plan.md`.
+- **Tests:** 23; 12/12 mutants killed.
+
+**Test evidence (Python 3.12.3 / NumPy 1.26.4, C5a isolation; Claude-reported, not independently re-run):**
+- PR #1 @ `0f3f9e6`: see above.
+- PR #14 @ `71bccd6`: 14 targets OK (A02, A01, bridge, group D, A-path, alerts, B1, guards, research foundation).
+- PR #13 @ `6a8a690`: G10 ×2, hygiene, quarantine and C5b OK.
 
 ### 3a-00. v3.7 development record — approved offline package (27–28 Oct 2026)
 
@@ -206,7 +252,7 @@ Tests on the integration head: 14 targets, 292 tests OK (8 research suites = 213
 | milestone | verdict (v3.6) | tasks: status |
 |---|---|---|
 | M1–M20, M21.U | — | Foundations in main (historical, closed with known deferred follow-ups): see §3 |
-| M21.1 scoring / candidate audit | **NOT COMPLETE** — A01 on draft PR #12 (tested offline, not merged); A02 partial | **A01** PR_PENDING · **A02** PARTIAL |
+| M21.1 scoring / candidate audit | **NOT COMPLETE** — A01 on draft PR #12 and A02 on draft PR #14 (both tested offline, not merged; A02 not deployed or wired) | **A01** PR_PENDING · **A02** PR_PENDING |
 | M21.1extra (C5a/C5b, D0–D3, WS1–WS3, paper loop, monitoring, dashboard, real-bar parity) | **NOT COMPLETE** — code for C5, D0–D2, WS1, WS3 merged; WS2 (PR #1) pending; runtime/paper acceptance blocked on approval | **A03** ✅ CLOSED · **A04** ✅ CLOSED · **A05** ✅ CODE_MERGED · **A06** RUNTIME_UNVERIFIED · **A07** ✅ CODE_MERGED · **A08** BLOCKED · **A09** PR_PENDING · **A10** BLOCKED · **A11** PR_PENDING · **A12** BLOCKED · **A13** PR_PENDING · **A14** NOT_STARTED · **A16** NOT_STARTED · **A17** CODE_MERGED |
 | Four starter templates (June roadmap) | research CODE_MERGED; not data-verified | **A15** CODE_MERGED |
 | M21.2 parameter optimisation | foundations merged; **not complete** | **B09** CODE_MERGED · **B10** CODE_MERGED · **B11** PARTIAL |
@@ -229,7 +275,7 @@ The task IDs below are **tracking IDs, not replacement milestone numbers**. A ta
 
 ### A. Close the core M21.1 / M21.1extra loop
 
-- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (28 Oct 2026, v3.7): PR_PENDING — TESTED_OFFLINE on draft PR #12 @ `8013044`.**
+- [ ] **A01 · M21.1 scoring reality check.** Verify real scanner signals reach the M19 enrichment/scorer and return valid ranking, component breakdown, direction, explanation, timestamp and freshness; no fabricated calibrated probabilities, no execution grant from research scores. Automated real-fixture parity tests and source-aware error codes. **Status (28 Oct 2026, v3.8): PR_PENDING — TESTED_OFFLINE on draft PR #12 @ `8013044`; the independent review confirmed the risk-decision provenance finding is resolved; awaiting merge decision.** v3.7 detail:
 - **Contract:** pure `bot/scoring_truth`:
   - DST-correct session and bar-close semantics;
   - MISSING / INVALID / UNVERIFIED / STALE / INCOMPLETE / VALID per symbol × timeframe;
@@ -244,14 +290,21 @@ The task IDs below are **tracking IDs, not replacement milestone numbers**. A ta
   - the fail-closed consequence for consumers.
 
 Previous: NOT_STARTED (27 Oct 2026).
-- [ ] **A02 · M21.1 candidate decision audit.** Persist every candidate stage, M19 gates/reasons, paper risk decision and outcomes with stable join IDs; distinguish rejected, watch, eligible, blocked and skipped; instrument effective data coverage. **Status (28 Oct 2026, v3.7): PARTIAL — CODE_MERGED (research foundations) / NOT_STARTED (production persistence); WP2 waits for the A01 contract (PR #12) to be reviewed.** v3.6: Stage taxonomy, lane-A candidate ids, counterfactual labels and engine decision records are on main (`80b4343`); production persistence of scanner → M19 → risk → outcome join ids is the next work package (§5). History: Stage taxonomy + read-only `candidate_snapshots` adapter + labels for every stage in PR #6 @ 3398de4 (offline). Production persistence of M19/Risk join IDs not started; real export needs approval.
+- [ ] **A02 · M21.1 candidate decision audit.** Persist every candidate stage, M19 gates/reasons, paper risk decision and outcomes with stable join IDs; distinguish rejected, watch, eligible, blocked and skipped; instrument effective data coverage. **Status (28 Oct 2026, v3.8): PR_PENDING — offline implementation TESTED_OFFLINE on draft PR #14 @ `71bccd6` (stacked on #12).**
+- **Contents:** ledger schema, stable ids, stages, joins, flag-gated writer (off), legacy replay.
+- **Not done** (each needs approval): no migration deployed, no writer enabled, no runtime wiring.
+- **Next:** an approved read-only replay on a copy of production data, then the wiring PR.
+
+v3.7: WP2 waited for the A01 review. v3.6: Stage taxonomy, lane-A candidate ids, counterfactual labels and engine decision records are on main (`80b4343`); production persistence of scanner → M19 → risk → outcome join ids is the next work package (§5). History: Stage taxonomy + read-only `candidate_snapshots` adapter + labels for every stage in PR #6 @ 3398de4 (offline). Production persistence of M19/Risk join IDs not started; real export needs approval.
 - [x] **A03 · M21.1extra C5a/C5b controls.** October protected-file/test-isolation work merged. Preserve exact content-transition pins, no generic guard weakening. **Status (27 Oct 2026): CLOSED.** Merged earlier (main 015d2ce).
 - [x] **A04 · M21.1extra D0, D1, supervised D2 foundation.** Already shipped historically; do not confuse supervised proof with unattended activity. **Status (27 Oct 2026): CLOSED.** Historical delivery.
 - [x] **A05 · M21.1extra D3 WS1 code delivery.** Read-only authenticated performance metrics, honest N/A, fees and drawdown merged; runtime proof still in A06. **Status (27 Oct 2026): CODE_MERGED.** main 015d2ce; runtime proof is A06.
 - [ ] **A06 · D3 dashboard operational acceptance.** Separately approved restart/deploy, authenticated GET-only dashboard/mobile inspection, genuine-vs-simulated and pending-fee N/A displays, no write/broker route, service/health unchanged. **Status (27 Oct 2026): RUNTIME_UNVERIFIED / needs approval.** Dashboard restart not approved.
 - [x] **A07 · WS3 signal-alert code.** Signals-only Telegram outbox/cooldown/expiry/retry implementation merged; activation remains A08. **Status (27 Oct 2026): CODE_MERGED.** main 015d2ce; activation is A08.
 - [ ] **A08 · WS3 operational signal alerting.** Decide separate credentials and bot .env notifier overlap to prevent duplicates; dry-run/controlled send and scheduled source only after operator permission. Confirm BUY versus SHORT, stale signals, dedup, restart safety, security and observability. **Status (27 Oct 2026): BLOCKED (approval).** Credentials/duplicate-notifier decision + send permission.
-- [ ] **A09 · WS2 controlled code integration.** Exact-head independent review of draft PR #1 (5d6654d), safeguarded fast-forward/merge only upon operator approval; no broker actions from code merge. **Status (28 Oct 2026, v3.7): PR_PENDING — refreshed and TESTED_OFFLINE @ `46c87ab`.**
+- [ ] **A09 · WS2 controlled code integration.** Exact-head independent review of draft PR #1 (5d6654d), safeguarded fast-forward/merge only upon operator approval; no broker actions from code merge. **Status (28 Oct 2026, v3.8): PR_PENDING — TESTED_OFFLINE @ `0f3f9e6`, with market-clock hardening R1–R3 (trusted Alpaca provider only, absolute 30 s ceiling, valid future session close required).** Merge needs separate approval.
+
+v3.7:
 - `8242a12` is a normal merge of `main` `80b4343`.
 - `46c87ab`: the risk gate now verifies a fresh, typed D1 market decision on every call, so it cannot be bypassed by direct invocation, a closed market, a holiday, or a stale or unavailable clock.
 - The exact-head audit was posted with LOW residuals R1–R3.
@@ -299,7 +352,11 @@ v3.6: Draft PR #1 @ 5d6654d: the three findings were reported corrected by an in
 
 The June document groups M22.1–M22.6 without fixing a complete subnumber-to-deliverable mapping. **Retain M22.1–M22.6 exactly; reconcile precise sub-numbering with repo before implementation.** The following are required acceptance tasks under the M22 family, not an invented renumbering.
 
-- [ ] **C01 · M14 scanner-path Risk Authority parity — HARD BLOCKER.** Every scanner-driven submit path must invoke or meet/exceed the full M14 gate set: broker/global capital, broker daily loss, combined exposure, drawdown throttle, per-symbol/sector concentration, quote/spread and data freshness, kill switches and unified policy-invalid semantics; AST and runtime tests. **Status (28 Oct 2026, v3.7): DESIGN ONLY — draft PR #13 @ `4584a3a`; implementation NOT_STARTED — HARD BLOCKER for M22.**
+- [ ] **C01 · M14 scanner-path Risk Authority parity — HARD BLOCKER.** Every scanner-driven submit path must invoke or meet/exceed the full M14 gate set: broker/global capital, broker daily loss, combined exposure, drawdown throttle, per-symbol/sector concentration, quote/spread and data freshness, kill switches and unified policy-invalid semantics; AST and runtime tests. **Status (28 Oct 2026, v3.8): DESIGN ONLY — final decisions D-1..D-6 (rev 3) on draft PR #13 @ `6a8a690`; implementation NOT_STARTED — HARD BLOCKER for M22.**
+- Adds the governor-store schema, completed-candle design §11 (T-N) and reduce-only flatten §12 (closed-market semantics).
+- Remaining: approvals and VPS verification only.
+
+v3.7:
 - **The design (`docs/M22_C01_risk_authority_parity_design.md`) contains:**
   - a 25-row gate parity matrix;
   - CRITICAL findings: no M14 decision on the scanner path; unverified market state (M14 `market_open` defaults to True); legacy fail-open on DB read errors;
@@ -373,13 +430,17 @@ Previous: NOT_STARTED (27 Oct 2026).
 - **Working research report:** https://github.com/mikemitakidis/algotrading/blob/research/m21-autonomous-research-engine/docs/research/M21_autonomous_research_engine_proposal.md
 - **GitHub source:** ROADMAP.md; MILESTONE_STATUS.md; docs/NEXT_WORK_REGISTER.md.
 
-**Claude's next authorised action (resume point, v3.7):** **STOPPED for independent review.** Draft PRs #12 (`8013044`), #1 (`46c87ab`) and #13 (`4584a3a`) await exact-head re-review. No merge has been requested.
+**Claude's next authorised action (resume point, v3.8):** **STOPPED for independent review.** Draft PRs await exact-head review and the operator's merge decisions:
+- #12 A01 (`8013044`);
+- #1 WS2 (`0f3f9e6`);
+- #13 C01 design (`6a8a690`);
+- #14 A02, stacked on #12 (`71bccd6`).
 
 **After review, in order:**
-1. Operator decisions on the A01 fail-closed consequence and the C01 open items (§4 C01).
-2. **WP2 — M21.1 A02:** the candidate-decision ledger, built on the reviewed A01 contract. Additive migrations as code, an inactive-by-default writer, offline fixtures, a separate draft PR.
-3. Optional WS2 hardening R1–R3, if approved.
-4. C01 implementation phases, only as approved (§9 of the design).
+1. Merge decisions: #12, then retarget #14 to `main`; #1; #13.
+2. The A01 fail-closed consequence for A-path, B1, WS3 and WS2 (evidence wiring or research-rank selection).
+3. An approved, read-only A02 replay on a copy of production data.
+4. C01 implementation phases, as approved (design §9): governor store, completed-candle scanner (with the A01 completed-bar staleness basis), reduce-only flatten, M14 on the scanner path.
 
 Real-data, VPS, IBKR paper, Telegram, CI activation and any merge need separate approval. Do **not** merge or alter production.
 
