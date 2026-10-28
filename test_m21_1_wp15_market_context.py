@@ -159,6 +159,8 @@ class X3_Features(Base):
         t = pd.Timestamp(days[-1].date()).tz_localize("America/New_York").tz_convert("UTC") + pd.Timedelta(hours=15)
         f = F.trend_feature("spy_trend", start, t.to_pydatetime())
         self.assertEqual((f.status, f.detail), (F.UNAVAILABLE, "start_stamped_bars_refused"))
+        at_open = start.assign(ts_utc=start["ts_utc"] + pd.Timedelta(hours=9, minutes=30))   # stamped at the open
+        self.assertEqual(F.trend_feature("spy_trend", at_open, t.to_pydatetime()).detail, "start_stamped_bars_refused")
         close = start.assign(ts_utc=start["ts_utc"] + pd.Timedelta(hours=16))     # 16:00 New York closes
         self.assertEqual(F.trend_feature("spy_trend", close, t.to_pydatetime()).status, F.OK)
         b = F.breadth_feature({"A": start, "B": start}, t.to_pydatetime())
