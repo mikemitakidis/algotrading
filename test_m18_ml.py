@@ -10423,6 +10423,8 @@ class G10_Hygiene(unittest.TestCase):
             "bot/market_clock/",                            # M21.1extra-D1 market clock
             "bot/paper_loop_d2/",                           # M21.1extra-D2 loop
             "bot/scoring_truth/",                           # M21.1 A01 truth contract
+            "bot/candidate_ledger/",                        # M21.1 A02 ledger (offline)
+            "tools/candidate_ledger/",                      # M21.1 A02 legacy replay
             # M21 research lanes (Issues #2/#3): offline-only package, docs and
             # root test modules; never imported by production
             # (guarded in test_m21_research_foundation.py).
@@ -10582,6 +10584,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_scoring_bridge.py",
             # M21.1 A01 truthful scanner -> M19 scoring contract tests.
             "test_m21_1_a01_scoring_truth.py",
+            # M21.1 A02 candidate-decision ledger tests + implementation plan.
+            "test_m21_1_a02_candidate_ledger.py",
+            "docs/M21_1_A02_candidate_ledger_plan.md",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
             "test_m21_1extra_a_paper_order_contract.py",
