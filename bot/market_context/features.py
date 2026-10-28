@@ -11,7 +11,9 @@ feature is never filled with a default value.
 * ``spy_trend``, ``qqq_trend`` and ``sector_uptrend_share`` come from
   CLOSE-stamped daily bars. Only rows with ``ts_utc <= t`` are used, so a
   forming or future bar can never leak in. Callers pass completed bars (WP6)
-  or WP11-converted history.
+  or WP11-converted history. Bars stamped at or before the 09:30 New York
+  open cannot be closes (M16 stores bar STARTS); they are refused and the
+  feature is UNAVAILABLE (review of PR #20, fail closed).
 * ``breadth_above_sma50`` is the share of the universe above its 50-day SMA,
   computed only with enough coverage.
 * ``event_<KIND>_hours`` and ``event_window`` use only events whose schedule
@@ -68,16 +70,26 @@ def vix_features(store: ContextStore, t: datetime) -> Dict[str, FeatureValue]:
     return out
 
 
+class _StartStamped(ValueError):
+    pass
+
+
 def _closed(bars: Optional[pd.DataFrame], t: datetime) -> Optional[pd.DataFrame]:
     if bars is None or len(bars) == 0:
         return None
     ts = pd.to_datetime(bars["ts_utc"], utc=True)
+    ny = pd.DatetimeIndex(ts).tz_convert("America/New_York")
+    if ((ny.hour * 60 + ny.minute) <= 9 * 60 + 30).any():
+        raise _StartStamped("bars stamped at or before the 09:30 New York open are not closes")
     b = bars.loc[(ts <= pd.Timestamp(t)).to_numpy()]
     return b if len(b) else None
 
 
 def trend_feature(name: str, bars: Optional[pd.DataFrame], t: datetime, *, min_bars: int = 200) -> FeatureValue:
-    b = _closed(bars, t)
+    try:
+        b = _closed(bars, t)
+    except _StartStamped:
+        return _unavailable(name, "INDEX_ETF", "start_stamped_bars_refused")
     if b is None or len(b) < min_bars:
         return _unavailable(name, "INDEX_ETF", "fewer_than_%d_closed_bars" % min_bars)
     c = b["close"].astype(float)
@@ -101,7 +113,10 @@ def breadth_feature(bars_by_symbol: Mapping[str, pd.DataFrame], t: datetime, *,
                     min_coverage: float = 0.8) -> FeatureValue:
     n, above, used = len(bars_by_symbol), 0, 0
     for b in bars_by_symbol.values():
-        c = _closed(b, t)
+        try:
+            c = _closed(b, t)
+        except _StartStamped:
+            continue                                       # not counted: coverage falls, never a leak
         if c is None or len(c) < 50 or pd.Timestamp(t) - pd.Timestamp(c["ts_utc"].iloc[-1]) > BARS_MAX_AGE:
             continue
         x = c["close"].astype(float)

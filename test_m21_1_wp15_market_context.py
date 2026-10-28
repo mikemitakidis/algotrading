@@ -152,6 +152,20 @@ class X3_Features(Base):
         self.assertEqual(F.trend_feature("spy_trend", bars(slope=-0.001), T).value, "down")
         self.assertEqual(F.trend_feature("spy_trend", bars(end=T - timedelta(days=9)), T).status, F.STALE)
 
+    def test_start_stamped_bars_are_refused_not_used(self):
+        days = pd.bdate_range("2025-01-02", periods=260)
+        start = pd.DataFrame({"ts_utc": [d.tz_localize("America/New_York").tz_convert("UTC") for d in days],
+                              "close": np.linspace(100, 150, len(days))})          # M16 style: local midnight
+        t = pd.Timestamp(days[-1].date()).tz_localize("America/New_York").tz_convert("UTC") + pd.Timedelta(hours=15)
+        f = F.trend_feature("spy_trend", start, t.to_pydatetime())
+        self.assertEqual((f.status, f.detail), (F.UNAVAILABLE, "start_stamped_bars_refused"))
+        at_open = start.assign(ts_utc=start["ts_utc"] + pd.Timedelta(hours=9, minutes=30))   # stamped at the open
+        self.assertEqual(F.trend_feature("spy_trend", at_open, t.to_pydatetime()).detail, "start_stamped_bars_refused")
+        close = start.assign(ts_utc=start["ts_utc"] + pd.Timedelta(hours=16))     # 16:00 New York closes
+        self.assertEqual(F.trend_feature("spy_trend", close, t.to_pydatetime()).status, F.OK)
+        b = F.breadth_feature({"A": start, "B": start}, t.to_pydatetime())
+        self.assertEqual(b.status, F.UNAVAILABLE)
+
     def test_sector_and_breadth_need_coverage(self):
         etfs = {e: bars(slope=0.001 if i % 2 else -0.001) for i, e in enumerate(SRC.SECTOR_ETFS)}
         s = F.sector_feature(etfs, T)
