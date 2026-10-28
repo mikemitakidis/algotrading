@@ -1,5 +1,5 @@
 # Algo Trading — FULL Canonical Project Handoff & Completion Register
-**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.9) Europe/London** · **Version:** 3.9 (28 Oct 2026: M21 finish line, requirements matrix, remaining-work plan, estimate, merge readiness and decisions in `docs/handoffs/M21_Finish_Line_2026-10-28.md`; A01 completed-bar staleness basis on PR #12 @ `47e9057`; `main` unchanged; all 71 tasks kept) · 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
+**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.10) Europe/London** · **Version:** 3.10 (28 Oct 2026, late: corrections after the independent review of the accelerated delivery — #23 cross-store governance, #17 risk-evidence provenance, #24 canary experiment identity, plus §6/§7 audit fixes on #20/#24/#25; corrected heads, evidence and OP1.6 in `docs/reviews/M21_Review_Corrections_2026-10-28.md`; `main` unchanged; all 71 tasks kept) · 3.9 (28 Oct 2026: M21 finish line, requirements matrix, remaining-work plan, estimate, merge readiness and decisions in `docs/handoffs/M21_Finish_Line_2026-10-28.md`; A01 completed-bar staleness basis on PR #12 @ `47e9057`; `main` unchanged; all 71 tasks kept) · 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
 
 > **Permanent rule:** This handoff covers every remaining capability from the June 2026 canonical roadmap through M23 and the two-broker operating objective, plus all still-open technical debt and the new advanced AI/self-development research architecture. **No delivery deadlines or calendar estimates.** Work proceeds by dependencies, testing evidence and operator approvals. Preserve original milestone names and numbers. A GitHub merge, a VPS deployment, a runtime activation and an independently validated trading edge are FOUR DIFFERENT STATES.
 
@@ -35,6 +35,27 @@ Build a sophisticated continuously learning trading research-and-execution platf
 | GitHub main | **80b4343db4a22413aa670efd32e24952d53e532e** (27 Oct 2026, merge of PR #11; previously 015d2ce). Tree identical to the reviewed integration head `a645a91`; 89 files changed vs 015d2ce, all under `research/`, `docs/research/`, `test_m21_research_*.py` plus test-only M17/M18 hygiene allow-lists; no `bot/`, `dashboard/`, `tools/`, `main.py`, `requirements.txt` or active workflow changes | No changes to main without separate explicit approval. Vercel auto-deployed the repo's web project (READY); that is NOT the trading runtime |
 | Last operator-reported VPS | Trader inactive; ibgateway failed; dashboard + Caddy running; no dashboard restart after WS1; no Telegram, no new IBKR orders; sync daemon off | Current runtime must be independently rechecked at activation, not guessed |
 | M21.2–M21.7, M22, M23 | Unfinished or only supporting infrastructure exists | Completion tasks follow |
+
+### 3a-00000. v3.10 — corrections after the independent review (28 Oct 2026, late)
+
+**Inputs:**
+- Issue #3 review record 6475528106;
+- PR reviews 5686441635 (#23), 5686442374 (#17), 5686443135 (#24);
+- the operator's review brief: finish verification, fix defects, do not expand M21.
+
+**Fixed, each on its owning branch, with normal merges downstream:**
+- **#23** `28c1943`: durable cross-store promotion operations, reconcile, BLOCKED + `resolve_block`, an atomic one-active rule, a state-checked `record_shadow`.
+- **#17** `4c1cac7`: risk evidence M14_LIVE / VERIFIED / RECONSTRUCTED_INFERRED / UNVERIFIED. A journal order is never turned into an M14 PASS, and `intent()` refuses non-authorising evidence.
+- **#24**: canary experiment identity bound and verified by the report card; v2 preserved; v3 preregistered, not run. Also: real walk-forward input must be close-stamped, and unknown-exit trades block a PASS.
+- **#20**: M17 multi-timeframe and M18 real-data entrances refuse M16 start-stamped bars (lookahead).
+- **#25** `d992a0f`: index/breadth features refuse start-stamped bars.
+
+**Evidence:** an integration tree rebuilt by normal merges; full suite and mutants as reported in the corrections doc.
+
+**Task statuses.** No task changed CLOSED status. The A10–A13 runtime items stay BLOCKED (OP2/OP3).
+- B01/E05 (real-data readiness): DATA_UNVERIFIED until OP1.
+- B13 (M21.3 promotion): TESTED_OFFLINE, RUNTIME_UNVERIFIED (OP5).
+- The Finish Line §6 checklist carries DATA_UNVERIFIED / RUNTIME_UNVERIFIED markers.
 
 ### 3a-0000. v3.9 — M21 finish line (28 Oct 2026)
 

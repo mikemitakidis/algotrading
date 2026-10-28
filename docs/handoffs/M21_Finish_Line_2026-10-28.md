@@ -8,6 +8,20 @@
 
 ## 0. In plain words (one screen)
 
+> **Update, 28 Oct (late), after the independent review.**
+> - All three material findings are fixed, each on its owning PR:
+>   - #23: cross-store promotion consistency;
+>   - #17: no fabricated M14 approvals;
+>   - #24: canary bound to a full experiment identity.
+> - The audit fixed four more defects:
+>   - M17/M18 multi-timeframe reads of start-stamped M16 bars (lookahead) now fail closed;
+>   - the walk-forward refuses unconverted real bars;
+>   - market context refuses start-stamped bars;
+>   - unknown-exit trades can no longer support a walk-forward PASS.
+> - Details, SHAs and test evidence: `docs/reviews/M21_Review_Corrections_2026-10-28.md` (§7b below).
+> - Nothing is merged; `main` is unchanged.
+> - Every item below that needs real data or a real runtime is marked **DATA_UNVERIFIED** or **RUNTIME_UNVERIFIED** (§6). Synthetic tests do not make it "done".
+
 > **Update, 28 Oct (evening), after the accelerated program.**
 > - **Code now exists for every remaining M21 work package**: WP5–WP18 and the cross-lane test. It sits in 12 draft PRs (#15–#26), all offline and all unmerged. `main` is unchanged.
 > - **What is left:**
@@ -280,6 +294,11 @@ What each work package contains:
 
 ## 6. Authoritative M21 checklist (update on every merge; link from Issue #3)
 
+**Markers:**
+- **DATA_UNVERIFIED**: correct on synthetic/fixture data only; needs the real data from OP1.
+- **RUNTIME_UNVERIFIED**: correct offline; never run against the real gateway, scheduler or dashboard.
+- **REVIEW**: waiting for an independent exact-head review.
+
 **Phase 1 — close the open PRs**
 - [ ] WP1 #12 merged
 - [ ] WP3 #1 merged
@@ -287,26 +306,28 @@ What each work package contains:
 - [ ] WP4 #13 merged
 
 **Phase 2 — make the loop real**
-- [ ] WP5 — code in PR #15 (review)
-- [ ] WP6 — code in PR #16 (review; protected scanner + Alpaca provider transitions need approval)
-- [ ] WP7 — code in PR #17 (review)
-- [ ] WP10 — code in PR #18 (review)
+- [ ] WP5 — code in PR #15 (REVIEW; RUNTIME_UNVERIFIED)
+- [ ] WP6 — code in PR #16 (REVIEW; protected scanner + Alpaca transitions need C5b approval; proof in the corrections doc §9; RUNTIME_UNVERIFIED)
+- [ ] WP7 — PR #17, corrected `4c1cac7` (REVIEW; risk-evidence policy; RUNTIME_UNVERIFIED)
+- [ ] WP10 — code in PR #18 (REVIEW; RUNTIME_UNVERIFIED: the alarm drill is B-6)
 - [ ] OP1
 - [ ] OP2
 - [ ] OP3 — **paper loop running**
 - [ ] OP4 soak (B-3)
 
 **Phase 3 — remaining M21 capability**
-- [ ] WP8 — code in PR #21 (review; templates 2–4 shadow-only)
-- [ ] WP9 — backend in PR #22 (review; dashboard UI pending, protected `dashboard/app.py`)
-- [ ] WP12 — code in PR #19 (review)
-- [ ] WP11 (B-1) — tooling in PR #20 (review); real run = OP1
-- [ ] WP13 (C-1, C-2) — driver + canary in PR #24 (review); real run after OP1
-- [ ] WP14 (C-6) — code in PR #23 (review); governance cycle = OP5
-- [ ] WP15 — framework in PR #25 (review); data loading = operator step (G4)
-- [ ] WP16 — shadow code in PR #26 (review); real run after OP1
-- [ ] WP17 — shadow code in PR #26 (review); real run after OP1
-- [ ] WP18 (C-3) — shadow code in PR #26 (review); real run after OP1
+- [ ] WP8 — PR #21 (REVIEW; templates 2–4 shadow-only; RUNTIME_UNVERIFIED)
+- [ ] WP9 — PR #22 backend (REVIEW). **Missing: the dashboard UI** (protected `dashboard/app.py`, separate approval). RUNTIME_UNVERIFIED.
+- [ ] WP12 — PR #19 (REVIEW; verified in the corrections doc §8; spread, impact, slippage and borrow are assumptions → DATA_UNVERIFIED until paper fills)
+- [ ] WP11 (B-1) — PR #20, corrected (REVIEW; real-data entrances fail closed). Real run = OP1 → DATA_UNVERIFIED.
+- [ ] WP13 (C-1, C-2) — PR #24, corrected (REVIEW). **v3 canary preregistered, not run.** Report-card wiring for real runs is open. DATA_UNVERIFIED.
+- [ ] WP14 / M21.3 (C-6) — PR #23, corrected (REVIEW; cross-store ops). Governance cycle = OP5 → RUNTIME_UNVERIFIED.
+- [ ] WP15 / M21.6 — PR #25, corrected (REVIEW). Context sources undecided (G4); WS2 wiring open → DATA_UNVERIFIED.
+- [ ] WP16 — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
+- [ ] WP17 — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
+- [ ] WP18 (C-3) — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
+- [ ] Converted-input path for M17 multi-timeframe and M18 real builds (they now refuse raw M16 bars) → DATA_UNVERIFIED
+- [ ] Runbooks OP1–OP5 — prepared, with abort and rollback (OP1.6 queries are syntax-checked, not run)
 
 **Closeout**
 - [ ] OP5
@@ -404,6 +425,29 @@ That is about 13–15 dev-days plus reviews, against ≈ 49 before.
 3. Then R: #19 → #20 → #24 → #26, plus #25.
 
 Stacked PRs are retargeted to `main` as each base merges, by merging `main` in. No rebases.
+
+## 7b. Review-correction round, 28 Oct (late)
+
+**Corrected heads.** Everything else is unchanged. Merge order is unchanged (§7a); then the v3 canary runs on the merged WP13 code.
+
+| PR | Head | Change |
+|---|---|---|
+| #17 | `4c1cac7` | risk provenance |
+| #21 | `04970d4` | merge only |
+| #22 | `ded303d` | merge only |
+| #23 | `28c1943` | cross-store ops |
+| #20 | `5f86c30` | real-data entrances |
+| #24 | `aa00b12` | experiment identity, real-input guard, outcome separation |
+| #26 | `9cffb0a` | merges only |
+| #25 | `d992a0f` | start-stamped bars refused |
+| `m21/integration` | `bcbcf01` | — |
+
+**Evidence:**
+- **129 modules: 128 OK, 0 failed, 1 with no tests (test_m12, by design)** on the integration tree;
+- 75/75 targeted mutants;
+- +49 tests.
+
+Full report: `docs/reviews/M21_Review_Corrections_2026-10-28.md`.
 
 ## 8. Decision list (only what is genuinely needed)
 
