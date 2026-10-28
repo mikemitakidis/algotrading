@@ -11,9 +11,10 @@ this package can authorise or trigger execution.
 """
 from bot.scoring_truth.sessions import (  # noqa: F401
     BarOutOfSession, CalendarError, DEFAULT_SPECS, SessionCalendar,
-    TimeframeSpec, bar_timing,
+    TimeframeSpec, bar_timing, following_bar_close,
 )
 from bot.scoring_truth.observations import (  # noqa: F401
+    BAR_BASES, BASIS_COMPLETED, BASIS_IN_PROGRESS,
     ObservationState, TimeframeObservation, classify_observation,
     classify_symbol, parse_utc,
 )

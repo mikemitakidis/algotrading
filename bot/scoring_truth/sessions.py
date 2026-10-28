@@ -285,3 +285,36 @@ def bar_timing(cal: SessionCalendar, spec: TimeframeSpec, start: datetime,
     close = min(s_last + base, b[1])
     nxt = _next_after(cal, close, b[1], market_now > close)
     return BarTiming(start, close, nxt, b[0], b[1], True)
+
+
+def following_bar_close(cal: SessionCalendar, spec: TimeframeSpec,
+                        timing: BarTiming) -> Optional[Tuple[datetime, bool]]:
+    """Close of the first NEWER bar after ``timing`` (completed-bar basis).
+
+    Returns ``(close, exact)``, or None when no newer bar can exist yet
+    (``timing.next_start`` unresolved). Daily: the following session's close.
+    Intraday: the next bar on the recorded bar's own grid phase (clock- and
+    session-anchored provider grids differ only at the session open). Bucket:
+    the next UTC-grid bucket; with an unknown base anchor its close is a LOWER
+    bound (``exact`` False), so staleness is never flagged later than it
+    truly applies. Raises CalendarError / BarOutOfSession like ``bar_timing``.
+    """
+    s = timing.next_start
+    if s is None:
+        return None
+    if spec.kind == DAILY:
+        b = cal.session_bounds(cal.local_date(s))
+        if b is None:
+            raise CalendarError("no session for the bar following %s" % timing.start)
+        return b[1], True
+    grid = spec.minutes * 60
+    e = int(s.timestamp())
+    if spec.kind == INTRADAY:
+        phase = int(timing.start.timestamp()) % grid
+        fstart = datetime.fromtimestamp(e - (e - phase) % grid, UTC)
+        return bar_timing(cal, spec, fstart, s).close, True
+    fstart = datetime.fromtimestamp(e - e % grid, UTC)
+    ft = bar_timing(cal, spec, fstart, s)
+    if ft.exact:
+        return ft.close, True
+    return min(fstart + timedelta(minutes=spec.minutes), ft.session_close), False
