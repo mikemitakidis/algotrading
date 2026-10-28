@@ -4226,6 +4226,8 @@ class G10_Hygiene(unittest.TestCase):
             # pre-M19 Group D (ISSUE-009/010): scanner hard-block + WATCH drop
             # (sha256-pinned) + its proof tests (operator-approved).
             "bot/scanner.py",
+            # M21.1extra-D2.3/D2.4/D5: unattended paper learning loop tests.
+            "test_m21_1extra_d2_3_learning_loop.py",
             "test_group_d_scanner.py",
             # pre-M19 Group E (ISSUE-014/013): broker factory fail-safe (not
             # sha256-pinned; not a protected runtime file) + dashboard
