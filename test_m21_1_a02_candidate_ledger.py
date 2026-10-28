@@ -308,6 +308,91 @@ class L3_Writer(unittest.TestCase):
         caller.close()
 
 
+class L3b_Concurrency(unittest.TestCase):
+    """Concurrent writers (separate connections, threads) serialise: each
+    call's checks and writes run in one immediate transaction."""
+
+    def _race(self, path, jobs):
+        import threading
+        barrier = threading.Barrier(len(jobs))
+        results, errors = [None] * len(jobs), []
+
+        def run(i, job):
+            try:
+                w = CandidateLedgerWriter(lambda: sqlite3.connect(path, timeout=10),
+                                          enabled=True)
+                barrier.wait()
+                results[i] = (job(w), w.stats)
+            except Exception as exc:                     # pragma: no cover
+                errors.append(exc)
+        ts = [threading.Thread(target=run, args=(i, j)) for i, j in enumerate(jobs)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(60)
+        self.assertEqual(errors, [])
+        return results
+
+    def test_repeated_pipeline_from_many_writers_is_exactly_once(self):
+        path = ledger_db(self)
+
+        def pipeline(w):
+            cid = open_one(w)
+            ok = [w.record(cid, "risk_evaluated", at_utc=NOW,
+                           payload=risk_payload(True, None, {"verdict": "pass"})),
+                  w.record(cid, "intent_logged", at_utc=NOW, payload={"intent_id": 7}),
+                  w.record(cid, "broker_result", at_utc=NOW, payload={"status": "accepted"}),
+                  w.record(cid, "outcome_resolved", at_utc=NOW, payload={"outcome": "WIN"}),
+                  w.close(cid, "outcome_resolved", at_utc=NOW)]
+            return ok
+        res = self._race(path, [pipeline] * 8)
+        for ok, stats in res:
+            self.assertEqual(ok, [True] * 5)
+            self.assertFalse([k for k in stats if k.startswith(("error", "conflict"))], stats)
+        with sqlite3.connect(path) as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidate_ledger").fetchone()[0], 1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidate_ledger_events")
+                             .fetchone()[0], 6)
+            self.assertTrue(account(c).ok)
+
+    def test_racing_terminal_kinds_leave_one_consistent_terminal(self):
+        path = ledger_db(self)
+        w0 = writer(path)
+        cid = open_one(w0)
+        w0.record(cid, "risk_evaluated", at_utc=NOW, payload=risk_payload(True, None, {}))
+        w0.record(cid, "intent_logged", at_utc=NOW, payload={"intent_id": 1})
+        w0.record(cid, "broker_result", at_utc=NOW, payload={"status": "rejected"})
+        kinds = ["broker_not_accepted", "cancelled"] * 4
+        res = self._race(path, [lambda w, k=k: w.close(cid, k, at_utc=NOW) for k in kinds])
+        with sqlite3.connect(path) as c:
+            term = c.execute("SELECT terminal_kind FROM candidate_ledger").fetchone()[0]
+            closed = c.execute("SELECT payload_json FROM candidate_ledger_events "
+                               "WHERE stage='closed'").fetchall()
+            rep = account(c)
+        self.assertIn(term, ("broker_not_accepted", "cancelled"))
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(json.loads(closed[0][0])["terminal_kind"], term)
+        winners = [k for k, (ok, _s) in zip(kinds, res) if ok]
+        self.assertEqual(set(winners), {term})            # every same-kind close is idempotent
+        self.assertTrue(rep.ok, rep.violations)
+
+    def test_no_stage_lands_after_a_racing_close(self):
+        path = ledger_db(self)
+        w0 = writer(path)
+        cid = open_one(w0)
+        w0.record(cid, "risk_evaluated", at_utc=NOW, payload=risk_payload(False, "x", {}))
+        jobs = [lambda w: w.close(cid, "risk_rejected", at_utc=NOW),
+                lambda w: w.record(cid, "intent_logged", at_utc=NOW, payload={"i": 1})] * 4
+        res = self._race(path, jobs)
+        with sqlite3.connect(path) as c:
+            stages = {r[0] for r in c.execute("SELECT stage FROM candidate_ledger_events")}
+        intent_won = any(ok for (ok, _s), j in zip(res, range(len(res))) if j % 2 == 1)
+        # either the intent was recorded before the close or every attempt
+        # after the close was refused; the close itself always lands
+        self.assertIn("closed", stages)
+        self.assertEqual("intent_logged" in stages, intent_won)
+
+
 # ═════════════════════════════ accounting ══════════════════════════════════
 
 class L4_Accounting(unittest.TestCase):
