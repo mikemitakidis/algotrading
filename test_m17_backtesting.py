@@ -4347,6 +4347,12 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_a01_scoring_truth.py",
             # M21.1 A02 candidate-decision ledger tests + implementation plan.
             "test_m21_1_a02_candidate_ledger.py",
+            "bot/market_context/__init__.py",
+            "bot/market_context/store.py",
+            "bot/market_context/sources.py",
+            "bot/market_context/features.py",
+            "bot/market_context/throttle.py",
+            "test_m21_1_wp15_market_context.py",
             "docs/M21_1_A02_candidate_ledger_plan.md",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
