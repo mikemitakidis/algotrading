@@ -167,9 +167,11 @@ def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=
             # M21 WP8: templates 2-4 judge the newest completed daily bar in SHADOW.
             # Never affects the candidates above; a failure here is logged and ignored.
             try:
+                from bot.templates.controls import read_active, shadow_params
                 from tools.signal_scoring.template_shadow import run_template_shadow
+                active = read_active(str(REPO / "data" / "template_controls.db"))      # read-only; never raises
                 res = run_template_shadow(shadow_store, fetch_bars(focus, "1y", "1d") or {}, completion,
-                                          now=now)
+                                          now=now, params=shadow_params(active))
                 log.info("[WP8] template shadow: recorded=%d already=%d skipped=%d", res["recorded"],
                          res["already_recorded"], len(res["skipped"]))
             except Exception as exc:
