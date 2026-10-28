@@ -410,7 +410,8 @@ class R11_RealDataEntrances(unittest.TestCase):
     DAYS = SESS[20:25]
 
     def frames(self, stamp):
-        raw = {"1D": yf_daily(self.DAYS), "1H": intraday(self.DAYS, 60), "15m": intraday(self.DAYS, 15)}
+        raw = {"1D": yf_daily(self.DAYS), "4H": intraday(self.DAYS, 240), "1H": intraday(self.DAYS, 60),
+               "15m": intraday(self.DAYS, 15)}                     # DAYS span the 1 Nov 2026 DST change
         if stamp == "start":
             return raw
         return {tf: ST.to_close_stamped(df, tf, CAL, ST.START)[0] for tf, df in raw.items()}
@@ -419,7 +420,9 @@ class R11_RealDataEntrances(unittest.TestCase):
         from bot.backtesting.mtf_context import start_stamp_evidence
         start, conv = self.frames("start"), self.frames("close")
         self.assertEqual(start_stamp_evidence(start["1D"]["ts_utc"]), len(self.DAYS))      # local midnight
-        self.assertEqual(start_stamp_evidence(start["15m"]["ts_utc"]), len(self.DAYS))     # the 09:30 bar
+        for tf in ("4H", "1H", "15m"):
+            self.assertEqual(start_stamp_evidence(start[tf]["ts_utc"]), len(self.DAYS), tf)  # the 09:30 bar
+        self.assertEqual({d.month for d in self.DAYS}, {10, 11})
         for tf, df in conv.items():
             self.assertEqual(start_stamp_evidence(df["ts_utc"]), 0, tf)
 
@@ -440,10 +443,10 @@ class R11_RealDataEntrances(unittest.TestCase):
             bars = self.frames(stamp)
             with mock.patch.object(m16_loader, "load_bars", side_effect=lambda sym, tf, adjusted: bars[tf]):
                 if ok:
-                    self.assertEqual(set(M18._default_bars_provider("AAA", ["1D", "1H", "15m"])), {"1D", "1H", "15m"})
+                    self.assertEqual(set(M18._default_bars_provider("AAA", list(bars))), set(bars))
                 else:
                     with self.assertRaises(StartStampedBarsError):
-                        M18._default_bars_provider("AAA", ["1D", "1H", "15m"])
+                        M18._default_bars_provider("AAA", list(bars))
 
     def test_m17_loader_refuses_m16_start_stamps(self):
         from bot.backtesting import data_loader as DL
