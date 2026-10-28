@@ -26,21 +26,154 @@ Rules
 * Simulated outcomes stay distinguishable from genuine paper fills: every
   intent, broker result and outcome payload carries the broker's
   ``data_source``.
+
+Risk-decision provenance (review 5686442374)
+--------------------------------------------
+Every ``risk_evaluated`` payload carries ``evidence``:
+
+* ``M14_LIVE`` — written by ``risk()`` with the decision the M14 gate returned
+  in-process, before the intent. A pass without a decision id is NOT live
+  evidence (``UNVERIFIED``).
+* ``VERIFIED`` — backfilled by ``reconcile`` only after the decision was read
+  back from the persisted M14 ``risk_decisions`` table (read-only) and matched
+  the journal order on decision id, action (``trade_open``), scope
+  (``ibkr_paper``), result (``allow``), symbol, side, leverage, amount (covers
+  the planned notional) and time (taken before planning, at most
+  ``MAX_DECISION_LEAD`` earlier).
+* ``RECONSTRUCTED_INFERRED`` — backfilled from the journal alone (no M14 store
+  configured or readable). Verdict ``unverified``; never authorising.
+* ``UNVERIFIED`` — the decision is missing, or contradicts the order.
+
+Only ``M14_LIVE`` and ``VERIFIED`` are authorising: ``intent`` (the mandatory
+pre-submit audit point) refuses unless the candidate's risk evidence is one of
+them, and only those link ``risk_decision_id`` on the ledger row. Reconcile
+never changes a terminal state (the writer refuses), and every contradiction
+it meets is counted, not repaired.
 """
 from __future__ import annotations
 
 import json
+import math
+import os
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from datetime import datetime, timedelta
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from bot.candidate_ledger.ids import make_candidate_id
 from bot.candidate_ledger.writer import CandidateLedgerWriter, risk_payload
 
 ACCEPTED_JOURNAL_STATES = ("SUBMITTED", "OPEN", "CLOSED")
 NOT_PLACED_JOURNAL_STATES = ("REJECTED", "NOT_SUBMITTED")
+
+EVIDENCE_LIVE = "M14_LIVE"
+EVIDENCE_VERIFIED = "VERIFIED"
+EVIDENCE_INFERRED = "RECONSTRUCTED_INFERRED"
+EVIDENCE_UNVERIFIED = "UNVERIFIED"
+AUTHORISING_EVIDENCE = (EVIDENCE_LIVE, EVIDENCE_VERIFIED)
+PAPER_SCOPE = "ibkr_paper"
+MAX_DECISION_LEAD = timedelta(minutes=10)
+
+_M14_SELECT = ("SELECT decision_id, taken_at, broker_scope, requested_action, request_json, result "
+               "FROM risk_decisions WHERE decision_id = ?")
+
+
+def _ro_uri(path: Any) -> str:
+    return "file:%s?mode=ro" % str(path).replace("%", "%25").replace("?", "%3f").replace("#", "%23")
+
+
+def read_m14_decision(db_path: Any, decision_id: str) -> Optional[Dict[str, Any]]:
+    """One persisted M14 decision, read-only (``mode=ro`` + ``query_only``);
+    None when absent. Raises sqlite3.Error when the store cannot be read."""
+    if not os.path.isfile(str(db_path)):
+        raise sqlite3.OperationalError("m14 store missing")
+    conn = sqlite3.connect(_ro_uri(db_path), uri=True)
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        rows = conn.execute(_M14_SELECT, (decision_id,)).fetchall()
+    finally:
+        conn.close()
+    if len(rows) != 1:
+        return None
+    keys = ("decision_id", "taken_at", "broker_scope", "requested_action", "request_json", "result")
+    return dict(zip(keys, rows[0]))
+
+
+def _utc(ts: Any) -> Optional[datetime]:
+    try:
+        t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo is not None else None
+
+
+def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, Any]]) -> Tuple[str, str]:
+    """(evidence, reason) for one journal order against its persisted M14
+    decision. VERIFIED only when every field matches; else UNVERIFIED."""
+    did = order.get("risk_decision_id")
+    u = lambda why: (EVIDENCE_UNVERIFIED, why)                     # noqa: E731
+    if not isinstance(did, str) or not did.strip():
+        return u("no_decision_id_in_journal")
+    if record is None:
+        return u("decision_not_in_m14_store")
+    if record.get("decision_id") != did:
+        return u("record_for_other_decision")
+    if record.get("requested_action") != "trade_open":
+        return u("decision_not_trade_open:%s" % record.get("requested_action"))
+    if record.get("broker_scope") != PAPER_SCOPE:
+        return u("decision_scope_mismatch:%s" % record.get("broker_scope"))
+    if record.get("result") != "allow":
+        return u("m14_decision_not_allow:%s" % record.get("result"))
+    try:
+        req = json.loads(record.get("request_json") or "")
+    except (TypeError, ValueError):
+        req = None
+    if not isinstance(req, dict):
+        return u("decision_payload_unreadable")
+    if str(req.get("symbol", "")).strip().upper() != str(order.get("symbol", "")).strip().upper():
+        return u("decision_for_other_symbol")
+    if str(req.get("side", "")).strip().lower() != str(order.get("direction", "")).strip().lower():
+        return u("decision_for_other_side")
+    if req.get("leverage", 1) != 1:
+        return u("decision_leverage_%s" % req.get("leverage"))
+    amt, qty, ref = req.get("amount_usd"), order.get("qty"), order.get("entry_ref_price")
+    try:
+        planned = float(qty) * float(ref)
+        if not (math.isfinite(float(amt)) and float(amt) >= planned * (1 - 1e-9) and planned > 0):
+            return u("decision_amount_below_order_notional")
+    except (TypeError, ValueError):
+        return u("decision_amount_unreadable")
+    taken, at = _utc(record.get("taken_at")), _utc(order.get("planned_at_utc"))
+    if taken is None or at is None:
+        return u("decision_or_plan_time_unreadable")
+    if taken > at:
+        return u("decision_taken_after_the_order_was_planned")
+    if at - taken > MAX_DECISION_LEAD:
+        return u("decision_older_than_%ds_before_planning" % MAX_DECISION_LEAD.total_seconds())
+    return EVIDENCE_VERIFIED, "matched_persisted_m14_decision"
+
+
+def risk_evidence(payload: Optional[Mapping[str, Any]]) -> str:
+    """The evidence label of one ``risk_evaluated`` payload. Payloads written
+    before labels existed: a journal backfill is INFERRED, a pass carrying a
+    decision id from the live path is M14_LIVE, anything else UNVERIFIED."""
+    if not payload:
+        return EVIDENCE_UNVERIFIED
+    ev = payload.get("evidence")
+    if ev in (EVIDENCE_LIVE, EVIDENCE_VERIFIED, EVIDENCE_INFERRED, EVIDENCE_UNVERIFIED):
+        return ev
+    if ev is not None:
+        return EVIDENCE_UNVERIFIED
+    if payload.get("source") == "journal_reconcile":
+        return EVIDENCE_INFERRED
+    if payload.get("verdict") == "pass" and payload.get("risk_decision_id"):
+        return EVIDENCE_LIVE
+    return EVIDENCE_UNVERIFIED
+
+
+def authorising(payload: Optional[Mapping[str, Any]]) -> bool:
+    return bool(payload) and payload.get("verdict") == "pass" and risk_evidence(payload) in AUTHORISING_EVIDENCE
 
 
 def _iso(t: Any) -> str:
@@ -60,10 +193,13 @@ def outcome_label(row: Mapping[str, Any]) -> str:
 
 
 class LoopLedger:
-    def __init__(self, writer: CandidateLedgerWriter):
+    def __init__(self, writer: CandidateLedgerWriter, *, m14_db: Optional[str] = None):
+        """``m14_db``: the database holding M14's ``risk_decisions`` (read-only
+        here). Without it, reconcile can only ever backfill INFERRED risk."""
         if not isinstance(writer, CandidateLedgerWriter):
             raise TypeError("a CandidateLedgerWriter is required")
         self.w = writer
+        self.m14_db = m14_db
         self.stats: Counter = Counter()
 
     @property
@@ -123,9 +259,13 @@ class LoopLedger:
             return
         body = risk_payload(passed is True, reason, checks)
         body["risk_decision_id"] = decision_id
+        live = isinstance(decision_id, str) and bool(decision_id.strip())
+        body["evidence"] = EVIDENCE_LIVE if live else EVIDENCE_UNVERIFIED
+        if passed is True and not live:
+            body["verdict"], body["reason"] = "unverified", "pass_without_m14_decision_id"
         self.w.record(cid, "risk_evaluated", at_utc=_iso(now), payload=body,
                       reason_codes=[reason] if reason and passed is not True else [])
-        if decision_id:
+        if live:
             self.w.link(cid, risk_decision_id=decision_id)
         if passed is not True:
             self.w.close(cid, "risk_rejected", at_utc=_iso(now),
@@ -139,6 +279,12 @@ class LoopLedger:
             return True
         cid = self._ensure_open(cand, now, cycle_key)
         if cid is None:
+            return False
+        risk = self._risk_payloads(cid)
+        if risk is None or not risk or not authorising(risk[-1]):
+            # no M14 PASS backed by live or verified evidence: no intent, no order
+            self.stats["intent_blocked:risk_evidence_%s" % (
+                risk_evidence(risk[-1]) if risk else "missing")] += 1
             return False
         ok = self.w.record(cid, "intent_logged", at_utc=_iso(now),
                            payload={"client_ref": client_ref, "order_ref": order_ref,
@@ -201,14 +347,27 @@ class LoopLedger:
             have = self._stages(cid)
             at = o["submitted_at_utc"] or o["planned_at_utc"]
             src = o["data_source"]
-            if "risk_evaluated" not in have:            # an order exists only after a pass
-                self.w.record(cid, "risk_evaluated", at_utc=o["planned_at_utc"],
-                              payload=dict(risk_payload(True, None, {}),
-                                           risk_decision_id=o["risk_decision_id"],
-                                           source="journal_reconcile"))
-                out["backfilled:risk_evaluated"] += 1
-            if o["risk_decision_id"]:
-                self.w.link(cid, risk_decision_id=o["risk_decision_id"])
+            did = o["risk_decision_id"]
+            if "risk_evaluated" not in have:
+                # the order proves only that it was planned, never that M14 passed it
+                ev, why = self._verify_risk(dict(o))
+                body = {"verdict": "pass" if ev == EVIDENCE_VERIFIED else "unverified", "reason": why,
+                        "checks": {}, "evidence": ev, "source": "journal_reconcile",
+                        "journal_risk_decision_id": did,
+                        "risk_decision_id": did if ev == EVIDENCE_VERIFIED else None}
+                self.w.record(cid, "risk_evaluated", at_utc=o["planned_at_utc"], payload=body,
+                              reason_codes=[] if ev == EVIDENCE_VERIFIED else [why])
+                out["backfilled:risk_evaluated:%s" % ev] += 1
+                if ev == EVIDENCE_VERIFIED and not self.w.link(cid, risk_decision_id=did):
+                    out["contradiction:risk_decision_id"] += 1
+            else:
+                last = (self._risk_payloads(cid) or [{}])[-1]
+                if last.get("verdict") == "reject":
+                    out["contradiction:risk_rejected_but_ordered"] += 1
+                elif authorising(last) and did and last.get("risk_decision_id") not in (None, did):
+                    out["contradiction:risk_decision_id"] += 1
+                elif not authorising(last):
+                    out["non_authorising_risk_evidence:%s" % risk_evidence(last)] += 1
             if "intent_logged" not in have:
                 self.w.record(cid, "intent_logged", at_utc=o["planned_at_utc"],
                               payload={"client_ref": ref, "order_ref": o["order_ref"],
@@ -226,8 +385,9 @@ class LoopLedger:
                                   payload={"status": state.lower(), "data_source": src,
                                            "source": "journal_reconcile"})
                     out["backfilled:broker_result"] += 1
-                self.w.close(cid, "broker_not_accepted", at_utc=o["updated_at_utc"],
-                             reason_codes=[state.lower()])
+                if not self.w.close(cid, "broker_not_accepted", at_utc=o["updated_at_utc"],
+                                    reason_codes=[state.lower()]):
+                    out["contradiction:terminal"] += 1          # never overwritten
                 continue
             else:
                 out["in_flight"] += 1
@@ -245,7 +405,8 @@ class LoopLedger:
                                            "exit_reason": row.get("exit_reason"),
                                            "data_source": row.get("data_source")})
                     out["backfilled:outcome_resolved"] += 1
-                self.w.close(cid, "outcome_resolved", at_utc=row["exit_filled_at_utc"] or at)
+                if not self.w.close(cid, "outcome_resolved", at_utc=row["exit_filled_at_utc"] or at):
+                    out["contradiction:terminal"] += 1          # never overwritten
         # an intent whose order was never planned (e.g. a crash between the
         # audit write and planning) cannot have reached the broker: planning
         # always precedes submission
@@ -256,6 +417,31 @@ class LoopLedger:
                 out["closed_unplanned_intent"] += 1
         self.stats.update({"reconcile:%s" % k: v for k, v in out.items()})
         return dict(out)
+
+    def _verify_risk(self, order: Mapping[str, Any]) -> Tuple[str, str]:
+        if self.m14_db is None:
+            return EVIDENCE_INFERRED, "no_m14_store_configured"
+        did = order.get("risk_decision_id")
+        if not isinstance(did, str) or not did.strip():
+            return EVIDENCE_UNVERIFIED, "no_decision_id_in_journal"
+        try:
+            rec = read_m14_decision(self.m14_db, did)
+        except sqlite3.Error as exc:
+            return EVIDENCE_INFERRED, "m14_store_unreadable:%s" % type(exc).__name__
+        return verify_m14_decision(order, rec)
+
+    def _risk_payloads(self, cid: str) -> Optional[List[Dict[str, Any]]]:
+        """risk_evaluated payloads in write order; None when unreadable."""
+        try:
+            conn = self.w._factory()
+            try:
+                return [json.loads(r[0]) for r in conn.execute(
+                    "SELECT payload_json FROM candidate_ledger_events WHERE candidate_id=? AND "
+                    "stage='risk_evaluated' ORDER BY rowid", (cid,))]
+            finally:
+                conn.close()
+        except Exception:
+            return None
 
     def _stages(self, cid: str) -> set:
         try:
@@ -304,6 +490,11 @@ class LoopLedger:
 class ConsistencyReport:
     checked: int = 0
     problems: List[str] = field(default_factory=list)
+    # journal orders whose risk evidence is not an M14 PASS (inferred,
+    # unverified or missing): reported separately so no report can read them
+    # as verified, and listed even when nothing else is wrong
+    risk_evidence: Counter = field(default_factory=Counter)
+    non_authorising_risk: List[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -334,6 +525,12 @@ def journal_consistency(ledger_conn: sqlite3.Connection,
                 "SELECT stage, payload_json FROM candidate_ledger_events WHERE candidate_id=?",
                 (cid,)):
             ev.setdefault(stage, []).append(json.loads(payload))
+        risk = ev.get("risk_evaluated", [])
+        label = risk_evidence(risk[-1]) if risk else "MISSING"
+        rep.risk_evidence[label] += 1
+        if not (risk and authorising(risk[-1])):
+            rep.non_authorising_risk.append("%s: journal order %s has %s risk evidence (not an M14 PASS)"
+                                            % (cid, ref, label))
         intents = ev.get("intent_logged", [])
         if not intents:
             rep.problems.append("%s: no intent_logged for journal order %s" % (cid, ref))

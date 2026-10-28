@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import ast
 import os
+import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -344,6 +346,458 @@ class P5_BudgetCoolingOffRevert(Book):
                          MC.proposal_digest(prop("z", base_cfg(), base_cfg(31.0))))
 
 
+class Crash(BaseException):
+    """A process death: nothing after it runs (no except-Exception handler sees it)."""
+
+
+class FaultAt:
+    def __init__(self, point, exc=None, times=1):
+        self.point, self.exc, self.left = point, exc or Crash("crash at %s" % point), times
+
+    def __call__(self, point):
+        if point == self.point and self.left:
+            self.left -= 1
+            raise self.exc
+
+
+class FailingControls(K.TemplateControls):
+    def __init__(self, path, *, clock, fail_on=()):
+        super().__init__(path, clock=clock)
+        self.fail_on = set(fail_on)
+
+    def _maybe(self, name):
+        if name in self.fail_on:
+            raise sqlite3.OperationalError("simulated controls write failure in %s" % name)
+
+    def propose(self, *a, **k):
+        self._maybe("propose")
+        return super().propose(*a, **k)
+
+    def activate(self, *a, **k):
+        self._maybe("activate")
+        return super().activate(*a, **k)
+
+    def rollback(self, *a, **k):
+        self._maybe("rollback")
+        return super().rollback(*a, **k)
+
+
+class CrossStore(Book):
+    """Fault injection at every boundary between the promotion and controls stores (review 5686441635)."""
+
+    def approved(self, pid, rsi=36.0):
+        self.to_eligible(prop(pid, K.read_active(self.ctl.path).config, base_cfg(rsi)))
+        t = self.token(pid)
+        self.book.approve(pid, t, self.v)
+        return t
+
+    def restart(self):
+        return MC.PromotionBook(self.path, clock=self.clock)
+
+    def audits(self, action):
+        return [a for a in self.ctl.audit() if a["action"] == action]
+
+    def no_live_leftovers(self):
+        """No version is left PROPOSED/APPROVED and exactly one is ACTIVE."""
+        st = [v["status"] for v in self.ctl.versions()]
+        self.assertEqual(st.count(K.ACTIVE), 1, st)
+        self.assertFalse({K.PROPOSED, K.APPROVED} & set(st), st)
+
+    def assert_shut(self, book, pid, needle):
+        acts = [lambda: book.submit(prop("zz", K.read_active(self.ctl.path).config, base_cfg(31.0)))]
+        if book.state(pid) != MC.MONITORING:
+            acts.append(lambda: book.withdraw(pid, actor="mike", reason="x"))
+        for act in acts:
+            with self.assertRaises(MC.PromotionRefused) as cm:
+                act()
+            self.assertIn(needle, str(cm.exception))
+
+
+class P7_CrashAndFaults(CrossStore):
+    def test_01_crash_before_activation_aborts_and_never_reapplies(self):
+        for point in ("apply:intent_recorded", "apply:version_proposed", "apply:version_approved"):
+            with self.subTest(point=point):
+                self.tearDown()
+                self.setUp()
+                base = K.read_active(self.ctl.path)
+                t = self.approved("c1")
+                self.book.fault_hook = FaultAt(point)
+                with self.assertRaises(Crash):
+                    self.book.apply("c1", self.ctl, token=t, verifier=self.v)
+                book = self.restart()
+                self.assert_shut(book, "c1", "operation_open_reconcile_required")
+                (op,) = book.ops("c1")
+                self.assertEqual(book.reconcile(self.ctl)["settled"], {op["op_id"]: MC.OP_PENDING})  # lease held
+                self.clock.advance(minutes=11)
+                self.assertEqual(book.reconcile(self.ctl)["settled"], {op["op_id"]: MC.OP_ABORTED})
+                now = K.read_active(self.ctl.path)
+                self.assertEqual((now.version, now.config), (base.version, base.config))
+                self.assertEqual(book.state("c1"), MC.APPROVED)
+                self.assertEqual(len(self.audits("ACTIVATED")), 1)          # only the baseline ever activated
+                self.no_live_leftovers()
+                # 06: a repeated apply after recovery is a fresh, audited attempt and applies exactly once
+                v2 = book.apply("c1", self.ctl, token=t, verifier=self.v)
+                self.assertEqual((K.read_active(self.ctl.path).version, book.state("c1")), (v2, MC.MONITORING))
+                n = len(self.ctl.versions())
+                with self.assertRaises(MC.PromotionRefused):
+                    book.apply("c1", self.ctl, token=t, verifier=self.v)
+                self.assertEqual(len(self.ctl.versions()), n)
+                self.no_live_leftovers()
+
+    def test_02_crash_after_activation_before_promotion_commit_completes_the_audit(self):
+        t = self.approved("c2")
+        self.book.fault_hook = FaultAt("apply:activated")
+        with self.assertRaises(Crash):
+            self.book.apply("c2", self.ctl, token=t, verifier=self.v)
+        live = K.read_active(self.ctl.path).version
+        book = self.restart()
+        self.assertEqual(book.state("c2"), MC.APPROVED)                     # the stores disagree right now ...
+        self.assert_shut(book, "c2", "operation_open_reconcile_required")  # ... so nothing else may happen
+        self.clock.advance(minutes=11)
+        book.reconcile(self.ctl)
+        self.assertEqual((book.state("c2"), book._row("c2")["controls_version"]), (MC.MONITORING, live))
+        applied = [e for e in book.events("c2") if e["kind"] == "APPLIED"]
+        self.assertEqual(len(applied), 1)
+        self.assertTrue(MC.json.loads(applied[0]["detail"])["recovered"])
+        before = len(book.events())
+        self.assertEqual(book.reconcile(self.ctl), {"settled": {}, "blocked": [], "diverged": []})
+        self.assertEqual(len(book.events()), before)                       # idempotent
+        with self.assertRaises(MC.PromotionRefused):                       # 06: no second apply
+            book.apply("c2", self.ctl, token=t, verifier=self.v)
+        self.assertEqual(len(self.audits("ACTIVATED")), 2)
+        self.no_live_leftovers()
+
+    def test_03_promotion_store_write_failure_keeps_the_op_open_until_reconciled(self):
+        t = self.approved("c3")
+        self.book.fault_hook = FaultAt("apply:complete_tx", exc=sqlite3.OperationalError("disk I/O error"), times=2)
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("c3", self.ctl, token=t, verifier=self.v)
+        self.assertIn("UNSETTLED:OperationalError", str(cm.exception))
+        self.assertEqual(self.book.state("c3"), MC.APPROVED)
+        self.assertEqual([o["state"] for o in self.book.ops("c3")], [MC.OP_PENDING])
+        self.assert_shut(self.book, "c3", "operation_open_reconcile_required")
+        self.clock.advance(minutes=11)                                     # the store is healthy again
+        self.book.reconcile(self.ctl)
+        self.assertEqual(self.book.state("c3"), MC.MONITORING)
+        self.assertEqual(self.book._row("c3")["controls_version"], K.read_active(self.ctl.path).version)
+        self.no_live_leftovers()
+
+    def test_04_controls_store_write_failure_aborts_cleanly(self):
+        base = K.read_active(self.ctl.path)
+        t = self.approved("c4")
+        for step in ("activate", "propose"):
+            bad = FailingControls(self.ctl.path, clock=self.clock, fail_on={step})
+            with self.assertRaises(MC.PromotionRefused) as cm:
+                self.book.apply("c4", bad, token=t, verifier=self.v)
+            self.assertIn("ABORTED", str(cm.exception))
+            self.assertEqual(K.read_active(self.ctl.path).version, base.version)
+            self.assertEqual(self.book.state("c4"), MC.APPROVED)
+            self.no_live_leftovers()
+        self.assertEqual([o["state"] for o in self.book.ops("c4")], [MC.OP_ABORTED] * 2)
+        v = self.book.apply("c4", self.ctl, token=t, verifier=self.v)
+        self.assertEqual(K.read_active(self.ctl.path).version, v)
+
+    def test_05_crash_during_auto_revert_is_completed_once(self):
+        for point in ("revert:intent_recorded", "revert:rolled_back", "revert:complete_tx"):
+            with self.subTest(point=point):
+                self.tearDown()
+                self.setUp()
+                base = K.read_active(self.ctl.path)
+                self.apply_d = self.approved("d1")
+                self.book.apply("d1", self.ctl, token=self.apply_d, verifier=self.v)
+                self.book.fault_hook = FaultAt(point)
+                with self.assertRaises(Crash):
+                    self.book.monitor("d1", [-3.0, -4.0], self.ctl, sink=Sink())
+                book = self.restart()
+                self.assertIsNotNone(book.cooling_off_until())             # durable with the decision
+                self.clock.advance(minutes=11)
+                sink = Sink()
+                book.reconcile(self.ctl, sink=sink)
+                now = K.read_active(self.ctl.path)
+                self.assertEqual((now.version, now.config), (base.version, base.config))
+                self.assertEqual(book.state("d1"), MC.REVERTED)
+                self.assertEqual(len(self.audits("ROLLED_BACK")), 1)       # never rolled back twice
+                self.assertEqual([e["kind"] for e in sink.events], ["PROMOTION_AUTO_REVERT"])
+                self.assertIs(sink.events[0]["cancel_orders"], False)
+                self.assertEqual(sink.events[0]["reverted_to_version"], base.version)
+
+    def test_06_reconcile_and_retries_are_idempotent(self):
+        t = self.approved("i1")
+        v = self.book.apply("i1", self.ctl, token=t, verifier=self.v)
+        n = len(self.book.events())
+        for _ in range(3):
+            self.assertEqual(self.book.reconcile(self.ctl, sink=Sink())["blocked"], [])
+        self.assertEqual(len(self.book.events()), n)
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("i1", self.ctl, token=t, verifier=self.v)
+        self.assertIn("not_approved:MONITORING", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).version, v)
+
+    def test_09_restart_during_cooling_off(self):
+        t = self.approved("k1")
+        self.book.apply("k1", self.ctl, token=t, verifier=self.v)
+        self.book.fault_hook = FaultAt("revert:intent_recorded")
+        with self.assertRaises(Crash):
+            self.book.monitor("k1", [-3.0, -4.0], self.ctl, sink=Sink())
+        book = self.restart()
+        self.clock.advance(minutes=11)
+        book.reconcile(self.ctl)
+        cur = K.read_active(self.ctl.path).config
+        self.clock.advance(days=13)
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.restart().submit(prop("k2", cur, base_cfg(31.0)))
+        self.assertIn("cooling_off", str(cm.exception))
+        self.clock.advance(days=2)
+        self.assertEqual(self.restart().submit(prop("k3", cur, base_cfg(31.0))), TI.GREEN)
+
+    def test_10_corrupt_or_unavailable_controls_block_safely(self):
+        t = self.approved("b1")
+        v = self.book.apply("b1", self.ctl, token=t, verifier=self.v)
+        con = sqlite3.connect(self.ctl.path)
+        good = con.execute("SELECT config_json FROM template_config_versions WHERE version=?", (v,)).fetchone()[0]
+        con.execute("UPDATE template_config_versions SET config_json=? WHERE version=?",
+                    (good.replace("36.0", "99.0"), v))
+        con.commit()
+        rep = self.book.reconcile(self.ctl, sink=Sink())
+        self.assertEqual(rep["diverged"], ["b1"])
+        (blk,) = self.book.blocked()
+        self.assertIn("last_good", MC.json.loads(blk["detail"])["blocked_because"])
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.monitor("b1", [0.3] * 30, self.ctl, sink=Sink())
+        self.assertIn("blocked:", str(cm.exception))
+        self.assert_shut(self.book, "b1", "blocked:")
+        with self.assertRaises(MC.PromotionRefused):                          # still corrupt: cannot resolve
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="r")
+        con.execute("UPDATE template_config_versions SET config_json=? WHERE version=?", (good, v))
+        con.commit()
+        con.close()
+        self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="restored")
+        self.assertEqual((self.book.blocked(), self.book.state("b1")), ([], MC.MONITORING))
+        # an unreadable controls store during an open apply also blocks
+        self.tearDown()
+        self.setUp()
+        t = self.approved("b2")
+        self.book.fault_hook = FaultAt("apply:intent_recorded")
+        with self.assertRaises(Crash):
+            self.book.apply("b2", self.ctl, token=t, verifier=self.v)
+        Path(self.ctl.path).write_bytes(b"not a database" * 100)
+        self.clock.advance(minutes=11)
+        rep = self.restart().reconcile(self.ctl)
+        self.assertEqual(list(rep["settled"].values()), [MC.OP_BLOCKED])
+        self.assertIn("store_unreadable", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+
+    def test_11_failed_alert_is_audited_and_retried(self):
+        t = self.approved("a1")
+        self.book.apply("a1", self.ctl, token=t, verifier=self.v)
+        self.assertEqual(self.book.monitor("a1", [-3.0, -4.0], self.ctl, sink=Sink(fail=True)), MC.REVERTED)
+        self.assertIn("ALERT_FAILED", [e["kind"] for e in self.book.events("a1")])
+        self.assertEqual(self.book.unsent_alerts(), ["a1"])
+        ok = Sink()
+        self.assertEqual(self.book.retry_alerts(ok), ["a1"])
+        self.assertEqual((self.book.unsent_alerts(), ok.events[0]["kind"]), ([], "PROMOTION_AUTO_REVERT"))
+        self.assertEqual(self.book.retry_alerts(ok), [])
+
+    def test_12_contradictory_stores_block_until_an_operator_resolves(self):
+        base = K.read_active(self.ctl.path)
+        t = self.approved("x1")
+        self.book.fault_hook = FaultAt("apply:intent_recorded")
+        with self.assertRaises(Crash):
+            self.book.apply("x1", self.ctl, token=t, verifier=self.v)
+        third = self.ctl.propose(base_cfg(25.0), author="mike", reason="manual change during the crash")
+        self.ctl.approve(third, approver="mike", reason="manual")
+        self.ctl.activate(third, actor="mike")
+        self.clock.advance(minutes=11)
+        book = self.restart()
+        self.assertEqual(list(book.reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
+        (blk,) = book.blocked()
+        for who, res in (("claude", MC.ROLL_BACK), ("mike", MC.ROLL_BACK), ("mike", MC.ROLL_FORWARD)):
+            with self.assertRaises(MC.PromotionRefused):                   # non-human, or stores disagree
+                book.resolve_block(blk["op_id"], self.ctl, actor=who, resolution=res, reason="r")
+        self.assertEqual(len(book.blocked()), 1)
+        self.ctl.rollback(actor="mike", reason="restore the pre-apply config")
+        self.assertEqual(K.read_active(self.ctl.path).version, base.version)
+        for who in ("claude", "Scheduler", " "):                         # stores now agree; still a human only
+            with self.assertRaises(MC.PromotionRefused):
+                book.resolve_block(blk["op_id"], self.ctl, actor=who, resolution=MC.ROLL_BACK, reason="r")
+        book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="restored")
+        self.assertEqual((book.blocked(), book.state("x1")), ([], MC.APPROVED))
+        self.assertEqual(book.ops("x1")[0]["state"], MC.OP_ABORTED)
+
+    def test_12b_monitoring_divergence_and_revert_cannot_roll_forward(self):
+        base = K.read_active(self.ctl.path)
+        t = self.approved("y1")
+        self.book.apply("y1", self.ctl, token=t, verifier=self.v)
+        self.ctl.rollback(actor="mike", reason="manual rollback outside the book")
+        rep = self.book.reconcile(self.ctl)
+        self.assertEqual(rep["diverged"], ["y1"])
+        (blk,) = self.book.blocked()
+        with self.assertRaises(MC.PromotionRefused):
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="r")
+        self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="agree")
+        self.assertEqual(self.book.state("y1"), MC.REVERTED)
+        self.assertIsNotNone(self.book.cooling_off_until())
+        self.assertEqual(K.read_active(self.ctl.path).version, base.version)
+        # a REVERT that cannot complete stays a revert: rolling forward is refused
+        self.tearDown()
+        self.setUp()
+        t = self.approved("y2")
+        self.book.apply("y2", self.ctl, token=t, verifier=self.v)
+        bad = FailingControls(self.ctl.path, clock=self.clock, fail_on={"rollback"})
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.monitor("y2", [-3.0, -4.0], bad, sink=Sink())
+        self.assertIn("auto_revert_not_completed:PENDING", str(cm.exception))
+        self.assertIsNotNone(self.book.cooling_off_until())
+        self.clock.advance(minutes=11)
+        self.assertEqual(self.book.state("y2"), MC.MONITORING)
+        self.book.reconcile(self.ctl)                                       # store healthy: revert completes
+        self.assertEqual(self.book.state("y2"), MC.REVERTED)
+
+    def test_12c_intended_version_activated_and_replaced_outside_the_book_blocks(self):
+        t = self.approved("z1")
+        self.book.fault_hook = FaultAt("apply:activated")
+        with self.assertRaises(Crash):
+            self.book.apply("z1", self.ctl, token=t, verifier=self.v)
+        self.ctl.rollback(actor="mike", reason="someone undid it before reconciliation")
+        self.clock.advance(minutes=11)
+        self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
+        self.assertIn("activated_and_replaced", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+
+    def test_12d_active_config_not_the_intended_one_blocks(self):
+        t = self.approved("z2")
+        self.book.fault_hook = FaultAt("apply:activated")
+        with self.assertRaises(Crash):
+            self.book.apply("z2", self.ctl, token=t, verifier=self.v)
+        v = K.read_active(self.ctl.path).version
+        other = base_cfg(20.0)                                             # internally consistent, but not intended
+        con = sqlite3.connect(self.ctl.path)
+        con.execute("UPDATE template_config_versions SET config_json=?, config_sha256=? WHERE version=?",
+                    (K.canonical(other), K.sha256(other), v))
+        con.commit()
+        con.close()
+        self.assertEqual(K.read_active(self.ctl.path).source, K.SOURCE_STORE)
+        self.clock.advance(minutes=11)
+        self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
+        self.assertIn("intended_sha256", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+
+    def test_12e_revert_that_lands_anywhere_but_the_pre_apply_version_blocks(self):
+        base = K.read_active(self.ctl.path)
+        t = self.approved("z3")
+        v = self.book.apply("z3", self.ctl, token=t, verifier=self.v)
+        x = self.ctl.propose(base_cfg(25.0), author="mike", reason="manual")
+        self.ctl.approve(x, approver="mike", reason="manual")
+        self.ctl.activate(x, actor="mike")
+        self.ctl.rollback(actor="mike", reason="back to v")                # history: base, v, x, v
+        self.assertEqual(K.read_active(self.ctl.path).version, v)
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.monitor("z3", [-3.0, -4.0], self.ctl, sink=Sink())   # rollback would land on x, not base
+        self.assertIn("auto_revert_not_completed:BLOCKED", str(cm.exception))
+        (blk,) = self.book.blocked()
+        self.assertNotEqual(K.read_active(self.ctl.path).version, base.version)
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="r")
+        self.assertIn("a_decay_revert_cannot_be_rolled_forward", str(cm.exception))
+        self.assertEqual(self.book.state("z3"), MC.MONITORING)
+
+    def test_config_changed_between_intent_and_activation_is_never_overwritten(self):
+        t = self.approved("z5")
+        ctl = self.ctl
+
+        def operator_changes_controls(point):
+            if point == "apply:version_approved":
+                x = ctl.propose(base_cfg(25.0), author="mike", reason="concurrent manual change")
+                ctl.approve(x, approver="mike", reason="manual")
+                ctl.activate(x, actor="mike")
+        self.book.fault_hook = operator_changes_controls
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("z5", self.ctl, token=t, verifier=self.v)
+        self.assertIn("BLOCKED", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).config, base_cfg(25.0))  # the operator's change stands
+        self.assertEqual(self.book.state("z5"), MC.APPROVED)
+
+    def test_divergence_is_not_opened_for_a_proposal_that_moved_on(self):
+        t = self.approved("z4")
+        self.book.apply("z4", self.ctl, token=t, verifier=self.v)
+        stale = self.book._row("z4")
+        self.book.monitor("z4", [-3.0, -4.0], self.ctl, sink=Sink())       # REVERTED meanwhile
+        self.book._open_divergence(stale, K.read_active(self.ctl.path))
+        self.assertEqual(self.book.blocked(), [])
+
+    def test_record_shadow_checks_state_and_tokens_cannot_be_reused(self):
+        cur = K.read_active(self.ctl.path).config
+        self.book.submit(prop("s1", cur, base_cfg(31.0)))                  # CLASSIFIED, not SHADOW
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.record_shadow("s1", EV.compare_shadow(shadow(3), min_signals=20), actor="c")
+        self.assertIn("not_in_shadow:CLASSIFIED", str(cm.exception))
+        self.assertNotIn("SHADOW_INCONCLUSIVE", [e["kind"] for e in self.book.events("s1")])
+        self.book.withdraw("s1", actor="mike", reason="x")
+        with self.assertRaises(MC.PromotionRefused):
+            self.book.record_shadow("s1", EV.compare_shadow(shadow(3), min_signals=20), actor="c")
+        t1 = self.approved("s2")
+        self.book.apply("s2", self.ctl, token=t1, verifier=self.v)
+        self.book.monitor("s2", [0.3] * 30, self.ctl, sink=Sink())
+        self.clock.advance(days=8)
+        self.to_eligible(prop("s3", K.read_active(self.ctl.path).config, base_cfg(30.0)))
+        with self.assertRaises(MC.PromotionRefused):
+            self.book.approve("s3", t1, self.v)                            # s2's token is bound to s2
+        with self.assertRaises(MC.PromotionRefused):
+            self.book.submit(prop("s2", K.read_active(self.ctl.path).config, base_cfg(30.0)))  # id reuse
+
+    def test_database_level_guards(self):
+        cur = K.read_active(self.ctl.path).config
+        self.book.submit(prop("g1", cur, base_cfg(31.0)))
+        con = sqlite3.connect(self.path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            con.execute("INSERT INTO promotion_proposals VALUES ('g2','t','a','tune','GREEN','SHADOW','d','{}','{}',"
+                        "NULL,NULL)")
+        con.execute("INSERT INTO promotion_ops VALUES ('o1','g1','APPLY',1,'PENDING',1,NULL,'s','r','m','t','t',"
+                    "NULL,'{}')")
+        with self.assertRaises(sqlite3.IntegrityError):
+            con.execute("INSERT INTO promotion_ops VALUES ('o2','g1','APPLY',2,'BLOCKED',1,NULL,'s','r','m','t','t',"
+                        "NULL,'{}')")
+        con.close()
+
+
+class P8_Concurrency(CrossStore):
+    def race(self, fns):
+        barrier, out = threading.Barrier(len(fns)), [None] * len(fns)
+
+        def run(i):
+            barrier.wait()
+            try:
+                out[i] = ("ok", fns[i]())
+            except MC.PromotionRefused as exc:
+                out[i] = ("refused", str(exc))
+        ts = [threading.Thread(target=run, args=(i,)) for i in range(len(fns))]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(30)
+        return out
+
+    def test_07_simultaneous_proposals_admit_exactly_one(self):
+        cur = K.read_active(self.ctl.path).config
+        fns = [(lambda i=i: MC.PromotionBook(self.path, clock=self.clock)
+                .submit(prop("p%d" % i, cur, base_cfg(31.0 + i * 0.1)))) for i in range(6)]
+        out = self.race(fns)
+        self.assertEqual([o[0] for o in out].count("ok"), 1, out)
+        self.assertEqual(len([e for e in self.book.events() if e["kind"] == "TRANSITION"]), 1)
+        self.assertEqual(len(self.refusals()), 5)
+
+    def test_08_simultaneous_approves_and_applies_change_once(self):
+        self.to_eligible(prop("q1", K.read_active(self.ctl.path).config, base_cfg(36.0)))
+        t = self.token("q1")
+        out = self.race([lambda: MC.PromotionBook(self.path, clock=self.clock).approve("q1", t, self.v)] * 2)
+        self.assertEqual([o[0] for o in out].count("ok"), 1, out)
+        n = len(self.ctl.versions())
+        out = self.race([lambda: MC.PromotionBook(self.path, clock=self.clock).apply(
+            "q1", K.TemplateControls(self.ctl.path, clock=self.clock), token=t, verifier=self.v)] * 2)
+        self.assertEqual([o[0] for o in out].count("ok"), 1, out)
+        self.assertEqual(len(self.ctl.versions()), n + 1)
+        self.assertEqual(len([e for e in self.book.events() if e["kind"] == "APPLIED"]), 1)
+        self.assertEqual(self.book.state("q1"), MC.MONITORING)
+        self.no_live_leftovers()
+
+
 class P6_Isolation(unittest.TestCase):
     FILES = ["bot/promotion/__init__.py", "bot/promotion/tiers.py", "bot/promotion/evaluation.py",
              "bot/promotion/approvals.py", "bot/promotion/machine.py"]
@@ -361,6 +815,22 @@ class P6_Isolation(unittest.TestCase):
             for s in ("scoring_truth", "scanner_bridge", "candidate_ledger", "cancelOrder", "cancel_order(",
                       "placeOrder"):
                 self.assertNotIn(s, text, (f, s))
+
+    def test_a_rollback_cannot_reach_exposure_or_protective_orders(self):
+        """The controls store feeds only the template SHADOW runner: apply or
+        revert changes shadow parameters, never routing, sizing, brackets or
+        orders. Any new reader of the store must be reviewed here."""
+        readers = set()
+        for top in ("bot", "tools", "dashboard"):
+            for p in (REPO / top).rglob("*.py"):
+                t = p.read_text(encoding="utf-8", errors="ignore")
+                if "bot.templates.controls" in t or "template_controls.db" in t:
+                    readers.add(str(p.relative_to(REPO)))
+        self.assertEqual({r for r in readers if not r.startswith(("bot/promotion/", "bot/templates/"))},
+                         {"tools/paper_loop/m21_1extra_d2_3_scheduler.py"})
+        sched = (REPO / "tools/paper_loop/m21_1extra_d2_3_scheduler.py").read_text()
+        i = sched.index("from bot.templates.controls import")
+        self.assertIn("run_template_shadow", sched[i:i + 600])               # the shadow path, nothing else
 
 
 if __name__ == "__main__":
