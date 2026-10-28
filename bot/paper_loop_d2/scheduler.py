@@ -126,8 +126,12 @@ class PaperLearningLoop:
                  candidate_provider: Callable[[datetime], Sequence[Any]], lock_path: str,
                  config: Optional[LoopConfig] = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                 pid: Optional[int] = None, pid_alive: Callable[[int], bool] = _pid_alive):
+                 pid: Optional[int] = None, pid_alive: Callable[[int], bool] = _pid_alive,
+                 ledger: Any = None):
         self.journal = journal
+        # M21 WP7: optional ledger sink, injected by the caller (the loop never
+        # imports it). None, or a sink whose writer is disabled, changes nothing.
+        self.ledger = ledger
         self.broker = broker
         self.d0_gate = d0_gate
         self.d1_gate = d1_gate
@@ -193,6 +197,7 @@ class PaperLearningLoop:
                                               {k: res[k] for k in ("recovered", "opened", "closed",
                                                                    "review", "errors", "entry")},
                                               self._now())
+            self._ledger_reconcile(now, res)
         finally:
             lock.release()
         res.pop("_equity_snapshot", None)
@@ -211,6 +216,23 @@ class PaperLearningLoop:
             nxt = self.slot_start(self._now()) + timedelta(minutes=self.config.interval_minutes)
             sleep(max(1.0, (nxt - self._now()).total_seconds()))
         return results
+
+    # ── M21 WP7: candidate ledger (never breaks the loop) ──
+    def _ledger_call(self, method: str, res: Dict[str, Any], *args: Any, **kw: Any) -> None:
+        if self.ledger is None:
+            return
+        try:
+            getattr(self.ledger, method)(*args, **kw)
+        except Exception as exc:
+            res["errors"].append("ledger_%s:%s" % (method, type(exc).__name__))
+
+    def _ledger_reconcile(self, now: datetime, res: Dict[str, Any]) -> None:
+        if self.ledger is None:
+            return
+        try:
+            res["ledger"] = self.ledger.reconcile(self.journal.db_path, now)
+        except Exception as exc:
+            res["errors"].append("ledger_reconcile:%s" % type(exc).__name__)
 
     # ── maintenance: recovery + outcome capture + equity ──
     def _maintenance(self, now: datetime, key: str, res: Dict[str, Any]) -> None:
@@ -642,35 +664,59 @@ class PaperLearningLoop:
                                        excluded_symbols=busy, now=now,
                                        max_signal_age_minutes=cfg.max_signal_age_minutes)
         res["candidate_notes"] = notes
+        self._ledger_call("selection", res, items, cand, notes, now, key)
         if cand is None:
             return block("no_candidate")
+
+        def reject(reason: str, decision_id: Optional[str] = None) -> None:
+            self._ledger_call("risk", res, cand, passed=False, reason=reason, now=now,
+                              cycle_key=key, decision_id=decision_id)
+            block(reason)
+
         why, px = self._quote_block(cand, now)
         if why:
-            return block(why)
+            return reject(why)
         res["quote"] = px
         notional = max(px, cand.entry_ref_price) * cfg.qty
         cap = min(cfg.max_notional_usd, cfg.max_notional_pct_of_equity * snap.net_liquidation)
         if notional > cap:
-            return block("notional_cap:%.2f>%.2f" % (notional, cap))
+            return reject("notional_cap:%.2f>%.2f" % (notional, cap))
         try:
             allowed, why, decision_id = self.risk_gate(
                 symbol=cand.symbol, side=cand.direction, notional_usd=notional,
                 stop_loss=cand.stop_loss, take_profit=cand.take_profit)
         except Exception as exc:
-            return block("risk_gate_error:%s" % type(exc).__name__)
+            return reject("risk_gate_error:%s" % type(exc).__name__)
         if allowed is not True:
-            return block("risk:%s" % why)
+            return reject("risk:%s" % why, decision_id)
+        self._ledger_call("risk", res, cand, passed=True, reason=None, now=now, cycle_key=key,
+                          decision_id=decision_id)
         ref = "%s|%s" % (key, cand.symbol)
         order_ref = make_order_ref(self.journal.journal_id, ref)
+        data_source = self.broker.data_source
+        if self.ledger is not None:
+            # MANDATORY audit point: with the ledger enabled, the intent must be
+            # durably recorded before anything is planned or submitted.
+            try:
+                audited = self.ledger.intent(cand, client_ref=ref, order_ref=order_ref,
+                                             data_source=data_source, now=now, cycle_key=key)
+            except Exception as exc:
+                res["errors"].append("ledger_intent:%s" % type(exc).__name__)
+                audited = False
+            if audited is not True:
+                return block("ledger_audit_unavailable")
+        candidate_id = (self.ledger.candidate_id(cand) if self.ledger is not None
+                        else getattr(cand, "candidate_id", None))
         try:
             self.journal.plan_order(
                 client_ref=ref, cycle_key=key, strategy_id=cand.strategy_id, symbol=cand.symbol,
                 direction=cand.direction, qty=cfg.qty, entry_ref_price=cand.entry_ref_price,
                 stop_loss=cand.stop_loss, take_profit=cand.take_profit, score=cand.score,
-                data_source=self.broker.data_source, risk_decision_id=decision_id,
+                data_source=data_source, risk_decision_id=decision_id,
                 equity_at_entry=snap.net_liquidation, now=now, order_ref=order_ref,
-                account=self._account)
+                account=self._account, candidate_id=candidate_id)
         except sqlite3.IntegrityError:
+            self._ledger_call("not_persisted", res, cand, "duplicate_or_symbol_busy", now, key)
             return block("duplicate_or_symbol_busy")
         req = BracketRequest(client_ref=ref, symbol=cand.symbol, direction=cand.direction,
                              qty=cfg.qty, entry_ref_price=cand.entry_ref_price,
@@ -701,9 +747,16 @@ class PaperLearningLoop:
                                     **fields)
             res["entry"] = {"client_ref": ref, "state": "SUBMITTED", "order_ref": order_ref,
                             "candidate": asdict(cand)}
+            self._ledger_call("broker_result", res, cand, accepted=True, status=str(ack.status),
+                              now=now, cycle_key=key, data_source=data_source,
+                              detail={"client_ref": ref, "order_ref": order_ref})
         else:
             self.journal.transition(ref, "PENDING_SUBMIT", "REJECTED", self._now(),
                                     submit_status=ack.status, note=ack.reason)
+            self._ledger_call("broker_result", res, cand, accepted=False,
+                              status=str(ack.status or "rejected"), now=now, cycle_key=key,
+                              data_source=data_source,
+                              detail={"client_ref": ref, "reason": ack.reason})
             return block("broker_rejected:%s" % ack.status)
 
 
