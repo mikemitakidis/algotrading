@@ -8,6 +8,16 @@
 
 ## 0. In plain words (one screen)
 
+> **Update, 28 Oct (evening), after the accelerated program.**
+> - **Code now exists for every remaining M21 work package**: WP5–WP18 and the cross-lane test. It sits in 12 draft PRs (#15–#26), all offline and all unmerged. `main` is unchanged.
+> - **What is left:**
+>   - review rounds and merges;
+>   - the operations OP1–OP5 (your gates);
+>   - re-running the research packages on **real** data after OP1;
+>   - the dashboard UI for templates and controls (a protected-file change);
+>   - WP19.
+> - **Estimate:** engineering ≈ 25 Nov; operational ≈ 1–5 Dec; full acceptance ≈ 22 Dec – 8 Jan (§7a).
+
 - **Where we are.** The foundations are built and well tested offline: scoring, the paper-loop code, safety gates, and the research engine (backtester, walk-forward tools, ML lab). Four pull requests are waiting for review and merge. None of it has run against real data or a real IBKR paper account yet.
 - **What M21 still needs.** Three things:
   1. switch on the real paper loop, so it starts collecting genuine outcomes;
@@ -277,26 +287,26 @@ What each work package contains:
 - [ ] WP4 #13 merged
 
 **Phase 2 — make the loop real**
-- [ ] WP5
-- [ ] WP6
-- [ ] WP7
-- [ ] WP10
+- [ ] WP5 — code in PR #15 (review)
+- [ ] WP6 — code in PR #16 (review; protected scanner + Alpaca provider transitions need approval)
+- [ ] WP7 — code in PR #17 (review)
+- [ ] WP10 — code in PR #18 (review)
 - [ ] OP1
 - [ ] OP2
 - [ ] OP3 — **paper loop running**
 - [ ] OP4 soak (B-3)
 
 **Phase 3 — remaining M21 capability**
-- [ ] WP8
-- [ ] WP9
-- [ ] WP12
-- [ ] WP11 (B-1)
-- [ ] WP13 (C-1, C-2)
-- [ ] WP14 (C-6)
-- [ ] WP15
-- [ ] WP16
-- [ ] WP17
-- [ ] WP18 (C-3)
+- [ ] WP8 — code in PR #21 (review; templates 2–4 shadow-only)
+- [ ] WP9 — backend in PR #22 (review; dashboard UI pending, protected `dashboard/app.py`)
+- [ ] WP12 — code in PR #19 (review)
+- [ ] WP11 (B-1) — tooling in PR #20 (review); real run = OP1
+- [ ] WP13 (C-1, C-2) — driver + canary in PR #24 (review); real run after OP1
+- [ ] WP14 (C-6) — code in PR #23 (review); governance cycle = OP5
+- [ ] WP15 — framework in PR #25 (review); data loading = operator step (G4)
+- [ ] WP16 — shadow code in PR #26 (review); real run after OP1
+- [ ] WP17 — shadow code in PR #26 (review); real run after OP1
+- [ ] WP18 (C-3) — shadow code in PR #26 (review); real run after OP1
 
 **Closeout**
 - [ ] OP5
@@ -328,6 +338,72 @@ What each work package contains:
 | #13 C01 (doc) | `6a8a690eea14a639836af3fbe48f563c83288d73` | **Yes** | Doc only. It remains the M22 hard-blocker design; implementation needs a separate decision (only §11 is pulled into M21, as WP6). |
 
 ---
+
+## 7a. Accelerated program, 28 Oct: PRs, evidence and the new estimate
+
+**All of these are offline draft PRs.** Nothing is merged, deployed, scheduled or connected. The flags stay **OFF**. Guard runs used Python 3.12.3 / NumPy 1.26.4 with C5a isolation from a checkout outside `/tmp`.
+
+| PR | WP | Branch → base | Head | Tests | Mutants | Guard + suite run |
+|---|---|---|---|---|---|---|
+| #15 | WP5 evidence wiring | `m21/wp5-evidence` → stack-base | `5394882` | 26 | 12/12 | 28/28 |
+| #16 | WP6 completed-candle scanner | `m21/wp6-completed-candles` → wp5 | `bf92678` | 19 | 11/11 | 47/47 |
+| #17 | WP7 ledger wiring | `m21/wp7-ledger-wiring` → wp6 | `16ad7fb` | 16 | 11/11 | 32/32 |
+| #18 | WP10 monitoring | `m21/wp10-monitoring` → stack-base | `45784e7` | 13 | 10/10 | 28/28 |
+| #19 | WP12 economics | `m21/wp12-economics` → stack-base | `d7b8e66` | 43 | 14/14 | 35/35 |
+| #20 | WP11 readiness + **lookahead fix** | `m21/wp11-readiness` → wp12 | `ac31ef8` | 35 | 16/16 | 37/37 |
+| #21 | WP8 templates | `m21/wp8-templates` → wp7 | `24a64a9` | 21 | 15/15 | 33/33 |
+| #22 | WP9 template controls | `m21/wp9-template-controls` → wp8 | `bb1b571` | 18 | 13/13 | 33/33 |
+| #23 | WP14 promotion & approval | `m21/wp14-promotion` → wp9 | `b671d92` | 20 | 18/18 | 33/33 |
+| #24 | WP13 walk-forward driver | `m21/wp13-walkforward` → wp11 | `609aa85` | 16 | 13/13 | 37/37 |
+| #25 | WP15 market context | `m21/wp15-market-context` → stack-base | `b421903` | 15 | 12/12 | 28/28 |
+| #26 | WP16–18 shadow ML | `m21/wp16-18-shadow-ml` → wp13 | `6fe2d1a` | 11 | 10/10 | 38/38 |
+
+**Mutant counts are after the fixes.** Eight first-pass survivors were real test gaps; each now has a test. No production assertion was weakened.
+
+**Cross-lane end-to-end test.**
+- Lives on the integration-only branch `m21/integration` (`a4791f6`), which merges both lanes plus WP10 and WP15. It is **not for merging**.
+- `test_m21_e2e_cross_lane.py` has 24 tests, including **17 negative cases**.
+- **48/48** suites pass on that tree.
+- The chain:
+  1. start-stamped store bars;
+  2. WP11 re-stamp;
+  3. WP13 walk-forward with WP12 economics, then the one-shot holdout;
+  4. WP8 bot↔research signal parity;
+  5. WP9 controls;
+  6. WP14 shadow → token → apply → confirm;
+  7. WP16–18 evidence gate;
+  8. WP10 alarms;
+  9. WP15 shadow context.
+
+**Findings that change the plan:**
+1. **Lookahead (fixed in tooling).** M16 stamps bar starts, while M17 and research read closes. Every real-data use must pass through `research.dataqa.stamps.to_close_stamped` (WP11).
+2. **Power.** On an 8-symbol universe the walk-forward cannot detect a planted 0.5σ effect after multiplicity is charged; on 30 symbols it can. The real-data universe must be wide enough. The canary battery (59 nulls + 20 positives) is reported on PR #24.
+3. **Meta-labelling.** In synthetic pilots it was **WORSE** than taking every template entry, and the regime refinements showed no evidence of improvement. The gates correctly refuse to promote them. Real-data runs decide.
+
+**Remaining work after review:**
+- review fixes (≈ 20 %);
+- the walk-forward report card;
+- loading the context data and wiring the WS2 shadow;
+- the dashboard UI for templates and controls (protected file);
+- real-data runs of WP11/13/16–18 after OP1;
+- WP19.
+
+That is about 13–15 dev-days plus reviews, against ≈ 49 before.
+
+| Gate | Optimistic | **Planned** | Pessimistic | Driver |
+|---|---|---|---|---|
+| A. Engineering complete | ≈ 18 Nov | **≈ 25 Nov 2026** | ≈ 9 Dec | 12 PR reviews (1–2 rounds each); OP1 by ≈ 3 Nov for the real-data reruns |
+| B. Operational acceptance | ≈ 27 Nov | **≈ 1–5 Dec 2026** | mid-Dec | merges, then OP2 (the gateway was last seen failed), OP3 activation ≈ 16 Nov, 10-day soak |
+| C. Full M21 acceptance | ≈ 18 Dec | **≈ 22 Dec 2026 – 8 Jan 2027** | late Jan | 20 paper trading days after activation; one governance cycle (OP5); holidays |
+
+**Runbooks** for OP1–OP5 (preparation only) are in `docs/runbooks/M21_OP1-OP5_Runbooks_2026-10-28.md` on this branch.
+
+**Merge order:**
+1. #12 → #1 → #14 → #13 (unchanged).
+2. Then L: #15 → #16 → #17 → #21 → #22 → #23, plus #18.
+3. Then R: #19 → #20 → #24 → #26, plus #25.
+
+Stacked PRs are retargeted to `main` as each base merges, by merging `main` in. No rebases.
 
 ## 8. Decision list (only what is genuinely needed)
 
