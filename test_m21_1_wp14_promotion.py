@@ -264,6 +264,16 @@ class P4_Lifecycle(Book):
 
 
 class P5_BudgetCoolingOffRevert(Book):
+    def test_one_active_change_at_a_time(self):
+        cur = K.read_active(self.ctl.path).config
+        self.book.submit(prop("o1", cur, base_cfg(31.0)))
+        self.book.start_shadow("o1", actor="claude")
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.submit(prop("o2", cur, base_cfg(32.0)))
+        self.assertIn("one_active_change:o1", str(cm.exception))
+        self.book.withdraw("o1", actor="mike", reason="make room")
+        self.assertEqual(self.book.submit(prop("o3", cur, base_cfg(32.0))), TI.GREEN)
+
     def test_one_apply_per_seven_days(self):
         self.to_eligible(prop("a1", K.read_active(self.ctl.path).config, base_cfg(31.0)))
         self.apply("a1")
