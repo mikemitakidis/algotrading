@@ -4187,6 +4187,11 @@ class G10_Hygiene(unittest.TestCase):
                             # imported only by tools/signal_scoring; guarded
                             # in test_m21_1_a01_scoring_truth.T8).
                             "bot/scoring_truth/",
+                            # M21.1 A02 candidate-decision ledger (offline;
+                            # not wired into the runtime; guarded in
+                            # test_m21_1_a02_candidate_ledger.L6).
+                            "bot/candidate_ledger/",
+                            "tools/candidate_ledger/",
                             # M21 research lanes (Issues #2/#3): offline-only
                             # package, its docs and root test modules. Never
                             # imported by production (guarded in
@@ -4336,6 +4341,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_scoring_bridge.py",
             # M21.1 A01 truthful scanner -> M19 scoring contract tests.
             "test_m21_1_a01_scoring_truth.py",
+            # M21.1 A02 candidate-decision ledger tests + implementation plan.
+            "test_m21_1_a02_candidate_ledger.py",
+            "docs/M21_1_A02_candidate_ledger_plan.md",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
             "test_m21_1extra_a_paper_order_contract.py",
