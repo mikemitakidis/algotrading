@@ -151,6 +151,18 @@ class O4_Economics(unittest.TestCase):
         ed = W.net_equity(d["res"], d["priced"], self.tl, self.te)
         self.assertAlmostEqual(ea.iloc[-1] - ed.iloc[-1], te0.net_pnl, places=4)   # its gross P&L is gone too
 
+    def test_unknown_exit_is_inconclusive_and_kept_apart_from_no_fill(self):
+        a = W._oos(self.g, self.bars, self.tl, self.te, self.cfg, None, None)
+        t0 = next(t for t in a["res"].trades if t.exit_reason not in ("eod", "delisted"))
+        dead = {s: b.copy() for s, b in self.bars.items()}
+        b = dead[t0.symbol]
+        x = int(pd.DatetimeIndex(pd.to_datetime(b["ts_utc"], utc=True)).get_loc(pd.Timestamp(t0.exit_bar_close_ts)))
+        b.loc[x, "volume"] = 0.0                                        # the exit bar traded nothing
+        d = W._oos(self.g, dead, self.tl, self.te, self.cfg, None, None)
+        self.assertEqual((d["n_inconclusive"], d["n_no_fill"]), (a["n_inconclusive"] + 1, a["n_no_fill"]))
+        self.assertEqual(d["n_trades"], a["n_trades"] - 1)
+        self.assertEqual(d["n_unfilled"], d["n_no_fill"] + d["n_inconclusive"])
+
     def test_size_sensitivity_grows_less_than_linearly(self):
         a = W._oos(self.g, self.bars, self.tl, self.te, self.cfg, None, None, size_mult=1.0)
         big = W._oos(self.g, self.bars, self.tl, self.te, self.cfg, None, None, size_mult=200.0)
@@ -168,6 +180,16 @@ def summary(**kw):
 
 
 class O5_Verdicts(unittest.TestCase):
+    def test_unknown_exits_block_a_pass_and_breaches_are_disclosed(self):
+        v, why = W._verdict(summary(oos_inconclusive=2), W.WFConfig())
+        self.assertEqual(v, W.INCONCLUSIVE)
+        self.assertIn("oos_trades_with_unknown_exit_price_2", why)
+        v, why = W._verdict(summary(oos_exit_capacity_breach=3), W.WFConfig())
+        self.assertEqual(v, W.PASS)
+        self.assertIn("exit_capacity_breach_trades_3", why)
+        v, _ = W._verdict(summary(oos_inconclusive=2, oos_sharpe_ann=-1.0), W.WFConfig())
+        self.assertEqual(v, W.FAIL)                                      # FAIL still takes precedence
+
     def test_verdict_order_is_fail_closed(self):
         cfg = W.WFConfig()
         cases = [({}, W.PASS), ({"pbo": {"pbo": 0.8}, "oos_trades": 3}, W.FAIL),

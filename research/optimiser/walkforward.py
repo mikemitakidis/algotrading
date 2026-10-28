@@ -54,7 +54,8 @@ import numpy as np
 import pandas as pd
 
 from research.common.hashing import digest
-from research.economics.model import (CorporateActions, EconomicsModel, FillBar, TradeSpec, liquidity_asof,
+from research.economics.model import INCONCLUSIVE as ECON_INCONCLUSIVE
+from research.economics.model import (NO_FILL, CorporateActions, EconomicsModel, FillBar, TradeSpec, liquidity_asof,
                                       price_trade)
 from research.genome import engine as E
 from research.genome import search as SR
@@ -235,6 +236,11 @@ def _oos(genome, bars, tl, w, cfg, membership, actions, *, model=None, size_mult
     r = _net_daily(res, priced, tl, w)
     filled = [te for _, te in priced if te.priced]
     return {"returns": r, "n_trades": len(filled), "n_unfilled": len(priced) - len(filled),
+            # kept apart (review of PR #19): a NO_FILL never happened; an INCONCLUSIVE trade was entered but
+            # its exit price is unknown (halted / zero-volume exit bar, unverified raw basis)
+            "n_no_fill": sum(te.status == NO_FILL for _, te in priced),
+            "n_inconclusive": sum(te.status == ECON_INCONCLUSIVE for _, te in priced),
+            "n_exit_capacity_breach": sum("exit_capacity_breach" in te.flags for te in filled),
             "net_usd": float(sum(te.net_pnl for te in filled)),
             "net_r": [te.net_r for te in filled if np.isfinite(te.net_r)],
             "capped": sum(te.status == "CAPPED" for te in filled), "res": res, "priced": priced}
@@ -304,6 +310,8 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
                           "chosen_plateau": sel["best_plateau"]["plateau"],
                           "isolated_peak": sel["best_isolated"], "train_points": int(len(df)),
                           "oos_trades": o["n_trades"], "oos_unfilled": o["n_unfilled"], "oos_capped": o["capped"],
+                          "oos_no_fill": o["n_no_fill"], "oos_inconclusive": o["n_inconclusive"],
+                          "oos_exit_capacity_breach": o["n_exit_capacity_breach"],
                           "oos_net_usd": o["net_usd"], "oos_sharpe": _sharpe_ann(o["returns"]),
                           "default_sharpe": _sharpe_ann(d["returns"]), "stress_net_sharpe": _sharpe_ann(st["returns"]),
                           "buy_and_hold_sharpe": bh["sharpe_ann"]})
@@ -326,6 +334,9 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
         pbo_note = str(exc)
     summary = {
         "oos_days": int(len(R)), "oos_trades": int(trades), "oos_sharpe_ann": _sharpe_ann(R),
+        "oos_no_fill": int(sum(f["oos_no_fill"] for f in fold_rows)),
+        "oos_inconclusive": int(sum(f["oos_inconclusive"] for f in fold_rows)),
+        "oos_exit_capacity_breach": int(sum(f["oos_exit_capacity_breach"] for f in fold_rows)),
         "oos_mean_net_r": float(np.mean(net_r)) if net_r else float("nan"),
         "default_params_oos_sharpe_ann": _sharpe_ann(np.concatenate(oos_def_r)) if oos_def_r else 0.0,
         "stress_oos_sharpe_ann": _sharpe_ann(np.concatenate(oos_stress_r)) if oos_stress_r else 0.0,
@@ -370,6 +381,11 @@ def _verdict(s: Dict, cfg: WFConfig) -> Tuple[str, List[str]]:
         return FAIL, ["no_oos_edge_after_costs"]
     if s["stress_oos_sharpe_ann"] <= 0:
         return FAIL, ["edge_does_not_survive_%gx_costs" % s["stress_multiplier"]]
+    if s.get("oos_exit_capacity_breach", 0):
+        reasons.append("exit_capacity_breach_trades_%d" % s["oos_exit_capacity_breach"])
+    if s.get("oos_inconclusive", 0):
+        # entered trades whose exit price is unknown cannot support a PASS
+        return INCONCLUSIVE, reasons + ["oos_trades_with_unknown_exit_price_%d" % s["oos_inconclusive"]]
     if s["pbo"] is None:
         reasons.append("pbo_unavailable")
     if s["dsr"] is None or not (s["dsr"]["dsr"] >= cfg.dsr_min):
@@ -396,10 +412,12 @@ def _holdout(template, cfg, *, ledger, family, sealed: SealedHistory, research, 
     w = Window(lo, len(ftl) - 1)
     o = _oos(pick, full, ftl, w, cfg, None, actions)
     st = _oos(pick, full, ftl, w, cfg, None, actions, model=cfg.economics.scale(cfg.stress))
-    ok = o["n_trades"] >= max(5, cfg.min_oos_trades // 4)
+    ok = o["n_trades"] >= max(5, cfg.min_oos_trades // 4) and o["n_inconclusive"] == 0
     status = (INCONCLUSIVE if not ok else PASS if (_sharpe_ann(o["returns"]) > 0 and _sharpe_ann(st["returns"]) > 0)
               else FAIL)
     return {"status": status, "genome": dict(pick.p), "genome_id": pick.genome_id, "trades": o["n_trades"],
+            "no_fill": o["n_no_fill"], "inconclusive": o["n_inconclusive"],
+            "exit_capacity_breach": o["n_exit_capacity_breach"],
             "net_usd": o["net_usd"], "sharpe_ann": _sharpe_ann(o["returns"]),
             "stress_sharpe_ann": _sharpe_ann(st["returns"]),
             "n_trials_family_at_holdout": int(ledger.family_trial_count(family)),
