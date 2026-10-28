@@ -56,11 +56,18 @@ class TruthPolicy:
     required_timeframes: Tuple[str, ...] = ("1D", "4H", "1H", "15m")
     specs: Mapping[str, TimeframeSpec] = field(default_factory=lambda: dict(DEFAULT_SPECS))
     max_lag_minutes: float = 30.0
+    # How the scanner evaluates bars: "in_progress" (today's scanner scores the
+    # forming bar) or "completed" (finished bars only; see observations.py).
+    bar_basis: str = "in_progress"
     count_incomplete_as_available: bool = False
     accepted_risk_scopes: Tuple[str, ...] = ("ibkr_paper", "ibkr_live",
                                              "etoro_paper", "etoro_real")
     max_risk_decision_age_minutes: float = 15.0
     max_leverage: int = 1
+
+    def __post_init__(self):
+        if self.bar_basis not in ("in_progress", "completed"):
+            raise ValueError("unknown bar_basis %r" % (self.bar_basis,))
 
 
 # ── schema ──────────────────────────────────────────────────────────────────
@@ -318,7 +325,8 @@ def build_truth(signal: Mapping[str, Any], *,
     if ev is not None:
         obs = classify_symbol(bar_asof, timeframes=policy.required_timeframes,
                               evaluated_at=ev, calendar=calendar, specs=policy.specs,
-                              max_lag_minutes=policy.max_lag_minutes)
+                              max_lag_minutes=policy.max_lag_minutes,
+                              basis=policy.bar_basis)
     states = [o.state for o in (obs or ())]
     dq = "data_quality_context"
     if not schema.ok or ObservationState.INVALID in states:
@@ -351,7 +359,9 @@ def build_truth(signal: Mapping[str, Any], *,
         F.append(FieldTruth(dq, K.DQ_STALE_DATA_FLAG, MEASURED, bool(stale),
                             "stale: %s" % (",".join(stale) or "none")))
         F.append(FieldTruth(dq, K.DQ_DATA_FRESHNESS_MINUTES, MEASURED, lag,
-                            "max lag behind newest available market data (min)"))
+                            "max lag behind newest available market data (min)"
+                            if policy.bar_basis == "in_progress" else
+                            "max lag behind the newest completed bar (min)"))
 
     # timeframes available for THIS symbol
     if obs is None:

@@ -15,12 +15,23 @@ timeframe, at an explicit evaluation time:
   INCOMPLETE  the bar is still forming at the evaluation time (in progress)
   VALID       a complete bar, not stale
 
-``lag_minutes`` is the staleness measure: minutes between the moment newer
-market data started to exist (the start of the following bar) and the newest
-instant market data can exist at evaluation time (``market_now``: the
-evaluation time during a session, otherwise the latest session close). It is
-0 when no newer data can exist yet. ``age_minutes`` is plain data age: minutes
-since the bar closed (complete bars) or since it opened (incomplete bars).
+``lag_minutes`` is the staleness measure. Its basis follows how the scanner
+evaluates bars (``basis``):
+
+  in_progress (default; today's scanner, which scores the forming bar):
+      minutes between the moment newer market data started to exist (the
+      start of the following bar) and the newest instant market data can
+      exist at evaluation time (``market_now``: the evaluation time during a
+      session, otherwise the latest session close).
+  completed (a scanner that scores only finished bars):
+      minutes since a NEWER COMPLETED bar became available (the close of the
+      following bar) at evaluation time. A prior daily close is therefore
+      current for the whole next session and stale only once that session's
+      bar has closed; a forming bar is INVALID under this basis.
+
+It is 0 when no newer data (or no newer completed bar) can exist yet.
+``age_minutes`` is plain data age: minutes since the bar closed (complete
+bars) or since it opened (incomplete bars).
 """
 from __future__ import annotations
 
@@ -32,10 +43,14 @@ from typing import Any, Mapping, Optional, Tuple
 
 from bot.scoring_truth.sessions import (
     BarOutOfSession, CalendarError, DEFAULT_SPECS, SessionCalendar,
-    TimeframeSpec, bar_timing,
+    TimeframeSpec, bar_timing, following_bar_close,
 )
 
 UTC = timezone.utc
+
+BASIS_IN_PROGRESS = "in_progress"
+BASIS_COMPLETED = "completed"
+BAR_BASES = (BASIS_IN_PROGRESS, BASIS_COMPLETED)
 
 
 class ObservationState(str, enum.Enum):
@@ -95,12 +110,15 @@ def classify_observation(timeframe: str, bar_start: Any, *,
                          evaluated_at: datetime,
                          calendar: Optional[SessionCalendar],
                          spec: Optional[TimeframeSpec] = None,
-                         max_lag_minutes: float = 30.0) -> TimeframeObservation:
+                         max_lag_minutes: float = 30.0,
+                         basis: str = BASIS_IN_PROGRESS) -> TimeframeObservation:
     """Classify one recorded bar start. ``evaluated_at`` must be aware."""
     ev = parse_utc(evaluated_at)
     if not (isinstance(max_lag_minutes, (int, float)) and math.isfinite(max_lag_minutes)
             and max_lag_minutes >= 0):
         raise ValueError("max_lag_minutes must be a finite number >= 0")
+    if basis not in BAR_BASES:
+        raise ValueError("unknown bar basis %r" % (basis,))
     if bar_start is None:
         return TimeframeObservation(timeframe, ObservationState.MISSING,
                                     "no_bar_recorded")
@@ -133,7 +151,22 @@ def classify_observation(timeframe: str, bar_start: Any, *,
                                     age_minutes=_minutes(ev, start))
     complete = tm.close <= ev
     age = _minutes(ev, tm.close if complete else start)
-    if tm.next_start is None or tm.next_start >= mnow:
+    if basis == BASIS_COMPLETED:
+        if not complete:
+            return TimeframeObservation(
+                timeframe, ObservationState.INVALID,
+                "bar_not_complete_under_completed_basis%s"
+                % ("" if tm.exact else " (conservative close bound; declare base_anchor)"),
+                s_iso, tm.close.isoformat(), tm.exact, tm.session_close.isoformat(),
+                age_minutes=age)
+        try:
+            fol = following_bar_close(calendar, spec, tm)
+        except (BarOutOfSession, CalendarError) as exc:
+            return TimeframeObservation(timeframe, ObservationState.UNVERIFIED,
+                                        "calendar_cannot_verify_following_bar: %s" % exc,
+                                        s_iso, age_minutes=age)
+        lag = 0.0 if fol is None or fol[0] >= ev else _minutes(ev, fol[0])
+    elif tm.next_start is None or tm.next_start >= mnow:
         lag = 0.0
     else:
         lag = _minutes(mnow, tm.next_start)
@@ -155,7 +188,8 @@ def classify_symbol(bar_asof: Optional[Mapping[str, Any]], *,
                     evaluated_at: datetime,
                     calendar: Optional[SessionCalendar],
                     specs: Optional[Mapping[str, TimeframeSpec]] = None,
-                    max_lag_minutes: float = 30.0
+                    max_lag_minutes: float = 30.0,
+                    basis: str = BASIS_IN_PROGRESS
                     ) -> Optional[Tuple[TimeframeObservation, ...]]:
     """Classify every required timeframe for one symbol. Returns None when no
     as-of record was supplied at all (UNKNOWN, not 'all missing')."""
@@ -168,5 +202,5 @@ def classify_symbol(bar_asof: Optional[Mapping[str, Any]], *,
     specs = specs or DEFAULT_SPECS
     return tuple(classify_observation(tf, bar_asof.get(tf), evaluated_at=evaluated_at,
                                       calendar=calendar, spec=specs.get(tf),
-                                      max_lag_minutes=max_lag_minutes)
+                                      max_lag_minutes=max_lag_minutes, basis=basis)
                  for tf in timeframes)

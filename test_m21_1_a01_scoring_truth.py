@@ -332,6 +332,13 @@ class T2_ObservationStates(unittest.TestCase):
         o = obs("15m", "2026-10-30T19:45:00+00:00", "2026-11-02T15:30:00+00:00")
         self.assertEqual((o.state, o.lag_minutes), (ObservationState.STALE, 60.0))
 
+    def test_default_basis_is_unchanged_in_progress(self):
+        self.assertEqual(TruthPolicy().bar_basis, "in_progress")
+        a = obs("1D", "2026-10-26T04:00:00+00:00", "2026-10-27T15:00:00+00:00")
+        b = obs("1D", "2026-10-26T04:00:00+00:00", "2026-10-27T15:00:00+00:00",
+                basis="in_progress")
+        self.assertEqual(a, b)
+
     def test_missing_invalid_unverified(self):
         self.assertEqual(obs("1H", None, EV).state, ObservationState.MISSING)
         for bad in ("2026-10-27T19:30:00", "yesterday", 12345, True):
@@ -358,6 +365,124 @@ class T2_ObservationStates(unittest.TestCase):
 
 
 # ═══════════════════════════ corporate actions ══════════════════════════════
+
+class T2b_CompletedBarBasis(unittest.TestCase):
+    """Completed-candle evaluation (C01 §11): a finished bar is current until a
+    NEWER finished bar has existed for longer than the allowed lag."""
+
+    def c(self, tf, start, ev, **kw):
+        return obs(tf, start, ev, basis="completed", **kw)
+
+    def test_prior_daily_close_is_current_for_the_next_session(self):
+        mon = "2026-10-26T04:00:00+00:00"
+        # the defect: under the in-progress basis Monday's bar is stale 30 min
+        # into Tuesday's session; under the completed basis it is current
+        self.assertEqual(obs("1D", mon, "2026-10-27T15:00:00+00:00").state,
+                         ObservationState.STALE)
+        for ev in ("2026-10-27T13:45:00+00:00", "2026-10-27T15:00:00+00:00",
+                   "2026-10-27T19:59:00+00:00"):
+            o = self.c("1D", mon, ev)
+            self.assertEqual((o.state, o.lag_minutes), (ObservationState.VALID, 0.0), ev)
+        # Tuesday's bar closed 20:00Z: Monday's is stale only after the lag
+        o = self.c("1D", mon, "2026-10-27T20:29:00+00:00")
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.VALID, 29.0))
+        o = self.c("1D", mon, "2026-10-27T20:31:00+00:00")
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.STALE, 31.0))
+        # ... and stays stale overnight (missed close, not market-time frozen)
+        self.assertEqual(self.c("1D", mon, "2026-10-28T02:00:00+00:00").state,
+                         ObservationState.STALE)
+
+    def test_weekend_holiday_half_day_and_dst(self):
+        fri = "2026-10-30T04:00:00+00:00"                  # EDT Friday
+        self.assertEqual(self.c("1D", fri, "2026-10-31T12:00:00+00:00").state,
+                         ObservationState.VALID)            # Saturday
+        self.assertEqual(self.c("1D", fri, "2026-11-02T14:00:00+00:00").state,
+                         ObservationState.VALID)            # Mon pre-open (EST)
+        self.assertEqual(self.c("1D", fri, "2026-11-02T20:59:00+00:00").state,
+                         ObservationState.VALID)            # Mon close is 21:00Z
+        o = self.c("1D", fri, "2026-11-02T21:31:00+00:00")
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.STALE, 31.0))
+        wed = "2026-11-25T05:00:00+00:00"
+        self.assertEqual(self.c("1D", wed, "2026-11-26T21:31:00+00:00").state,
+                         ObservationState.VALID)            # Thanksgiving: closed
+        self.assertEqual(self.c("1D", wed, "2026-11-27T18:29:00+00:00").state,
+                         ObservationState.VALID)            # half day closes 18:00Z
+        self.assertEqual(self.c("1D", wed, "2026-11-27T18:31:00+00:00").state,
+                         ObservationState.STALE)
+        # a calendar that misses the holiday expects a Thursday bar: fails closed
+        self.assertEqual(self.c("1D", wed, "2026-11-26T21:31:00+00:00",
+                                cal=CAL_NO_THANKSGIVING).state, ObservationState.STALE)
+
+    def test_intraday_following_bar_keeps_the_provider_grid(self):
+        o = self.c("15m", "2026-10-27T14:00:00+00:00", "2026-10-27T15:00:00+00:00")
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.VALID, 30.0))
+        self.assertEqual(self.c("15m", "2026-10-27T14:00:00+00:00",
+                                "2026-10-27T15:01:00+00:00").state, ObservationState.STALE)
+        # session-anchored 1H grid: last bar 19:30Z; next day's first closes 14:30Z
+        so = "2026-10-27T19:30:00+00:00"
+        self.assertEqual(self.c("1H", so, "2026-10-28T14:59:00+00:00").state,
+                         ObservationState.VALID)
+        self.assertEqual(self.c("1H", so, "2026-10-28T15:01:00+00:00").state,
+                         ObservationState.STALE)
+        # clock-anchored 1H grid: last bar 19:00Z; next day's first (13:00) closes 14:00Z
+        ck = "2026-10-27T19:00:00+00:00"
+        o = self.c("1H", ck, "2026-10-28T14:29:00+00:00")
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.VALID, 29.0))
+        self.assertEqual(self.c("1H", ck, "2026-10-28T14:31:00+00:00").state,
+                         ObservationState.STALE)
+
+    def test_4h_bucket_bounds(self):
+        unk = TimeframeSpec("4H", BUCKET, 240, 60, None)
+        so = TimeframeSpec("4H", BUCKET, 240, 60, ANCHOR_SESSION_OPEN)
+        b = "2026-10-27T12:00:00+00:00"
+        # unknown anchor: complete only at the conservative bound (17:00Z)
+        o = self.c("4H", b, "2026-10-27T16:45:00+00:00", spec=unk)
+        self.assertEqual(o.state, ObservationState.INVALID)
+        self.assertIn("declare base_anchor", o.reason)
+        self.assertEqual(self.c("4H", b, "2026-10-27T16:45:00+00:00", spec=so).state,
+                         ObservationState.VALID)
+        # following bucket (16:00) closes no earlier than 20:00Z
+        self.assertEqual(self.c("4H", b, "2026-10-27T20:29:00+00:00", spec=unk).state,
+                         ObservationState.VALID)
+        self.assertEqual(self.c("4H", b, "2026-10-27T20:31:00+00:00", spec=unk).state,
+                         ObservationState.STALE)
+        # EST (close 21:00Z): the following 16:00 bucket's close is bounded
+        # BELOW by 20:00Z, not by its conservative upper bound (21:00Z)
+        o = self.c("4H", "2026-11-03T12:00:00+00:00", "2026-11-03T20:31:00+00:00", spec=unk)
+        self.assertEqual((o.state, o.lag_minutes), (ObservationState.STALE, 31.0))
+
+    def test_forming_bar_is_invalid_under_completed_basis(self):
+        ev = "2026-10-27T15:05:00+00:00"
+        self.assertEqual(obs("1H", "2026-10-27T14:30:00+00:00", ev).state,
+                         ObservationState.INCOMPLETE)
+        o = self.c("1H", "2026-10-27T14:30:00+00:00", ev)
+        self.assertEqual(o.state, ObservationState.INVALID)
+        self.assertTrue(o.reason.startswith("bar_not_complete_under_completed_basis"))
+
+    def test_basis_is_validated(self):
+        with self.assertRaises(ValueError):
+            obs("1D", "2026-10-26T04:00:00+00:00", EV, basis="latest")
+        with self.assertRaises(ValueError):
+            TruthPolicy(bar_basis="latest")
+
+    def test_contract_end_to_end(self):
+        ev = U("2026-10-27T15:05:00+00:00")
+        asof = {"1D": "2026-10-26T04:00:00+00:00", "4H": "2026-10-26T16:00:00+00:00",
+                "1H": "2026-10-27T13:30:00+00:00", "15m": "2026-10-27T14:45:00+00:00"}
+        s = sig(timestamp="2026-10-27T15:00:00+00:00")
+        kw = full_evidence(evaluated_at_utc=ev, bar_asof=asof,
+                           risk_decision=approval(at="2026-10-27T15:01:00+00:00"))
+        done = TruthPolicy(bar_basis="completed")
+        ci, _ = enrich_signal_with_truth(s, policy=done, **kw)
+        self.assertIs(ci.data_quality_context[K.DQ_STALE_DATA_FLAG], False)
+        self.assertEqual(ci.data_quality_context[K.DQ_DATA_FRESHNESS_MINUTES], 0.0)
+        self.assertEqual(ci.timeframe_context[K.TF_AVAILABLE], ["1D", "4H", "1H", "15m"])
+        self.assertNotIn("stale_data", score_signal(s, policy=done, **kw).hard_gate_failures)
+        # the same completed bars read as stale under today's in-progress basis
+        ci2, _ = enrich_signal_with_truth(s, **kw)
+        self.assertIs(ci2.data_quality_context[K.DQ_STALE_DATA_FLAG], True)
+        self.assertIn("stale_data", score_signal(s, **kw).hard_gate_failures)
+
 
 class T3_CorporateActions(unittest.TestCase):
     def test_detector(self):
