@@ -4193,6 +4193,8 @@ class G10_Hygiene(unittest.TestCase):
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
             "docs/NEXT_WORK_REGISTER.md",
+            # C01 (M22 blocker): Risk Authority parity design (documentation only).
+            "docs/M22_C01_risk_authority_parity_design.md",
             # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",
