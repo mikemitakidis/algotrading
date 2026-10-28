@@ -257,7 +257,10 @@ class N1_TNMatrix(unittest.TestCase):
         self.assertEqual(late.classify("1H", "2026-11-03T14:00:00")[0], UNKNOWN)  # naive
         self.assertEqual(late.classify("2H", Z("2026-11-03T14:00:00"))[0], UNKNOWN)
         unknown = lambda tf, ts: (UNKNOWN, None)                     # noqa: E731
-        self.assertIsNone(select_completed(df, "15m", unknown)[0])
+        out, sel = select_completed(df, "15m", unknown)
+        self.assertIsNone(out)
+        self.assertTrue(sel.reason.startswith("completion_unknown_at_"), sel.reason)
+        self.assertEqual(sel.dropped_rows, 0)                     # stops, never skips
         boom = lambda tf, ts: 1 / 0                                  # noqa: E731
         self.assertIsNone(select_completed(df, "15m", boom)[0])
         self.assertIsNone(regular_session_only(df, "15m", boom))
@@ -553,13 +556,11 @@ class N6_ProtectedTransitions(unittest.TestCase):
         e = PB.APPROVED_CHANGES["bot/scanner.py"]
         rc, removed, added = _diff_lines(A01_SCANNER_BLOB, e.to_blob)
         self.assertEqual(rc, 0)
-        self.assertEqual(removed, ["from bot.data       import fetch_bars, resample_to_4h",
-                                   "now_utc  = datetime.now(timezone.utc).isoformat()"])
+        self.assertEqual(removed, ["now_utc  = datetime.now(timezone.utc).isoformat()"])
         code = [x for x in added if not x.startswith("#")]
         self.assertEqual(code, [
             "from bot.bar_completion import (BASIS_COMPLETED, BASIS_IN_PROGRESS,",
             "regular_session_only, select_completed)",
-            "from bot.data       import fetch_bars, resample_to_4h",
             "bar_basis  = (config.get('bar_basis', BASIS_IN_PROGRESS)",
             "if isinstance(config, dict) else BASIS_IN_PROGRESS)",
             "completion = config.get('bar_completion') if bar_basis == BASIS_COMPLETED else None",
