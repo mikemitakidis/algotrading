@@ -97,13 +97,13 @@ def main(argv=None) -> int:
     res = run_canary(a.template, W.WFConfig(), ledger=led, name=a.name, n_nulls=a.nulls,
                      effect_sizes=(a.effect,) if a.positives else (), n_per_effect=a.positives,
                      n_symbols=a.symbols, n_sessions=a.sessions)
+    print(res.verdict, "null_passes=%d/%d" % (res.null_passes, res.n_nulls),
+          " ".join("power@%g=%d/%d" % (p.effect, p.detections, p.n) for p in res.power), flush=True)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "canary_%s.json" % a.template).write_text(json.dumps(
-        {"origin": "synthetic", "battery": asdict(res), "args": vars(a), "ledger_tip": led.tip_hash,
-         "ledger_ok": led.verify().ok}, indent=2, default=str))
-    print(res.verdict, "null_passes=%d/%d" % (res.null_passes, res.n_nulls),
-          " ".join("power@%g=%d/%d" % (p.effect, p.detections, p.n) for p in res.power))
+    target = out / ("canary_%s.json" % a.template)
+    target.write_text(json.dumps({"origin": "synthetic", "battery": asdict(res), "args": vars(a),
+                                  "ledger_tip": led.tip_hash, "ledger_ok": led.verify().ok}, indent=2, default=str))
     return 0
 
 

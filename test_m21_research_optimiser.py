@@ -249,6 +249,18 @@ class O8_Canary(unittest.TestCase):
                          n_per_effect=1)
 
 
+class O8b_CanaryCLI(unittest.TestCase):
+    def test_cli_writes_its_report(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = C.main(["--template", "mean_reversion", "--nulls", "1", "--positives", "0", "--symbols", "4",
+                         "--sessions", "300", "--name", "cli-test", "--out", tmp])
+            self.assertEqual(rc, 0)
+            rep = json.loads((Path(tmp) / "canary_mean_reversion.json").read_text())
+            self.assertEqual((rep["origin"], rep["battery"]["n_nulls"], rep["ledger_ok"]), ("synthetic", 1, True))
+
+
 class O9_Boundary(unittest.TestCase):
     def test_research_boundary_and_no_production_import(self):
         self.assertEqual([str(v) for v in boundary.scan_tree(REPO / "research" / "optimiser")], [])
