@@ -698,6 +698,22 @@ class P7_CrashAndFaults(CrossStore):
         self.assertIn("a_decay_revert_cannot_be_rolled_forward", str(cm.exception))
         self.assertEqual(self.book.state("z3"), MC.MONITORING)
 
+    def test_config_changed_between_intent_and_activation_is_never_overwritten(self):
+        t = self.approved("z5")
+        ctl = self.ctl
+
+        def operator_changes_controls(point):
+            if point == "apply:version_approved":
+                x = ctl.propose(base_cfg(25.0), author="mike", reason="concurrent manual change")
+                ctl.approve(x, approver="mike", reason="manual")
+                ctl.activate(x, actor="mike")
+        self.book.fault_hook = operator_changes_controls
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("z5", self.ctl, token=t, verifier=self.v)
+        self.assertIn("BLOCKED", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).config, base_cfg(25.0))  # the operator's change stands
+        self.assertEqual(self.book.state("z5"), MC.APPROVED)
+
     def test_divergence_is_not_opened_for_a_proposal_that_moved_on(self):
         t = self.approved("z4")
         self.book.apply("z4", self.ctl, token=t, verifier=self.v)
