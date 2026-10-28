@@ -402,6 +402,56 @@ class R9_CLI(unittest.TestCase):
                 R.main(["--out", tmp])
 
 
+class R11_RealDataEntrances(unittest.TestCase):
+    """Review of PR #20: the real-data entrances that align timeframes (M17 load_multi_tf_bars, the M18
+    dataset CLI loader) refuse M16 start-stamped bars; converted bars pass. One timeframe alone is never
+    aligned, so it is not refused."""
+
+    DAYS = SESS[20:25]
+
+    def frames(self, stamp):
+        raw = {"1D": yf_daily(self.DAYS), "1H": intraday(self.DAYS, 60), "15m": intraday(self.DAYS, 15)}
+        if stamp == "start":
+            return raw
+        return {tf: ST.to_close_stamped(df, tf, CAL, ST.START)[0] for tf, df in raw.items()}
+
+    def test_evidence_is_exact_for_start_and_zero_after_conversion(self):
+        from bot.backtesting.mtf_context import start_stamp_evidence
+        start, conv = self.frames("start"), self.frames("close")
+        self.assertEqual(start_stamp_evidence(start["1D"]["ts_utc"]), len(self.DAYS))      # local midnight
+        self.assertEqual(start_stamp_evidence(start["15m"]["ts_utc"]), len(self.DAYS))     # the 09:30 bar
+        for tf, df in conv.items():
+            self.assertEqual(start_stamp_evidence(df["ts_utc"]), 0, tf)
+
+    def test_alignment_refuses_start_stamps_only_across_timeframes(self):
+        from bot.backtesting.mtf_context import StartStampedBarsError, refuse_start_stamped
+        with self.assertRaises(StartStampedBarsError) as cm:
+            refuse_start_stamped(self.frames("start"), "test")
+        self.assertIn("15m", str(cm.exception))
+        refuse_start_stamped(self.frames("close"), "test")
+        refuse_start_stamped({"1D": yf_daily(self.DAYS), "1H": None}, "single timeframe")
+
+    def test_m18_cli_loader_refuses_m16_start_stamps(self):
+        from unittest import mock
+        from bot.backtesting.mtf_context import StartStampedBarsError
+        from bot.ml import cli as M18
+        from bot.ml.dataset import m16_loader
+        for stamp, ok in (("start", False), ("close", True)):
+            bars = self.frames(stamp)
+            with mock.patch.object(m16_loader, "load_bars", side_effect=lambda sym, tf, adjusted: bars[tf]):
+                if ok:
+                    self.assertEqual(set(M18._default_bars_provider("AAA", ["1D", "1H", "15m"])), {"1D", "1H", "15m"})
+                else:
+                    with self.assertRaises(StartStampedBarsError):
+                        M18._default_bars_provider("AAA", ["1D", "1H", "15m"])
+
+    def test_m17_loader_refuses_m16_start_stamps(self):
+        from bot.backtesting import data_loader as DL
+        src = Path(DL.__file__).read_text()
+        i = src.index("def load_multi_tf_bars(")
+        self.assertIn("refuse_start_stamped(per_tf_bars", src[i:])
+
+
 class R10_Boundary(unittest.TestCase):
     def test_research_tree_clean_and_only_sessions_admitted(self):
         self.assertEqual([str(v) for v in boundary.scan_tree(REPO / "research")], [])
