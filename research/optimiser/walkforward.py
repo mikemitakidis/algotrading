@@ -245,6 +245,21 @@ def _sharpe_ann(r) -> float:
     return float(r.mean() / r.std(ddof=1) * math.sqrt(252)) if len(r) > 2 and r.std(ddof=1) > 0 else 0.0
 
 
+def require_close_stamped(bars: Mapping[str, pd.DataFrame]) -> None:
+    """Real bars must be WP11 ``to_close_stamped`` output: every row carries a
+    ``bar_open_ts`` strictly before its ``ts_utc`` (the close). Raw M16 rows
+    (stamped at the bar START, no ``bar_open_ts``) are refused — fail closed
+    (review of PR #20)."""
+    for s in sorted(bars):
+        b = bars[s]
+        if "bar_open_ts" not in b.columns:
+            raise ValueError("real bars for %s carry no bar_open_ts: convert M16 start stamps with "
+                             "research.dataqa.stamps.to_close_stamped first" % s)
+        bo, ts = pd.to_datetime(b["bar_open_ts"], utc=True), pd.to_datetime(b["ts_utc"], utc=True)
+        if bo.isna().any() or ts.isna().any() or (bo >= ts).any():
+            raise ValueError("real bars for %s: bar_open_ts must be strictly before every ts_utc (close)" % s)
+
+
 # ── per-template run ─────────────────────────────────────────────────────────
 def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig, *, ledger: Ledger,
                  data_seed: int, sealed: Optional[SealedHistory] = None,
@@ -252,6 +267,8 @@ def run_template(template: str, bars: Mapping[str, pd.DataFrame], cfg: WFConfig,
                  actions: Optional[Mapping[str, CorporateActions]] = None, origin: str = "synthetic") -> Dict:
     if origin not in ("synthetic", "real"):
         raise ValueError("origin must be 'synthetic' or 'real'")
+    if origin == "real":
+        require_close_stamped(bars)
     family = "wf:%s" % template
     axes = cfg.axes_for(template)
     genomes, n_invalid = SR.grid(template, axes)
@@ -393,7 +410,11 @@ def run(bars: Mapping[str, pd.DataFrame], cfg: WFConfig = WFConfig(), *, ledger:
         origin: str = "synthetic", membership: Optional[Mapping[str, np.ndarray]] = None,
         actions: Optional[Mapping[str, CorporateActions]] = None, holdout_name: str = "wf-holdout") -> Dict:
     """All templates. ``bars``: close-stamped daily bars per symbol (WP11
-    ``to_close_stamped`` output for real data)."""
+    ``to_close_stamped`` output for real data, enforced)."""
+    if origin not in ("synthetic", "real"):
+        raise ValueError("origin must be 'synthetic' or 'real'")
+    if origin == "real":
+        require_close_stamped(bars)
     tl = timeline_of(bars)
     seal_ts = tl[int(len(tl) * (1.0 - cfg.holdout_frac))]
     sealed = SealedHistory(ledger, holdout_name, bars, seal_ts)
@@ -417,4 +438,4 @@ def _cfg_dict(cfg: WFConfig) -> Dict:
 
 
 __all__ = ["PASS", "FAIL", "INCONCLUSIVE", "HOLDOUT_NOT_RUN", "DEFAULT_AXES", "WFConfig", "SealedHistory", "Window",
-           "timeline_of", "folds", "reprice", "net_equity", "run_template", "run"]
+           "timeline_of", "folds", "reprice", "net_equity", "require_close_stamped", "run_template", "run"]

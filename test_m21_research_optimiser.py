@@ -211,6 +211,19 @@ class O6_EndToEnd(unittest.TestCase):
         self.assertEqual(again["templates"]["mean_reversion"]["summary"], self.r["summary"])
         self.assertEqual(again["templates"]["mean_reversion"]["folds"], self.r["folds"])
 
+    def test_real_origin_requires_close_stamped_bars(self):
+        bars = small(n_sessions=200)
+        for b in (bars, {k: v.assign(bar_open_ts=pd.to_datetime(v["ts_utc"], utc=True)) for k, v in bars.items()}):
+            for call in (lambda: W.run_template("mean_reversion", b, W.WFConfig(templates=MR), ledger=Ledger(),
+                                                data_seed=1, origin="real"),
+                         lambda: W.run(b, W.WFConfig(templates=MR), ledger=Ledger(), data_seed=1, origin="real")):
+                with self.assertRaises(ValueError) as cm:
+                    call()
+                self.assertIn("bar_open_ts", str(cm.exception))
+        ok = {k: v.assign(bar_open_ts=pd.to_datetime(v["ts_utc"], utc=True) - pd.Timedelta(hours=6, minutes=30))
+              for k, v in bars.items()}
+        W.require_close_stamped(ok)
+
     def test_origin_must_be_declared(self):
         with self.assertRaises(ValueError):
             W.run_template("mean_reversion", small(n_sessions=200), W.WFConfig(templates=MR), ledger=Ledger(),
