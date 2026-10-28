@@ -154,6 +154,8 @@ class R3_Conversion(unittest.TestCase):
         self.assertEqual((h["bar_open_ts"].iloc[0], h["ts_utc"].iloc[0]),
                          (pd.Timestamp("2026-11-03 14:30", tz="UTC"), pd.Timestamp("2026-11-03 15:00", tz="UTC")))
         self.assertEqual(len(h), 7)
+        s, _ = ST.to_close_stamped(intraday(d, 60), "1H", CAL, ST.START)   # session-anchored: 15:30 ET bar
+        self.assertEqual(s["ts_utc"].iloc[-1], pd.Timestamp("2026-11-03 21:00", tz="UTC"))   # cut at the close
 
     def test_utc_grid_4h_bucket_gets_conservative_close(self):
         f = frame([pd.Timestamp("2026-11-03 12:00", tz="UTC"), pd.Timestamp("2026-11-03 16:00", tz="UTC"),
@@ -344,6 +346,15 @@ class R8_ParityAndReport(unittest.TestCase):
         few = R.parity_check({s: per for s, per in list(self.rep["_converted"].items())[:1]}, provider="synthetic",
                              adjusted=True, min_compared=10**6)
         self.assertEqual(few.verdict, R.INCONCLUSIVE)
+
+    def test_parity_mismatch_fails(self):
+        from unittest import mock
+        from research.evidence import parity
+        bad = parity.ParityResult(n_compared=50, n_match=49, n_mismatch=1, n_known_divergence=0, n_skipped=0,
+                                  mismatches=[{"candidate_id": "C-x", "why": "price"}])
+        with mock.patch.object(parity, "check", return_value=bad):
+            c = R.parity_check(self.rep["_converted"], provider="synthetic", adjusted=True)
+        self.assertEqual((c.verdict, c.detail["mismatches"]), (R.FAIL, 1))
 
     def test_convention_contradiction_and_origin_rules(self):
         chk, use = R.convention_check(close_daily(SESS[:5]), "1D", CAL, ST.START)
