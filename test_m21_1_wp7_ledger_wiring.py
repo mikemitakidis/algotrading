@@ -481,6 +481,11 @@ class W7_RiskProvenance(unittest.TestCase):
         p = self.risk(cid)
         self.assertEqual((p["verdict"], p["evidence"], p["risk_decision_id"]), ("pass", "VERIFIED", "dec-q"))
         self.assertEqual(self.linked(cid), "dec-q")
+        self.assertTrue(L.authorising(p))
+        self.assertFalse(L.permits_execution(p))                        # a reconstruction is not a permission
+        sink = L.LoopLedger(self.db.writer(), m14_db=self.m14.path)
+        self.assertFalse(sink.intent(SimpleNamespace(candidate_id=cid, symbol="QQQ"), client_ref="again",
+                                     order_ref="o", data_source="sim", now=self.PLAN, cycle_key="slot:1"))
 
     def test_invented_or_contradictory_approvals_are_never_accepted(self):
         before = (self.PLAN - timedelta(minutes=1)).isoformat()

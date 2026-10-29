@@ -50,9 +50,11 @@ start, so a genuine decision lies within ``MAX_DECISION_LEAD`` before or
   configured or readable). Verdict ``unverified``; never authorising.
 * ``UNVERIFIED`` — the decision is missing, or contradicts the order.
 
-Only ``M14_LIVE`` and ``VERIFIED`` are authorising: ``intent`` (the mandatory
-pre-submit audit point) refuses unless the candidate's risk evidence is one of
-them, and only those link ``risk_decision_id`` on the ledger row. Reconcile
+Only ``M14_LIVE`` and ``VERIFIED`` are authenticated, and only those link
+``risk_decision_id`` on the ledger row. Only ``M14_LIVE`` is an execution
+permission: ``intent`` (the mandatory pre-submit audit point) refuses unless
+the candidate's latest risk evidence is a live, authenticated pass. A
+``VERIFIED`` backfill proves history; it never permits a new order. Reconcile
 never changes a terminal state (the writer refuses), and every contradiction
 it meets is counted, not repaired.
 """
@@ -77,7 +79,8 @@ EVIDENCE_LIVE = "M14_LIVE"
 EVIDENCE_VERIFIED = "VERIFIED"
 EVIDENCE_INFERRED = "RECONSTRUCTED_INFERRED"
 EVIDENCE_UNVERIFIED = "UNVERIFIED"
-AUTHORISING_EVIDENCE = (EVIDENCE_LIVE, EVIDENCE_VERIFIED)
+AUTHORISING_EVIDENCE = (EVIDENCE_LIVE, EVIDENCE_VERIFIED)   # authenticated: a genuine M14 pass (reports)
+EXECUTION_EVIDENCE = (EVIDENCE_LIVE,)                        # may permit a NEW intent: never a reconstruction
 PAPER_SCOPE = "ibkr_paper"
 MAX_DECISION_LEAD = timedelta(minutes=10)
 MAX_DECISION_LAG = timedelta(minutes=10)    # the gate runs later in the same tick than its start
@@ -185,7 +188,15 @@ def risk_evidence(payload: Optional[Mapping[str, Any]]) -> str:
 
 
 def authorising(payload: Optional[Mapping[str, Any]]) -> bool:
+    """An authenticated M14 pass (live or verified history)."""
     return bool(payload) and payload.get("verdict") == "pass" and risk_evidence(payload) in AUTHORISING_EVIDENCE
+
+
+def permits_execution(payload: Optional[Mapping[str, Any]]) -> bool:
+    """Only a live, authenticated M14 pass may permit a new intent. A verified
+    backfill proves what happened; it is an audit reconstruction, never a
+    permission to execute."""
+    return bool(payload) and payload.get("verdict") == "pass" and risk_evidence(payload) in EXECUTION_EVIDENCE
 
 
 def _iso(t: Any) -> str:
@@ -313,7 +324,7 @@ class LoopLedger:
         if cid is None:
             return False
         risk = self._risk_payloads(cid)
-        if risk is None or not risk or not authorising(risk[-1]):
+        if risk is None or not risk or not permits_execution(risk[-1]):
             # no M14 PASS backed by live or verified evidence: no intent, no order
             self.stats["intent_blocked:risk_evidence_%s" % (
                 risk_evidence(risk[-1]) if risk else "missing")] += 1
