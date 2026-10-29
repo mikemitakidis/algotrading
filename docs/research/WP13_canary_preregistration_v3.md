@@ -1,6 +1,6 @@
 # WP13 canary — identity binding, historical v2 evidence, and the preregistered v3 run
 
-Status: **v3 preregistered, NOT yet run.** It runs once, on the WP13 head the reviewer approves, because
+Status: **v3 preregistered, NOT yet run** (identity schema `/2`: the full planted-effect spec is recorded). It runs once, on the WP13 head the reviewer approves, because
 the experiment identity includes the code fingerprint and any later code change would make the
 result stale. Synthetic evidence only: it calibrates the walk-forward *decision procedure*, never a
 real-market edge.
@@ -84,20 +84,54 @@ The identity digest at the head that carries this document is printed by
 `python -c "from research.optimiser import canary as C, walkforward as W; print(C.experiment_digest('mean_reversion', W.WFConfig(), C.PROTOCOL_V3))"`.
 It changes with any code change in `CODE_PATHS`, by design.
 
-To run it, on the approved head (offline, synthetic, one run only):
+## 4. One-shot execution procedure (prepared; NOT run)
 
-`python -m research.optimiser.canary --template mean_reversion --out <dir>`
+**When:**
+- once, after #19 → #20 → #24 are merged;
+- on the merged `main` commit whose WP13 code is the reviewed source.
 
-The run writes three files:
+Never on a draft branch, and never twice.
 
-- `canary_mean_reversion.json`: the result, plan record, experiment digest and protocol;
-- `canary_mean_reversion.ledger.jsonl`: the exported hash-chained ledger, checkable with `Ledger.verify_jsonl`;
-- `canary_mean_reversion.ledger.db`.
+**Environment:**
+- Python 3.12.3, NumPy 1.26.4, pandas 2.2.3, SciPy 1.17.1. The result records it in `environment`.
+- Offline: no network, no broker, no VPS.
 
-Decision rule, fixed before the run:
+**Commands:**
 
-- The verdict is whatever `run_battery` returns: CALIBRATED / NOT_CALIBRATED / UNDERPOWERED.
-- If it is not CALIBRATED, it is reported as such. The design is not changed and the run is not repeated
-  to obtain a different result.
-- v2 and v3 are both kept.
-- A WP13 evaluation consumes v3 only by passing that digest as `canary_experiment`.
+```bash
+git switch --detach <merged main SHA>          # record the SHA in the report
+git status --porcelain                         # must be empty
+python -c "from research.optimiser import canary as C, walkforward as W; \
+print(C.experiment_digest('mean_reversion', W.WFConfig(), C.PROTOCOL_V3))"   # record before the run
+OUT=$HOME/m21_canary_v3_$(git rev-parse --short HEAD)
+OMP_NUM_THREADS=1 python -m research.optimiser.canary --template mean_reversion --out "$OUT" 2>&1 | tee "$OUT.log"
+```
+
+- No `--name` or design flags: the CLI then runs exactly `PROTOCOL_V3`.
+- Expected runtime: 79 walk-forward runs at about 33 s each, so **about 45–60 minutes** (measured on a 2-CPU host).
+
+**Outputs**, in `$OUT/`:
+- `canary_mean_reversion.json`: verdict, counts, Clopper–Pearson bounds, the plan record with the full experiment identity, `experiment_digest`, protocol, `ledger_tip`, `ledger_ok`, environment;
+- `canary_mean_reversion.ledger.jsonl`: hash-chained;
+- `canary_mean_reversion.ledger.db`;
+- the run log.
+
+**Acceptance of the run itself, before reading the verdict:**
+- `ledger_ok` is true;
+- `Ledger.verify_jsonl(...)` is ok;
+- the recorded `experiment_digest` equals the digest printed before the run;
+- the plan's `design` equals `PROTOCOL_V3`.
+
+**Preservation:**
+- Commit the JSON, the JSONL, the log and a `sha256sum` manifest verbatim to `docs/research/evidence/wp13_canary_v3_<sha>/`, in a docs-only PR.
+- Never edit, re-run or re-name them.
+- v2 stays where it is.
+
+**Reporting.** One Issue #3 comment and one PR #24 comment, each giving:
+- verdict, null passes / 59 and the upper bound, detections / 20 and the lower bound;
+- experiment digest, code digest, ledger tip, environment, runtime, merged SHA.
+
+**Decision rule (fixed now):**
+- The verdict is final for this identity.
+- If it is not CALIBRATED: no retuning, no second run. The real-data walk-forward cannot obtain a verified canary, so it cannot PASS, until a new design is preregistered with your approval.
+- A WP13 evaluation consumes v3 only by passing that exact digest as `canary_experiment`.

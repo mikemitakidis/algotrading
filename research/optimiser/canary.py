@@ -55,7 +55,7 @@ from research.optimiser import walkforward as W
 EFFECT_FOR = {"mean_reversion": "rsi_oversold", "breakout_momentum": "breakout", "pullback_in_trend": "pullback"}
 CODE_PATHS = ("research/optimiser", "research/genome", "research/integrity", "research/economics",
               "research/common", "bot/backtesting")
-IDENTITY_SCHEMA = "m21-wp13-canary-experiment/1"
+IDENTITY_SCHEMA = "m21-wp13-canary-experiment/2"     # /2: the full planted-effect spec is explicit
 SEED_SCHEME = "research.common.rng.child_seed(base_seed, plan.name, 'null'|'pos', [repr(effect),] index)"
 
 
@@ -110,7 +110,10 @@ def experiment_identity(template: str, cfg: W.WFConfig, protocol: CanaryProtocol
         "data_protocol": {
             "generator": "research.common.synthetic.generate",
             "market_spec": spec,                                 # every generator parameter except the seed
-            "planted_effect": {"name": "canary", "kind": EFFECT_FOR.get(template), "horizon": protocol.horizon},
+            # every PlantedEffect parameter except the per-run strength (the strengths are the design's effects)
+            "planted_effect": ({k: v for k, v in asdict(PlantedEffect("canary", EFFECT_FOR[template], 0.0,
+                                                                      horizon=protocol.horizon)).items()
+                                if k != "strength"} if template in EFFECT_FOR else None),
             "universe": {"n_symbols": protocol.n_symbols, "n_sessions": protocol.n_sessions, "timeframe": "1D"},
         },
         "design": {"name": plan.name, "n_nulls": plan.n_nulls, "effect_sizes": list(plan.effect_sizes),
@@ -188,6 +191,20 @@ __all__ = ["EFFECT_FOR", "CODE_PATHS", "IDENTITY_SCHEMA", "CanaryProtocol", "PRO
            "run_protocol"]
 
 
+def environment() -> Dict[str, str]:
+    """The interpreter and numeric stack a battery ran on (recorded with the result; reproduction uses the same)."""
+    import platform
+    import numpy
+    import pandas
+    out = {"python": platform.python_version(), "numpy": numpy.__version__, "pandas": pandas.__version__}
+    try:
+        import scipy
+        out["scipy"] = scipy.__version__
+    except Exception:                                    # pragma: no cover
+        out["scipy"] = "absent"
+    return out
+
+
 def main(argv=None) -> int:
     """Offline canary battery for one template (long job; writes a JSON report to --out)."""
     import argparse
@@ -222,8 +239,8 @@ def main(argv=None) -> int:
     target = out / ("canary_%s.json" % a.template)
     target.write_text(json.dumps({"origin": "synthetic", "battery": asdict(res), "plan": plan.record(),
                                   "experiment_digest": plan.experiment_digest, "protocol": asdict(protocol),
-                                  "args": vars(a), "ledger_tip": led.tip_hash, "ledger_ok": led.verify().ok},
-                                 indent=2, default=str))
+                                  "args": vars(a), "ledger_tip": led.tip_hash, "ledger_ok": led.verify().ok,
+                                  "environment": environment()}, indent=2, default=str))
     return 0
 
 if __name__ == "__main__":  # pragma: no cover

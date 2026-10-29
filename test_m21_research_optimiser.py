@@ -306,6 +306,7 @@ class O8b_CanaryCLI(unittest.TestCase):
                 "mean_reversion", W.WFConfig(), C.CanaryProtocol("cli-test", 1, (), 0, n_symbols=4, n_sessions=300)))
             self.assertEqual(rep["plan"]["plan_digest"], rep["battery"]["plan_digest"])
             self.assertTrue(Ledger.verify_jsonl(Path(tmp) / "canary_mean_reversion.ledger.jsonl").ok)
+            self.assertEqual(set(rep["environment"]), {"python", "numpy", "pandas", "scipy"})
 
 
 class O10_ExperimentIdentity(unittest.TestCase):
@@ -340,6 +341,9 @@ class O10_ExperimentIdentity(unittest.TestCase):
             ds.append(C.experiment_digest(self.T, cfg, self.P))
         with mock.patch.object(C, "MarketSpec", lambda **kw: MarketSpec(**dict(kw, tail_df=4.0))):
             ds.append(C.experiment_digest(self.T, cfg, self.P))           # a generator parameter changes
+        real_pe = C.PlantedEffect
+        with mock.patch.object(C, "PlantedEffect", lambda *a, **kw: real_pe(*a, **dict(kw, k=2.5))):
+            ds.append(C.experiment_digest(self.T, cfg, self.P))           # a planted-effect default changes
         self.assertEqual(len(set(ds + [base])), len(ds) + 1)
 
     def test_plan_binds_the_identity_and_plans_without_one_hash_as_before(self):
