@@ -3612,6 +3612,25 @@ class G9_GoldenPathE2E(unittest.TestCase):
 
     # ---- end-to-end reproducibility --------------------------------
 
+    def test_report_has_no_per_run_identity_whatever_the_clock(self):
+        """G9 flake root cause: report.json embedded run_id, whose prefix is the
+        run's wall-clock second, so two runs straddling a second differed. The
+        report is now identical for any two creation times; only the manifest
+        carries run_id / created_at_utc."""
+        from datetime import datetime, timezone
+        cfg = _config()
+        with self._patched_loader(self._bars_with_crossover()):
+            result = runner.run(cfg)
+        from bot.backtesting import output as _out
+        a = _out.write_results(result, cfg, self.tmpdir / "a",
+                                 created_at_utc=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc))
+        b = _out.write_results(result, cfg, self.tmpdir / "b",
+                                 created_at_utc=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc))
+        self.assertEqual((a / "report.json").read_bytes(), (b / "report.json").read_bytes())
+        self.assertNotIn("run_id", json.loads((a / "report.json").read_text()))
+        self.assertNotEqual(json.loads((a / "manifest.json").read_text())["run_id"],
+                            json.loads((b / "manifest.json").read_text())["run_id"])
+
     def test_two_runs_same_bars_produce_byte_identical_report(self):
         """Two full runs through runner.run_and_write with identical
         config + identical bars produce byte-identical report.json."""

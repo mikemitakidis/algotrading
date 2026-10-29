@@ -448,6 +448,20 @@ class R11_RealDataEntrances(unittest.TestCase):
                     with self.assertRaises(StartStampedBarsError):
                         M18._default_bars_provider("AAA", list(bars))
 
+    def test_m18_has_one_production_bar_path(self):
+        """The injected provider is a keyword-only, test-only argument: no CLI option sets it and no
+        production module passes it, so production always goes through the guarded default provider."""
+        import inspect
+        from bot.ml import cli as M18
+        p = inspect.signature(M18.main).parameters["_bars_provider"]
+        self.assertEqual((p.kind, p.default), (inspect.Parameter.KEYWORD_ONLY, None))
+        self.assertNotIn("bars-provider", Path(M18.__file__).read_text())
+        for top in ("bot", "tools", "dashboard"):
+            for f in (REPO / top).rglob("*.py"):
+                if f.name == "cli.py" and f.parent.name == "ml":
+                    continue
+                self.assertNotIn("_bars_provider", f.read_text(errors="ignore"), str(f))
+
     def test_m17_loader_refuses_m16_start_stamps(self):
         from bot.backtesting import data_loader as DL
         src = Path(DL.__file__).read_text()
