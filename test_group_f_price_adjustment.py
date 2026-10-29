@@ -191,6 +191,18 @@ class GroupF2RealBuildPathThreading(unittest.TestCase):
                     manifest = _json.load(_mf)
         return rc, calls, out.getvalue(), err.getvalue(), manifest
 
+    def test_raw_24h_fixture_is_refused_on_the_real_build_path(self):
+        """Regression pin (review of PR #20): the real M18 provider refuses
+        start / pre-market stamps instead of building a leaky dataset."""
+        from unittest import mock
+        import bot.ml.cli as cli
+        from bot.backtesting.mtf_context import StartStampedBarsError
+        raw = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        with mock.patch("bot.ml.dataset.m16_loader.load_bars",
+                        side_effect=lambda symbol, tf, adjusted=True, **kw: raw[tf]):
+            with self.assertRaises(StartStampedBarsError):
+                cli._default_bars_provider("X", ["15m", "1H", "4H", "1D"])
+
     def test_raw_config_loads_raw_and_manifest_says_raw(self):
         rc, calls, out, err, manifest = self._run_build([])  # default raw
         self.assertEqual(rc, 0, f"build failed: {err[-400:]}")
