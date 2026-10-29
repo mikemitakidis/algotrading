@@ -47,9 +47,40 @@ from bot.backtesting.strategy import (
 )
 
 
-def run(cfg: BacktestConfig) -> BacktestResult:
+# M21 E3: the conversion method whose evidence injected multi-TF bars must
+# carry (research.dataqa.converted.METHOD; production never injects bars).
+CONVERTED_BARS_METHOD = "m21-e3-close-stamped/1"
+
+
+def _accept_converted(mtf, cfg: BacktestConfig, timeframes) -> None:
+    """Injected multi-TF bars (the research converted path) must be the
+    requested symbol's, cover every strategy timeframe, carry conversion
+    evidence for each, and still pass the start-stamp guard."""
+    from bot.backtesting.data_loader import MultiTfBars
+    from bot.backtesting.mtf_context import refuse_start_stamped
+    if not isinstance(mtf, MultiTfBars):
+        raise BacktestError("injected multi-TF bars must be a MultiTfBars")
+    if mtf.symbol != cfg.request.symbol:
+        raise BacktestError(f"injected bars are for {mtf.symbol!r}, not {cfg.request.symbol!r}")
+    missing = [tf for tf in timeframes if mtf.per_tf_bars.get(tf) is None]
+    if missing:
+        raise BacktestError(f"injected bars lack timeframes {missing}")
+    ev = mtf.conversion or {}
+    per_tf = ev.get("per_tf") or {}
+    if ev.get("method") != CONVERTED_BARS_METHOD or any(tf not in per_tf for tf in timeframes):
+        raise BacktestError("injected multi-TF bars carry no conversion evidence for every "
+                            "timeframe: only the converted path (research.dataqa.converted) may inject")
+    refuse_start_stamped(mtf.per_tf_bars, f"converted multi-TF bars ({cfg.request.symbol})")
+
+
+def run(cfg: BacktestConfig, *, _multi_tf_bars=None) -> BacktestResult:
     """Execute a backtest end-to-end and return a BacktestResult.
-    Doesn't write to disk — use run_and_write for that."""
+    Doesn't write to disk — use run_and_write for that.
+
+    ``_multi_tf_bars`` is INTERNAL (like the M18 CLI's injected provider): the
+    research converted-data path passes close-stamped bars WITH their
+    conversion evidence. Production never passes it (pinned by test), so
+    production always loads through the guarded ``load_multi_tf_bars``."""
     if not isinstance(cfg, BacktestConfig):
         raise BacktestError(
             f"runner.run expects BacktestConfig, got {type(cfg).__name__}")
@@ -73,8 +104,12 @@ def run(cfg: BacktestConfig) -> BacktestResult:
                 f"strategy.params.anchor_tf={anchor_tf!r}; the request "
                 f"timeframe identifies the cycle anchor for the "
                 f"multi-TF run")
-        mtf = load_multi_tf_bars(cfg, timeframes,
-                                    allow_partial_tfs=False)  # strict
+        if _multi_tf_bars is None:
+            mtf = load_multi_tf_bars(cfg, timeframes,
+                                        allow_partial_tfs=False)  # strict
+        else:
+            _accept_converted(_multi_tf_bars, cfg, timeframes)
+            mtf = _multi_tf_bars
         bars     = mtf.per_tf_bars[anchor_tf]
         coverage = mtf.per_tf_coverage[anchor_tf]
         load_warnings = mtf.warnings
@@ -82,6 +117,10 @@ def run(cfg: BacktestConfig) -> BacktestResult:
             mtf.per_tf_bars, anchor_tf=anchor_tf)
         strategy.attach_context(context)
     else:
+        if _multi_tf_bars is not None:
+            raise StrategyError(
+                f"{strategy.name} is single-timeframe: converted multi-TF bars "
+                f"are not accepted")
         # M17.A single-TF path — byte-identical to before M17.B.4.
         bars, coverage, load_warnings = load_backtest_bars(cfg)
 
