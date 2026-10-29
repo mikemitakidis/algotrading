@@ -17,6 +17,12 @@ Proves (ChatGPT's 15 gates):
  13. operator report/json written only to /tmp
  14. fixture proof deterministic
  15. AST/source guard bans real broker submit/network paths
+
+A01 (truthful scoring contract): run_once has no evidence source, so with the
+real bridge every candidate is M19-BLOCKED and no contract is built
+(TestA01FailClosed). All other tests score through ``evidenced_score_signal``
+(real M19 scoring with complete A01 fixture evidence), patched in for the
+module, so their assertions are not satisfied vacuously by zero contracts.
 """
 from __future__ import annotations
 
@@ -32,8 +38,34 @@ import unittest
 import _test_isolation  # noqa: E402
 _test_isolation.install()
 
+from unittest import mock
+
 from bot.brokers.base import OrderIntent
 import tools.paper_loop.m21_1extra_b1_ibkr_paper_contract_dryrun as B1
+from test_m21_1_a01_scoring_truth import evidenced_score_signal  # A01 test helper
+
+_REAL_SCORER = B1.score_signal
+_EVIDENCE_PATCH = mock.patch.object(B1, "score_signal", evidenced_score_signal)
+
+
+def setUpModule():
+    _EVIDENCE_PATCH.start()
+
+
+def tearDownModule():
+    _EVIDENCE_PATCH.stop()
+
+
+class TestA01FailClosed(unittest.TestCase):
+    def test_without_evidence_no_contract_is_built(self):
+        with mock.patch.object(B1, "score_signal", _REAL_SCORER):
+            d = B1.run_once(B1.fixture_signals(), kill_switch_active=False).to_dict()
+        self.assertEqual(d["dry_run_contracts_built"], 0)
+        self.assertEqual(d["submit_ready_count"], 0)
+
+    def test_with_evidence_contracts_are_built(self):
+        d = B1.run_once(B1.fixture_signals(), kill_switch_active=False).to_dict()
+        self.assertGreater(d["dry_run_contracts_built"], 0)
 
 _MODULE_PATH = "tools/paper_loop/m21_1extra_b1_ibkr_paper_contract_dryrun.py"
 
