@@ -77,6 +77,14 @@ class E1_Verdicts(unittest.TestCase):
         self.assertEqual(e.payload["verdict"], R.PASS)
         self.assertTrue(f.led.verify().ok)
 
+    def test_the_experiment_is_computed_from_the_run_config(self):
+        cfg = replace(W.WFConfig(templates=MR), stress=3.0)
+        f = Fixture(cfg=cfg)
+        c = f.card()
+        self.assertEqual(c.verdict, R.PASS, c.reasons)
+        self.assertEqual(c.inputs["required_canary_experiment"], C.experiment_digest(T, cfg, PROTO))
+        self.assertNotEqual(c.inputs["required_canary_experiment"], C.experiment_digest(T, W.WFConfig(), PROTO))
+
     def test_synthetic_is_never_a_pass(self):
         c = Fixture(origin="synthetic").card()
         self.assertEqual(c.verdict, R.INCONCLUSIVE)
@@ -109,7 +117,9 @@ class E1_Verdicts(unittest.TestCase):
         f = Fixture()
         bad = battery(f.led, f.cfg, null_pass=True)                       # every null passes: not calibrated
         self.assertNotEqual(bad.verdict, "CALIBRATED")
-        self.assertEqual(f.card(canary=bad).verdict, R.INCONCLUSIVE)
+        c = f.card(canary=bad)
+        self.assertEqual(c.verdict, R.INCONCLUSIVE)
+        self.assertIn("walk-forward decision procedure has no CALIBRATED canary battery", c.reasons)
         f = Fixture()
         other = battery(f.led, replace(f.cfg, stress=3.0))                # calibrated, other experiment
         self.assertEqual(other.verdict, "CALIBRATED")
