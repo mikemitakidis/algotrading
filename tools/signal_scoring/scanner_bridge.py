@@ -102,10 +102,19 @@ def enrich_signal_with_truth(
     model_readiness_passed: bool = False,
     production_thinness_status: Optional[str] = None,
     policy=None,
+    derive_liquidity_from_signal: bool = True,
 ):
-    """Build the truthful M19 input and its TruthReport. Pure: no I/O."""
-    adv_dollar = (avg_dollar_volume if avg_dollar_volume is not None
-                  else _derive_avg_dollar_volume(signal))
+    """Build the truthful M19 input and its TruthReport. Pure: no I/O.
+
+    ``derive_liquidity_from_signal=False`` (WP5 evidence path) uses ONLY the
+    measured ``avg_dollar_volume`` (None -> liquidity UNKNOWN); it never falls
+    back to the scanner's own price x average-share-volume fields."""
+    if avg_dollar_volume is not None:
+        adv_dollar = avg_dollar_volume
+    elif derive_liquidity_from_signal:
+        adv_dollar = _derive_avg_dollar_volume(signal)
+    else:
+        adv_dollar = None
     price = signal.get("entry_price") or signal.get("price")
     liquidity = {"price": price}
     if adv_dollar is not None:
