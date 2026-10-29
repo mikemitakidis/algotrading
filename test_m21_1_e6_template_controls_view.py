@@ -13,11 +13,14 @@ from pathlib import Path
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
-from flask import Flask
+import _test_isolation  # noqa: E402  (C5a: isolate before any dashboard import)
+_test_isolation.install()
 
-from bot.templates import controls as TC
-from bot.templates.routing import LIVE_TEMPLATES, is_live
-from dashboard import template_controls_view as V
+from flask import Flask  # noqa: E402
+
+from bot.templates import controls as TC  # noqa: E402
+from bot.templates.routing import LIVE_TEMPLATES, is_live  # noqa: E402
+from dashboard import template_controls_view as V  # noqa: E402
 
 REPO = Path(__file__).resolve().parent
 CSRF = "e6-test-token"
