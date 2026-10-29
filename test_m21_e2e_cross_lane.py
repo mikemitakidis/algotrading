@@ -13,6 +13,11 @@ the machinery, not a market):
 
 Then 17 negative cases: every fail-closed point in the chain refuses the bad
 input. No broker, no network, no production data; nothing is enabled.
+
+E4 is the operational L chain on fixtures: scanner signal -> WP5 evidence ->
+research score -> the REAL M14 gate on a temp signals DB -> WP7 ledger
+(authenticated M14_LIVE) -> WS2 journal -> SIMULATED paper broker -> outcome,
+with a forged decision id refused at the same point.
 """
 from __future__ import annotations
 
@@ -384,6 +389,112 @@ class E2_NegativeCases(unittest.TestCase):
         r = h.tick()
         self.assertEqual(r["entry_block"], "ledger_audit_unavailable")
         self.assertEqual(h.submits(), 0)
+
+
+class E4_OperationalChain(unittest.TestCase):
+    """Scanner -> evidence -> scoring -> M14 -> ledger -> journal -> broker sim -> outcome, one id."""
+
+    def setUp(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ, {"ALPACA_KEY": "test-key", "ALPACA_SECRET": "test-secret"})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def chain(self, forge=False, min_score=30.0):
+        import sqlite3
+        from unittest import mock
+        import test_m14_f_preflight as F
+        import test_m21_1_wp5_evidence as W5
+        import test_m21_1_wp7_ledger_wiring as W7
+        import test_m21_1extra_d2_3_learning_loop as D23
+        from bot.broker_allocation import save_policy
+        from bot.candidate_ledger.loop_sink import LoopLedger
+        from bot.paper_loop_d2.risk_gate import make_risk_authority_gate
+        from bot.paper_loop_d2.scheduler import LoopConfig
+        from bot.risk_authority import engine as ENG
+        from tools.signal_scoring.evidence import loop_candidates, rank_candidates, record_scored
+
+        ranked = rank_candidates([W5.sig("AAA")], W5.evidence(symbols=("AAA",)))   # scanner signal + evidence
+        self.assertTrue(ranked[0].selectable, ranked[0].block_reasons)
+        cands, notes = loop_candidates(ranked)
+        self.assertEqual((len(cands), notes), (1, []))
+        c = cands[0]
+        ev = datetime.fromisoformat(W5.EV)
+        fx = F._DB()
+        self.addCleanup(fx.cleanup)
+        with fx.conn() as conn:
+            save_policy(conn, F._valid_policy())
+            F._seed_fresh_all_scopes(conn)
+        # The loop's min_score gates the M19 research rank (0..100); this clean fixture ranks ~33.
+        h = D23.LoopHarness(self, candidates=[c], prices={"AAA": c.entry_ref_price}, once=True,
+                            config=LoopConfig(interval_minutes=15, max_hold_minutes=600, min_score=min_score))
+        h.clock.t = ev
+
+        class _At(datetime):                                   # the engine's wall clock = the tick
+            @classmethod
+            def now(cls, tz=None):
+                return h.clock()
+        pt = mock.patch.object(ENG, "datetime", _At)
+        pt.start()
+        self.addCleanup(pt.stop)
+        ms = D23.market_state(now=ev, ts="2026-11-03T16:05:00Z", next_close="2026-11-03T21:00:00Z",
+                              next_open="2026-11-04T14:30:00Z",
+                              cal=({"date": "2026-11-03", "open": "09:30", "close": "16:00"},))
+        real = make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(fx.path), market_state=ms,
+                                        clock=lambda: ev)
+
+        def gate(**kw):
+            ok, why, did = real(**kw)
+            return ok, why, ("forged-" + str(did) if forge else did)
+        db = W7.LedgerDB(self)
+        record_scored(db.writer(), ranked, cycle_key="scan:e4", now=ev)
+        h.loop = h.make_loop(risk_gate=gate, ledger=LoopLedger(db.writer(), m14_db=fx.path))
+        return h, db, c, fx
+
+    def test_scanner_signal_to_outcome_through_the_real_gate(self):
+        import sqlite3
+        h, db, c, fx = self.chain()
+        r1 = h.tick()
+        self.assertEqual(r1["entry"]["state"], "SUBMITTED")
+        o = h.orders()[0]
+        self.assertEqual(o["candidate_id"], c.candidate_id)                    # one id, scan to outcome
+        p = db.payload(c.candidate_id, "risk_evaluated")
+        self.assertEqual((p["verdict"], p["evidence"], p["risk_decision_id"]),
+                         ("pass", "M14_LIVE", o["risk_decision_id"]))
+        with sqlite3.connect(fx.path) as m:
+            self.assertEqual(m.execute("SELECT result, broker_scope, requested_action FROM risk_decisions "
+                                       "WHERE decision_id=?", (o["risk_decision_id"],)).fetchone(),
+                             ("allow", "ibkr_paper", "trade_open"))
+        self.assertEqual(db.payload(c.candidate_id, "scored")["selectable"], True)
+        h.tick(15)
+        h.prices["AAA"] = c.take_profit + 1.0
+        r3 = h.tick(15)
+        self.assertEqual(r3["closed"][0]["exit_reason"], "take_profit")
+        self.assertEqual(db.stages(c.candidate_id), ["scanned", "scored", "risk_evaluated", "intent_logged",
+                                                     "broker_result", "outcome_resolved", "closed"])
+        out = db.payload(c.candidate_id, "outcome_resolved")
+        self.assertEqual((out["outcome"], out["data_source"]), ("WIN", "simulated"))
+        acc, cons = db.report(h.db)
+        self.assertTrue(acc.ok, acc.violations)
+        self.assertTrue(cons.ok, cons.problems)
+        self.assertEqual(h.submits(), 1)
+
+    def test_the_default_threshold_applies_to_the_research_rank(self):
+        h, db, c, _ = self.chain(min_score=60.0)
+        self.assertLess(c.score, 60.0)
+        r = h.tick()
+        self.assertEqual(r["entry_block"], "no_candidate")
+        self.assertEqual(h.submits(), 0)
+        self.assertNotIn("risk_evaluated", db.stages(c.candidate_id))
+
+    def test_an_unauthenticated_decision_never_reaches_the_broker(self):
+        h, db, c, _ = self.chain(forge=True)
+        r = h.tick()
+        self.assertIsNotNone(r["entry_block"])
+        self.assertEqual(h.submits(), 0)
+        p = db.payload(c.candidate_id, "risk_evaluated")
+        self.assertEqual((p["evidence"], p["evidence_reason"]), ("UNVERIFIED", "decision_not_in_m14_store"))
+        self.assertNotIn("intent_logged", db.stages(c.candidate_id))
 
 
 class E3_Determinism(unittest.TestCase):
