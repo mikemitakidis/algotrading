@@ -12,6 +12,8 @@ Pure in-memory assembler builds (no I/O): no data/ml, no signals.db.
 """
 import unittest
 
+import pandas as pd
+
 from test_m18_ml import (
     _multi_tf_for_assembler, ds_assembler, ds_anchors)
 from bot.ml.readiness import assess_readiness
@@ -123,6 +125,24 @@ class GroupF2PriceAdjustment(unittest.TestCase):
         self.assertTrue(m2.allow_adjusted_prices_for_ml)
 
 
+def _session_close_stamped(per_tf):
+    """The fixture re-stamped at regular-session bar CLOSES (09:45..16:00
+    New York for 15m, 10:30..16:00 for 1H, 13:30/16:00 for 4H, 16:00 for
+    1D). The real M16 build path refuses start / pre-market stamps (M21
+    review of PR #20); this test is about the adjusted flag, not stamps."""
+    closes = {"15m": ["%02d:%02d" % divmod(9 * 60 + 30 + 15 * k, 60) for k in range(1, 27)],
+              "1H": ["10:30", "11:30", "12:30", "13:30", "14:30", "15:30", "16:00"],
+              "4H": ["13:30", "16:00"], "1D": ["16:00"]}
+    out = {}
+    for tf, df in per_tf.items():
+        per_day, n = closes[tf], len(df)
+        days = pd.bdate_range("2024-01-02", periods=n // len(per_day) + 2)
+        ts = [pd.Timestamp("%s %s" % (d.date(), hm), tz="America/New_York").tz_convert("UTC")
+              for d in days for hm in per_day][:n]
+        out[tf] = df.assign(ts_utc=pd.DatetimeIndex(ts))
+    return out
+
+
 class GroupF2RealBuildPathThreading(unittest.TestCase):
     """Prove the REAL CLI build path threads the SAME adjusted value into both
     m16_loader.load_bars(adjusted=...) and AssemblerConfig.adjusted, so the
@@ -142,7 +162,7 @@ class GroupF2RealBuildPathThreading(unittest.TestCase):
         from unittest import mock
         import bot.ml.cli as cli
 
-        per_tf = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        per_tf = _session_close_stamped(_multi_tf_for_assembler(n_15m=2000, seed=21))
         calls = {}
 
         def fake_load_bars(symbol, tf, adjusted=True, **kw):
@@ -170,6 +190,18 @@ class GroupF2RealBuildPathThreading(unittest.TestCase):
                 with open(mpath) as _mf:
                     manifest = _json.load(_mf)
         return rc, calls, out.getvalue(), err.getvalue(), manifest
+
+    def test_raw_24h_fixture_is_refused_on_the_real_build_path(self):
+        """Regression pin (review of PR #20): the real M18 provider refuses
+        start / pre-market stamps instead of building a leaky dataset."""
+        from unittest import mock
+        import bot.ml.cli as cli
+        from bot.backtesting.mtf_context import StartStampedBarsError
+        raw = _multi_tf_for_assembler(n_15m=2000, seed=21)
+        with mock.patch("bot.ml.dataset.m16_loader.load_bars",
+                        side_effect=lambda symbol, tf, adjusted=True, **kw: raw[tf]):
+            with self.assertRaises(StartStampedBarsError):
+                cli._default_bars_provider("X", ["15m", "1H", "4H", "1D"])
 
     def test_raw_config_loads_raw_and_manifest_says_raw(self):
         rc, calls, out, err, manifest = self._run_build([])  # default raw
