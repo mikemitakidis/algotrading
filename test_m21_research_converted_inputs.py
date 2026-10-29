@@ -195,11 +195,26 @@ class C2_Conversion(Base):
             with self.assertRaises(CV.ConversionRefused) as cm:
                 self.convert(bad)
             self.assertIn(needle, str(cm.exception))
+        closes_1d = raw["1D"].assign(ts_utc=[_ny(d, EARLY.get(d, "16:00")) for d in sessions()])
+        odd = pd.concat([closes_1d, closes_1d.tail(1).assign(ts_utc=_ny(date(2026, 11, 24), "15:00"))],
+                        ignore_index=True)                                 # close convention, one row mid-session
+        with self.assertRaises(CV.ConversionRefused) as cm:
+            self.convert(dict(raw, **{"1D": odd}))
+        self.assertIn("1 inconsistent rows", str(cm.exception))
         with self.assertRaises(CV.ConversionRefused):
             self.convert(asof=pd.Timestamp("2026-11-25 18:00"))           # naive
         with self.assertRaises(CV.ConversionRefused) as cm:
             self.convert(asof=pd.Timestamp("2025-11-03 13:00", tz="UTC"))  # before the first close
         self.assertIn("no completed bar", str(cm.exception))
+
+
+    def test_the_production_guard_still_runs_on_the_result(self):
+        from research.dataqa.stamps import ConversionReport
+        leak = lambda df, tf, cal, conv: (df.assign(bar_open_ts=df["ts_utc"]),
+                                          ConversionReport(tf, conv, len(df), len(df), 0, 0, 0, 0, 0))
+        with mock.patch.object(CV, "to_close_stamped", leak):              # a conversion that changed nothing
+            with self.assertRaises(StartStampedBarsError):
+                self.convert()
 
 
 class C3_M17(Base):
@@ -222,7 +237,8 @@ class C3_M17(Base):
         no_ev = replace(good, conversion=None)
         wrong_method = replace(good, conversion=dict(good.conversion, method="other"))
         partial = replace(good, conversion=dict(good.conversion, per_tf={"15m": {}}))
-        for bad in (no_ev, wrong_method, partial, replace(good, symbol="MSFT"), {"15m": raw["15m"]}):
+        no_4h = replace(good, per_tf_bars={tf: v for tf, v in good.per_tf_bars.items() if tf != "4H"})
+        for bad in (no_ev, wrong_method, partial, no_4h, replace(good, symbol="MSFT"), {"15m": raw["15m"]}):
             with self.assertRaises(BacktestError):
                 RUN.run(m17_cfg(), _multi_tf_bars=bad)
         forged = replace(good, per_tf_bars=dict(raw))                     # start stamps with copied evidence
