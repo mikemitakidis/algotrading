@@ -203,6 +203,7 @@ class Matching(unittest.TestCase):
         E.order(source="simulated")
         rep = run(E, [E.flex([ex(sym="ZZZ", eid="Z")])])
         self.assertEqual(rep["claims"]["ws2_journal"]["orders_simulated_excluded"], 1)
+        self.assertEqual(rep["claims"]["ws2_journal"]["orders_other_source_excluded"], 0)
         self.assertEqual(rep["legs"], [])
 
     def test_legacy_claims_reach_probable_at_most(self):
@@ -210,13 +211,14 @@ class Matching(unittest.TestCase):
         lg = E.legacy([("AAA", "long", "ibkr_paper", "filled", 10.0, 100, (T0 + timedelta(seconds=20)).isoformat()),
                        ("BBB", "long", "paper", "paper_logged", 10.0, 100, T0.isoformat()),
                        ("CCC", "long", "ibkr_paper", "accepted", None, None, None),
+                       ("EEE", "long", "ibkr_paper", "cancelled", 10.0, 100, T0.isoformat()),
                        ("DDD", "short", "ibkr_paper", "filled", 10.0, 50, "2026-10-15T13:35:00")])   # naive
         rep = run(E, [E.flex([ex(eid="L1"), ex(sym="DDD", side="SELL", qty=50, eid="L2")])], legacy=lg)
-        self.assertEqual(rep["claims"]["legacy_intents"], {"intents_ibkr": 3, "filled_claims": 2, "not_filled": 1,
+        self.assertEqual(rep["claims"]["legacy_intents"], {"intents_ibkr": 4, "filled_claims": 2, "not_filled": 2,
                                                            "unusable": 0})
         self.assertEqual(leg(rep, "intent:1")["class"], ST.PROBABLE)
-        self.assertEqual(leg(rep, "intent:4")["class"], ST.UNMATCHED_CLAIM)
-        self.assertIn("claim_time_naive", leg(rep, "intent:4")["reasons"])
+        self.assertEqual(leg(rep, "intent:5")["class"], ST.UNMATCHED_CLAIM)
+        self.assertIn("claim_time_naive", leg(rep, "intent:5")["reasons"])
 
 
 class AccountsAndFees(unittest.TestCase):
@@ -272,6 +274,10 @@ class AccountsAndFees(unittest.TestCase):
         _, o = E.order(entry=(10.02, T0, None), exit=None, state="OPEN", ref_price=10.0)
         rep = run(E, [E.flex([ex(px=10.02, oref=o, eid="S1")])])
         self.assertAlmostEqual(rep["entry_slippage_vs_reference_bps"]["median"], 20.0, places=6)
+        E2 = Env(self)                                    # a short entry filled below the reference is adverse
+        _, o2 = E2.order(direction="short", entry=(9.98, T0, None), exit=None, state="OPEN", ref_price=10.0)
+        rep2 = run(E2, [E2.flex([ex(side="SELL", px=9.98, oref=o2, eid="S2")])])
+        self.assertAlmostEqual(rep2["entry_slippage_vs_reference_bps"]["median"], 20.0, places=6)
 
 
 class Parsing(unittest.TestCase):
