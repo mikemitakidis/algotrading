@@ -91,8 +91,9 @@ def write_results(
     _write_json(run_dir / "manifest.json", manifest)
 
     # ---- report.json ------------------------------------------------
+    # report.json carries no per-run identity (run_id / created_at live in the
+    # manifest only), so two runs of the same config and bars are byte-identical
     report = {
-        "run_id":         run_id,
         "engine_version": ENGINE_VERSION,
         "config_hash":    cfg_hash,
         "metrics":        result.metrics,
