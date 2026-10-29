@@ -51,7 +51,11 @@ _GUARD_BASELINES = {
     "bot/signal_scoring/gates.py": ("e823fe6", "5cdd083"),
     "bot/brokers/ibkr_broker.py": ("e823fe6",),
     "dashboard/app.py": ("e823fe6",),
+    # M21 WP6: test_m20_universe_quality_collector freezes the provider at M19.
+    "bot/providers/alpaca_provider.py": ("e823fe6",),
 }
+# M21.1 A01's approved scanner content (produced by 6242bde); WP6 builds on it.
+_A01_SCANNER_BLOB = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"
 
 # module -> (baseline literals that must still be present, protected path
 # literals that must still be present)
@@ -144,9 +148,13 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
 
     def test_scanner_a01_transition_is_metadata_only(self):
         # From the Group D content, A01 adds the as-of helper, one dict, one
-        # assignment and one meta key; it removes nothing.
+        # assignment and one meta key; it removes nothing. (WP6's later,
+        # separately pinned transition is checked in
+        # test_m21_1_wp6_completed_candles.N6.)
         e = PB.APPROVED_CHANGES["bot/scanner.py"]
-        rc, out = _git("diff", "--unified=0", e.also_from[0], e.to_blob)
+        self.assertEqual(_git("rev-parse", "6242bde81e5bf9fd194be5fbba41c8cb1c558e08"
+                              ":bot/scanner.py")[1], _A01_SCANNER_BLOB)
+        rc, out = _git("diff", "--unified=0", e.also_from[0], _A01_SCANNER_BLOB)
         self.assertEqual(rc, 0)
         removed = [l for l in out.splitlines()
                    if l.startswith("-") and not l.startswith("---")]
