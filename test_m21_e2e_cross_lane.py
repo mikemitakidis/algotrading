@@ -18,6 +18,10 @@ E4 is the operational L chain on fixtures: scanner signal -> WP5 evidence ->
 research score -> the REAL M14 gate on a temp signals DB -> WP7 ledger
 (authenticated M14_LIVE) -> WS2 journal -> SIMULATED paper broker -> outcome,
 with a forged decision id refused at the same point.
+
+R1 (release candidate, E1-E7): IBKR-statement-proven paper trades flow from E5
+(statement reconciliation) into E4 (score versus outcome) while journal-only
+and simulated trades never become evidence; every new runtime path stays OFF.
 """
 from __future__ import annotations
 
@@ -508,3 +512,114 @@ class E3_Determinism(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── M21 E1-E7 release candidate: cross-lane chain and default-OFF checks ────
+class R1_ReleaseCandidateChain(unittest.TestCase):
+    """Statement-proven IBKR paper trades flow from E5 (statement reconciliation) into E4
+    (score versus outcome); journal-only and simulated trades never become evidence; and every
+    new runtime path added in E1-E7 stays OFF by default. Fixtures only; made-up account ids."""
+
+    T0 = datetime(2026, 11, 2, 15, 0, tzinfo=UTC)
+
+    def _fixture(self, d):
+        import sqlite3
+        from bot.candidate_ledger import CandidateLedgerWriter, migrate
+        from bot.paper_loop_d2.journal import LoopJournal
+        jpath, lpath = os.path.join(d, "journal.db"), os.path.join(d, "ledger.db")
+        LoopJournal(jpath)
+        with sqlite3.connect(lpath) as c:
+            migrate(c, now_utc=self.T0.isoformat())
+        w = CandidateLedgerWriter(lambda: sqlite3.connect(lpath), enabled=True)
+        trades = [("R1", "AAA", 72.0, 1.5, "ibkr_paper"), ("R2", "BBB", 65.0, -1.0, "ibkr_paper"),
+                  ("R3", "CCC", 81.0, 2.0, "ibkr_paper"), ("R4", "DDD", 90.0, 3.0, "simulated")]
+        rows = []
+        jc = sqlite3.connect(jpath)
+        for i, (ref, sym, score, r, src) in enumerate(trades):
+            t_in, t_out = self.T0 + timedelta(minutes=i), self.T0 + timedelta(hours=2, minutes=i)
+            oref = "M21L-%s" % ref
+            with jc:
+                jc.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, entry_ref_price, "
+                           "state, data_source, planned_at_utc, updated_at_utc, entry_fill_price, entry_filled_at_utc, "
+                           "entry_fees, exit_fill_price, exit_filled_at_utc, exit_fees, order_ref) "
+                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (ref, "scan:x", sym, "long", 10, 50.0, "CLOSED", src, t_in.isoformat(), t_out.isoformat(),
+                            50.0, t_in.isoformat(), 1.0, 50.0 + r, t_out.isoformat(), 1.0, oref))
+            at = t_in.isoformat()
+            cid = w.open_candidate(symbol=sym, direction="long", strategy_id="scanner:v1", decision_ts_utc=at,
+                                   cycle_key="scan:%s" % at, scanner_stage="final_signal", at_utc=at)
+            w.record(cid, "scored", at_utc=at, payload={"research_rank": score, "selectable": True})
+            w.record(cid, "risk_evaluated", at_utc=at, payload={"verdict": "pass", "evidence": "M14_LIVE"})
+            w.record(cid, "intent_logged", at_utc=at, payload={"data_source": src})
+            w.record(cid, "broker_result", at_utc=at, payload={"status": "accepted", "data_source": src})
+            w.record(cid, "outcome_resolved", at_utc=t_out.isoformat(), payload={
+                "outcome": "WIN" if r > 0 else "LOSS", "trade_id": ref, "r_multiple": r, "fees_final": 1,
+                "realized_pnl": 10 * r, "data_source": src})
+            w.close(cid, "outcome_resolved", at_utc=t_out.isoformat())
+            if ref in ("R1", "R2"):                      # R3 never reached the statement; R4 is simulated
+                ny = lambda t: (t - timedelta(hours=5)).strftime("%Y%m%d;%H%M%S")      # EST in November
+                rows.append(("DUX0000001", sym, "BUY", "10", "50", "-1", ny(t_in), oref, "X%sa" % ref))
+                rows.append(("DUX0000001", sym, "SELL", "-10", "%g" % (50.0 + r), "-1", ny(t_out), oref, "X%sb" % ref))
+        jc.close()
+        stmt = os.path.join(d, "flex.csv")
+        with open(stmt, "w") as fh:
+            fh.write("ClientAccountID,Symbol,Buy/Sell,Quantity,TradePrice,IBCommission,DateTime,OrderReference,"
+                     "IBExecID\n")
+            fh.writelines(",".join(r) + "\n" for r in rows)
+        return jpath, lpath, stmt
+
+    def test_statement_proof_flows_from_reconciliation_into_score_vs_outcome(self):
+        import json
+        import sqlite3
+        from research.economics import statement as E5
+        from tools.candidate_ledger import score_outcome as E4
+        with tempfile.TemporaryDirectory() as d:
+            jpath, lpath, stmt = self._fixture(d)
+            files = [E5.parse_statement(stmt, tz="America/New_York")]
+            claims, stats = E5.ws2_claims(jpath)
+            rec = E5.build_report(files, claims, {"ws2_journal": stats}, tz="America/New_York")
+            self.assertEqual(rec["matched_trade_ids"], ["R1", "R2"])
+            self.assertEqual(rec["counts"]["UNMATCHED_CLAIM"], 2)                 # both legs of R3
+            self.assertEqual(stats["orders_simulated_excluded"], 1)
+            recon = os.path.join(d, "recon.json")
+            with open(recon, "w") as fh:
+                json.dump(rec, fh)
+            out = os.path.join(d, "so.json")
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(E4.main(["--ledger-db", lpath, "--statement-matches", recon, "--out-json", out]), 0)
+            with open(out) as fh:
+                so = json.load(fh)
+            cls = so["classes"]
+            self.assertEqual(cls[E4.IBKR_MATCHED]["resolved_trades"], 2)
+            self.assertEqual(cls[E4.IBKR_MATCHED]["verdict"], E4.INSUFFICIENT)    # 2 < 30: no claim at all
+            self.assertEqual((cls[E4.IBKR_PAPER]["resolved_trades"], cls[E4.IBKR_PAPER]["verdict"]),
+                             (1, E4.NOT_CONFIRMED))
+            self.assertEqual((cls[E4.SIMULATED]["resolved_trades"], cls[E4.SIMULATED]["verdict"]),
+                             (1, E4.NOT_MARKET))
+            # the reconciliation and the report only read their inputs
+            c = sqlite3.connect("file:%s?mode=ro" % lpath, uri=True)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidate_ledger").fetchone()[0], 4)
+            c.close()
+
+    def test_new_runtime_paths_are_off_by_default(self):
+        from unittest import mock
+        import sqlite3
+        from bot.candidate_ledger import CandidateLedgerWriter
+        from tools.paper_loop import context_audit as CA
+        from tools.paper_loop import m21_1extra_d2_3_scheduler as SCH
+        from dashboard import template_controls_view as TV
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in (CA.FLAG, TV.DB_KEY, TV.WRITES_KEY)}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            self.assertFalse(CA.enabled_from_env())
+            self.assertIsNone(SCH._context_audit())                                # E2 shadow record OFF
+            self.assertFalse(CandidateLedgerWriter(lambda: sqlite3.connect(":memory:")).enabled)
+            from flask import Flask
+            app = Flask("r1")
+            with app.app_context():
+                self.assertIsNone(TV._path())                                      # E6: 503 not_configured
+                self.assertFalse(TV._writes_enabled())                             # E6: read-only
+        self.assertNotIn("template_controls_view", (REPO / "dashboard" / "app.py").read_text())
+        self.assertEqual(RT.LIVE_TEMPLATES, frozenset({"scanner"}))
