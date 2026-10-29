@@ -598,7 +598,6 @@ class P7_CrashAndFaults(CrossStore):
         self.assertEqual(self.book.retry_alerts(ok), [])
 
     def test_12_contradictory_stores_block_until_an_operator_resolves(self):
-        base = K.read_active(self.ctl.path)
         t = self.approved("x1")
         self.book.fault_hook = FaultAt("apply:intent_recorded")
         with self.assertRaises(Crash):
@@ -610,18 +609,23 @@ class P7_CrashAndFaults(CrossStore):
         book = self.restart()
         self.assertEqual(list(book.reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
         (blk,) = book.blocked()
-        for who, res in (("claude", MC.ROLL_BACK), ("mike", MC.ROLL_BACK), ("mike", MC.ROLL_FORWARD)):
-            with self.assertRaises(MC.PromotionRefused):                   # non-human, or stores disagree
-                book.resolve_block(blk["op_id"], self.ctl, actor=who, resolution=res, reason="r")
-        self.assertEqual(len(book.blocked()), 1)
-        self.ctl.rollback(actor="mike", reason="restore the pre-apply config")
-        self.assertEqual(K.read_active(self.ctl.path).version, base.version)
-        for who in ("claude", "Scheduler", " "):                         # stores now agree; still a human only
+        self.assert_shut(book, "x1", "blocked:")                         # nothing else moves while blocked
+        for who in ("claude", "Scheduler", " "):                         # a named human only
             with self.assertRaises(MC.PromotionRefused):
                 book.resolve_block(blk["op_id"], self.ctl, actor=who, resolution=MC.ROLL_BACK, reason="r")
-        book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="restored")
+        with self.assertRaises(MC.PromotionRefused):                     # the promotion's config is not active
+            book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="r")
+        self.assertEqual(len(book.blocked()), 1)
+        # the promotion's version never went live: the operator closes it without undoing their own change
+        book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="stale baseline")
         self.assertEqual((book.blocked(), book.state("x1")), ([], MC.APPROVED))
         self.assertEqual(book.ops("x1")[0]["state"], MC.OP_ABORTED)
+        self.assertEqual(K.read_active(self.ctl.path).version, third)
+        res = [e for e in book.events("x1") if e["kind"] == "BLOCK_RESOLVED"]
+        self.assertEqual((len(res), res[0]["actor"]), (1, "mike"))      # operator recovery is audited
+        with self.assertRaises(MC.PromotionRefused) as cm:               # and the stale proposal cannot apply
+            book.apply("x1", self.ctl, token=t, verifier=self.v)
+        self.assertIn("stale_config", str(cm.exception))
 
     def test_12b_monitoring_divergence_and_revert_cannot_roll_forward(self):
         base = K.read_active(self.ctl.path)
@@ -660,7 +664,12 @@ class P7_CrashAndFaults(CrossStore):
         self.ctl.rollback(actor="mike", reason="someone undid it before reconciliation")
         self.clock.advance(minutes=11)
         self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
-        self.assertIn("activated_and_replaced", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+        (blk,) = self.book.blocked()
+        self.assertIn("activated_and_replaced", MC.json.loads(blk["detail"])["blocked_because"])
+        with self.assertRaises(MC.PromotionRefused):                     # it did go live: not "never active"
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_FORWARD, reason="r")
+        self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="undone")
+        self.assertEqual(self.book.blocked(), [])
 
     def test_12d_active_config_not_the_intended_one_blocks(self):
         t = self.approved("z2")
@@ -721,6 +730,96 @@ class P7_CrashAndFaults(CrossStore):
         self.book.monitor("z4", [-3.0, -4.0], self.ctl, sink=Sink())       # REVERTED meanwhile
         self.book._open_divergence(stale, K.read_active(self.ctl.path))
         self.assertEqual(self.book.blocked(), [])
+
+    def test_13_compare_and_swap_closes_the_check_then_activate_window(self):
+        base = K.read_active(self.ctl.path)
+        t = self.approved("w1")
+        ctl = self.ctl
+
+        def operator_changes_controls(point):                            # lands AFTER the pre-activate check
+            if point == "apply:checked_before_activate":
+                x = ctl.propose(base_cfg(25.0), author="mike", reason="concurrent manual change")
+                ctl.approve(x, approver="mike", reason="manual")
+                ctl.activate(x, actor="mike")
+        self.book.fault_hook = operator_changes_controls
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("w1", self.ctl, token=t, verifier=self.v)
+        self.assertIn("BLOCKED", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).config, base_cfg(25.0))  # never overwritten
+        self.assertIn("ACTIVATE_REFUSED", [a["action"] for a in self.ctl.audit()])
+        self.assertEqual(self.book.state("w1"), MC.APPROVED)
+        self.assertNotEqual(K.read_active(self.ctl.path).version, base.version)
+
+    def test_14_an_activated_config_must_match_its_recorded_digest(self):
+        t = self.approved("w2")
+        path = self.ctl.path
+
+        def tamper(point):
+            if point == "apply:activated":
+                v = K.read_active(path).version
+                other = base_cfg(20.0)
+                con = sqlite3.connect(path)
+                con.execute("UPDATE template_config_versions SET config_json=?, config_sha256=? WHERE version=?",
+                            (K.canonical(other), K.sha256(other), v))
+                con.commit()
+                con.close()
+        self.book.fault_hook = tamper
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.apply("w2", self.ctl, token=t, verifier=self.v)
+        self.assertIn("BLOCKED", str(cm.exception))                      # never a valid-looking MONITORING
+        self.assertEqual(self.book.state("w2"), MC.APPROVED)
+        self.assertEqual([e for e in self.book.events("w2") if e["kind"] == "APPLIED"], [])
+
+    def test_15_recovery_refuses_an_activation_over_an_unexpected_version(self):
+        t = self.approved("w3")
+        self.book.fault_hook = FaultAt("apply:version_approved")
+        with self.assertRaises(Crash):
+            self.book.apply("w3", self.ctl, token=t, verifier=self.v)
+        x = self.ctl.propose(base_cfg(25.0), author="mike", reason="manual")
+        self.ctl.approve(x, approver="mike", reason="manual")
+        self.ctl.activate(x, actor="mike")
+        ours = [v for v in self.ctl.versions() if v["reason"].startswith("promotion w3")][0]["version"]
+        self.ctl.activate(ours, actor="mike")                            # out-of-band activation over x
+        self.clock.advance(minutes=11)
+        self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
+        (blk,) = self.book.blocked()
+        self.assertIn("not_pre_apply", MC.json.loads(blk["detail"])["blocked_because"])
+        self.assertEqual(self.book.state("w3"), MC.APPROVED)
+        with self.assertRaises(MC.PromotionRefused):                     # its version IS live: cannot just close
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="r")
+        self.assertEqual(len(self.book.blocked()), 1)
+
+    def test_17_revert_never_overwrites_a_change_landing_after_its_check(self):
+        t = self.approved("w5")
+        self.book.apply("w5", self.ctl, token=t, verifier=self.v)
+        ctl = self.ctl
+
+        def operator_changes_controls(point):
+            if point == "revert:checked_before_rollback":
+                x = ctl.propose(base_cfg(25.0), author="mike", reason="concurrent manual change")
+                ctl.approve(x, approver="mike", reason="manual")
+                ctl.activate(x, actor="mike")
+        self.book.fault_hook = operator_changes_controls
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.monitor("w5", [-3.0, -4.0], self.ctl, sink=Sink())
+        self.assertIn("BLOCKED", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).config, base_cfg(25.0))  # the operator's change stands
+        self.assertIsNotNone(self.book.cooling_off_until())
+
+    def test_16_recovery_is_idempotent_across_repeated_restarts(self):
+        t = self.approved("w4")
+        self.book.fault_hook = FaultAt("apply:activated")
+        with self.assertRaises(Crash):
+            self.book.apply("w4", self.ctl, token=t, verifier=self.v)
+        self.clock.advance(minutes=11)
+        counts = []
+        for _ in range(4):                                               # four restarts
+            book = self.restart()
+            book.reconcile(self.ctl, sink=Sink())
+            counts.append((book.state("w4"), len(book.events()), len(self.ctl.audit()),
+                           len([e for e in book.events() if e["kind"] == "APPLIED"])))
+        self.assertEqual(counts[0][0], MC.MONITORING)
+        self.assertEqual(len(set(counts)), 1, counts)                    # no further writes after the first
 
     def test_record_shadow_checks_state_and_tokens_cannot_be_reused(self):
         cur = K.read_active(self.ctl.path).config
