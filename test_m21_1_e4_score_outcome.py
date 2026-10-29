@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import io
 import json
+import math
 import os
 import shutil
 import sqlite3
@@ -153,6 +154,26 @@ class ClassesAndVerdicts(unittest.TestCase):
         c = SO.report(L2.rows(matched=ids2))["classes"][SO.IBKR_MATCHED]
         self.assertEqual(c["verdict"], SO.NO_ASSOC)
         self.assertGreaterEqual(c["association"]["permutation_p"], 0.05)
+
+    def test_weak_in_sample_pattern_is_not_an_association(self):
+        """rho about 0.25 on 40 trades, permutation p about 0.11: above 0.05, so no association is stated."""
+        L = Ledger(self)
+        ids = []
+        for i in range(40):
+            r = math.sin(i * 1.7) + 0.015 * i
+            ids.append("T-%03d" % (L.n + 1))
+            L.add(40 + i * 55 / 39, outcome="WIN" if r > 0 else "LOSS", r=r)
+        c = SO.report(L.rows(matched=ids))["classes"][SO.IBKR_MATCHED]
+        self.assertGreater(c["association"]["spearman_rho_score_vs_r"], 0.2)
+        self.assertTrue(0.05 < c["association"]["permutation_p"] < 0.2)
+        self.assertEqual(c["verdict"], SO.NO_ASSOC)
+
+    def test_unrecognised_outcome_is_not_a_resolved_trade(self):
+        L = Ledger(self)
+        L.add(70, outcome="PENDING")
+        c = SO.report(L.rows())["classes"][SO.IBKR_PAPER]
+        self.assertEqual(c["resolved_trades"], 0)
+        self.assertEqual(c["missing_outcomes"]["resolved_terminal_without_outcome_record"], 1)
 
     def test_conflicting_or_missing_sources_are_unknown_never_pooled(self):
         L = Ledger(self)
