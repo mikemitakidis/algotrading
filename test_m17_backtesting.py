@@ -4303,6 +4303,10 @@ class G10_Hygiene(unittest.TestCase):
             "bot/brokers/__init__.py",
             "dashboard/app.py",
             "test_group_e_safety.py",
+            "dashboard/template_controls_view.py",
+            "test_m21_1_e6_template_controls_view.py",
+            "docs/m21/E6_dashboard_app_wiring.patch",
+            "docs/m21/E6_dashboard_app_wiring.md",
             # M21.1 signals-only Telegram BUY/SHORT alerts
             "test_m21_1_signal_alerts.py",
             # pre-M19 Group F1 (ISSUE-007): predict-time calibration proof tests.
