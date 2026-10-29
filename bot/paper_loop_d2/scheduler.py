@@ -668,9 +668,10 @@ class PaperLearningLoop:
         if cand is None:
             return block("no_candidate")
 
-        def reject(reason: str, decision_id: Optional[str] = None) -> None:
+        def reject(reason: str, decision_id: Optional[str] = None,
+                   notional_usd: Optional[float] = None) -> None:
             self._ledger_call("risk", res, cand, passed=False, reason=reason, now=now,
-                              cycle_key=key, decision_id=decision_id)
+                              cycle_key=key, decision_id=decision_id, notional_usd=notional_usd)
             block(reason)
 
         why, px = self._quote_block(cand, now)
@@ -688,9 +689,9 @@ class PaperLearningLoop:
         except Exception as exc:
             return reject("risk_gate_error:%s" % type(exc).__name__)
         if allowed is not True:
-            return reject("risk:%s" % why, decision_id)
+            return reject("risk:%s" % why, decision_id, notional)
         self._ledger_call("risk", res, cand, passed=True, reason=None, now=now, cycle_key=key,
-                          decision_id=decision_id)
+                          decision_id=decision_id, notional_usd=notional)
         ref = "%s|%s" % (key, cand.symbol)
         order_ref = make_order_ref(self.journal.journal_id, ref)
         data_source = self.broker.data_source
