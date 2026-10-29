@@ -63,6 +63,11 @@ class M1_Checks(unittest.TestCase):
         self.assertEqual(check_gateway(dict(GOOD_GW, expected_port=4001), T0).status, ALARM)
         self.assertEqual(check_gateway(None, T0).status, UNKNOWN)
         self.assertEqual(check_gateway(GOOD_GW, T0 + timedelta(minutes=6)).status, UNKNOWN)
+        # a reading from the future cannot prove freshness (clock or data contradiction)
+        self.assertEqual(check_gateway(GOOD_GW, T0 - timedelta(minutes=1)).status, OK)
+        r = check_gateway(GOOD_GW, T0 - timedelta(hours=3))
+        self.assertEqual((r.status, r.severity), (UNKNOWN, CRITICAL))
+        self.assertIn("ahead", r.detail)
 
     def test_heartbeat_and_scheduler(self):
         self.assertEqual(check_loop_heartbeat((T0 - timedelta(minutes=10)).isoformat(), T0,
@@ -74,6 +79,13 @@ class M1_Checks(unittest.TestCase):
                          UNKNOWN)
         self.assertEqual(check_loop_heartbeat("2026-11-03T15:00:00", T0,
                                               max_age=timedelta(minutes=32)).status, UNKNOWN)
+        # a dead loop whose last cycle is stamped ahead of the clock never reads healthy
+        r = check_loop_heartbeat((T0 + timedelta(hours=3)).isoformat(), T0,
+                                 max_age=timedelta(minutes=32))
+        self.assertEqual((r.status, r.severity), (UNKNOWN, CRITICAL))
+        self.assertIn("ahead", r.detail)
+        self.assertEqual(check_loop_heartbeat((T0 + timedelta(minutes=1)).isoformat(), T0,
+                                              max_age=timedelta(minutes=32)).status, OK)
         iv = timedelta(minutes=15)
         cyc = [{"cycle_key": "a", "started_at_utc": (T0 - timedelta(minutes=10)).isoformat(),
                 "state": "DONE"}]
