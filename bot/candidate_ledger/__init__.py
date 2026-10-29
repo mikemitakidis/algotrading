@@ -3,8 +3,9 @@
 One stable candidate id (lane-A formula) carried through scanner -> M19 score
 -> risk decision -> execution intent -> broker result -> outcome, with complete
 stage accounting. Additive schema with an explicit migration; a flag-gated,
-idempotent, never-raising writer that is OFF by default. Nothing in the
-runtime calls it yet; deploying the schema or enabling the writer on any
+idempotent, never-raising writer that is OFF by default. M21 WP7: the WS2
+paper-loop tool can wire it (``loop_sink.LoopLedger``, flag-gated); no bot/
+module imports it. Deploying the schema or enabling the writer on any
 production database requires operator approval.
 """
 from bot.candidate_ledger.ids import (  # noqa: F401

@@ -378,7 +378,93 @@ def loop_candidates(ranked: Sequence[ScoredCandidate], *, strategy_prefix: str =
                     strategy_prefix, ver if ver is not None else "unknown"),
                 entry_ref_price=s.get("entry_price") or s.get("price"),
                 stop_loss=s.get("stop_loss"), take_profit=s.get("target_price"),
-                signal_ts_utc=s.get("timestamp")))
+                signal_ts_utc=s.get("timestamp"),
+                candidate_id=ledger_candidate_id(s, strategy_prefix)))
         except InvalidCandidate as exc:
             notes.append("invalid:%s:%s" % (c.symbol, exc))
     return out, notes
+
+
+# ── M21 WP7: candidate-ledger records for the scan and scoring stages ───────
+
+def _ledger_strategy_id(signal: Mapping[str, Any], strategy_prefix: str = "scanner") -> str:
+    ver = signal.get("strategy_version")
+    return signal.get("strategy_id") or "%s_v%s" % (
+        strategy_prefix, ver if ver is not None else "unknown")
+
+
+def ledger_candidate_id(signal: Mapping[str, Any], strategy_prefix: str = "scanner"
+                        ) -> Optional[str]:
+    from bot.candidate_ledger import make_candidate_id
+    try:
+        return make_candidate_id(str(signal.get("symbol")), signal.get("timestamp"),
+                                 signal.get("direction"),
+                                 _ledger_strategy_id(signal, strategy_prefix))
+    except Exception:
+        return None
+
+
+def record_scored(writer, ranked: Sequence[ScoredCandidate], *, cycle_key: str, now,
+                  strategy_prefix: str = "scanner") -> Dict[str, int]:
+    """Open every ranked candidate (``scanned``), record its M19 score and
+    selection verdict (``scored``) and close blocked ones as
+    ``scoring_blocked``. No-op unless the writer is enabled."""
+    from bot.candidate_ledger import score_payload
+    counts: Dict[str, int] = {}
+    if not getattr(writer, "enabled", False):
+        return counts
+    at = now.isoformat() if hasattr(now, "isoformat") else str(now)
+    for c in ranked:
+        s = c.signal
+        cid = writer.open_candidate(
+            symbol=c.symbol, direction=c.direction,
+            strategy_id=_ledger_strategy_id(s, strategy_prefix),
+            decision_ts_utc=s.get("timestamp"), cycle_key=cycle_key, cycle_id=None,
+            scanner_stage="final_signal", at_utc=at,
+            bar_asof={o.timeframe: o.bar_start_utc
+                      for o in (c.truthful.truth.observations or ())} or None,
+            payload={"valid_count": s.get("valid_count"), "route": s.get("route"),
+                     "entry_price": s.get("entry_price"), "stop_loss": s.get("stop_loss"),
+                     "target_price": s.get("target_price")})
+        if cid is None:
+            counts["invalid"] = counts.get("invalid", 0) + 1
+            continue
+        body = score_payload(c.truthful)
+        body.update(research_rank=c.research_rank, selectable=c.selectable,
+                    block_reasons=list(c.block_reasons),
+                    accepted_pre_risk=list(c.accepted_pre_risk),
+                    evidence=[n.__dict__ for n in c.evidence])
+        writer.record(cid, "scored", at_utc=at, payload=body,
+                      reason_codes=list(c.block_reasons))
+        if not c.selectable:
+            writer.close(cid, "scoring_blocked", at_utc=at, reason_codes=list(c.block_reasons))
+            counts["scoring_blocked"] = counts.get("scoring_blocked", 0) + 1
+        else:
+            counts["selectable"] = counts.get("selectable", 0) + 1
+    return counts
+
+
+def record_scanner_rejects(writer, rows: Sequence[Mapping[str, Any]], *, cycle_key: str,
+                           now, strategy_prefix: str = "scanner") -> int:
+    """Candidates the SCANNER itself did not emit (partial confluence, watch
+    only), as logged through its flywheel hook: opened and closed
+    ``not_selected`` with the scanner's rejection reason."""
+    if not getattr(writer, "enabled", False):
+        return 0
+    at = now.isoformat() if hasattr(now, "isoformat") else str(now)
+    n = 0
+    for r in rows:
+        cid = writer.open_candidate(
+            symbol=r.get("symbol"), direction=r.get("direction"),
+            strategy_id=_ledger_strategy_id({"strategy_version": r.get("strategy_version")},
+                                            strategy_prefix),
+            decision_ts_utc=now, cycle_key=cycle_key, cycle_id=r.get("cycle_id"),
+            scanner_stage=str(r.get("stage")), at_utc=at,
+            payload={"valid_count": r.get("valid_count"), "tfs_passing": r.get("tfs_passing"),
+                     "available_tfs": r.get("available_tfs")},
+            reason_codes=[r["rejection_reason"]] if r.get("rejection_reason") else [])
+        if cid is not None:
+            writer.close(cid, "not_selected", at_utc=at,
+                         reason_codes=[r.get("rejection_reason") or str(r.get("stage"))])
+            n += 1
+    return n

@@ -15,7 +15,8 @@
 * Order-checked: a stage is accepted only after the stages it requires.
 * Never raises into the caller: errors are counted in ``stats``.
 
-Nothing in bot/ or main.py calls this writer yet (no runtime wiring).
+No module in bot/ or main.py imports it: the WS2 paper-loop TOOL wires it
+(M21 WP7, flag-gated) and injects a ``LoopLedger`` sink into the loop.
 """
 from __future__ import annotations
 

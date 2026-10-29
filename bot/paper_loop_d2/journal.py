@@ -147,6 +147,8 @@ _ADDED_COLUMNS = (
     # time-stop close intent: written BEFORE the broker call (INTENT), then
     # SUBMITTED / CONFIRMED; cleared only when the broker PROVES nothing was placed
     ("close_state", "TEXT"), ("close_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    # M21 WP7: the candidate-ledger id carried from the scanner (nullable)
+    ("candidate_id", "TEXT"),
 )
 # Outcome columns added later (also migrated onto older DBs).
 _ADDED_OUTCOME_COLUMNS = (
@@ -289,7 +291,8 @@ class LoopJournal:
                    take_profit: float, score: float, data_source: str,
                    risk_decision_id: Optional[str], equity_at_entry: Optional[float],
                    now: datetime, order_ref: Optional[str] = None,
-                   account: Optional[str] = None) -> None:
+                   account: Optional[str] = None,
+                   candidate_id: Optional[str] = None) -> None:
         """Write-ahead record BEFORE the broker is called, including the
         broker-visible order_ref. Raises sqlite3.IntegrityError if this
         client_ref / order_ref exists or the symbol already has an active order."""
@@ -297,11 +300,11 @@ class LoopJournal:
             c.execute("INSERT INTO loop_orders (client_ref, cycle_key, strategy_id, symbol, direction,"
                       " qty, entry_ref_price, stop_loss, take_profit, score, state, data_source,"
                       " risk_decision_id, equity_at_entry, planned_at_utc, updated_at_utc,"
-                      " order_ref, account)"
-                      " VALUES (?,?,?,?,?,?,?,?,?,?,'PENDING_SUBMIT',?,?,?,?,?,?,?)",
+                      " order_ref, account, candidate_id)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,'PENDING_SUBMIT',?,?,?,?,?,?,?,?)",
                       (client_ref, cycle_key, strategy_id, symbol, direction, qty, entry_ref_price,
                        stop_loss, take_profit, score, data_source, risk_decision_id,
-                       equity_at_entry, _utc(now), _utc(now), order_ref, account))
+                       equity_at_entry, _utc(now), _utc(now), order_ref, account, candidate_id))
 
     def transition(self, client_ref: str, expected: str, new: str, now: datetime,
                    claims: Optional[List[tuple]] = None, **fields: Any) -> None:
