@@ -602,6 +602,7 @@ class PromotionBook:
         if target is None:
             raise _Diverged("no_recorded_pre_apply_version_to_revert_to")
         if active.version == op["from_version"]:
+            self._hook("revert:checked_before_rollback")
             try:
                 controls.rollback(actor=GUARD, reason=op["controls_reason"], expected_current=op["from_version"])
             except ControlError as exc:

@@ -782,8 +782,29 @@ class P7_CrashAndFaults(CrossStore):
         self.ctl.activate(ours, actor="mike")                            # out-of-band activation over x
         self.clock.advance(minutes=11)
         self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
-        self.assertIn("not_pre_apply", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+        (blk,) = self.book.blocked()
+        self.assertIn("not_pre_apply", MC.json.loads(blk["detail"])["blocked_because"])
         self.assertEqual(self.book.state("w3"), MC.APPROVED)
+        with self.assertRaises(MC.PromotionRefused):                     # its version IS live: cannot just close
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike", resolution=MC.ROLL_BACK, reason="r")
+        self.assertEqual(len(self.book.blocked()), 1)
+
+    def test_17_revert_never_overwrites_a_change_landing_after_its_check(self):
+        t = self.approved("w5")
+        self.book.apply("w5", self.ctl, token=t, verifier=self.v)
+        ctl = self.ctl
+
+        def operator_changes_controls(point):
+            if point == "revert:checked_before_rollback":
+                x = ctl.propose(base_cfg(25.0), author="mike", reason="concurrent manual change")
+                ctl.approve(x, approver="mike", reason="manual")
+                ctl.activate(x, actor="mike")
+        self.book.fault_hook = operator_changes_controls
+        with self.assertRaises(MC.PromotionRefused) as cm:
+            self.book.monitor("w5", [-3.0, -4.0], self.ctl, sink=Sink())
+        self.assertIn("BLOCKED", str(cm.exception))
+        self.assertEqual(K.read_active(self.ctl.path).config, base_cfg(25.0))  # the operator's change stands
+        self.assertIsNotNone(self.book.cooling_off_until())
 
     def test_16_recovery_is_idempotent_across_repeated_restarts(self):
         t = self.approved("w4")
