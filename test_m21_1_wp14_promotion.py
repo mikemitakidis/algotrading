@@ -687,6 +687,12 @@ class P7_CrashAndFaults(CrossStore):
         self.clock.advance(minutes=11)
         self.assertEqual(list(self.restart().reconcile(self.ctl)["settled"].values()), [MC.OP_BLOCKED])
         self.assertIn("intended_sha256", MC.json.loads(self.book.blocked()[0]["detail"])["blocked_because"])
+        (blk,) = self.book.blocked()
+        with self.assertRaises(MC.PromotionRefused) as cm:             # the operator cannot "confirm" a config
+            self.book.resolve_block(blk["op_id"], self.ctl, actor="mike",  # that is not the intended one
+                                    resolution=MC.ROLL_FORWARD, reason="looks applied")
+        self.assertIn("intended_version_is_not_active", str(cm.exception))
+        self.assertEqual((len(self.book.blocked()), self.book.state("z2")), (1, MC.APPROVED))
 
     def test_12e_revert_that_lands_anywhere_but_the_pre_apply_version_blocks(self):
         base = K.read_active(self.ctl.path)
