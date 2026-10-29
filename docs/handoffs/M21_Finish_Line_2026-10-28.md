@@ -1,12 +1,18 @@
 # M21 Finish Line — requirements, remaining work, estimate, merge readiness, decisions
 
-**Date:** 28 Oct 2026 (Europe/London) · **Repo:** mikemitakidis/algotrading · **main:** `80b4343db4a22413aa670efd32e24952d53e532e`
+**Date:** 28 Oct 2026, updated 29 Oct (Europe/London) · **Repo:** mikemitakidis/algotrading · **main:** `80b4343db4a22413aa670efd32e24952d53e532e`
 **Scope source:** the 29 June 2026 canonical roadmap (“Algo_Trading_Bot_Canonical_Roadmap.docx”, v2.0) — sections M21.U, M21.1, M21.1extra, M21.2–M21.7, §5 learning loop, §8 safety rules, Appendix A. Task IDs (A01–E09) are from the canonical handoff register; **all 71 stay in the register** (see §4).
 **Status of this file:** the single authoritative M21 checklist (§6). It replaces separate plan documents; the canonical handoff links here.
 
 ---
 
 ## 0. In plain words (one screen)
+
+> **Update, 29 Oct — final engineering acceptance.** The full record is `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md` (§7c below).
+> - All 16 PRs merge onto `main` in order with **zero conflicts**. The result is tree `f1ff536`, which equals `m21/integration` `79ae46f` minus its E2E file and that file's two allow-list entries. Full suite on the integration tree: 129 modules: 128 OK, 0 failed, 1 without tests (test_m12, by design).
+> - 13 new defects were fixed: 3 high (#17 forged M14 id, #22/#23 activation race, #25 timezone lookahead) and the #18/#25 merge conflict. None critical/high remains open.
+> - Remaining: 7 small engineering items E1–E7 (≈ 8 dev-days), the merges (C5b for #12/#16), the v3 canary run, and OP1–OP5.
+> - Estimate: engineering ≈ 16–18 Nov; operational ≈ 1–5 Dec; full acceptance ≈ 22 Dec – 8 Jan.
 
 > **Update, 28 Oct (late), after the independent review.**
 > - All three material findings are fixed, each on its owning PR:
@@ -308,32 +314,37 @@ What each work package contains:
 **Phase 2 — make the loop real**
 - [ ] WP5 — code in PR #15 (REVIEW; RUNTIME_UNVERIFIED)
 - [ ] WP6 — code in PR #16 (REVIEW; protected scanner + Alpaca transitions need C5b approval; proof in the corrections doc §9; RUNTIME_UNVERIFIED)
-- [ ] WP7 — PR #17, corrected `4c1cac7` (REVIEW; risk-evidence policy; RUNTIME_UNVERIFIED)
-- [ ] WP10 — code in PR #18 (REVIEW; RUNTIME_UNVERIFIED: the alarm drill is B-6)
+- [ ] WP7 — PR #17 `bf94f71` (REVIEW; M14_LIVE authenticated against the store; only M14_LIVE permits an intent; RUNTIME_UNVERIFIED)
+- [ ] WP10 — PR #18 `9012711` (REVIEW; future-stamped readings are UNKNOWN; RUNTIME_UNVERIFIED: the alarm drill is B-6)
 - [ ] OP1
 - [ ] OP2
 - [ ] OP3 — **paper loop running**
 - [ ] OP4 soak (B-3)
 
 **Phase 3 — remaining M21 capability**
-- [ ] WP8 — PR #21 (REVIEW; templates 2–4 shadow-only; RUNTIME_UNVERIFIED)
-- [ ] WP9 — PR #22 backend (REVIEW). **Missing: the dashboard UI** (protected `dashboard/app.py`, separate approval). RUNTIME_UNVERIFIED.
+- [ ] WP8 — PR #21 `fbfc815` (REVIEW; templates 2–4 shadow-only; RUNTIME_UNVERIFIED)
+- [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). **Missing: the dashboard UI = E6** (protected `dashboard/app.py`; shape proposed in the acceptance packet §14b). RUNTIME_UNVERIFIED.
 - [ ] WP12 — PR #19 (REVIEW; verified in the corrections doc §8; spread, impact, slippage and borrow are assumptions → DATA_UNVERIFIED until paper fills)
-- [ ] WP11 (B-1) — PR #20, corrected (REVIEW; real-data entrances fail closed). Real run = OP1 → DATA_UNVERIFIED.
-- [ ] WP13 (C-1, C-2) — PR #24, corrected (REVIEW). **v3 canary preregistered, not run.** Report-card wiring for real runs is open. DATA_UNVERIFIED.
-- [ ] WP14 / M21.3 (C-6) — PR #23, corrected (REVIEW; cross-store ops). Governance cycle = OP5 → RUNTIME_UNVERIFIED.
-- [ ] WP15 / M21.6 — PR #25, corrected (REVIEW). Context sources undecided (G4); WS2 wiring open → DATA_UNVERIFIED.
-- [ ] WP16 — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
+- [ ] WP11 (B-1) — PR #20 `4924844` (REVIEW; real-data entrances fail closed; G9 root cause fixed). Real run = OP1 → DATA_UNVERIFIED.
+- [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest `01b3f432…f262`. Report-card wiring = E1. DATA_UNVERIFIED.
+- [ ] WP14 / M21.3 (C-6) — PR #23 `04bf5ca` (REVIEW; cross-store ops + CAS + post-activation verification). Governance cycle = OP5 → RUNTIME_UNVERIFIED.
+- [ ] WP15 / M21.6 — PR #25 `f05ed84` (REVIEW; UTC publication instants, minimum backfill lag). Context sources (G4); WS2 logging = E2 → DATA_UNVERIFIED.
+- [ ] WP16 — PR #26 `89bc874` (REVIEW); real run after OP1 → DATA_UNVERIFIED
 - [ ] WP17 — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
 - [ ] WP18 (C-3) — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
-- [ ] Converted-input path for M17 multi-timeframe and M18 real builds (they now refuse raw M16 bars) → DATA_UNVERIFIED
-- [ ] Runbooks OP1–OP5 — prepared, with abort and rollback (OP1.6 queries are syntax-checked, not run)
+- [ ] E3 — converted-input path for M17 multi-timeframe and M18 real builds (they refuse raw M16 bars) → DATA_UNVERIFIED
+- [ ] E1 — walk-forward → report card
+- [ ] E2 — WS2 market-context shadow logging
+- [ ] E4 — score-vs-outcome report from ledger joins (C-4)
+- [ ] E5 — paper fill/fee reconciliation into `fee_calibration` (C-4; needs the IBKR statement)
+- [ ] v3 canary — one run on merged `main` (acceptance packet §8)
+- [ ] Runbooks OP1–OP5 — prepared, with abort and rollback; OP1.6 nine evidence categories (executed read-only on real-code schemas, not on real data); OP1.7 IBKR statement reconciliation; OP2/OP3 one-page gate
 
 **Closeout**
 - [ ] OP5
 - [ ] C-4 report
 - [ ] C-5 report
-- [ ] WP19 / E08
+- [ ] WP19 / E08 (= E7)
 - [ ] A-gate
 - [ ] B-gate
 - [ ] C-gate → **M21 ACCEPTED**
@@ -449,6 +460,26 @@ Stacked PRs are retargeted to `main` as each base merges, by merging `main` in. 
 
 Full report: `docs/reviews/M21_Review_Corrections_2026-10-28.md`.
 
+## 7c. Final engineering acceptance, 29 Oct
+
+**Final heads:**
+- #12 `47e9057`, #1 `0f3f9e6`, #14 `68ca7b4`, #13 `6a8a690`;
+- L lane: #15 `5394882`, #16 `bf92678`, #17 `bf94f71`, #21 `fbfc815`, #22 `b4e9955`, #23 `04bf5ca`, #18 `9012711`;
+- R lane: #19 `d7b8e66`, #20 `4924844`, #24 `4b677bc`, #26 `89bc874`, #25 `f05ed84`;
+- `m21/integration` `79ae46f` (tree `7843553`).
+
+**Merge proof.** A sequential trial merge of all 16 heads onto `main` (local only) is conflict-free in either lane order and ends at tree `f1ff536`. That tree equals the integration tree minus `test_m21_e2e_cross_lane.py` and its two G10 allow-list entries. The expected `main` tree after every step, the commands and the retarget rule are in the acceptance packet §13. Use merge commits only.
+
+**Evidence:** full suite 129 modules: 128 OK, 0 failed, 1 without tests (test_m12, by design); lane tips 35/35 and 40/40; #18 and #25 28/28 each.
+
+**Verdicts:**
+- READY FOR MERGE REVIEW: #17, #21, #22, #23, #24.
+- READY WITH DOCUMENTED LIMITATIONS: #15, #18, #19, #20, #25, #26.
+- BLOCKED_BY_APPROVAL (C5b): #16, and #12's scanner metadata.
+- No PR is CHANGES REQUIRED after this round's fixes.
+
+Full report: `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`.
+
 ## 8. Decision list (only what is genuinely needed)
 
 | Gate | Decision | Recommendation |
@@ -460,6 +491,8 @@ Full report: `docs/reviews/M21_Review_Corrections_2026-10-28.md`.
 | G-opt | Activate the existing inactive offline CI (E09: no secrets, read-only) so reviewers rely on CI runs rather than Claude-reported results. | Optional; it would shorten every review round |
 
 Nothing else needs your approval for M21 engineering. Everything in §5 marked L or R is offline work on branches.
+
+**29 Oct:** the current grouped approvals are in the acceptance packet §20: G-review, C5b, G3a merges, the dashboard shape, G2/OP1 (with your IBKR statement exports), G3b OP2/OP3, G4 and the Vercel decision.
 
 ## 9. Working process (to stop the drift)
 

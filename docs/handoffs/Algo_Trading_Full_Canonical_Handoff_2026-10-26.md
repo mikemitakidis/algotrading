@@ -1,5 +1,5 @@
 # Algo Trading — FULL Canonical Project Handoff & Completion Register
-**Snapshot:** 26 October 2026, **status refresh 28 October 2026 (v3.10) Europe/London** · **Version:** 3.10 (28 Oct 2026, late: corrections after the independent review of the accelerated delivery — #23 cross-store governance, #17 risk-evidence provenance, #24 canary experiment identity, plus §6/§7 audit fixes on #20/#24/#25; corrected heads, evidence and OP1.6 in `docs/reviews/M21_Review_Corrections_2026-10-28.md`; `main` unchanged; all 71 tasks kept) · 3.9 (28 Oct 2026: M21 finish line, requirements matrix, remaining-work plan, estimate, merge readiness and decisions in `docs/handoffs/M21_Finish_Line_2026-10-28.md`; A01 completed-bar staleness basis on PR #12 @ `47e9057`; `main` unchanged; all 71 tasks kept) · 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
+**Snapshot:** 26 October 2026, **status refresh 29 October 2026 (v3.11) Europe/London** · **Version:** 3.11 (29 Oct 2026: final engineering acceptance — 13 defects fixed incl. #17 forged-M14-id, #22/#23 activation race, #25 timezone lookahead; all 16 PRs proven to merge conflict-free onto `main` in order; full suite on the post-merge tree; C5b and dashboard requests; OP1.6 nine categories + OP1.7 statement reconciliation; G4 matrix; `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`; `main` unchanged; all 71 tasks kept) · 3.10 (28 Oct 2026, late: corrections after the independent review of the accelerated delivery — #23 cross-store governance, #17 risk-evidence provenance, #24 canary experiment identity, plus §6/§7 audit fixes on #20/#24/#25; corrected heads, evidence and OP1.6 in `docs/reviews/M21_Review_Corrections_2026-10-28.md`; `main` unchanged; all 71 tasks kept) · 3.9 (28 Oct 2026: M21 finish line, requirements matrix, remaining-work plan, estimate, merge readiness and decisions in `docs/handoffs/M21_Finish_Line_2026-10-28.md`; A01 completed-bar staleness basis on PR #12 @ `47e9057`; `main` unchanged; all 71 tasks kept) · 3.8 (28 Oct 2026: PR #1 market-clock hardening R1–R3; C01 final design decisions D-1..D-6 (rev 3); A02 candidate ledger offline on draft PR #14; `main` unchanged at `80b4343`; scope unchanged from 3.0) · 3.7 (28 Oct 2026: WP1/WP3/WP4 delivered as draft PRs #12/#1/#13; checkpoint corrections) · previous 3.6 (27 Oct 2026: M21 research PRs #4–#11 merged to main `80b4343`) · **Repo:** mikemitakidis/algotrading · **Dashboard:** algotrading.marketwarrior.club
 
 > **Permanent rule:** This handoff covers every remaining capability from the June 2026 canonical roadmap through M23 and the two-broker operating objective, plus all still-open technical debt and the new advanced AI/self-development research architecture. **No delivery deadlines or calendar estimates.** Work proceeds by dependencies, testing evidence and operator approvals. Preserve original milestone names and numbers. A GitHub merge, a VPS deployment, a runtime activation and an independently validated trading edge are FOUR DIFFERENT STATES.
 
@@ -35,6 +35,35 @@ Build a sophisticated continuously learning trading research-and-execution platf
 | GitHub main | **80b4343db4a22413aa670efd32e24952d53e532e** (27 Oct 2026, merge of PR #11; previously 015d2ce). Tree identical to the reviewed integration head `a645a91`; 89 files changed vs 015d2ce, all under `research/`, `docs/research/`, `test_m21_research_*.py` plus test-only M17/M18 hygiene allow-lists; no `bot/`, `dashboard/`, `tools/`, `main.py`, `requirements.txt` or active workflow changes | No changes to main without separate explicit approval. Vercel auto-deployed the repo's web project (READY); that is NOT the trading runtime |
 | Last operator-reported VPS | Trader inactive; ibgateway failed; dashboard + Caddy running; no dashboard restart after WS1; no Telegram, no new IBKR orders; sync daemon off | Current runtime must be independently rechecked at activation, not guessed |
 | M21.2–M21.7, M22, M23 | Unfinished or only supporting infrastructure exists | Completion tasks follow |
+
+### 3a-000000. v3.11 — final engineering acceptance (29 Oct 2026)
+
+**Input:** the operator's "M21 final engineering acceptance and merge-readiness program" (29 Oct). No new development cycle.
+
+**Result** (full record: `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`):
+- **Heads:**
+  - #17 `bf94f71`, #21 `fbfc815`, #22 `b4e9955`, #23 `04bf5ca`, #18 `9012711`;
+  - #20 `4924844`, #24 `4b677bc`, #26 `89bc874`, #25 `f05ed84`;
+  - unchanged: #12, #1, #14, #13, #15, #16, #19.
+  - `m21/integration` `79ae46f`.
+- **Defects fixed (13):**
+  - **#17:** M14_LIVE now authenticated against the persisted M14 decision; tick time window; only M14_LIVE permits an intent.
+  - **#22/#23:** compare-and-swap activation and revert; post-activation digest and previous-version verification; never-live ROLL_BACK.
+  - **#24:** explicit planted-effect identity and environment.
+  - **#20:** G9 root cause (per-run id in `report.json`).
+  - **#18:** future-stamped readings are UNKNOWN.
+  - **#25:** UTC publication instants; minimum 22 h backfill lag.
+  - **#18/#25:** allow-list anchors, so the sequential merge onto `main` is conflict-free.
+- **Merge proof:** all 16 PRs merge onto `main` in order, conflict-free, ending at tree `f1ff536`, which is the integration tree minus the E2E file and its allow-list entries. The full suite ran on that tree.
+- **Protected files:** C5b sign-off requested for #12 and #16 (`bot/scanner.py`, `bot/providers/alpaca_provider.py`); dashboard shape requested (blueprint plus one line). Nothing protected was modified.
+
+**Task statuses.** No task changed to CLOSED; all 71 are kept.
+- A15/A16 backends: READY_FOR_REVIEW. The A16 UI is INCOMPLETE (E6, protected).
+- B08: v3 prepared, not run.
+- B18: WS2 logging is INCOMPLETE (E2).
+- §5 loop and C-4: score-vs-outcome (E4) and fill reconciliation (E5) are INCOMPLETE.
+- E08: E7.
+- Everything real-data or runtime stays DATA_UNVERIFIED or RUNTIME_UNVERIFIED until OP1–OP4.
 
 ### 3a-00000. v3.10 — corrections after the independent review (28 Oct 2026, late)
 
@@ -511,7 +540,21 @@ Previous: NOT_STARTED (27 Oct 2026).
 - **Working research report:** https://github.com/mikemitakidis/algotrading/blob/research/m21-autonomous-research-engine/docs/research/M21_autonomous_research_engine_proposal.md
 - **GitHub source:** ROADMAP.md; MILESTONE_STATUS.md; docs/NEXT_WORK_REGISTER.md.
 
-**Claude's next authorised action (resume point, v3.9):** **STOPPED for review** of the M21 finish line (`docs/handoffs/M21_Finish_Line_2026-10-28.md`) and of the PR deltas:
+**Claude's next authorised action (resume point, v3.11):** **STOPPED** after the final engineering acceptance packet (`docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`, posted on Issue #3).
+
+Waiting for the grouped approvals in its §20:
+- G-review;
+- C5b (#12, #16);
+- G3a merges, in the §13 order and trees, merge commits only;
+- the dashboard shape;
+- G2/OP1, with your IBKR statement exports;
+- G3b OP2/OP3;
+- G4;
+- the Vercel decision.
+
+After the merges: the v3 canary once, then E1–E7.
+
+Earlier resume point (v3.9): **STOPPED for review** of the M21 finish line (`docs/handoffs/M21_Finish_Line_2026-10-28.md`) and of the PR deltas:
 - #12 A01 (`47e9057`; delta `8013044..47e9057`);
 - #1 WS2 (`0f3f9e6`; delta `46c87ab..0f3f9e6`);
 - #13 C01 design (`6a8a690`);
