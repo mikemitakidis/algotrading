@@ -5,10 +5,28 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state (updated 2026-07-06, A1 docs realignment)
+> ## Current operating state (reconciled 2026-10-29, M21 E7)
 >
-> **Active milestone:** M21.1extra. **IBKR paper only** (port 4002, account
-> `DUP623346`); no IBKR live, no eToro real orders.
+> **Active milestone:** M21 (June 2026 canonical roadmap: M21.U, M21.1, M21.1extra, M21.2–M21.7).
+> **IBKR paper only;** no IBKR live, no eToro real orders. Nothing below changes that.
+>
+> | Gate | State on 29 Oct 2026 |
+> |---|---|
+> | A. Engineering | All M21 work packages exist as code in **draft PRs, not merged**: #12, #1, #14, #13 and #15–#26 (proven to merge conflict-free onto `main` `80b4343`, tree `f1ff536`), plus E1–E6 #27–#32 (stacked on that tree) and this reconciliation (E7). Merge needs the operator's batch approval; `main` is still `80b4343`. |
+> | B. Operational | **Not started.** OP1 (read-only VPS inspection + IBKR statement exports), OP2 (IBKR paper gateway), OP3 (activation), OP4 (10-day soak), OP5 (governance cycle) all need separate approvals. The paper loop is not running; the ledger migration is not deployed; every new runtime flag is OFF. |
+> | C. Performance validation | **Not started.** Needs real historical data (OP1) and genuine paper outcomes; the v3 canary is preregistered and NOT run (waits for approval of the optimiser's final source). |
+>
+> What is **complete and on `main`**: M21.U; M21.1extra D0, D1, supervised D2 and the D3 metrics **code** (D3's runtime
+> acceptance, A06, still needs a dashboard restart). What is **not** complete: everything else in M21, including the
+> unattended paper loop, real-data research runs, the Promotion & Approval cycle and the template dashboard UI
+> (E6: blueprint in PR #32; the protected `dashboard/app.py` wiring is a prepared patch, not applied).
+> Authoritative checklist: `docs/handoffs/M21_Finish_Line_2026-10-28.md` §6 on the docs branch
+> `docs/full-canonical-handoff-2026-10-26`; all 71 register tasks are kept there.
+>
+> ## Previous operating state (2026-07-06, A1 docs realignment), kept for history
+>
+> **Active milestone:** M21.1extra. **IBKR paper only** (port 4002, the configured
+> DU paper account); no IBKR live, no eToro real orders.
 >
 > ```
 > ✅ D0 — authorization gate
@@ -88,8 +106,9 @@ project-wide reconciliation narrative lives in
 | 18 | ML strategy/criteria foundation (read-only / shadow-only) | **CLOSED — merged to `main` at `264fba84`** | sklearn/RandomForest foundation; `test_m18_ml` loader 669 (668 + duplicate-class guard added in pre-M19 cleanup); see `docs/M18_ACCEPTANCE.md`. NOT live trading, NOT M19 scoring |
 | 19 | Signal scoring engine (M19) | CLOSED | `bot/signal_scoring/` — pure scoring/explainability layer; see `bot/signal_scoring/M19_STATUS.md`. Not execution |
 | 20 | Paper decision/orchestration (M20) | CLOSED | `bot/paper/`; see `docs/ROADMAP_M20.md` |
-| 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (M21.1extra D0/D1/D2 done; D3 not started) | `bot/paper_loop_d2/`; D0 auth gate, D1 market-clock, D2 supervised paper lifecycle proven; **D3 dashboard metrics not started** |
-| 21.2 | Parameter optimisation | NOT STARTED | Blocked on D3 + the PnL/backtest debt (debt register pending on branch `m21-docs-debt-register`) |
+| 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (reconciled 2026-10-29). M21.U CLOSED; D0/D1/supervised D2 CLOSED; D3 code merged (runtime acceptance A06 pending a dashboard restart); A01 truthful scoring, A02 candidate ledger, WS2 paper loop, WP5–WP10 and E2/E4/E5/E6 on **draft PRs, not merged**; unattended paper loop NOT running | `bot/paper_loop_d2/`, `dashboard/paper_metrics_view.py` on `main`; PRs #12, #1, #14, #15–#18, #21, #22, #28, #30–#32; operational gates OP1–OP4 not started |
+| 21.2 | Parameter optimisation | ENGINEERING ON DRAFT PRs, not merged (WP12 #19, WP11 #20, WP13 #24, E1 #27, E3 #29); real-data runs need OP1; v3 canary preregistered, NOT run | Synthetic machinery only; every real-data result is DATA_UNVERIFIED |
+| 21.3–21.7 | Walk-forward + Promotion & Approval (21.3), meta-labelling (21.4), regime thresholds (21.5), market context (21.6), learned regime weights (21.7) | ENGINEERING ON DRAFT PRs, not merged (WP14 #23, WP16–18 #26, WP15 #25, E2 #28); shadow-only; no trading authority | Promotion cycle (OP5) and real-data runs not done |
 | 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later** |
 
 ---
@@ -163,7 +182,7 @@ project-wide reconciliation narrative lives in
 ### Milestone 11 — IBKR Paper Trading (CLOSED)
 - **Files:** `bot/brokers/ibkr_broker.py` (paper port 4002 path; `_check_live_safety_config()` gate; `get_positions()`, `reconcile()`).
 - **Infrastructure:** IBC 3.22.0 headless IB Gateway on `DISPLAY=:99`, systemd `Restart=always`, nightly `AutoRestartTime=23:45`.
-- **Evidence:** `test_m11.py` records "Logged in to PAPER account DUP623346" + "API connections enabled (port 4002)". Paper login flow verified.
+- **Evidence:** `test_m11.py` records the "Logged in to PAPER account DU…" line (the configured paper account) + "API connections enabled (port 4002)". Paper login flow verified.
 
 ### Milestone 12 — IBKR Live Trading (CLOSED, capability proven)
 - **Files:** `bot/brokers/ibkr_broker.py` live mode (port 4001 / `config.live.ini` / `start_ibgateway_live.sh` / `/var/lib/ibgateway-live`).
