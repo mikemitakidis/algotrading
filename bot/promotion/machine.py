@@ -400,13 +400,36 @@ class PromotionBook:
         controls.approve(v, approver=op["actor"], reason="promotion token %s" % d["token_signature_prefix"])
         self._hook("apply:version_approved")
         active = read_active(controls.path)
-        if not (active.source == SOURCE_STORE and active.version == v):
-            if active.source != SOURCE_STORE or active.version != op["from_version"]:
-                raise _Diverged("active_v%s_%s_is_not_pre_apply_v%s" % (active.version, active.source,
-                                                                        op["from_version"]))
-            controls.activate(v, actor=op["actor"])
+        if active.source != SOURCE_STORE or active.version != op["from_version"]:
+            raise _Diverged("active_v%s_%s_is_not_pre_apply_v%s" % (active.version, active.source,
+                                                                    op["from_version"]))
+        self._hook("apply:checked_before_activate")
+        # compare-and-swap inside the controls store's own transaction: a change that lands after the
+        # check above is refused there, never overwritten
+        controls.activate(v, actor=op["actor"], expected_current=op["from_version"])
         self._hook("apply:activated")
+        self._verify_applied(controls, op, v)
         return v
+
+    @staticmethod
+    def _activation_previous(controls: TemplateControls, v: int):
+        """The version that was active when ``v`` was (last) activated, from the controls audit."""
+        try:
+            rows = [a for a in controls.audit() if a["action"] == "ACTIVATED" and a["version"] == v]
+        except sqlite3.DatabaseError as exc:
+            raise _Diverged("controls_store_error:%s" % type(exc).__name__)
+        return json.loads(rows[-1]["detail"]).get("previous") if rows else None
+
+    def _verify_applied(self, controls: TemplateControls, op, v: int) -> None:
+        """The intended config is active, exactly as recorded, and it replaced the pre-apply version."""
+        active = read_active(controls.path)
+        if active.source != SOURCE_STORE or active.version != v:
+            raise _Diverged("after_activation_active_v%s_%s_is_not_v%s" % (active.version, active.source, v))
+        if sha256(active.config) != op["intended_sha256"]:
+            raise _Diverged("active_config_differs_from_intended_sha256")
+        prev = self._activation_previous(controls, v)
+        if prev != op["from_version"]:
+            raise _Diverged("v%s_was_activated_over_v%s_not_pre_apply_v%s" % (v, prev, op["from_version"]))
 
     def _complete_apply(self, op, v, *, recovered, cause, resolved_by=None) -> None:
         now = self.clock()
@@ -547,8 +570,7 @@ class PromotionBook:
     def _settle_apply(self, op, controls, active, cause) -> str:
         found = self._find_version(controls, op["controls_reason"])
         if found is not None and active.version == found["version"]:
-            if sha256(active.config) != op["intended_sha256"]:
-                raise _Diverged("active_config_differs_from_intended_sha256")
+            self._verify_applied(controls, op, found["version"])        # digest and what it replaced
             self._complete_apply(op, found["version"], recovered=True, cause=cause)
             return OP_COMPLETED
         if active.version != op["from_version"]:
@@ -581,7 +603,7 @@ class PromotionBook:
             raise _Diverged("no_recorded_pre_apply_version_to_revert_to")
         if active.version == op["from_version"]:
             try:
-                controls.rollback(actor=GUARD, reason=op["controls_reason"])
+                controls.rollback(actor=GUARD, reason=op["controls_reason"], expected_current=op["from_version"])
             except ControlError as exc:
                 raise _Diverged("rollback_refused:%s" % exc)
             except sqlite3.DatabaseError as exc:              # transient: stays PENDING, every action stays shut
@@ -681,10 +703,18 @@ class PromotionBook:
                     self._close(op, OP_COMPLETED, by, {"resolution": resolution, "reason": reason})
             else:
                 pre = op["target_version"] if kind == OP_REVERT else op["from_version"]
-                if pre is None or active.version != pre:
+                never_live = False
+                if kind == OP_APPLY:
+                    found = self._find_version(controls, op["controls_reason"])
+                    never_live = found is None or found["status"] not in (ACTIVE, SUPERSEDED)
+                if not never_live and (pre is None or active.version != pre):
                     raise _Diverged("pre_apply_version_v%s_is_not_active" % pre)
                 if kind == OP_APPLY:
-                    self._close(op, OP_ABORTED, by, {"resolution": resolution, "reason": reason})
+                    # the promotion's version never went live: nothing of it to undo; withdraw the orphan
+                    if found is not None and found["status"] in (PROPOSED, V_APPROVED):
+                        controls.withdraw(found["version"], actor=by, reason="aborted promotion op %s" % op_id)
+                    self._close(op, OP_ABORTED, by, {"resolution": resolution, "reason": reason,
+                                                     "intended_never_active": never_live})
                 else:
                     self._complete_revert(op, recovered=True, resolved_by=by, close_kind=kind)
         except _Diverged as exc:
