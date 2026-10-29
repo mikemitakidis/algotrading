@@ -10590,6 +10590,12 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_a01_scoring_truth.py",
             # M21.1 A02 candidate-decision ledger tests + implementation plan.
             "test_m21_1_a02_candidate_ledger.py",
+            "bot/templates/__init__.py",
+            "bot/templates/core.py",
+            "bot/templates/ids.py",
+            "bot/templates/routing.py",
+            "bot/templates/shadow.py",
+            "test_m21_1_wp8_templates.py",
             "test_m21_1_wp7_ledger_wiring.py",
             "bot/providers/alpaca_provider.py",
             "bot/bar_completion.py",
