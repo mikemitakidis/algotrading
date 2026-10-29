@@ -77,7 +77,7 @@ def run(cfg: BacktestConfig, *, _multi_tf_bars=None) -> BacktestResult:
     """Execute a backtest end-to-end and return a BacktestResult.
     Doesn't write to disk — use run_and_write for that.
 
-    ``_multi_tf_bars`` is INTERNAL (like M18's ``_bars_provider``): the
+    ``_multi_tf_bars`` is INTERNAL (like the M18 CLI's injected provider): the
     research converted-data path passes close-stamped bars WITH their
     conversion evidence. Production never passes it (pinned by test), so
     production always loads through the guarded ``load_multi_tf_bars``."""
