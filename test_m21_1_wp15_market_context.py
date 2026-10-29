@@ -75,6 +75,10 @@ class X1_PointInTime(Base):
         got = self.store.asof("VIXCLS", datetime(2026, 11, 3, 12, 0, tzinfo=ny))
         self.assertEqual(got.published_at_utc, datetime(2026, 11, 3, 17, 0, tzinfo=UTC))
         self.assertEqual(got.published_at_utc.utcoffset(), timedelta(0))
+        self.assertEqual([o.value for o in self.store.history_asof("VIXCLS", datetime(2026, 11, 3, 12, 0,
+                                                                                      tzinfo=ny), 5)], [19.1])
+        self.assertEqual(self.store.history_asof("VIXCLS", datetime(2026, 11, 4, 1, 0, tzinfo=timezone(
+            timedelta(hours=9))), 5), [])                                            # 16:00 UTC on the 3rd
         with self.assertRaises(ValueError):
             self.store.history_asof("VIXCLS", datetime(2026, 11, 3, 17, 0), 5)
 
