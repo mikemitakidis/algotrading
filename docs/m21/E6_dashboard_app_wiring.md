@@ -54,11 +54,13 @@ commit (`test_approving_commit_is_ancestor_and_produced_to_blob` fails until it 
 
 ## 4. Verification done (29 Oct, on the PR E6 head + the patch, scratch only)
 
-- The patch applies with `git am` to PR E6 head `d417513` (and to any later head that only adds `docs/m21/` files) and produces exactly the verified tree `09a8135`.
+- The patch applies with `git am` to PR E6 head `d417513` (tree `09a8135`) and to the current head `53e48cf` (tree `ba46912`); the documented placeholder step (§3) was then run as written.
 - Without patch 2/2, the guards fail as they must (`test_m17` sha256 pin, `test_m20_paper`, `test_m20_paper_storage`,
   `test_m21_c5b`, and the E6 isolation test): the protection works.
 - With both patches: the protected guard set passes (evidence in the PR conversation).
 - The C5a static isolation guard found that a test importing `dashboard.app` must install `_test_isolation`
   first; the E6 test now does so (PR head `d417513`), so the patch needs no further change.
+- The WP14 isolation guard requires every reader of the template-controls store to be reviewed; the E6 blueprint
+  is recorded there as the second reader with its import set pinned (PR head `53e48cf`).
 
 Python 3.12.3 / NumPy 1.26.4, C5a isolation, checkout outside `/tmp`.
