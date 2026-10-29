@@ -1,6 +1,6 @@
 # M21 operational runbooks OP1–OP5 (preparation only)
 
-**Status:** prepared by Claude on 28 Oct 2026; revised the same evening after the independent review (OP1.6, the abort criteria and the rollback steps for OP2/OP3, and promotion reconciliation in OP5); revised 29 Oct (OP1.6 nine evidence categories, OP1.7 statement reconciliation, OP2/OP3 acceptance gate). Nothing here has been run. Every step needs **your explicit approval at the gate shown**.
+**Status:** prepared by Claude on 28 Oct 2026; revised the same evening after the independent review (OP1.6, the abort criteria and the rollback steps for OP2/OP3, and promotion reconciliation in OP5); revised 29 Oct (OP1.6 nine evidence categories, OP1.7 statement reconciliation, OP2/OP3 acceptance gate); **OP1 finalised 29 Oct evening** (scripts in `docs/runbooks/op1/`, verified read-only on a synthetic replica; IBKR Flex specification; E5 reconciliation). Nothing here has been run. Every step needs **your explicit approval at the gate shown**.
 
 **Rule for every runbook:**
 - Stop at the first unexpected output.
@@ -14,172 +14,95 @@
 
 ---
 
-## OP1: one read-only VPS session (gate G2)
+## OP1: one read-only VPS session (gate G2) — FINAL, 29 Oct 2026
 
-**Purpose:**
-- data inventory and real-data readiness (B01/E05, WP11);
-- a copy of `signals.db` for the A02 legacy replay;
-- the M14 `RISK_*` environment check (names only, no values);
-- `.env` permission metadata (E07).
+**Status:** final for approval. Prepared and verified offline; **not run on the VPS**. Claude does not connect to the
+VPS or to IBKR: you run OP1 and download the IBKR statements yourself.
 
-**Writes:** only under `/tmp/m21_op1/`.
+### OP1.0 What OP1 establishes, and what counts as proof
 
-**Never:**
-- writes to `/opt/algo-trader`;
-- reads `.env` values;
-- restarts a service;
-- connects a broker.
+| # | Question | Evidence (output file) | Proof level |
+|---|---|---|---|
+| 1 | Historical data available | `m16_inventory.txt` §B–C, `parquet_basis.csv` | our store, read-only |
+| 2 | Symbols and timeframes | `m16_inventory.txt` §C/E, `parquet_basis_summary.txt` | our store |
+| 3 | Coverage and gaps | `m16_inventory.txt` §C–G (bars, window, missing, duplicates, quality events), `readiness/report.md` | our store + exchange calendar |
+| 4 | Adjustment basis and corporate actions | `parquet_basis.csv` (is_adjusted share, distinct ratios, ratio change points), `readiness/` | our store; raw-basis verdicts stay INCONCLUSIVE until corporate-action records exist (WP5) |
+| 5 | Was the old paper system running | `runtime_status.txt` (units, timers, cron, process names, ports, bot_state keys), `journal_<unit>.txt` (activity per day, redacted) | host evidence |
+| 6 | Signals since 1 June 2026 | `old_paper_signals.txt` §2 | our records (claims) |
+| 7 | Orders planned and submitted | `old_paper_signals.txt` §3–4, `old_paper_journal.txt` | claims |
+| 8 | Broker acknowledgements | `old_paper_signals.txt` §5/6 (ids recorded, counts only), journal perm ids | claims → proof only via OP1.7 |
+| 9 | Claimed fills vs confirmed broker fills | OP1.7 reconciliation (E5) | **the IBKR statement** |
+| 10 | Open / closed paper positions | journal states + `old_paper_signals.txt` §9 (latest broker_positions batch); statement Open Positions section | statement for proof |
+| 11 | Fees / commissions | OP1.7 (statement commissions; missing = unknown, never zero) | **statement only** |
+| 12 | Unexpected live-account activity | `9_LIVE_SCOPE_ATTEMPT_ESCALATE` rows; live-scope positions; E5 `LIVE_ACCOUNT_ACTIVITY` on the **live** statement | live statement |
+| 13 | Current M14 exposure / P&L evidence collection | `old_paper_signals.txt` §10 (daily_state_per_broker last 14 days, risk_snapshots, risk_decisions last 7 days), `env_metadata.txt` (RISK_* names) | our records |
+| 14 | **Would merging to `main` auto-deploy to the VPS?** | `runtime_status.txt`: `sync_sh_processes`, `sync.log` deploy/restart events, deployed `HEAD` and modified-file count | host evidence — **merge blocker until answered** |
 
-### OP1.1 Get the exact code into /tmp (no git operations on the VPS)
+**Rules:** a database row is a claim, never proof of execution. Local simulations (`paper_logged`, `data_source='simulated'`)
+are reported separately from IBKR paper activity and never counted as executions. The nine evidence categories
+below are never added together.
+
+### OP1.1 Minimum permissions
+
+| Where | Needed | Not needed |
+|---|---|---|
+| VPS | SSH as the account that already runs the bot (read access to `/opt/algo-trader/data`, `stat` of `.env*`); write access **only** to `/tmp/m21_op1`; `journalctl -u` for the bot units needs membership of `systemd-journal` (or `adm`); otherwise that one step reports "access denied" and nothing else changes | sudo for anything else; any write under `/opt/algo-trader`; reading `.env` values; service start/stop/restart; package installs (if `sqlite3` is absent the script uses `op1_sql.py`, standard library) |
+| Network (VPS) | HTTPS to `codeload.github.com` for the two tarballs (or copy them in with `scp`) | broker, Alpaca or any data vendor |
+| IBKR | your own Client Portal login, to create and run a Flex Query (reporting only) for the **paper** account and for the **live** account | API keys, TWS/Gateway sessions, trading permissions, sharing credentials |
+| Claude | the output files and statement CSVs you upload | VPS or IBKR access of any kind |
+
+### OP1.2 Fetch code and runbook (no git operations on the VPS)
 ```bash
-SHA=<head of m21/wp11-readiness (PR #20), or of main once #19/#20 are merged>
+CODE=<code SHA: head of m21/wp11-readiness (PR #20), or main once merged>
+DOCS=<head of docs/full-canonical-handoff-2026-10-26 (this runbook's commit)>
 mkdir -p /tmp/m21_op1 && cd /tmp/m21_op1
-curl -fsSL -o src.tgz https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$SHA
-sha256sum src.tgz            # record in the OP1 log
-mkdir -p src && tar -xzf src.tgz -C src --strip-components=1
+curl -fsSL -o src.tgz  https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$CODE
+curl -fsSL -o docs.tgz https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$DOCS
+sha256sum src.tgz docs.tgz | tee -a op1.log
+mkdir -p src docs && tar -xzf src.tgz -C src --strip-components=1 && tar -xzf docs.tgz -C docs --strip-components=1
 ```
 
-### OP1.2 Exchange calendar rows (VPS VERIFICATION REQUIRED)
-- WP11 needs a JSON list of `{date, open, close}` rows covering the data window (Alpaca `/v2/calendar` shape).
-- Two acceptable sources:
-  - (a) the WP5 calendar fetcher run in a separate, approved step (it uses the Alpaca keys);
-  - (b) an export you download yourself.
-- Save the rows as `/tmp/m21_op1/calendar.json`.
-- Do **not** hand-type a calendar.
+### OP1.3 Exchange calendar rows (VPS VERIFICATION REQUIRED)
+WP11 needs a JSON list of `{date, open, close}` rows covering the data window (Alpaca `/v2/calendar` shape), saved as
+`/tmp/m21_op1/calendar.json`: either (a) the WP5 calendar fetcher in a separate approved step (it uses the Alpaca keys)
+or (b) an export you download. Never hand-type a calendar. Without it, OP1.4 skips only the readiness report.
 
-### OP1.3 Readiness report (read-only)
+### OP1.4 Run the read-only session
 ```bash
-cd /tmp/m21_op1/src
-PYTHONDONTWRITEBYTECODE=1 /opt/algo-trader/venv/bin/python3 -I -c "import sys; sys.path.insert(0, '.'); \
-from research.dataqa.readiness import main; raise SystemExit(main(sys.argv[1:]))" \
-  --store /opt/algo-trader/data/historical --provider yfinance --calendar /tmp/m21_op1/calendar.json \
-  --symbols "$(ls /opt/algo-trader/data/historical/yfinance/1D | sed 's/.parquet//' | head -50 | paste -sd,)" \
-  --timeframes 1D,4H,1H,15m --convention start --out /tmp/m21_op1/readiness
+cd /tmp/m21_op1 && bash docs/docs/runbooks/op1/op1_readonly.sh
 ```
+It copies `signals.db`, `paper_lifecycles.db` and `historical.db` through read-only connections (`.backup` from a
+`mode=ro` URI; `immutable=1` when no `-wal` file exists, so SQLite creates no side files), runs
+`docs/runbooks/sql/{op1_m16_inventory,old_paper_signals,old_paper_journal}.sql` on the **copies** with
+`sqlite3 -readonly`, summarises the parquet store (`op1_parquet_basis.py`), runs the WP11 readiness report when the
+calendar is present, records `.env*` permissions and `RISK_*`/broker variable **names**, collects runtime evidence
+(`op1_runtime_status.sh`: unit properties, timers, cron, process **names** — never arguments — ports, the
+`sync.sh` auto-deploy daemon (process count, deploy/restart events from `logs/sync.log`), the deployed checkout's
+`HEAD` (read-only `git log`; `git status` with `GIT_OPTIONAL_LOCKS=0` so the index is not rewritten), `bot_state.json`
+keys, journal lines filtered and redacted), screens every output for secret-like strings and writes `MANIFEST.sha256`.
 
-**Accept:**
-- `report.json` and `report.md` exist;
-- `origin=real`;
-- the per-symbol convention is `start` (M16 stamps bar starts), so conversion runs.
+**Verified offline (29 Oct):** on a synthetic replica of the VPS layout built with the real code (`init_db`, flywheel
+tables and migrations, `LoopJournal`, M16 `apply_schema` + a parquet file written by the store), with planted fake
+secrets in `.env`, `bot_state.json` and `logs/sync.log`, and the replica as a git checkout: exit 0; the replica tree
+hash (including `.git`) identical before and after; no side files
+created; zero planted secrets in any output; all SQL ran without errors; the same with the `sqlite3` CLI absent
+(Python fallback); the readiness step ran read-only against a code checkout. `bash -n` clean.
 
-Expect raw-basis rows to be **INCONCLUSIVE** until corporate-action records are fetched (WP5). That is by design.
+**Merge blocker (item 14).** `sync.sh` polls GitHub every 60 s; on a new `main` commit it runs `git reset --hard
+origin/main` in `/opt/algo-trader`, `pip install -r requirements.txt` and restarts **both** `algo-trader.service` and
+`algo-trader-dashboard.service`. If `sync_sh_processes` is above 0, every merge would deploy and restart production.
+Before any merge, decide (separate approval): stop the daemon for the merge window and deploy once, deliberately
+(recommended), or accept automatic deployment. Do not merge while this is unknown.
 
-**Stop if:**
-- any write lands outside `/tmp/m21_op1`;
-- the store path is missing.
+**Stop if:** `op1.log` shows `COPY FAILED`, any path outside `/tmp/m21_op1` being written, a secret-screen count
+above 0 (review before sharing), any `9_LIVE_SCOPE_ATTEMPT_ESCALATE` row, a non-paper scope holding positions in §9,
+or any SQL error other than `no such table`.
 
-### OP1.4 Copy of `signals.db` for the A02 replay
-```bash
-sqlite3 "file:/opt/algo-trader/data/signals.db?mode=ro" ".backup /tmp/m21_op1/signals_copy.db"
-sha256sum /tmp/m21_op1/signals_copy.db
-```
-Transfer the copy off the VPS only by your chosen route. It contains no secrets, but it is production data, so you decide where it goes.
+**Share:** `MANIFEST.sha256` and the `.txt`, `.csv` and `readiness/` outputs. Keep the `*_copy.db` files; transfer them
+only by the route you choose (they are production data, no secrets): E5 needs `paper_lifecycles_copy.db` and
+`signals_copy.db`.
 
-### OP1.5 Environment names and permission metadata (no values)
-```bash
-stat -c '%a %U %G %n' /opt/algo-trader/.env
-grep -oE '^RISK_[A-Z_]+' /opt/algo-trader/.env | sort -u        # names only
-```
-
-### OP1.6 Old paper system since June: what really happened (prepared, NOT run)
-
-**Why.** Before any new paper evidence is trusted, we need to know what the old system actually did.
-
-**Rule: a database row is not proof of execution.** These queries only *classify our own records*. Proof needs a broker record:
-
-- **Genuine IBKR paper fills and fees** come only from an IBKR paper-account statement export (Activity or Flex: execution id, time, quantity, price, commission). You download it from Client Portal.
-  - The local schema stores **no commissions**.
-  - Claude reconciles each claimed row against that export offline.
-- **Live-account activity** can only be ruled out from the live account's own statement. The queries can only show whether our code ever *attempted* a live-scope action.
-
-**How.**
-- Save the two SQL blocks below as `/tmp/m21_op1/old_paper_signals.sql` and `/tmp/m21_op1/old_paper_journal.sql`. They are also `docs/runbooks/sql/*.sql` on this branch.
-- Run them against the OP1.4 copy and a copy of the loop journal, never the live files:
-
-```bash
-cd /tmp/m21_op1
-# the loop journal, only if it exists (default data/paper_lifecycles.db or $PAPER_LIFECYCLES_DB_PATH)
-[ -f /opt/algo-trader/data/paper_lifecycles.db ] && \
-  sqlite3 "file:/opt/algo-trader/data/paper_lifecycles.db?mode=ro" ".backup /tmp/m21_op1/lifecycles_copy.db"
-sqlite3 -readonly -header -column /tmp/m21_op1/signals_copy.db < old_paper_signals.sql > old_paper_signals.txt
-[ -f lifecycles_copy.db ] && sqlite3 -readonly -header -column lifecycles_copy.db < old_paper_journal.sql > old_paper_journal.txt
-```
-
-`old_paper_signals.sql` (revised 29 Oct: one section per evidence category). On 29 Oct both files were executed statement by statement through a read-only SQLite connection against empty databases created by the real code (`bot.database.init_db`, `bot.flywheel` tables and migrations, `LoopJournal`): 10/10 and 2/2 statements ran, and a write through the same connection was refused. They have **not** been run on any real database.
-
-```sql
--- OP1.6a  Old paper system since 1 June 2026 — signals.db COPY, read-only (sqlite3 -readonly).
--- A row is a CLAIM made by our own code, never proof of execution. Proof = the IBKR statement (OP1.7).
--- The nine categories are reported separately, no section adds one category to another.
-.print '== A. tables present'
-SELECT name FROM sqlite_master WHERE type='table' AND name IN
-  ('signals','candidate_snapshots','execution_intents','signal_outcomes','risk_decisions','broker_positions',
-   'daily_state') ORDER BY name;
-.print '== 2. CANDIDATE SIGNALS (scanner output; no order implied)'
-SELECT direction, COALESCE(NULLIF(route,''),'-') AS route, strategy_version, COUNT(*) AS n,
-       MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc
-FROM signals WHERE timestamp >= '2026-06-01' GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
-SELECT stage, COUNT(*) AS n, MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc
-FROM candidate_snapshots WHERE timestamp >= '2026-06-01' GROUP BY 1 ORDER BY 1;
-.print '== 3. ORDER INTENTS by broker and status (what our code decided to attempt)'
-SELECT broker, status, COUNT(*) AS n, MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc
-FROM execution_intents WHERE timestamp >= '2026-06-01' GROUP BY 1, 2 ORDER BY 1, 2;
-.print '== 1/4/5/6/9. classification of intents (claims only)'
-SELECT CASE
-    WHEN lower(broker) LIKE '%live%' OR lower(broker) IN ('etoro_real','etoro_live') THEN '9_LIVE_SCOPE_ATTEMPT_ESCALATE'
-    WHEN status = 'paper_logged' OR lower(broker) = 'paper' THEN '1_LOCAL_SIMULATION_NO_BROKER'
-    WHEN lower(broker) LIKE 'ibkr%' AND status = 'filled' AND fill_price IS NOT NULL THEN '6_EXECUTION_CLAIMED_NEEDS_STATEMENT'
-    WHEN lower(broker) LIKE 'ibkr%' AND COALESCE(broker_order_id,'') <> '' THEN '5_BROKER_ACK_CLAIMED (order id recorded)'
-    WHEN lower(broker) LIKE 'ibkr%' AND submitted_at IS NOT NULL THEN '4_SUBMISSION_REPORTED_NO_BROKER_ID'
-    WHEN status IN ('risk_rejected','broker_unready','live_safety_blocked','account_mismatch',
-                    'connection_failed','not_implemented') THEN '3b_INTENT_NOT_SUBMITTED'
-    ELSE '0_UNCLASSIFIED_REVIEW' END AS category,
-  broker, status, COUNT(*) AS n, MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc
-FROM execution_intents WHERE timestamp >= '2026-06-01' GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
-.print '== 5/6. broker identity evidence recorded by our code (counts only, no values)'
-SELECT broker, status, COUNT(*) AS n,
-       SUM(COALESCE(broker_order_id,'') <> '') AS with_broker_order_id,
-       SUM(submitted_at IS NOT NULL) AS with_submitted_at,
-       SUM(fill_price IS NOT NULL) AS with_fill_price, SUM(filled_at IS NOT NULL) AS with_filled_at,
-       SUM(lifecycle_json LIKE '%permId%' OR lifecycle_json LIKE '%perm_id%') AS mentions_perm_id,
-       SUM(lifecycle_json LIKE '%execId%' OR lifecycle_json LIKE '%exec_id%') AS mentions_exec_id,
-       SUM(lifecycle_json LIKE '%commission%') AS mentions_commission
-FROM execution_intents WHERE timestamp >= '2026-06-01' GROUP BY 1, 2 ORDER BY 1, 2;
-.print '== 7. CLOSED PAPER TRADES? signal_outcomes are PRICE-PATH outcomes, NOT fills'
-SELECT COALESCE(o.resolution_method,'-') AS method, COALESCE(o.outcome,'-') AS outcome,
-       (o.intent_id IS NOT NULL) AS linked_to_intent, COALESCE(i.broker,'-') AS intent_broker,
-       COALESCE(i.status,'-') AS intent_status, COUNT(*) AS n
-FROM signal_outcomes o LEFT JOIN execution_intents i ON i.id = o.intent_id
-WHERE COALESCE(o.resolved_at,'') >= '2026-06-01' OR o.outcome = 'OPEN'
-GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5;
-.print '== 8. FEES / COMMISSIONS: this schema stores none; commissions come only from the statement (OP1.7)'
-.print '== 9. LIVE-SCOPE activity recorded by our code (positions fetched and M14 decisions per scope)'
-SELECT broker_scope, COUNT(DISTINCT exposure_batch_id) AS batches, MIN(fetched_at_utc) AS first_utc,
-       MAX(fetched_at_utc) AS last_utc FROM broker_positions WHERE date >= '2026-06-01' GROUP BY 1 ORDER BY 1;
-SELECT p.broker_scope, p.symbol, p.side, p.qty, ROUND(p.exposure_usd, 2) AS exposure_usd, p.fetched_at_utc
-FROM broker_positions p JOIN (SELECT broker_scope, MAX(fetched_at_utc) AS m FROM broker_positions GROUP BY 1) l
-  ON l.broker_scope = p.broker_scope AND l.m = p.fetched_at_utc ORDER BY 1, 2;
-SELECT broker_scope, requested_action, result, source, COUNT(*) AS n, MIN(taken_at) AS first_utc,
-       MAX(taken_at) AS last_utc FROM risk_decisions WHERE taken_at >= '2026-06-01' GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4;
-```
-
-`old_paper_journal.sql`:
-
-```sql
--- OP1.6b  WS2/D2 loop journal (paper_lifecycles.db COPY), read-only. data_source separates simulation from IBKR paper.
-.print '== 1/3/4/5/6. loop orders by data_source and state (simulated vs IBKR-paper claims)'
-SELECT data_source, state, COUNT(*) AS n, MIN(planned_at_utc) AS first_utc, MAX(planned_at_utc) AS last_utc,
-       SUM(broker_perm_id IS NOT NULL) AS with_perm_id, SUM(entry_fill_price IS NOT NULL) AS with_entry_fill,
-       SUM(exit_fill_price IS NOT NULL) AS with_exit_fill, SUM(entry_fees IS NOT NULL OR exit_fees IS NOT NULL) AS with_fees
-FROM loop_orders GROUP BY 1, 2 ORDER BY 1, 2;
-.print '== 7/8. closed-trade outcomes by source (fees as recorded by our code; statement is the proof)'
-SELECT data_source, record_kind, is_edge_outcome, COUNT(*) AS n, SUM(fees IS NOT NULL) AS with_fees,
-       ROUND(SUM(gross_pnl), 2) AS gross_pnl, ROUND(SUM(realized_pnl), 2) AS realized_pnl,
-       MIN(exit_filled_at_utc) AS first_exit_utc, MAX(exit_filled_at_utc) AS last_exit_utc
-FROM paper_trade_outcomes GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
-```
-
-**The nine evidence categories (reported separately, never added together):**
+### OP1.5 The nine evidence categories (reported separately, never added together)
 
 | # | Category | Where it shows | What it proves |
 |---|---|---|---|
@@ -187,38 +110,54 @@ FROM paper_trade_outcomes GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
 | 2 | Candidate signals | `signals`, `candidate_snapshots` | Scanner output only; no order implied |
 | 3 | Order intents | intents by broker/status (3b = blocked before submission) | What our code decided to attempt |
 | 4 | Journal-reported submissions | `4_SUBMISSION_REPORTED_NO_BROKER_ID`; journal SUBMITTED without perm id | Our code says it sent an order; no broker id |
-| 5 | Broker acknowledgements | `5_BROKER_ACK_CLAIMED`; journal `broker_perm_id` | An id was recorded by our code; proof needs the statement (OP1.7) |
-| 6 | Real IBKR paper executions | `6_EXECUTION_CLAIMED_NEEDS_STATEMENT`; journal fills | **Only** statement executions matched in OP1.7 count |
-| 7 | Closed paper trades | journal `paper_trade_outcomes` (`ibkr_paper`); `signal_outcomes` are price paths, not trades | Genuine only when both legs match statement executions |
+| 5 | Broker acknowledgements | `5_BROKER_ACK_CLAIMED`; journal `broker_perm_id` | An id was recorded by our code; proof needs the statement |
+| 6 | Real IBKR paper executions | `6_EXECUTION_CLAIMED_NEEDS_STATEMENT`; journal fills | **Only** statement executions MATCHED in OP1.7 count |
+| 7 | Closed paper trades | journal `paper_trade_outcomes` (`ibkr_paper`); `signal_outcomes` are price paths, not trades | Genuine only when entry and every exit leg are MATCHED |
 | 8 | Fees / commissions | statement only (`signals.db` stores none; journal fees are our record) | Statement commission per execution |
-| 9 | Unexpected live activity | `9_LIVE_SCOPE_ATTEMPT_ESCALATE`; non-paper scopes in positions/M14 | Our code's attempts only; ruling live activity out needs the **live** statement |
+| 9 | Unexpected live activity | `9_LIVE_SCOPE_ATTEMPT_ESCALATE`; non-paper scopes in positions/M14 | Our code's attempts only; ruling it out needs the **live** statement |
 
-`0_UNCLASSIFIED_REVIEW` rows must each be explained.
+`0_UNCLASSIFIED_REVIEW` rows must each be explained. Section 10 of `old_paper_signals.txt` is the current M14
+exposure/P&L evidence collection (not an execution category).
 
-### OP1.7 IBKR statement reconciliation (prepared, NOT run; needs your exports)
+### OP1.6 IBKR statements you export (matching information for E5)
 
-**Inputs you download yourself** (Claude never logs in to IBKR):
-- the **paper** account Activity or Flex statement from 1 June 2026, with the Trades/Executions section (execution id, order id/permId, orderRef, symbol, side, quantity, price, time, commission);
-- the **live** account Activity statement for the same period, Trades section only, to rule out category 9.
+Create one Flex Query (Client Portal → Performance & Reports → Flex Queries → Activity Flex Query), run it once for
+the **paper** account and once for the **live** account, period **1 June 2026 → today**:
+- **Sections:** *Trades* with Options = **Execution** (level of detail). Fields: ClientAccountID, AssetClass,
+  CurrencyPrimary, Symbol, Buy/Sell, Quantity, TradePrice, IBCommission, IBCommissionCurrency, DateTime,
+  OrderReference, IBOrderID, IBExecID, LevelOfDetail, Notes/Codes (TradeDate, OrderType, Exchange optional).
+  Also *Open Positions* (Summary): ClientAccountID, Symbol, Position, MarkPrice, CostBasisPrice, ReportDate.
+- **Delivery:** format CSV, include column headers **yes**, section code/line descriptor either way (both layouts are
+  parsed); date format `yyyyMMdd`, time format `HHmmss`, date/time separator `;`.
+- **Time zone:** note the time zone the statement uses (shown in the query's settings; usually US/Eastern) and pass it
+  as `--statement-tz`. E5 assumes none. A constant 4- or 5-hour `time_differs_by_…` on every matched leg means the
+  wrong zone was given.
+- **Account ids:** leave `ClientAccountID` (E5 masks it in every output) or replace each id with a placeholder that
+  keeps its first two letters (`DU…` paper, `U…` live): E5 uses the `DU` prefix to separate paper from live.
+- An Activity Statement CSV is also accepted, but it carries no orderRef or execution id, so it can only produce
+  PROBABLE_MATCH (never proof). Use the Flex export.
 
-**Procedure (offline, on copies, in this workspace or `/tmp/m21_op1`):**
-1. Remove account identifiers from the exports before sharing; keep execution ids, order ids, orderRef, times, quantities, prices and commissions.
-2. Match each category-5/6 row and each journal order to statement executions: first on `orderRef` (our `client_ref` / `order_ref`), then on permId, then on symbol + side + quantity within ±2 minutes. One execution can match at most one row.
-3. Classify every row: **MATCHED** (category 6 proven; price and quantity agree), **MISMATCH** (matched, different price or quantity), **UNMATCHED_CLAIM** (our record, no execution), **UNATTRIBUTED_EXECUTION** (execution without our orderRef: manual or foreign; never counted as ours).
-4. Closed trades (7) = MATCHED entry + MATCHED exit. Fees (8) = statement commissions of those executions.
-5. Live statement: **any** execution in the period is reported to you, with whether our code shows a matching category-9 attempt.
+### OP1.7 Reconciliation (offline, in Claude's workspace; nothing connects to IBKR)
+```bash
+python -m research.economics.statement \
+  --statement paper_trades.csv --statement live_trades.csv --statement-tz America/New_York \
+  --journal-db paper_lifecycles_copy.db --legacy-signals-db signals_copy.db \
+  --out-json recon.json --out-md recon.md
+```
+- **Matching order:** claimed execution ids (journal `loop_exec_claims`) → orderRef (`order_ref`, `order_ref:FLAT`) →
+  perm id vs `IBOrderID` → otherwise symbol + side + quantity within ±120 s, which is only PROBABLE_MATCH. One
+  execution matches at most one claim. Old-system intents recorded no ids: PROBABLE at best.
+- **Classes:** MATCHED · MISMATCH (each reason listed: quantity, price, time, fees, non-paper account, claimed
+  execution id absent) · PROBABLE_MATCH · UNMATCHED_CLAIM · UNRECORDED_FILL_OF_KNOWN_ORDER · UNATTRIBUTED_EXECUTION.
+- **Closed trades (7)** = entry and every exit leg MATCHED (`matched_trade_ids`). **Fees (8)** = statement commissions
+  of MATCHED legs; missing commissions are counted, never zero; fee calibration only suggests a multiplier.
+- **Live statement:** every execution on a non-`DU` account raises `LIVE_ACCOUNT_ACTIVITY` → stop and escalate.
+- Later (after OP3, when the ledger exists): `python -m tools.candidate_ledger.score_outcome --ledger-db <copy>
+  --statement-matches recon.json` — only statement-matched trades can carry a score-vs-outcome verdict.
 
-**Report:** counts per category and per class; every MISMATCH and UNMATCHED_CLAIM listed; fee totals from the statement. This report, not the database, is the record of what the old paper system did.
-
-**Stop if:**
-- any `9_LIVE_SCOPE_ATTEMPT_ESCALATE` row;
-- section 9 shows a non-paper scope holding positions;
-- any query writes, or errors with anything other than "no such table".
-
-**Done when:**
-- the outputs are attached to Issue #3: the four OP1 outputs, the two OP1.6 files and, once you provide the exports, the OP1.7 report;
-- the readiness verdicts are reviewed;
-- the `RISK_*` names match the M14 expectation.
+**Done when:** the OP1 outputs and, once you provide the exports, `recon.md` are attached to Issue #3; the readiness
+verdicts are reviewed; the `RISK_*` names match the M14 expectation; every UNMATCHED_CLAIM, MISMATCH and
+UNATTRIBUTED_EXECUTION is explained.
 
 ---
 

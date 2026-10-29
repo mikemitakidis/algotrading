@@ -8,6 +8,17 @@
 
 ## 0. In plain words (one screen)
 
+> **Update, 29 Oct (evening) — release preparation (§7d).**
+> - The 16 PR heads are re-verified unchanged; they still merge onto `main` `80b4343` conflict-free to tree `f1ff536`.
+> - E1–E7 are delivered as draft PRs #27–#33, stacked on `m21/rc-base` (= that exact post-merge tree). With them the
+>   proposed `main` tree is `1ed8c0f`; the tested integration tree is that plus the E2E test only.
+> - E6's protected `dashboard/app.py` wiring is a prepared, verified patch — **not applied**.
+> - OP1 is final: scripts verified read-only on a synthetic replica of the VPS, minimum permissions, the IBKR Flex
+>   specification and the E5 reconciliation. It has not been run.
+> - Vercel: every push to any branch creates a Preview deployment and every push to `main` a Production deployment
+>   (GitHub deployment records); the project settings are not readable from here.
+> - Nothing is merged; `main` is unchanged; every new runtime path is OFF.
+
 > **Update, 29 Oct — final engineering acceptance.** The full record is `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md` (§7c below).
 > - All 16 PRs merge onto `main` in order with **zero conflicts**. The result is tree `f1ff536`, which equals `m21/integration` `79ae46f` minus its E2E file and that file's two allow-list entries. Full suite on the integration tree: 129 modules: 128 OK, 0 failed, 1 without tests (test_m12, by design).
 > - 13 new defects were fixed: 3 high (#17 forged M14 id, #22/#23 activation race, #25 timezone lookahead) and the #18/#25 merge conflict. None critical/high remains open.
@@ -323,28 +334,28 @@ What each work package contains:
 
 **Phase 3 — remaining M21 capability**
 - [ ] WP8 — PR #21 `fbfc815` (REVIEW; templates 2–4 shadow-only; RUNTIME_UNVERIFIED)
-- [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). **Missing: the dashboard UI = E6** (protected `dashboard/app.py`; shape proposed in the acceptance packet §14b). RUNTIME_UNVERIFIED.
+- [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). Dashboard UI = **E6, PR #32** (isolated blueprint; the protected `dashboard/app.py` wiring is a prepared patch, NOT applied). RUNTIME_UNVERIFIED.
 - [ ] WP12 — PR #19 (REVIEW; verified in the corrections doc §8; spread, impact, slippage and borrow are assumptions → DATA_UNVERIFIED until paper fills)
 - [ ] WP11 (B-1) — PR #20 `4924844` (REVIEW; real-data entrances fail closed; G9 root cause fixed). Real run = OP1 → DATA_UNVERIFIED.
-- [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest `01b3f432…f262`. Report-card wiring = E1. DATA_UNVERIFIED.
+- [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest on the proposed `main` tree with E1–E7: `7c49b813…6b26b` (was `01b3f432…f262` before E1/E3/E5 changed its code paths). Report-card wiring = E1 (PR #27). DATA_UNVERIFIED.
 - [ ] WP14 / M21.3 (C-6) — PR #23 `04bf5ca` (REVIEW; cross-store ops + CAS + post-activation verification). Governance cycle = OP5 → RUNTIME_UNVERIFIED.
 - [ ] WP15 / M21.6 — PR #25 `f05ed84` (REVIEW; UTC publication instants, minimum backfill lag). Context sources (G4); WS2 logging = E2 → DATA_UNVERIFIED.
 - [ ] WP16 — PR #26 `89bc874` (REVIEW); real run after OP1 → DATA_UNVERIFIED
 - [ ] WP17 — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
 - [ ] WP18 (C-3) — PR #26 (REVIEW); real run after OP1 → DATA_UNVERIFIED
-- [ ] E3 — converted-input path for M17 multi-timeframe and M18 real builds (they refuse raw M16 bars) → DATA_UNVERIFIED
-- [ ] E1 — walk-forward → report card
-- [ ] E2 — WS2 market-context shadow logging
-- [ ] E4 — score-vs-outcome report from ledger joins (C-4)
-- [ ] E5 — paper fill/fee reconciliation into `fee_calibration` (C-4; needs the IBKR statement)
+- [ ] E3 — converted-input path for M17 multi-timeframe and M18 real builds — code in **PR #29** (REVIEW) → DATA_UNVERIFIED
+- [ ] E1 — walk-forward → report card — code in **PR #27** (REVIEW)
+- [ ] E2 — WS2 market-context shadow logging — code in **PR #28** (REVIEW; flag OFF) → DATA_UNVERIFIED
+- [ ] E4 — score-vs-outcome report from ledger joins (C-4) — code in **PR #30** (REVIEW); needs genuine paper outcomes
+- [ ] E5 — paper fill/fee statement reconciliation into `fee_calibration` (C-4) — code in **PR #31** (REVIEW); needs the IBKR statement
 - [ ] v3 canary — one run on merged `main` (acceptance packet §8)
-- [ ] Runbooks OP1–OP5 — prepared, with abort and rollback; OP1.6 nine evidence categories (executed read-only on real-code schemas, not on real data); OP1.7 IBKR statement reconciliation; OP2/OP3 one-page gate
+- [ ] Runbooks OP1–OP5 — prepared, with abort and rollback; **OP1 final (29 Oct)**: scripts verified read-only on a synthetic VPS replica, minimum permissions, IBKR Flex specification, E5 reconciliation; OP2/OP3 one-page gate. Not run.
 
 **Closeout**
 - [ ] OP5
 - [ ] C-4 report
 - [ ] C-5 report
-- [ ] WP19 / E08 (= E7)
+- [ ] WP19 / E08 (= E7) — ROADMAP.md / MILESTONE_STATUS.md in **PR #33** (REVIEW; merge last; update to merged SHAs on merge day); this checklist and the register on the docs branch
 - [ ] A-gate
 - [ ] B-gate
 - [ ] C-gate → **M21 ACCEPTED**
@@ -480,6 +491,105 @@ Full report: `docs/reviews/M21_Review_Corrections_2026-10-28.md`.
 
 Full report: `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`.
 
+## 7d. Release preparation, 29 Oct (evening)
+
+**Nothing merged; `main` is `80b4343`; every new runtime path is OFF.**
+
+**1. The 16 PR heads, re-verified on GitHub (all open drafts, unchanged):** #12 `47e9057`, #1 `0f3f9e6`, #14 `68ca7b4`,
+#13 `6a8a690`; L lane #15 `5394882`, #16 `bf92678`, #17 `bf94f71`, #21 `fbfc815`, #22 `b4e9955`, #23 `04bf5ca`,
+#18 `9012711`; R lane #19 `d7b8e66`, #20 `4924844`, #24 `4b677bc`, #26 `89bc874`, #25 `f05ed84`.
+
+**2. New draft PRs (base `m21/rc-base` `5616f3a` = the exact post-merge tree `f1ff536`):**
+
+| PR | Item | Head | Tests | Mutants |
+|---|---|---|---|---|
+| #27 | E1 walk-forward → report card | `c4a5ef1` | 12 | 13/13 |
+| #28 | E2 WS2 market-context shadow record (flag OFF) | `f9141e6` | 10 | 10/11 (1 equivalent) |
+| #29 | E3 converted-data inputs for M17/M18 | `4cff094` | 13 | 15/15 |
+| #30 | E4 score-versus-outcome report | `e26da8b` | 18 | 21/21 |
+| #31 | E5 IBKR statement reconciliation + fee calibration | `e62ee43` | 21 | 29/29 |
+| #32 | E6 dashboard template controls (app.py patch prepared, NOT applied) | `1181077` | 15 | 18/18 |
+| #33 | E7 ROADMAP.md / MILESTONE_STATUS.md reconciliation | `1e3921d` | docs | — |
+
+**3. Merge sequence (merge commits only — no rebase, no squash; a stacked PR is retargeted by merging `main` into it).**
+Expected `main` tree after each step:
+
+| # | PR @ head | tree | # | PR @ head | tree |
+|---|---|---|---|---|---|
+| 1 | #12 `47e9057` | `a31b018` | 13 | #20 `4924844` | `2fe8a31` |
+| 2 | #1 `0f3f9e6` | `9c57eb8` | 14 | #24 `4b677bc` | `4959afc` |
+| 3 | #14 `68ca7b4` | `1da598c` | 15 | #26 `89bc874` | `1153db9` |
+| 4 | #13 `6a8a690` | `a1aa8dd` | 16 | #25 `f05ed84` | **`f1ff536`** |
+| 5 | #15 `5394882` | `9a21419` | 17 | #27 E1 `c4a5ef1` | `b44a49c` |
+| 6 | #16 `bf92678` (C5b) | `ab74aab` | 18 | #28 E2 `f9141e6` | `6780b99` |
+| 7 | #17 `bf94f71` | `afa9322` | 19 | #29 E3 `4cff094` | `808d3a5` |
+| 8 | #21 `fbfc815` | `6dac788` | 20 | #30 E4 `e26da8b` | `63d6704` |
+| 9 | #22 `b4e9955` | `f08b79e` | 21 | #31 E5 `e62ee43` | `c798a58` |
+| 10 | #23 `04bf5ca` | `fa238da` | 22 | #32 E6 `1181077` | `8214ac0` |
+| 11 | #18 `9012711` | `fc763db` | 23 | #33 E7 `1e3921d` | **`1ed8c0f`** (recomputed on merge day: E7 is updated to the merged SHAs first) |
+| 12 | #19 `d7b8e66` | `c1ff0ca` | | | |
+
+The E PRs merge conflict-free in any order (same final tree, checked forwards and backwards). The tested integration
+tree `m21/integration` `b7b8a90` equals `1ed8c0f` plus `test_m21_e2e_cross_lane.py` and its two G10 allow-list lines.
+
+**4. Merge blockers that are not code.**
+- **VPS auto-deploy (new, highest priority).** `sync.sh` (started by `deploy.sh`) polls GitHub every 60 s and, on a new
+  `main` commit, runs `git reset --hard origin/main`, `pip install -r requirements.txt` and restarts both
+  `algo-trader.service` and `algo-trader-dashboard.service`. Whether it runs on the VPS is unknown here (**VPS
+  VERIFICATION REQUIRED**, OP1 item 14). If it runs, each of the 23 merges deploys and restarts production. Decide
+  before merging: stop it for the merge window and deploy once deliberately (recommended), or accept it.
+- **Vercel.** GitHub deployment records show a Vercel **Production** deployment for every push to `main` (one per merge
+  commit: 8 within 3 minutes on 27 Oct, each ~10 s after the merge) and a **Preview** deployment for every branch push
+  (92 of the last 100 records, including today's E-branch pushes). Project settings are not readable with the
+  available access. To check (Vercel → Project → Settings): **Git → Production Branch** (`main`), **Git → Ignored Build
+  Step** (or disconnect the Git repository), and **Deployment Protection** for previews. Nothing was changed.
+- **C5b approval** for #16 (`bot/scanner.py` opt-in completed-bar seam, `bot/providers/alpaca_provider.py`
+  explicit `adjustment=raw`) and #12's scanner metadata; independent review of #27–#33.
+
+**5. Protected files.** The E PRs change no protected file. The batch changes exactly `bot/scanner.py` (A01 metadata +
+WP6 opt-in seam; default behaviour unchanged), `bot/providers/alpaca_provider.py` (WP6), the new
+`bot/providers/alpaca_corporate_actions.py` (WP5) and `_protected_baselines.py` — as reviewed. `dashboard/app.py`,
+`main.py`, `bot/risk.py`, `bot/brokers/*`, `server_scripts/`, `deploy.sh`, `requirements.txt` are unchanged. The only
+pending protected change is E6's `dashboard/app.py` +6 lines (`docs/m21/E6_dashboard_app_wiring.patch`, separate
+approval).
+
+**6. Production runtime behaviour on deployment, default configuration.** The scanner records a per-timeframe bar
+as-of in its cycle metadata (A01) and imports `bot.bar_completion`; signals and decisions are unchanged (bar basis
+`in_progress`). Everything else is inert until enabled: the WS2 loop is not scheduled; the candidate-ledger writer is
+disabled and its migration not deployed; `MARKET_CONTEXT_SHADOW_ENABLED`, `TEMPLATE_CONTROLS_DB_PATH` /
+`TEMPLATE_CONTROLS_WRITES_ENABLED` are unset; templates 2–4 stay shadow-only (`LIVE_TEMPLATES = {scanner}`); the
+minimum score is unchanged. A restart of both services is a production change in itself (see §4).
+
+**7. v3 canary.** E1/E3/E5 change files in its code paths, so the preregistered expected digest on the proposed tree
+is now `7c49b813835cfba77527379a17da4b2f8a0cf1757e794198c332a59016a5b26b` (was `01b3f432…f262`). NOT run.
+
+**8. Evidence.** Python 3.12.3 · NumPy 1.26.4 · pandas 2.2.3 · SciPy 1.17.1 · scikit-learn 1.8.0 · Flask 3.1.0 · pyarrow 24.0.0 ·
+SQLite 3.45.1; C5a isolation; checkout outside `/tmp`.
+- **Full suite on `m21/integration` `32f8e7b`** (tree `a862952`: all 16 + E1–E7 + the E2E test; the final head `b7b8a90`
+  differs only by one line in `docs/m21/E6_dashboard_app_wiring.md`, and the guards + E2E were re-run on it: 9/9 OK):
+  **135 modules, 0 failed**, 1 without tests (`test_m12`, by design); pre-existing skips: m16 1, m17 2, m18 3, m20j 1.
+  The cross-lane E2E (`test_m21_e2e_cross_lane`) now includes R1: E5 statement-matched trades flow into E4 while
+  journal-only and simulated trades never become evidence, and every E1–E7 runtime path is OFF by default.
+- **The first full run found two real guard failures, both fixed on their PRs (no guard weakened):**
+  `test_m21_research_data.F4` — every research suite must be listed in the inactive CI example (E1/E3/E5 each add
+  their module on its own line); `test_m21_1_wp14_promotion.P6` — every reader of the template-controls store must
+  be reviewed in the guard (E6 is now recorded there, with its import set pinned and no broker/order/ledger code).
+  Verifying the app.py patch also found that a test importing `dashboard.app` must install C5a isolation first (fixed
+  in E6).
+- **Branch tips** (own tests + the related WP suite + M17 G10, research foundation, research-data F4, WP14 P6, A01,
+  C5a, C5b, hygiene, quarantine): E1 11/11, E2 12/12, E3 11/11, E4 11/11, E5 11/11, E6 12/12, E7 9/9 modules OK.
+- **E6 `dashboard/app.py` patch** (applied with the documented procedure in scratch): 21/21 modules OK (protected-file guards incl. the `test_m17` sha256 pin, the M20 runtime guards, C5a, C5b, WP14 P6, WP9, D3, E6 real-app wiring: 401 without a session, 503 with one). An earlier run of `test_m18_ml` on the patched tree: OK. Without the governance half the guards fail, as they must.
+- **Mutation testing:** E1 13/13, E2 10/11 (1 equivalent), E3 15/15, E4 21/21, E5 29/29, E6 18/18.
+- **OP1 scripts:** verified read-only on a synthetic VPS replica (see 9).
+
+**9. OP1 is final** (runbook OP1.0–OP1.7): scripts in `docs/runbooks/op1/` and `docs/runbooks/sql/`, verified
+read-only on a synthetic VPS replica (tree hash including `.git` unchanged; no SQLite side files; no planted secret in
+any output; with and without the `sqlite3` CLI). Not run.
+
+**10. Still needs real data or IBKR paper:** OP1 (data inventory, old-system truth, statement exports), real-bar
+runs of WP11/WP13/WP16–18 through E3, v3 canary, IBKR paper gateway (OP2), activation (OP3), 10-day soak (OP4),
+statement-matched paper outcomes for E4/E5 (C-4), the governance cycle (OP5), D3/E6 dashboard runtime acceptance.
+
 ## 8. Decision list (only what is genuinely needed)
 
 | Gate | Decision | Recommendation |
@@ -493,6 +603,8 @@ Full report: `docs/reviews/M21_Final_Engineering_Acceptance_2026-10-29.md`.
 Nothing else needs your approval for M21 engineering. Everything in §5 marked L or R is offline work on branches.
 
 **29 Oct:** the current grouped approvals are in the acceptance packet §20: G-review, C5b, G3a merges, the dashboard shape, G2/OP1 (with your IBKR statement exports), G3b OP2/OP3, G4 and the Vercel decision.
+
+**29 Oct (evening), added by §7d:** (1) how to handle the VPS `sync.sh` auto-deploy before merging (stop it for the merge window and deploy once — recommended — or accept it); (2) the Vercel Production deployments on `main`; (3) the E6 `dashboard/app.py` patch; (4) review of #27–#33. OP1 remains G2.
 
 ## 9. Working process (to stop the drift)
 

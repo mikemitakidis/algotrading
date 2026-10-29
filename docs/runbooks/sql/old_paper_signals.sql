@@ -51,3 +51,12 @@ FROM broker_positions p JOIN (SELECT broker_scope, MAX(fetched_at_utc) AS m FROM
   ON l.broker_scope = p.broker_scope AND l.m = p.fetched_at_utc ORDER BY 1, 2;
 SELECT broker_scope, requested_action, result, source, COUNT(*) AS n, MIN(taken_at) AS first_utc,
        MAX(taken_at) AS last_utc FROM risk_decisions WHERE taken_at >= '2026-06-01' GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4;
+.print '== 10. CURRENT M14 EXPOSURE AND P&L EVIDENCE (what M14 is collecting now; our records, not the statement)'
+SELECT broker_scope, date, source, daily_pnl_source, daily_pnl_available, ROUND(realised_pnl_usd, 2) AS realised_pnl_usd,
+       ROUND(realised_daily_loss, 2) AS realised_daily_loss, open_positions, ROUND(capital_deployed, 2) AS capital_deployed,
+       ROUND(drawdown_from_peak, 4) AS drawdown_from_peak, daily_loss_block_active, fresh_reads_count, last_ingested_at
+FROM daily_state_per_broker WHERE date >= date('now', '-14 day') ORDER BY broker_scope, date;
+SELECT source, policy_version, COUNT(*) AS snapshots, MIN(taken_at) AS first_utc, MAX(taken_at) AS last_utc
+FROM risk_snapshots WHERE taken_at >= '2026-06-01' GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT broker_scope, result, COUNT(*) AS n, MAX(taken_at) AS last_utc
+FROM risk_decisions WHERE taken_at >= date('now', '-7 day') GROUP BY 1, 2 ORDER BY 1, 2;
