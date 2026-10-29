@@ -11,6 +11,7 @@ Offline research code for the M21 research lanes (Issues #2 and #3). Nothing her
 | `research.genome` | D | B09–B11, A15 | Strategy-as-data, the four templates, validator, multi-symbol backtester |
 | `research.agents` | E | B21, B22, D06 | Offline research-agent foundations: permissions, knowledge library, deterministic mock flow (no execution of generated code) |
 | `research.dataqa` | F | B01, B02, E05, E09 | Data inventory, OHLCV quality audit, snapshot manifests, vendor memo |
+| `research.economics` | R (WP12) | B10 | Execution economics: dated IBKR and regulatory fees, point-in-time liquidity, spread / impact / slippage, participation caps, halts, borrow, splits and dividends; edge-after-cost, size sensitivity, realised-vs-modelled calibration |
 
 ## Rules
 
