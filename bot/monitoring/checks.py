@@ -28,6 +28,9 @@ WARN, CRITICAL = "WARN", "CRITICAL"
 PAPER_PORT = 4002
 GATEWAY_READY = "service_active_api_port_open"
 BAD_OBSERVATIONS = ("STALE", "MISSING", "INVALID", "UNVERIFIED", "INCOMPLETE")
+# A reading stamped further ahead of the monitor's clock than this is a clock
+# or data contradiction: it cannot prove freshness, so it is UNKNOWN, never OK.
+MAX_CLOCK_LEAD = timedelta(minutes=2)
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,10 @@ def check_loop_heartbeat(last_cycle_started_utc: Any, now: datetime, *,
     t = _parse(last_cycle_started_utc)
     if t is None:
         return CheckResult("loop_heartbeat", UNKNOWN, CRITICAL, "no loop cycle recorded")
+    if t - now > MAX_CLOCK_LEAD:
+        return CheckResult("loop_heartbeat", UNKNOWN, CRITICAL,
+                           "last cycle stamped %.1f min ahead of the monitor clock"
+                           % ((t - now).total_seconds() / 60))
     age = now - t
     if age > max_age:
         return CheckResult("loop_heartbeat", ALARM, CRITICAL,
@@ -116,6 +123,9 @@ def check_gateway(health: Optional[Mapping[str, Any]], now: datetime, *,
     t = _parse(health.get("as_of_utc"))
     if t is None or now - t > max_age:
         return CheckResult("gateway", UNKNOWN, CRITICAL, "gateway health reading stale")
+    if t - now > MAX_CLOCK_LEAD:
+        return CheckResult("gateway", UNKNOWN, CRITICAL,
+                           "gateway health reading stamped ahead of the monitor clock")
     if health.get("expected_port") not in (None, PAPER_PORT):
         return CheckResult("gateway", ALARM, CRITICAL,
                            "gateway not in PAPER mode (expected port %s)"
