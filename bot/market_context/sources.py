@@ -30,6 +30,11 @@ from bot.market_context.store import Observation
 UTC = timezone.utc
 SECTOR_ETFS = ("XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY")
 EVENT_KINDS = ("FOMC", "CPI", "NFP")
+# The VIX close for date D is set at 16:15 New York time, i.e. no earlier than
+# 20:15 UTC (EDT) and 21:15 UTC (EST). An assumed publication lag is counted
+# from D 00:00 UTC, so anything shorter than 22 hours would make the close
+# knowable before it existed.
+MIN_ASSUMED_LAG = timedelta(hours=22)
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,9 @@ def parse_fred_csv(text: str, series_id: str, *, retrieved_at: datetime,
     D 00:00 UTC + lag (``assumed_lag``), never later than the retrieval."""
     if retrieved_at.tzinfo is None:
         raise ValueError("retrieved_at must be timezone-aware")
+    if assumed_lag is not None and assumed_lag < MIN_ASSUMED_LAG:
+        raise ValueError("assumed_lag %s is shorter than %s: the close would be knowable before it existed"
+                         % (assumed_lag, MIN_ASSUMED_LAG))
     rows = list(csv.reader(io.StringIO(text.strip())))
     if not rows or [h.strip() for h in rows[0]] not in (["observation_date", series_id], ["DATE", series_id]):
         raise ValueError("not a FRED CSV for %s (header %r)" % (series_id, rows[0] if rows else None))
@@ -130,5 +138,5 @@ def parse_event_calendar(text: str) -> List[ScheduledEvent]:
     return sorted(out, key=lambda x: (x.at_utc, x.kind))
 
 
-__all__ = ["SECTOR_ETFS", "EVENT_KINDS", "SourceSpec", "SOURCES", "parse_fred_csv", "ScheduledEvent",
+__all__ = ["SECTOR_ETFS", "EVENT_KINDS", "MIN_ASSUMED_LAG", "SourceSpec", "SOURCES", "parse_fred_csv", "ScheduledEvent",
            "parse_event_calendar"]

@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
 BASES = ("observed_retrieval", "assumed_lag")
+UTC = timezone.utc
 
 _DDL = (
     """CREATE TABLE IF NOT EXISTS context_observations (
@@ -52,6 +53,11 @@ class Observation:
         for t in (self.published_at_utc, self.retrieved_at_utc):
             if t.tzinfo is None:
                 raise ValueError("timestamps must be timezone-aware")
+        # Stored as text and compared as text, so every instant is held in UTC:
+        # a -05:00 stamp compared lexically with a UTC query time would make data
+        # visible hours before it was published.
+        object.__setattr__(self, "published_at_utc", self.published_at_utc.astimezone(UTC))
+        object.__setattr__(self, "retrieved_at_utc", self.retrieved_at_utc.astimezone(UTC))
         if self.publication_basis not in BASES:
             raise ValueError("publication_basis must be one of %s" % (BASES,))
         if self.publication_basis == "observed_retrieval" and self.published_at_utc > self.retrieved_at_utc:
@@ -96,6 +102,7 @@ class ContextStore:
     def asof(self, series_id: str, t: datetime) -> Optional[Observation]:
         if t.tzinfo is None:
             raise ValueError("t must be timezone-aware")
+        t = t.astimezone(UTC)
         c = self._c()
         try:
             r = c.execute("SELECT * FROM context_observations WHERE series_id=? AND published_at_utc<=? "
@@ -111,6 +118,9 @@ class ContextStore:
     def history_asof(self, series_id: str, t: datetime, n: int) -> List[Observation]:
         """The last ``n`` observation dates knowable at ``t`` (newest vintage
         published by ``t`` for each), oldest first."""
+        if t.tzinfo is None:
+            raise ValueError("t must be timezone-aware")
+        t = t.astimezone(UTC)
         c = self._c()
         try:
             rows = c.execute("SELECT * FROM context_observations o WHERE series_id=? AND published_at_utc<=? "

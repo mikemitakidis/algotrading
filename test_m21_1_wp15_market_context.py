@@ -64,6 +64,24 @@ class X1_PointInTime(Base):
         self.assertIsNone(self.store.asof("VIXCLS", mon - timedelta(seconds=1)))
         self.assertEqual(self.store.coverage("VIXCLS")["max_vintage"], 2)
 
+    def test_non_utc_stamps_are_compared_as_instants(self):
+        ny = timezone(timedelta(hours=-5))
+        pub = datetime(2026, 11, 3, 12, 0, tzinfo=ny)                               # 17:00 UTC
+        self.store.record(obs(date(2026, 11, 2), 19.1, pub, basis="observed_retrieval"))
+        self.assertEqual(self.store.asof("VIXCLS", datetime(2026, 11, 3, 13, 0, tzinfo=UTC)), None)
+        self.assertEqual(self.store.history_asof("VIXCLS", datetime(2026, 11, 3, 13, 0, tzinfo=UTC), 5), [])
+        self.assertEqual(self.store.asof("VIXCLS", datetime(2026, 11, 3, 17, 0, tzinfo=UTC)).value, 19.1)
+        self.assertEqual(self.store.asof("VIXCLS", datetime(2026, 11, 3, 11, 59, tzinfo=ny)), None)
+        got = self.store.asof("VIXCLS", datetime(2026, 11, 3, 12, 0, tzinfo=ny))
+        self.assertEqual(got.published_at_utc, datetime(2026, 11, 3, 17, 0, tzinfo=UTC))
+        self.assertEqual(got.published_at_utc.utcoffset(), timedelta(0))
+        self.assertEqual([o.value for o in self.store.history_asof("VIXCLS", datetime(2026, 11, 3, 12, 0,
+                                                                                      tzinfo=ny), 5)], [19.1])
+        self.assertEqual(self.store.history_asof("VIXCLS", datetime(2026, 11, 4, 1, 0, tzinfo=timezone(
+            timedelta(hours=9))), 5), [])                                            # 16:00 UTC on the 3rd
+        with self.assertRaises(ValueError):
+            self.store.history_asof("VIXCLS", datetime(2026, 11, 3, 17, 0), 5)
+
     def test_append_only_and_well_formed(self):
         p = datetime(2026, 11, 2, 22, 0, tzinfo=UTC)
         self.store.record(obs(date(2026, 11, 2), 20.0, p))
@@ -94,6 +112,13 @@ class X2_Parsers(Base):
         self.assertLessEqual(old[-1].published_at_utc, T)
         far, _ = SRC.parse_fred_csv(FRED, "VIXCLS", retrieved_at=T, assumed_lag=timedelta(hours=48))
         self.assertEqual(far[-1].published_at_utc, T)                  # never later than we actually had it
+
+    def test_assumed_lag_cannot_precede_the_close(self):
+        for lag in (timedelta(hours=1), timedelta(hours=21, minutes=59)):
+            with self.assertRaises(ValueError):
+                SRC.parse_fred_csv(FRED, "VIXCLS", retrieved_at=T, assumed_lag=lag)
+        ok, _ = SRC.parse_fred_csv(FRED, "VIXCLS", retrieved_at=T, assumed_lag=SRC.MIN_ASSUMED_LAG)
+        self.assertEqual(ok[0].published_at_utc, datetime(2026, 10, 29, 22, 0, tzinfo=UTC))
 
     def test_fred_csv_refusals(self):
         for text in ("date,value\n2026-11-02,1\n", FRED + "2026-11-04,x\n", FRED + "2027-01-04,20\n",
