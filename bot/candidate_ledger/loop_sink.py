@@ -31,15 +31,21 @@ Risk-decision provenance (review 5686442374)
 --------------------------------------------
 Every ``risk_evaluated`` payload carries ``evidence``:
 
-* ``M14_LIVE`` — written by ``risk()`` with the decision the M14 gate returned
-  in-process, before the intent. A pass without a decision id is NOT live
-  evidence (``UNVERIFIED``).
+* ``M14_LIVE`` — written by ``risk()`` only after the decision id the M14 gate
+  returned in-process was read back from the persisted M14 ``risk_decisions``
+  table (read-only) and matched the candidate (symbol, side), the requested
+  notional, scope, action, leverage, result and time. A decision id alone is
+  never evidence: a missing, unknown or contradicting decision, or no M14
+  store configured, is ``UNVERIFIED``.
 * ``VERIFIED`` — backfilled by ``reconcile`` only after the decision was read
-  back from the persisted M14 ``risk_decisions`` table (read-only) and matched
-  the journal order on decision id, action (``trade_open``), scope
-  (``ibkr_paper``), result (``allow``), symbol, side, leverage, amount (covers
-  the planned notional) and time (taken before planning, at most
-  ``MAX_DECISION_LEAD`` earlier).
+  back the same way and matched the journal order on decision id, action
+  (``trade_open``), scope (``ibkr_paper``), result (``allow``), symbol, side,
+  leverage, amount (covers the order's notional) and time.
+
+Time window: the M14 engine stamps ``taken_at`` with the wall clock while the
+tick is running, and the journal stamps ``planned_at_utc`` with the tick's
+start, so a genuine decision lies within ``MAX_DECISION_LEAD`` before or
+``MAX_DECISION_LAG`` after the reference time (one tick).
 * ``RECONSTRUCTED_INFERRED`` — backfilled from the journal alone (no M14 store
   configured or readable). Verdict ``unverified``; never authorising.
 * ``UNVERIFIED`` — the decision is missing, or contradicts the order.
@@ -74,6 +80,7 @@ EVIDENCE_UNVERIFIED = "UNVERIFIED"
 AUTHORISING_EVIDENCE = (EVIDENCE_LIVE, EVIDENCE_VERIFIED)
 PAPER_SCOPE = "ibkr_paper"
 MAX_DECISION_LEAD = timedelta(minutes=10)
+MAX_DECISION_LAG = timedelta(minutes=10)    # the gate runs later in the same tick than its start
 
 _M14_SELECT = ("SELECT decision_id, taken_at, broker_scope, requested_action, request_json, result "
                "FROM risk_decisions WHERE decision_id = ?")
@@ -108,9 +115,13 @@ def _utc(ts: Any) -> Optional[datetime]:
     return t if t.tzinfo is not None else None
 
 
-def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, Any]]) -> Tuple[str, str]:
-    """(evidence, reason) for one journal order against its persisted M14
-    decision. VERIFIED only when every field matches; else UNVERIFIED."""
+def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, Any]], *,
+                        expect_allow: bool = True) -> Tuple[str, str]:
+    """(evidence, reason) for one order (journal row, or the live candidate)
+    against its persisted M14 decision. VERIFIED only when every field
+    matches; else UNVERIFIED. The amount must cover ``notional_usd`` when the
+    order states it, else ``qty x entry_ref_price``. ``expect_allow=False``
+    matches a blocking decision (for an audited rejection)."""
     did = order.get("risk_decision_id")
     u = lambda why: (EVIDENCE_UNVERIFIED, why)                     # noqa: E731
     if not isinstance(did, str) or not did.strip():
@@ -123,8 +134,10 @@ def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, 
         return u("decision_not_trade_open:%s" % record.get("requested_action"))
     if record.get("broker_scope") != PAPER_SCOPE:
         return u("decision_scope_mismatch:%s" % record.get("broker_scope"))
-    if record.get("result") != "allow":
+    if expect_allow and record.get("result") != "allow":
         return u("m14_decision_not_allow:%s" % record.get("result"))
+    if not expect_allow and record.get("result") not in ("block", "downgrade_then_block"):
+        return u("m14_decision_not_block:%s" % record.get("result"))
     try:
         req = json.loads(record.get("request_json") or "")
     except (TypeError, ValueError):
@@ -139,7 +152,8 @@ def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, 
         return u("decision_leverage_%s" % req.get("leverage"))
     amt, qty, ref = req.get("amount_usd"), order.get("qty"), order.get("entry_ref_price")
     try:
-        planned = float(qty) * float(ref)
+        planned = (float(order["notional_usd"]) if order.get("notional_usd") is not None
+                   else float(qty) * float(ref))
         if not (math.isfinite(float(amt)) and float(amt) >= planned * (1 - 1e-9) and planned > 0):
             return u("decision_amount_below_order_notional")
     except (TypeError, ValueError):
@@ -147,17 +161,17 @@ def verify_m14_decision(order: Mapping[str, Any], record: Optional[Mapping[str, 
     taken, at = _utc(record.get("taken_at")), _utc(order.get("planned_at_utc"))
     if taken is None or at is None:
         return u("decision_or_plan_time_unreadable")
-    if taken > at:
-        return u("decision_taken_after_the_order_was_planned")
+    if taken - at > MAX_DECISION_LAG:
+        return u("decision_taken_more_than_%ds_after_the_tick" % MAX_DECISION_LAG.total_seconds())
     if at - taken > MAX_DECISION_LEAD:
-        return u("decision_older_than_%ds_before_planning" % MAX_DECISION_LEAD.total_seconds())
+        return u("decision_older_than_%ds_before_the_tick" % MAX_DECISION_LEAD.total_seconds())
     return EVIDENCE_VERIFIED, "matched_persisted_m14_decision"
 
 
 def risk_evidence(payload: Optional[Mapping[str, Any]]) -> str:
     """The evidence label of one ``risk_evaluated`` payload. Payloads written
-    before labels existed: a journal backfill is INFERRED, a pass carrying a
-    decision id from the live path is M14_LIVE, anything else UNVERIFIED."""
+    before labels existed were never authenticated: a journal backfill is
+    INFERRED, anything else UNVERIFIED."""
     if not payload:
         return EVIDENCE_UNVERIFIED
     ev = payload.get("evidence")
@@ -167,8 +181,6 @@ def risk_evidence(payload: Optional[Mapping[str, Any]]) -> str:
         return EVIDENCE_UNVERIFIED
     if payload.get("source") == "journal_reconcile":
         return EVIDENCE_INFERRED
-    if payload.get("verdict") == "pass" and payload.get("risk_decision_id"):
-        return EVIDENCE_LIVE
     return EVIDENCE_UNVERIFIED
 
 
@@ -249,9 +261,27 @@ class LoopLedger:
             self.w.close(cid, "not_selected", at_utc=_iso(now), reason_codes=why,
                          payload={"stage": "paper_loop_selection"})
 
+    def _live_evidence(self, cand: Any, *, passed: bool, decision_id: Optional[str], now: datetime,
+                       notional_usd: Optional[float]) -> Tuple[str, str]:
+        """M14_LIVE only when the decision id the gate returned is the persisted
+        M14 decision for THIS candidate, side, notional and tick."""
+        if not isinstance(decision_id, str) or not decision_id.strip():
+            return EVIDENCE_UNVERIFIED, "no_m14_decision_id"
+        if self.m14_db is None:
+            return EVIDENCE_UNVERIFIED, "m14_store_not_configured"
+        try:
+            rec = read_m14_decision(self.m14_db, decision_id)
+        except sqlite3.Error as exc:
+            return EVIDENCE_UNVERIFIED, "m14_store_unreadable:%s" % type(exc).__name__
+        order = {"risk_decision_id": decision_id, "symbol": getattr(cand, "symbol", None),
+                 "direction": getattr(cand, "direction", None), "notional_usd": notional_usd,
+                 "planned_at_utc": _iso(now)}
+        ev, why = verify_m14_decision(order, rec, expect_allow=passed is True)
+        return (EVIDENCE_LIVE if ev == EVIDENCE_VERIFIED else EVIDENCE_UNVERIFIED), why
+
     def risk(self, cand: Any, *, passed: bool, reason: Optional[str], now: datetime,
              cycle_key: str, decision_id: Optional[str] = None,
-             checks: Optional[Mapping[str, Any]] = None) -> None:
+             checks: Optional[Mapping[str, Any]] = None, notional_usd: Optional[float] = None) -> None:
         if not self.enabled:
             return
         cid = self._ensure_open(cand, now, cycle_key)
@@ -259,13 +289,15 @@ class LoopLedger:
             return
         body = risk_payload(passed is True, reason, checks)
         body["risk_decision_id"] = decision_id
-        live = isinstance(decision_id, str) and bool(decision_id.strip())
-        body["evidence"] = EVIDENCE_LIVE if live else EVIDENCE_UNVERIFIED
-        if passed is True and not live:
-            body["verdict"], body["reason"] = "unverified", "pass_without_m14_decision_id"
+        ev, why = self._live_evidence(cand, passed=passed, decision_id=decision_id, now=now,
+                                      notional_usd=notional_usd)
+        body["evidence"], body["evidence_reason"] = ev, why
+        if passed is True and ev != EVIDENCE_LIVE:
+            # the gate said yes, but its decision is not provable: never a pass in the audit
+            body["verdict"], body["reason"] = "unverified", "pass_not_authenticated:%s" % why
         self.w.record(cid, "risk_evaluated", at_utc=_iso(now), payload=body,
                       reason_codes=[reason] if reason and passed is not True else [])
-        if live:
+        if ev == EVIDENCE_LIVE:
             self.w.link(cid, risk_decision_id=decision_id)
         if passed is not True:
             self.w.close(cid, "risk_rejected", at_utc=_iso(now),
