@@ -669,14 +669,24 @@ class W8_RealM14GateProvenance(_AlpacaCreds):
             cid = LoopLedger.candidate_id(c)
             p = db.payload(cid, "risk_evaluated")
             self.assertEqual((p["verdict"], p["evidence"], p["evidence_reason"]), ("unverified", "UNVERIFIED", why))
+            self.assertIsNone(db.rows("SELECT risk_decision_id FROM candidate_ledger WHERE candidate_id=?", cid)[0][0])
             self.assertFalse(sink.intent(c, client_ref="x%d" % i, order_ref="o", data_source="sim", now=h.clock(),
                                          cycle_key="slot:f%d" % i))
         no_store = L.LoopLedger(db.writer())                            # no M14 store: never authenticated
         c = dataclasses.replace(cand("CCC"), signal_ts_utc=(h.clock() + timedelta(minutes=5)).isoformat())
         no_store.risk(c, passed=True, reason=None, now=h.clock(), cycle_key="slot:n", decision_id=real,
                       notional_usd=100.0)
-        self.assertEqual(db.payload(LoopLedger.candidate_id(c), "risk_evaluated")["evidence_reason"],
-                         "m14_store_not_configured")
+        p = db.payload(LoopLedger.candidate_id(c), "risk_evaluated")
+        self.assertEqual((p["evidence"], p["evidence_reason"]), ("UNVERIFIED", "m14_store_not_configured"))
+        self.assertFalse(no_store.intent(c, client_ref="n", order_ref="o", data_source="sim", now=h.clock(),
+                                         cycle_key="slot:n"))
+        # a rejection is authenticated only by a BLOCKING decision: an allow decision cannot back it
+        c = dataclasses.replace(cand("AAA"), signal_ts_utc=(h.clock() + timedelta(minutes=6)).isoformat())
+        sink.risk(c, passed=False, reason="risk:x", now=h.clock(), cycle_key="slot:r", decision_id=real,
+                  notional_usd=h.orders()[0]["qty"] * 100.0)
+        p = db.payload(LoopLedger.candidate_id(c), "risk_evaluated")
+        self.assertEqual((p["verdict"], p["evidence"], p["evidence_reason"]),
+                         ("reject", "UNVERIFIED", "m14_decision_not_block:allow"))
 
 
 class W6_ScanStageRecords(unittest.TestCase):
