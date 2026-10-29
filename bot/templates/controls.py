@@ -13,6 +13,10 @@ champion. Every change is a new immutable VERSION:
 * Only an APPROVED version can be activated; approval needs a named approver
   and a reason, and a version is approved at most once.
 * Rollback re-activates the version that was active before the current one.
+* Compare-and-swap: ``activate`` and ``rollback`` accept ``expected_current``;
+  the switch then happens only if that version is still the active one,
+  checked inside the same write transaction (a concurrent change is refused
+  and audited, never overwritten). The promotion book (WP14) always uses it.
 * Every action (including refusals) is appended to the audit table.
 * Integrity: each stored config carries its sha256. ``active()`` never
   raises: an unreadable store, a missing row, or a config whose digest or
@@ -220,7 +224,7 @@ class TemplateControls:
             self._audit(c, approver, "APPROVED", version, {"reason": reason})
         self._tx(run)
 
-    def activate(self, version: int, *, actor: str) -> None:
+    def activate(self, version: int, *, actor: str, expected_current: Optional[int] = None) -> None:
         row = self._row(version)
         if row is None or row["status"] != APPROVED:
             self._refuse(actor, "ACTIVATE", version,
@@ -228,9 +232,9 @@ class TemplateControls:
                          % (version, row["status"] if row else "missing"))
         if not self._intact(row):
             self._refuse(actor, "ACTIVATE", version, "stored config fails its integrity check")
-        self._switch(version, actor, "ACTIVATE")
+        self._switch(version, actor, "ACTIVATE", expected_current=expected_current)
 
-    def rollback(self, *, actor: str, reason: str) -> int:
+    def rollback(self, *, actor: str, reason: str, expected_current: Optional[int] = None) -> int:
         """Re-activate the most recent earlier activation that differs from the
         current one (a second rollback therefore undoes the first)."""
         if not str(actor or "").strip() or not str(reason or "").strip():
@@ -243,7 +247,8 @@ class TemplateControls:
         row = self._row(target) if target is not None else None
         if row is None or not self._intact(row):
             self._refuse(actor, "ROLLBACK", target, "rollback target missing or fails its integrity check")
-        self._switch(target, actor, "ROLLBACK", detail={"reason": reason, "from": current})
+        self._switch(target, actor, "ROLLBACK", detail={"reason": reason, "from": current},
+                     expected_current=expected_current if expected_current is not None else current)
         return target
 
     def withdraw(self, version: int, *, actor: str, reason: str) -> None:
@@ -256,9 +261,11 @@ class TemplateControls:
             self._audit(c, actor, "WITHDRAWN", version, {"reason": reason})
         self._tx(run)
 
-    def _switch(self, version, actor, kind, detail=None):
+    def _switch(self, version, actor, kind, detail=None, expected_current=None):
         def run(c):
             prev = c.execute("SELECT version FROM template_config_activations ORDER BY seq DESC LIMIT 1").fetchone()
+            if expected_current is not None and (prev[0] if prev else None) != expected_current:
+                return ("conflict", prev[0] if prev else None)
             if prev and prev[0] != version:
                 c.execute("UPDATE template_config_versions SET status=? WHERE version=?", (SUPERSEDED, prev[0]))
             c.execute("UPDATE template_config_versions SET status=? WHERE version=?", (ACTIVE, version))
@@ -266,7 +273,11 @@ class TemplateControls:
                       (version, kind, actor, self._now()))
             self._audit(c, actor, "ACTIVATED" if kind == "ACTIVATE" else "ROLLED_BACK", version,
                         dict(detail or {}, previous=prev[0] if prev else None))
-        self._tx(run)
+            return None
+        out = self._tx(run)
+        if out is not None:
+            self._refuse(actor, kind, version, "concurrent change: active version is %s, expected %s"
+                         % (out[1], expected_current))
 
     # ── reads ──
     def _row(self, version) -> Optional[Dict[str, Any]]:

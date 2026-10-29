@@ -142,6 +142,31 @@ class K3_Rollback(Base):
         self.assertEqual(self.actions()[-1], "ROLLED_BACK")
         self.assertEqual(self.k.rollback(actor="mike", reason="undo"), v2)   # a second rollback undoes the first
 
+    def test_compare_and_swap_never_overwrites_a_concurrent_change(self):
+        v1 = self.live()
+        v2 = self.k.propose(cfg(params={"mean_reversion": {"rsi_entry": 35.0}}), author="claude", reason="r")
+        self.k.approve(v2, approver="mike", reason="ok")
+        self.k.activate(v2, actor="mike", expected_current=v1)
+        v3 = self.k.propose(cfg(params={"mean_reversion": {"rsi_entry": 30.0}}), author="claude", reason="r")
+        self.k.approve(v3, approver="mike", reason="ok")
+        with self.assertRaises(K.ControlError) as cm:
+            self.k.activate(v3, actor="mike", expected_current=v1)          # someone else switched to v2
+        self.assertIn("concurrent change: active version is %d" % v2, str(cm.exception))
+        self.assertEqual(K.read_active(self.path).version, v2)
+        self.assertEqual(self.actions()[-1], "ACTIVATE_REFUSED")
+        with self.assertRaises(K.ControlError):
+            self.k.rollback(actor="mike", reason="r", expected_current=v1)
+        self.assertEqual(self.k.rollback(actor="mike", reason="r", expected_current=v2), v1)
+
+    def test_rollback_from_a_stale_history_is_refused(self):
+        v1 = self.live()
+        v2 = self.live(cfg(params={"mean_reversion": {"rsi_entry": 35.0}}))
+        self.live(cfg(params={"mean_reversion": {"rsi_entry": 30.0}}))    # v3 now active
+        self.k._activations = lambda: [v1, v2]                           # history read before v3 landed
+        with self.assertRaises(K.ControlError):
+            self.k.rollback(actor="mike", reason="r")
+        self.assertEqual(K.read_active(self.path).config["params"]["mean_reversion"]["rsi_entry"], 30.0)
+
     def test_rollback_refusals(self):
         with self.assertRaises(K.ControlError):
             self.k.rollback(actor="mike", reason="nothing")
