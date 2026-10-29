@@ -196,7 +196,7 @@ class C2_Conversion(Base):
                 self.convert(bad)
             self.assertIn(needle, str(cm.exception))
         closes_1d = raw["1D"].assign(ts_utc=[_ny(d, EARLY.get(d, "16:00")) for d in sessions()])
-        odd = pd.concat([closes_1d, closes_1d.tail(1).assign(ts_utc=_ny(date(2026, 11, 24), "15:00"))],
+        odd = pd.concat([closes_1d, closes_1d.tail(1).assign(ts_utc=_ny(date(2026, 11, 24), "10:00"))],
                         ignore_index=True)                                 # close convention, one row mid-session
         with self.assertRaises(CV.ConversionRefused) as cm:
             self.convert(dict(raw, **{"1D": odd}))
