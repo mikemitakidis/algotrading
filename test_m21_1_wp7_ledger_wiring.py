@@ -483,9 +483,17 @@ class W7_RiskProvenance(unittest.TestCase):
         self.assertEqual(self.linked(cid), "dec-q")
         self.assertTrue(L.authorising(p))
         self.assertFalse(L.permits_execution(p))                        # a reconstruction is not a permission
-        sink = L.LoopLedger(self.db.writer(), m14_db=self.m14.path)
-        self.assertFalse(sink.intent(SimpleNamespace(candidate_id=cid, symbol="QQQ"), client_ref="again",
-                                     order_ref="o", data_source="sim", now=self.PLAN, cycle_key="slot:1"))
+        # a fresh candidate whose only risk record is a verified reconstruction: no new intent
+        w = self.db.writer()
+        ts = (self.PLAN - timedelta(minutes=30)).isoformat()
+        fresh = w.open_candidate(symbol="ZZZ", direction="long", strategy_id="trend_v1", decision_ts_utc=ts,
+                                 cycle_key="slot:z", cycle_id=None, scanner_stage="loop_candidate", at_utc=ts,
+                                 payload={})
+        w.record(fresh, "risk_evaluated", at_utc=ts, payload=p)
+        sink = L.LoopLedger(w, m14_db=self.m14.path)
+        self.assertFalse(sink.intent(SimpleNamespace(candidate_id=fresh, symbol="ZZZ"), client_ref="z",
+                                     order_ref="o", data_source="sim", now=self.PLAN, cycle_key="slot:z"))
+        self.assertEqual(sink.stats["intent_blocked:risk_evidence_VERIFIED"], 1)
 
     def test_invented_or_contradictory_approvals_are_never_accepted(self):
         before = (self.PLAN - timedelta(minutes=1)).isoformat()
