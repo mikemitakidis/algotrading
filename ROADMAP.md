@@ -11,7 +11,13 @@ For the live state of every milestone (✅ closed / ⚠ partial / ⏳ pending /
 narrative snapshot of where the project is right now, see
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> **Current state (post-M18 merge, read-only/shadow-only foundation).**
+> **Current state (reconciled 2026-10-29, M21 E7).** `main` is `80b4343`. M21 follows the June 2026
+> canonical roadmap (M21.U, M21.1, M21.1extra, M21.2–M21.7); see "M21 — canonical scope and status" below.
+> All remaining M21 engineering exists as **draft PRs, not merged** (#12, #1, #14, #13, #15–#26, E1–E6 #27–#32);
+> operational acceptance (OP1–OP5) and performance validation have **not started**. Nothing is live; the paper
+> loop is not running. The paragraph below is the previous (June) snapshot, kept for history.
+>
+> **Previous state (post-M18 merge, read-only/shadow-only foundation).**
 > `main` is at `264fba84`; M1–M17 are on main
 > (M17 backtesting CLOSED, `test_m17_backtesting` 200 OK). **M18 — the ML
 > strategy/criteria foundation — is CLOSED and merged to `main`**
@@ -366,6 +372,28 @@ After M15 closes (M15.3.B + M15.3.C remain), **dashboard work stops unless safet
 - Compliance-grade audit log, regulatory artifact export (overlaps with M15.3.C).
 - **Hard precondition recorded 2026-06-05 at M1–M16 audit pass:** Requires M14 engine extension to the scanner-driven submit path. The scanner currently runs only `bot/risk.py` gates (a strict subset of the M14 engine's 24 gates). `AUTO_ALLOWED` cannot be safely enabled while the scanner path bypasses gates like `broker_daily_loss_cap`, `global_capital`, `combined_exposure`, `drawdown_throttle`, `quote_freshness`, `spread`, `data_staleness`. See [`docs/M14_FINAL_AUDIT.md` §12](docs/M14_FINAL_AUDIT.md) and the `M14-extension-to-scanner-path` entry in `docs/NEXT_WORK_REGISTER.md`. **NOT in M17 scope.**
 - Was previously sketched as "M22 — Semi-Automated Live Trading" + "M23 — Full Advanced Intelligence".
+
+### M21 — canonical scope and status (reconciled 2026-10-29)
+
+The milestone numbers in "Near-term" / "Mid-term" above are the June 2026 restructure sketch. M21's binding scope is
+the 29 June 2026 canonical roadmap (`Algo_Trading_Bot_Canonical_Roadmap.docx`, v2.0). Status vocabulary: CLOSED ·
+CODE_MERGED · PR_PENDING (draft PR, not merged) · TESTED_OFFLINE · DATA_UNVERIFIED (synthetic/fixture only) ·
+RUNTIME_UNVERIFIED (never run against the real gateway/scheduler/dashboard) · BLOCKED (approval).
+
+| Part | Scope (June text) | Status on 29 Oct 2026 | Where |
+|---|---|---|---|
+| M21.U | Global universe foundation | CLOSED | `main` |
+| M21.1 | Scanner → enriched context → score; ranked output; read-only; candidate decision audit | PR_PENDING · TESTED_OFFLINE | A01 #12, A02 #14, WP5 #15, WP7 #17; score-vs-outcome report E4 #30 |
+| M21.1extra | Scheduled IBKR **paper** loop, outcome capture, dashboard metrics per strategy, kill switch, unattended operation, four templates with SL/TP, Phase-1 template controls | D0–D2 CLOSED; D3 CODE_MERGED (runtime acceptance pending); the rest PR_PENDING · RUNTIME_UNVERIFIED; activation BLOCKED (OP2/OP3) | WS2 #1, WP6 #16, WP10 #18, WP8 #21, WP9 #22, E2 #28, E5 #31, E6 #32 (dashboard wiring prepared, not applied) |
+| M21.2 | Parameter optimisation from real outcomes | PR_PENDING · DATA_UNVERIFIED | WP12 #19, WP11 #20, WP13 #24, E1 #27, E3 #29 |
+| M21.3 | Walk-forward optimiser; Promotion & Approval Model | PR_PENDING · DATA_UNVERIFIED / RUNTIME_UNVERIFIED | WP13 #24, WP14 #23; v3 canary NOT run |
+| M21.4 / 21.5 / 21.7 | Meta-labelling; regime thresholds; learned regime weights | PR_PENDING · DATA_UNVERIFIED (shadow only) | WP16–18 #26 |
+| M21.6 | VIX / breadth / sector / index / macro-news context | PR_PENDING · DATA_UNVERIFIED (sources: decision G4) | WP15 #25, E2 #28 |
+| §5 loop | Compare predicted vs actual | PR_PENDING; needs genuine paper outcomes | E4 #30 + E5 #31 |
+
+**M21 is accepted only when** engineering (A), operational (B) and performance-validation (C) gates are all met
+(`docs/handoffs/M21_Finish_Line_2026-10-28.md` on the docs branch). A merge, a deployment, a runtime activation and a
+validated trading edge are four different states. Opening eToro (M22) needs a few hundred closed paper trades.
 
 ### Notes on the restructure
 
