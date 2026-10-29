@@ -4347,11 +4347,6 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_a01_scoring_truth.py",
             # M21.1 A02 candidate-decision ledger tests + implementation plan.
             "test_m21_1_a02_candidate_ledger.py",
-            "bot/monitoring/__init__.py",
-            "bot/monitoring/alarms.py",
-            "bot/monitoring/checks.py",
-            "bot/monitoring/probe.py",
-            "test_m21_1_wp10_monitoring.py",
             "docs/M21_1_A02_candidate_ledger_plan.md",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
@@ -4372,6 +4367,11 @@ class G10_Hygiene(unittest.TestCase):
             "reports/m21_1extra_c_outcome_persistence.md",
             "test_m21_1extra_c_outcome_persistence.py",
             "test_m21_1extra_d0_auth_gate.py",
+            "bot/monitoring/__init__.py",
+            "bot/monitoring/alarms.py",
+            "bot/monitoring/checks.py",
+            "bot/monitoring/probe.py",
+            "test_m21_1_wp10_monitoring.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
