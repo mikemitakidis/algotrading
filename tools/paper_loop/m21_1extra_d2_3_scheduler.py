@@ -76,7 +76,7 @@ def _simulated_parts(args):
 
 
 def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=None,
-                      shadow_store=None):
+                      shadow_store=None, context_audit=None):
     """Real candidates (WP5 + WP6): a verified Alpaca trading calendar ->
     completed-bar scan (C01 §11: only bars proven complete at the decision
     time; no calendar -> no signals) -> observed evidence (completed daily
@@ -176,6 +176,20 @@ def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=
                          res["already_recorded"], len(res["skipped"]))
             except Exception as exc:
                 log.warning("[WP8] template shadow skipped (%s)", type(exc).__name__)
+        if context_audit is not None:
+            # M21 E2: the point-in-time market context of this cycle, SHADOW only. Recorded after
+            # the candidates are fixed: it never changes them, and any failure is logged and ignored.
+            try:
+                from tools.paper_loop.context_audit import CONTEXT_SYMBOLS, record_cycle
+                daily = (fetch_bars(list(CONTEXT_SYMBOLS) + list(focus), "1y", "1d") or {}
+                         if completion is not None else {})
+                res = record_cycle(context_audit, cycle_key=cycle_key, now=now, daily_by_symbol=daily,
+                                   classify=completion.classify if completion is not None else None,
+                                   focus=focus, candidates=[(c.symbol, c.direction) for c in cands])
+                log.info("[E2] market context shadow: recorded=%s abstain=%s unavailable=%d stale=%d",
+                         res["recorded"], res["abstain"], res["unavailable"], res["stale"])
+            except Exception as exc:
+                log.warning("[E2] market context shadow skipped (%s)", type(exc).__name__)
         return cands
     return provider
 
@@ -186,6 +200,15 @@ def _template_shadow_store():
     if not shadow_enabled_from_env():
         return None
     return ShadowStore(str(REPO / "data" / "template_shadow.db"))
+
+
+def _context_audit():
+    """M21 E2: the market-context shadow record, ON only with MARKET_CONTEXT_SHADOW_ENABLED=1."""
+    from tools.paper_loop.context_audit import CycleContextAudit, enabled_from_env
+    if not enabled_from_env():
+        return None
+    return CycleContextAudit(str(REPO / "data" / "market_context.db"),
+                             events_path=str(REPO / "data" / "context_events.json"))
 
 
 def _ibkr_parts(args):
@@ -221,7 +244,8 @@ def _ibkr_parts(args):
                 risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
                                                    market_state=make_market_state_provider()),
                 candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer,
-                                                     shadow_store=_template_shadow_store()),
+                                                     shadow_store=_template_shadow_store(),
+                                                     context_audit=_context_audit()),
                 # reconcile verifies backfilled risk against M14 risk_decisions (read-only)
                 ledger=LoopLedger(writer, m14_db=signals_db))
 
