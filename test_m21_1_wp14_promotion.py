@@ -937,15 +937,19 @@ class P6_Isolation(unittest.TestCase):
         sched = (REPO / "tools/paper_loop/m21_1extra_d2_3_scheduler.py").read_text()
         i = sched.index("from bot.templates.controls import")
         self.assertIn("run_template_shadow", sched[i:i + 600])               # the shadow path, nothing else
-        # M21 E6: the dashboard UI is the second reader. It reaches the store only through
-        # bot.templates.controls (whose apply/rollback change shadow parameters only), reads
-        # LIVE_TEMPLATES for display, and imports no broker, order, sizing, messaging or network code.
+        # M21 E6: the dashboard view is the second reader. It is READ-ONLY (30 Oct review: its first
+        # version could activate configurations outside this promotion process): it reads the store with
+        # mode=ro and read_active, reads LIVE_TEMPLATES for display, constructs no TemplateControls and
+        # calls no lifecycle method, and imports no broker, order, sizing, messaging or network code.
         ui = (REPO / "dashboard/template_controls_view.py").read_text()
         tree = ast.parse(ui)
         mods = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names} | \
                {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
         self.assertEqual(sorted(m for m in mods if m.startswith(("bot", "dashboard", "tools", "research"))),
-                         ["bot.templates", "bot.templates.core", "bot.templates.routing", "dashboard.auth.csrf"])
+                         ["bot.templates", "bot.templates.core", "bot.templates.routing"])
+        self.assertNotIn("TemplateControls(", ui)
+        for call in (".propose(", ".approve(", ".activate(", ".rollback(", ".withdraw(", "methods=[\"POST\"]"):
+            self.assertNotIn(call, ui, call)
         for bad in ("requests", "socket", "subprocess", "urllib.request", "ib_insync", "telegram"):
             self.assertNotIn(bad, mods)
         for s in ("placeOrder", "cancelOrder", "cancel_order(", "submit(", "LIVE_TEMPLATES =", "LIVE_TEMPLATES.add",
