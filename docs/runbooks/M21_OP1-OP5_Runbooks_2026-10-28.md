@@ -195,28 +195,49 @@ the **paper** account and once for the **live** account, period **1 June 2026 �
 - **Time zone:** note the time zone the statement uses (shown in the query's settings; usually US/Eastern) and pass it
   as `--statement-tz`. E5 assumes none. A constant 4- or 5-hour `time_differs_by_…` on every matched leg means the
   wrong zone was given.
-- **Account ids:** leave `ClientAccountID` (E5 masks it in every output) or replace each id with a placeholder that
-  keeps its first two letters (`DU…` paper, `U…` live): E5 uses the `DU` prefix to separate paper from live.
+- **Account ids:** leave `ClientAccountID` exactly as exported. E5 requires every matched execution to be on the
+  same `DU…` paper account the journal recorded for the order, so a placeholder would make every trade a MISMATCH.
+  E5 never prints it: outputs show a masked id (`DU***NN`) and a digest. The statement files themselves contain the
+  id: transfer them by the route you choose.
 - An Activity Statement CSV is also accepted, but it carries no orderRef or execution id, so it can only produce
   PROBABLE_MATCH (never proof). Use the Flex export.
 
 ### OP1.7 Reconciliation (offline, in Claude's workspace; nothing connects to IBKR)
 ```bash
-python -m research.economics.statement \
-  --statement paper_trades.csv --statement live_trades.csv --statement-tz America/New_York \
-  --journal-db paper_lifecycles_copy.db --legacy-signals-db signals_copy.db \
-  --out-json recon.json --out-md recon.md
+S="--statement paper_trades.csv --statement live_trades.csv"
+D="--journal-db paper_lifecycles_copy.db --legacy-signals-db signals_copy.db"
+# 1. reconcile: recon.json carries the evidence manifest (schema m21-e5-reconciliation/3)
+python -m research.economics.statement $S --statement-tz America/New_York $D --out-json recon.json --out-md recon.md
+# 2. re-derive: the stored report must be exactly what these inputs produce (prints VERIFIED report_sha256=...)
+python -m research.economics.statement $S $D --verify-evidence recon.json
+# 3. later (after OP3, when the ledger exists): E4 with the SAME statement files and journal copy
+python -m tools.candidate_ledger.score_outcome --ledger-db <ledger copy> --statement-matches recon.json \
+  $S --journal-db paper_lifecycles_copy.db --out-json score_outcome.json --out-md score_outcome.md
 ```
-- **Matching order:** claimed execution ids (journal `loop_exec_claims`) → orderRef (`order_ref`, `order_ref:FLAT`) →
-  perm id vs `IBOrderID` → otherwise symbol + side + quantity within ±120 s, which is only PROBABLE_MATCH. One
-  execution matches at most one claim. Old-system intents recorded no ids: PROBABLE at best.
-- **Classes:** MATCHED · MISMATCH (each reason listed: quantity, price, time, fees, non-paper account, claimed
-  execution id absent) · PROBABLE_MATCH · UNMATCHED_CLAIM · UNRECORDED_FILL_OF_KNOWN_ORDER · UNATTRIBUTED_EXECUTION.
-- **Closed trades (7)** = entry and every exit leg MATCHED (`matched_trade_ids`). **Fees (8)** = statement commissions
-  of MATCHED legs; missing commissions are counted, never zero; fee calibration only suggests a multiplier.
+- **Matching:** first every identifier link — claimed execution ids (journal `loop_exec_claims`), then orderRef
+  (`order_ref`, `order_ref:FLAT`), then perm id vs `IBOrderID` — for all claims; only then symbol + side + quantity
+  within ±120 s for what is left, which is never more than PROBABLE_MATCH. Each statement execution is assigned to at
+  most one claim (an internal check refuses the report otherwise). Old-system intents recorded no ids: PROBABLE at best.
+- **MATCHED also needs:** a stock; the `DU…` paper account the journal recorded for the order (an order without a
+  recorded account, a blank account, or another account is never MATCHED); no cancelled (`Ca`), corrected (`Co`) or
+  adjusted (`Adj`) row for that account and symbol (those rows are excluded and the claim needs manual review); an
+  order key no other claim uses; an entry from one broker order.
+- **Closed trades (7)** = entry and every exit leg MATCHED, and all matched trades on ONE paper account
+  (`matched_trade_ids`; otherwise none counts: `UNSUPPORTED_ACCOUNT_SCOPE`). **Fees (8)** = statement commissions of
+  MATCHED legs; a missing commission or currency is unknown, never zero: the trade's `fees_known` is false and E4
+  reports its fees as unconfirmed; fee calibration only suggests a multiplier.
+- **Evidence:** `recon.json` records the generation time, the reconciler's sha256 and parameters, the sha256 of every
+  input, the account scope (masked id + digest) and, per matched trade, the identifiers and statement rows linking
+  each leg; `report_sha256` covers the rest. Step 2 re-derives it. E4 (step 3) refuses an altered report, other or
+  changed inputs, evidence older than 7 days or from the future, a scope that is not one verified paper account, a
+  trade that is not a CLOSED `ibkr_paper` journal order on that account, an identifier that is not in the statement or
+  not that order's, a statement row supporting two legs, and a ledger copy that disagrees with the journal.
+  **Digests are not signatures:** that the statement came from IBKR rests on your export (OP1.6); record who
+  exported it and when.
+- **Acceptance evidence (OP4/C-4):** a trade counts as statement-confirmed only when steps 2 and 3 both pass on the same
+  inputs; the acceptance record lists `report_sha256` and the input digests from `score_outcome.json`
+  (`statement_evidence`). Re-run step 1 rather than raising `--max-evidence-age-days`.
 - **Live statement:** every execution on a non-`DU` account raises `LIVE_ACCOUNT_ACTIVITY` → stop and escalate.
-- Later (after OP3, when the ledger exists): `python -m tools.candidate_ledger.score_outcome --ledger-db <copy>
-  --statement-matches recon.json` — only statement-matched trades can carry a score-vs-outcome verdict.
 
 **Done when:** the OP1 outputs and, once you provide the exports, `recon.md` are attached to Issue #3; the readiness
 verdicts are reviewed; the `RISK_*` names match the M14 expectation; every UNMATCHED_CLAIM, MISMATCH and

@@ -18,6 +18,10 @@
 > - Two separate approvals: **Gate B** = read-only OP1 including deployment discovery; **Gate A** = pause, the 23
 >   merges, one deliberate deployment, rollback — asked only after Gate B.
 > - Nothing merged; `main` is `80b4343`; every new runtime path is OFF.
+> - **Afternoon (final evidence check):** E4 now accepts statement evidence only against the same statement files and
+>   journal copy (edited, stale, unrelated or wrongly scoped evidence is refused); E5 assigns each statement
+>   execution to at most one claim, never matches corrected trades or orders without a recorded account, and writes a
+>   re-derivable evidence manifest. **Gate B packet ready:** `docs/runbooks/M21_Gate_B_Packet_2026-10-30.md`.
 
 > **Update, 29 Oct (evening) — release preparation (§7d).**
 > - The 16 PR heads are re-verified unchanged; they still merge onto `main` `80b4343` conflict-free to tree `f1ff536`.
@@ -348,7 +352,7 @@ What each work package contains:
 - [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). Dashboard UI = **E6, PR #32**: a **read-only** view (its first write routes bypassed WP14 and were removed, 30 Oct); changes go only through WP14; a WP14-driven dashboard change flow (A16) is not built; the protected `dashboard/app.py` wiring is a prepared patch, NOT applied. RUNTIME_UNVERIFIED.
 - [ ] WP12 — PR #19 (REVIEW; verified in the corrections doc §8; spread, impact, slippage and borrow are assumptions → DATA_UNVERIFIED until paper fills)
 - [ ] WP11 (B-1) — PR #20 `4924844` (REVIEW; real-data entrances fail closed; G9 root cause fixed). Real run = OP1 → DATA_UNVERIFIED.
-- [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest on the proposed `main` tree with E1–E7: `7c49b813…6b26b` (was `01b3f432…f262` before E1/E3/E5 changed its code paths). Report-card wiring = E1 (PR #27). DATA_UNVERIFIED.
+- [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest on the proposed `main` tree `5b0f40b`: `4350bb54…2b82` (it changes whenever a canary code path changes; `7c49b813…` was stale). Report-card wiring = E1 (PR #27). DATA_UNVERIFIED.
 - [ ] WP14 / M21.3 (C-6) — PR #23 `04bf5ca` (REVIEW; cross-store ops + CAS + post-activation verification). Governance cycle = OP5 → RUNTIME_UNVERIFIED.
 - [ ] WP15 / M21.6 — PR #25 `f05ed84` (REVIEW; UTC publication instants, minimum backfill lag). Context sources (G4); WS2 logging = E2 → DATA_UNVERIFIED.
 - [ ] WP16 — PR #26 `89bc874` (REVIEW); real run after OP1 → DATA_UNVERIFIED
@@ -357,8 +361,8 @@ What each work package contains:
 - [ ] E3 — converted-input path for M17 multi-timeframe and M18 real builds — code in **PR #29** (REVIEW) → DATA_UNVERIFIED
 - [ ] E1 — walk-forward → report card — code in **PR #27** (REVIEW)
 - [ ] E2 — WS2 market-context shadow logging — code in **PR #28** (REVIEW; flag OFF) → DATA_UNVERIFIED
-- [ ] E4 — score-vs-outcome report from ledger joins (C-4) — code in **PR #30** (REVIEW); needs genuine paper outcomes
-- [ ] E5 — paper fill/fee statement reconciliation into `fee_calibration` (C-4) — code in **PR #31** (REVIEW; account identity is part of every match, report schema `/2`, 30 Oct); needs the IBKR statement
+- [ ] E4 — score-vs-outcome report from ledger joins (C-4) — code in **PR #30** (REVIEW; statement evidence verified against its inputs, 30 Oct); needs genuine paper outcomes
+- [ ] E5 — paper fill/fee statement reconciliation into `fee_calibration` (C-4) — code in **PR #31** (REVIEW; account identity, one execution per claim, evidence manifest `/3`, 30 Oct); needs the IBKR statement
 - [ ] v3 canary — one run on merged `main` (acceptance packet §8)
 - [ ] Runbooks OP1–OP5 — prepared, with abort and rollback; **OP1 final (29 Oct)**: scripts verified read-only on a synthetic VPS replica, minimum permissions, IBKR Flex specification, E5 reconciliation; OP2/OP3 one-page gate. Not run.
 
@@ -636,7 +640,18 @@ active. No M21 path is enabled by a restart.
 | #33 E7 `6540e41` | wording | E6 described as read-only; the WP14-driven dashboard change flow (A16) recorded as **not built**; merge-day rule: updated to the merged SHAs before #33 merges, never describes a draft as merged |
 | #27 E1, #29 E3 | checked against the §3 invariants; no defect | none |
 
+**30 Oct (afternoon), final evidence check** (all on their PRs; no merge):
+
+| PR | Finding (reproduced before the fix) | Correction |
+|---|---|---|
+| #30 E4 `14daa55` | The CLI took `matched_trade_ids` from any JSON with the right schema name: an edited, stale or unrelated report could make journal trades count as statement-confirmed | `--statement-matches` needs the SAME `--statement` files and `--journal-db` and an `/3` report; refused on: altered report (`report_sha256`), other inputs (digests), age > 7 days or future, scope not one verified paper account, trade not a CLOSED `ibkr_paper` journal order on that account, identifier not in the statement or not that order's, a statement row supporting two legs, ledger copy disagreeing with the journal. Unknown statement fees stay unconfirmed. 36 tests; mutants 18/18 + 2/2 |
+| #31 E5 `d99f127` | A claim without identifiers could take executions an execution id links to another claim (time window processed first); IBKR `Co` (corrected) rows could be MATCHED; a journal order without a recorded account could be MATCHED | Identifier links for all claims before any time-window match; internal check refuses a report that assigns an execution twice; `Co`/`Adj` treated like `Ca`; `journal_account_unrecorded`; all matched trades on ONE paper account or none counts; per-trade `fees_known`; evidence manifest (`/3`) and `--verify-evidence` (re-derivation from the same inputs). Digests are not signatures. 45 tests; mutants 10/10 new, earlier sets re-run: all killed after re-anchoring |
+| #30 (found by the E2E) | E4 refused GENUINE evidence when one orderRef linked both legs of a trade | the reuse check is per leg kind; reuse across trades still refused |
+
 ### 7e.3 Gate B — read-only OP1 (ask first; changes nothing)
+
+**Execution packet: `docs/runbooks/M21_Gate_B_Packet_2026-10-30.md`** (exact commands with pinned SHAs and script
+sha256, permissions, the strace audit, what each output answers, stop conditions).
 
 **Permits only:** running `docs/runbooks/op1/op1_readonly.sh` as described in OP1.1 (read-only VPS account,
 `systemd-journal` group, writes only to `/tmp/m21_op1`), which now includes `op1_deploy_discovery.sh`; and your own
@@ -680,10 +695,10 @@ after every step and stop on any difference):**
 | 5 | #15 `5394882` | `9a21419` | 17 | #27 E1 `c4a5ef1` | `b44a49c` |
 | 6 | #16 `bf92678` (C5b) | `ab74aab` | 18 | #28 E2 `f366f05` | `fc4f456` |
 | 7 | #17 `bf94f71` | `afa9322` | 19 | #29 E3 `4cff094` | `ac37c94` |
-| 8 | #21 `fbfc815` | `6dac788` | 20 | #30 E4 `4984037` | `a690daf` |
-| 9 | #22 `b4e9955` | `f08b79e` | 21 | #31 E5 `0dd3d25` | `bbef2d0` |
-| 10 | #23 `04bf5ca` | `fa238da` | 22 | #32 E6 `a409b37` | `cb138e7` |
-| 11 | #18 `9012711` | `fc763db` | 23 | #33 E7 `6540e41` | **`a26b6ec`** (recomputed on merge day: #33 is first updated to the merged SHAs) |
+| 8 | #21 `fbfc815` | `6dac788` | 20 | #30 E4 `14daa55` | `5006311` |
+| 9 | #22 `b4e9955` | `f08b79e` | 21 | #31 E5 `d99f127` | `c7c320a` |
+| 10 | #23 `04bf5ca` | `fa238da` | 22 | #32 E6 `a409b37` | `ce279c4` |
+| 11 | #18 `9012711` | `fc763db` | 23 | #33 E7 `6540e41` | **`5b0f40b`** (recomputed on merge day: #33 is first updated to the merged SHAs) |
 | 12 | #19 `d7b8e66` | `c1ff0ca` | | | |
 
 **A4. One deliberate deployment (you run it, after step 23):**
@@ -742,7 +757,19 @@ SQLite 3.45.1; C5a isolation; checkout outside `/tmp`.
 - **Deployment discovery** verified read-only on the synthetic replica (now a git checkout with a credential-bearing
   remote, a running stand-in daemon and a decoy): replica including `.git` unchanged, no side files, no planted
   secret in any output, the daemon found and attributed, the decoy not matched.
-- v3 canary expected digest on `a26b6ec`: `7c49b813835cfba77527379a17da4b2f8a0cf1757e794198c332a59016a5b26b`. Not run.
+- v3 canary expected digest: **correction** — the value given for `a26b6ec` (`7c49b813…6b26b`) was stale: it was
+  computed on 29 Oct, before E5's 30 Oct change to `research/economics` (a canary code path). On `a26b6ec` it was
+  `4511248f…e324`.
+
+**30 Oct (afternoon), after the final evidence check:**
+- Heads changed: #30 E4 `14daa55`, #31 E5 `d99f127` (the other 21 unchanged, re-read on GitHub). **Proposed `main`
+  tree after the 23 merges: `5b0f40b`** (per-step trees: A3 above).
+- **Tested tree:** `m21/integration` **`6c82b1a`** (tree `04d3231`) = `5b0f40b` + the E2E file + the two allow-list
+  lines; no production file differs. Changed executable files since the full suite on `15bb236`:
+  `research/economics/statement.py` and `tools/candidate_ledger/score_outcome.py` only. **Affected set on exactly `6c82b1a`** (all 15 research suites, E4, A02 ledger, WP7 wiring, the cross-lane E2E, WP14 P6, A01,
+  M17 G10, C5a, C5b, hygiene, quarantine): 26 modules, 0 failed. Branch tips: E4 `14daa55` 12/12, E5 `d99f127` 11/11.
+  The full suite was last run on `15bb236`; it is **not** claimed for `6c82b1a`.
+- v3 canary expected digest on `5b0f40b`: `4350bb54ff80ecdb847152a1e3a7d1cb198095bd2ff177f6d7e8b06fdd092b82`. Not run.
 
 ## 8. Decision list (only what is genuinely needed)
 
