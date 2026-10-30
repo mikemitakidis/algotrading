@@ -18,6 +18,10 @@
 # -wal file has no unflushed content and is read with immutable=1 so SQLite creates no side files; with a -wal
 # file the side files already exist and mode=ro reads through them. Every copy gets PRAGMA quick_check.
 # The database files themselves are never written.
+# Stop rules (exit codes): 2 refused before anything was copied (OUT inside ROOT, or OUT already holds *_copy.db
+# from an earlier run); 3 a database copy failed; 4 a copy's PRAGMA quick_check was not exactly "ok". A stop ends
+# the session at once: no report, summary or later step runs, and only copies made AND checked in this run are
+# ever read (COPIED).
 set -u
 ROOT="${OP1_ROOT:-/opt/algo-trader}"
 OUT="${OP1_OUT:-/tmp/m21_op1}"
@@ -37,6 +41,14 @@ SQLITE="$(command -v sqlite3 || true)"
 log "python=$("$PY" -c 'import sys;print(sys.version.split()[0])' 2>&1) sqlite3=${SQLITE:-absent (python fallback op1_sql.py)}"
 
 # ── 1. read-only copies of the databases ────────────────────────────────────
+shopt -s nullglob
+OLD=("$OUT"/*_copy.db)
+shopt -u nullglob
+if [ ${#OLD[@]} -gt 0 ]; then
+  log "STOP: $OUT already holds ${#OLD[@]} *_copy.db file(s) from an earlier run; use a new OP1_OUT directory"
+  exit 2
+fi
+COPIED=" "
 for db in signals paper_lifecycles historical; do
   src="$ROOT/data/$db.db"
   if [ -f "$src" ]; then
@@ -44,22 +56,28 @@ for db in signals paper_lifecycles historical; do
     fmt=$(od -An -tu1 -j18 -N1 "$src" 2>/dev/null | tr -d ' ')          # SQLite header byte 18: 2 = WAL
     [ "$fmt" = "2" ] && [ ! -e "$src-wal" ] && uri="$uri&immutable=1"
     if [ -n "$SQLITE" ]; then sqlite3 "$uri" ".backup '$OUT/${db}_copy.db'"
-    else "$PY" -I "$HERE/op1_sql.py" backup "$src" "$OUT/${db}_copy.db"; fi 2>>"$LOG" \
-      && log "copied $db.db -> ${db}_copy.db sha256=$(sha256sum "$OUT/${db}_copy.db" | cut -c1-16) format=${fmt:-?}" \
-      || log "COPY FAILED for $db.db (stop and report)"
-    if [ -f "$OUT/${db}_copy.db" ]; then
-      if [ -n "$SQLITE" ]; then qc=$(sqlite3 -readonly "$OUT/${db}_copy.db" 'PRAGMA quick_check;' 2>&1 | head -1)
-      else qc=$("$PY" -I "$HERE/op1_sql.py" check "$OUT/${db}_copy.db" 2>&1 | head -1); fi
-      log "quick_check ${db}_copy.db: $qc (anything but ok: re-run the copy, then report)"
+    else "$PY" -I "$HERE/op1_sql.py" backup "$src" "$OUT/${db}_copy.db"; fi 2>>"$LOG"
+    rc=$?
+    if [ $rc -ne 0 ] || [ ! -f "$OUT/${db}_copy.db" ]; then
+      log "STOP: COPY FAILED for $db.db (rc=$rc). Nothing else runs; do not use or share ${db}_copy.db; report this."
+      exit 3
     fi
+    if [ -n "$SQLITE" ]; then qc=$(sqlite3 -readonly "$OUT/${db}_copy.db" 'PRAGMA quick_check;' 2>&1 | head -1)
+    else qc=$("$PY" -I "$HERE/op1_sql.py" check "$OUT/${db}_copy.db" 2>&1 | head -1); fi
+    if [ "$qc" != "ok" ]; then
+      log "STOP: quick_check ${db}_copy.db: ${qc:-no result}. Nothing else runs; do not use or share it; report this."
+      exit 4
+    fi
+    COPIED="$COPIED${db}_copy.db "
+    log "copied $db.db -> ${db}_copy.db sha256=$(sha256sum "$OUT/${db}_copy.db" | cut -c1-16) format=${fmt:-?} quick_check=ok"
   else
     log "absent: $src"
   fi
 done
 
 # ── 2. SQL reports on the copies (sqlite3 -readonly) ────────────────────────
-run_sql() {   # <copy> <sql> <out>
-  [ -f "$1" ] || { log "skip $(basename "$2"): no $(basename "$1")"; return; }
+run_sql() {   # <copy> <sql> <out>   only a copy made and checked in this run (COPIED) is ever read
+  case "$COPIED" in *" $(basename "$1") "*) ;; *) log "skip $(basename "$2"): no verified $(basename "$1")"; return;; esac
   if [ -n "$SQLITE" ]; then sqlite3 -readonly -header -column "$1" < "$2" > "$3" 2>&1
   else "$PY" -I "$HERE/op1_sql.py" run "$1" "$2" > "$3" 2>&1; fi
   log "$(basename "$2") -> $(basename "$3") (rc=$?, $(grep -ci 'error' "$3") error lines; 'no such table' is expected for absent features)"

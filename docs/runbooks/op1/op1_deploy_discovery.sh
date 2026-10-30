@@ -49,7 +49,13 @@ for p in os.listdir("/proc"):
     if (sh and len(a) > 1 and a[1].endswith("sync.sh")) or a[0].endswith("sync.sh"):
         print(p, a[1] if sh else a[0])
 ' 2>/dev/null)
-if [ -z "$PIDS" ]; then echo "sync_sh_running=no"; else
+# A non-root account may not see other users' processes (/proc mounted with hidepid): then "no" would be a guess.
+PROCOPT=$( (findmnt -no OPTIONS /proc 2>/dev/null || awk '$2 == "/proc" {print $4}' /proc/mounts 2>/dev/null) \
+          | paste -sd' ')
+echo "proc_mount_options=$PROCOPT session_uid=$(id -u)"
+if [ -z "$PIDS" ] && [ "$(id -u)" != "0" ] && echo "$PROCOPT" | grep -qE 'hidepid=(1|2|invisible|noaccess)'; then
+  echo "sync_sh_running=UNKNOWN (this account cannot see other users' processes; re-check as the service account)"
+elif [ -z "$PIDS" ]; then echo "sync_sh_running=no"; else
   echo "sync_sh_running=yes count=$(echo "$PIDS" | wc -l)"
   echo "$PIDS" | while read -r p script; do
     ps -o pid=,ppid=,user=,lstart=,etimes=,comm= -p "$p" 2>/dev/null | sed 's/^/process: /'
