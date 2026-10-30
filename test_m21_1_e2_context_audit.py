@@ -183,6 +183,25 @@ class E2_CompletedBars(unittest.TestCase):
         self.assertEqual(rec["bar_counts"]["SPY"]["unknown"], 260)
 
 
+    def test_a_future_close_never_enters_even_if_misclassified(self):
+        """Release-safety review (30 Oct): a classifier that wrongly calls today's (still forming) session
+        complete cannot make a value from after the decision time reach the record."""
+        d = tempfile.mkdtemp(prefix="e2_")
+        self.addCleanup(shutil.rmtree, d, True)
+        audit = CA.CycleContextAudit(os.path.join(d, "ctx.db"))
+        days = pd.bdate_range(end="2026-11-04", periods=260)
+        daily = {s: self.frame([x.date() for x in days]) for s in CA.CONTEXT_SYMBOLS}
+        wrong = self.policy(today=date(2026, 11, 5))           # calls 4 Nov (closes 21:00 > NOW) complete
+        CA.record_cycle(audit, cycle_key="scan:f", now=NOW, daily_by_symbol=daily, classify=wrong, focus=[])
+        rec = audit.get("scan:f")
+        self.assertEqual(rec["bar_counts"]["SPY"]["complete"], 260)
+        for name, f in rec["features"].items():
+            if f["as_of"] is not None:
+                self.assertLessEqual(pd.Timestamp(f["as_of"]), pd.Timestamp(NOW), name)
+        self.assertEqual(pd.Timestamp(rec["features"]["spy_trend"]["as_of"]),
+                         pd.Timestamp("2026-11-03 21:00", tz="UTC"))
+
+
 class E2_Wiring(unittest.TestCase):
     TOOL = REPO / "tools/paper_loop/m21_1extra_d2_3_scheduler.py"
 
@@ -219,7 +238,8 @@ class E2_Wiring(unittest.TestCase):
             elif isinstance(n, ast.ImportFrom):
                 mods.add(n.module or "")
         for bad in ("bot.brokers", "ib_insync", "requests", "urllib", "socket", "bot.paper_loop_d2",
-                    "bot.candidate_ledger", "research"):
+                    "bot.candidate_ledger", "research", "bot.risk", "bot.risk_authority", "bot.flywheel",
+                    "bot.kill_switch", "bot.templates", "bot.promotion", "bot.database", "subprocess"):
             self.assertFalse(any(m == bad or m.startswith(bad + ".") for m in mods), (bad, mods))
 
 
