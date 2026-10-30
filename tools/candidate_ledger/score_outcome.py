@@ -199,9 +199,11 @@ def verify_statement_evidence(doc: Mapping[str, Any], *, statements: Sequence[st
                         ok = str(v) in {str(x) for x in (allowed.get(kind) or {}).get(key, set())}
                     if not ok:
                         bad.append("%s:%s:identifier_not_this_journal_order" % (tid, kind))
-                    if (key, v) in seen_links:
+                    # one orderRef legitimately links both legs of ONE trade (bracket children share it); an
+                    # identifier may never link the same leg kind twice (rows below are the execution-level check)
+                    if (key, v, kind) in seen_links:
                         bad.append("%s:%s:identifier_supports_two_legs" % (tid, kind))
-                    seen_links.add((key, v))
+                    seen_links.add((key, v, kind))
                 for row in l.get("statement_rows") or []:
                     if row in seen_rows:
                         bad.append("%s:%s:statement_row_supports_two_legs" % (tid, kind))

@@ -426,6 +426,20 @@ class StatementEvidence(unittest.TestCase):
         self.assertEqual(v["matched"], self.V.doc["matched_trade_ids"])
         self.assertEqual(self.V.cli(), 0)
 
+    def test_one_order_ref_linking_both_legs_of_one_trade_is_genuine(self):
+        def by_ref(d):
+            for i, t in enumerate(d["evidence"]["matched_trades"]):
+                t["legs"][0].update(key="order_ref", link_values=["M21L-%03d" % i])
+        self.edit(by_ref)
+        self.assertEqual(self.V.cli(), 0)
+
+    def test_an_identifier_cannot_link_the_same_leg_of_two_trades(self):
+        def reuse(d):
+            a, b = d["evidence"]["matched_trades"][:2]
+            b["legs"][1]["link_values"] = list(a["legs"][1]["link_values"])
+        self.edit(reuse)
+        self.refused("identifier_supports_two_legs")
+
     def test_altered_report(self):
         self.edit(lambda d: d["matched_trade_ids"].pop(), redigest=False)
         self.refused("report_altered")
