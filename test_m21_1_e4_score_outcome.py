@@ -271,39 +271,46 @@ class Statistics(unittest.TestCase):
 
 
 class ReadOnlyCli(unittest.TestCase):
-    def test_cli_reads_without_writing_and_uses_statement_matches(self):
+    def test_cli_reads_without_writing_and_uses_verified_statement_matches(self):
         L = Ledger(self)
-        ids = L.trades(30, slope=1.0)
-        before = sha(L.path)
-        m = os.path.join(L.dir, "matches.json")
-        with open(m, "w") as fh:
-            json.dump({"schema": "m21-e5-reconciliation/2", "matched_trade_ids": ids}, fh)
+        L.trades(30, slope=1.0)
+        V = Evidence(self, L)
+        before = (sha(L.path), sha(V.journal))
         out_j, out_m = os.path.join(L.dir, "r.json"), os.path.join(L.dir, "r.md")
-        rc = quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", m, "--out-json", out_j,
-                             "--out-md", out_m])
-        self.assertEqual(rc, 0)
-        self.assertEqual(sha(L.path), before)
+        self.assertEqual(V.cli("--out-json", out_j, "--out-md", out_m), 0)
+        self.assertEqual((sha(L.path), sha(V.journal)), before)
         with open(out_j) as fh:
             rep = json.load(fh)
         self.assertEqual(rep["classes"][SO.IBKR_MATCHED]["verdict"], SO.POS_ASSOC)
-        self.assertIn("30 matched trades", rep["statement_reconciliation"])
+        self.assertIn("30 matched trades, verified against its inputs", rep["statement_reconciliation"])
+        self.assertEqual(rep["statement_evidence"]["account_scope"], {"status": SO.VERIFIED_SCOPE,
+                                                                      "account_masked": "DU***01"})
+        self.assertEqual(rep["statement_evidence"]["journal_db_sha256"], sha(V.journal))
         with open(out_m) as fh:
             md = fh.read()
         self.assertIn("IBKR_PAPER_STATEMENT_MATCHED — verdict **POSITIVE_ASSOCIATION_IN_SAMPLE**", md)
         self.assertIn("not predictive", md)
+        self.assertIn("not signatures", md)
 
-    def test_unreadable_statement_matches_refused(self):
+    def test_unreadable_or_old_statement_matches_refused(self):
         L = Ledger(self)
+        L.trades(2)
+        V = Evidence(self, L)
         bad = os.path.join(L.dir, "bad.json")
         with open(bad, "w") as fh:
             fh.write("{\"schema\": 1}")
-        self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", bad]), 2)
+        self.assertEqual(V.cli(path=bad), 2)
         for doc in ({"schema": "m21-e5-reconciliation/1", "matched_trade_ids": ["T-001"]},   # pre-account-check
+                    {"schema": "m21-e5-reconciliation/2", "matched_trade_ids": ["T-001"]},   # no evidence manifest
                     {"matched_trade_ids": ["T-001"]},
-                    {"schema": "m21-e5-reconciliation/2", "matched_trade_ids": "T-001"}):
+                    dict(V.doc, matched_trade_ids="T-001")):
             with open(bad, "w") as fh:
                 json.dump(doc, fh)
-            self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", bad]), 2, doc)
+            self.assertEqual(V.cli(path=bad), 2, doc)
+        # the inputs must be given: a report alone is never accepted
+        self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", V.path]), 2)
+        self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", V.path,
+                                         "--journal-db", V.journal]), 2)
 
     def test_connection_is_read_only(self):
         L = Ledger(self)
@@ -320,6 +327,236 @@ class ReadOnlyCli(unittest.TestCase):
         p = os.path.join(d, "absent.db")
         self.assertEqual(quiet(SO.main, ["--ledger-db", p]), 2)
         self.assertFalse(os.path.exists(p))
+
+
+PAPER = "DUX0000001"
+
+
+class Evidence:
+    """An E5 /3 report for the ledger's resolved ibkr_paper trades, with the journal copy and statement it
+    describes. Built here (tools tests cannot use the research package); the real E5 -> E4 path is covered by
+    the cross-lane E2E test."""
+
+    def __init__(self, tc, L, *, account=PAPER, generated=None, fees_known=True):
+        from bot.paper_loop_d2.journal import LoopJournal
+        self.tc, self.L = tc, L
+        self.journal = os.path.join(L.dir, "journal.db")
+        LoopJournal(self.journal)
+        self.trades = [r for r in L.rows() if r["trade_id"] and "ibkr_paper" in r["data_sources"]]
+        c = sqlite3.connect(self.journal)
+        rows = []
+        with c:
+            for i, r in enumerate(self.trades):
+                ref, oref = r["trade_id"], "M21L-%03d" % i
+                c.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, state, data_source,"
+                          " planned_at_utc, updated_at_utc, order_ref, account, candidate_id, broker_perm_id, "
+                          "sl_perm_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (ref, r["cycle_key"], r["symbol"], "long", 100, "CLOSED", "ibkr_paper", NOW, NOW, oref,
+                           account, r["candidate_id"], "P%d" % i, "S%d" % i))
+                for eid, legname in (("X%d-1" % i, "entry"), ("X%d-2" % i, "stop_loss")):
+                    c.execute("INSERT INTO loop_exec_claims (exec_id, client_ref, leg, claimed_at_utc) "
+                              "VALUES (?,?,?,?)", (eid, ref, legname, NOW))
+                rows.append((r["symbol"], "BUY", oref, "X%d-1" % i))
+                rows.append((r["symbol"], "SELL", oref, "X%d-2" % i))
+        c.close()
+        self.stmt = os.path.join(L.dir, "flex.csv")
+        with open(self.stmt, "w", newline="") as fh:
+            fh.write('"ClientAccountID","Symbol","Buy/Sell","OrderReference","IBExecID"\n')
+            for sym, side, oref, eid in rows:
+                fh.write('"%s","%s","%s","%s","%s"\n' % (PAPER, sym, side, oref, eid))
+        gen = generated or datetime.now(timezone.utc).replace(microsecond=0)
+        self.doc = {
+            "schema": SO.E5_SCHEMA,
+            "matched_trade_ids": [r["trade_id"] for r in self.trades],
+            "evidence": {
+                "generated_at_utc": gen.isoformat(),
+                "inputs": {"statements": [{"name": "flex.csv", "sha256": sha(self.stmt)}],
+                           "journal_db": {"name": "journal.db", "sha256": sha(self.journal)}},
+                "account_scope": {"status": SO.VERIFIED_SCOPE, "account_masked": "DU***01",
+                                  "account_digest": hashlib.sha256((SO.ACCOUNT_DIGEST_PREFIX + PAPER).encode()
+                                                                   ).hexdigest()},
+                "matched_trades": [
+                    {"trade_id": r["trade_id"], "fees_known": fees_known, "statement_fees": 2.0 if fees_known else None,
+                     "legs": [{"leg": "entry", "key": "exec_id", "link_values": ["X%d-1" % i],
+                               "statement_rows": ["flex.csv:%d" % (2 * i + 2)]},
+                              {"leg": "exit", "key": "order_ref", "link_values": ["M21L-%03d" % i],
+                               "statement_rows": ["flex.csv:%d" % (2 * i + 3)]}]}
+                    for i, r in enumerate(self.trades)]}}
+        self.path = os.path.join(L.dir, "recon.json")
+        self.write(self.doc)
+
+    def write(self, doc, *, redigest=True):
+        doc = json.loads(json.dumps(doc))
+        if redigest:
+            doc["report_sha256"] = SO.canonical_digest(doc)
+        with open(self.path, "w") as fh:
+            json.dump(doc, fh)
+        return doc
+
+    def verify(self, **kw):
+        with open(self.path) as fh:
+            return SO.verify_statement_evidence(json.load(fh), statements=[self.stmt], journal_db=self.journal, **kw)
+
+    def cli(self, *extra, path=None):
+        return quiet(SO.main, ["--ledger-db", self.L.path, "--statement-matches", path or self.path,
+                               "--statement", self.stmt, "--journal-db", self.journal] + list(extra))
+
+
+class StatementEvidence(unittest.TestCase):
+    """30 Oct: a JSON document alone can never make a trade statement-confirmed (forged, altered, stale,
+    unrelated or wrongly scoped evidence is refused)."""
+
+    def setUp(self):
+        self.L = Ledger(self)
+        self.L.trades(3)
+        self.V = Evidence(self, self.L)
+
+    def refused(self, why):
+        with self.assertRaisesRegex(SO.EvidenceRefused, why):
+            self.V.verify()
+        self.assertEqual(self.V.cli(), 2)
+
+    def edit(self, fn, *, redigest=True):
+        doc = json.loads(json.dumps(self.V.doc))
+        fn(doc)
+        self.V.write(doc, redigest=redigest)
+
+    def test_genuine_evidence_is_accepted(self):
+        v = self.V.verify()
+        self.assertEqual(v["matched"], self.V.doc["matched_trade_ids"])
+        self.assertEqual(self.V.cli(), 0)
+
+    def test_altered_report(self):
+        self.edit(lambda d: d["matched_trade_ids"].pop(), redigest=False)
+        self.refused("report_altered")
+
+    def test_forged_trade_id(self):
+        def forge(d):
+            d["matched_trade_ids"].append("T-999")
+            d["evidence"]["matched_trades"].append(dict(d["evidence"]["matched_trades"][0], trade_id="T-999"))
+        self.edit(forge)
+        self.refused("T-999:not_in_journal")
+
+    def test_forged_identifier(self):
+        self.edit(lambda d: d["evidence"]["matched_trades"][0]["legs"][0].update(link_values=["FORGED"]))
+        self.refused("identifier_not_in_statement")
+
+    def test_ids_must_equal_the_manifest_and_every_trade_needs_both_legs(self):
+        self.edit(lambda d: d["matched_trade_ids"].append(d["matched_trade_ids"][0]))
+        self.refused("matched_ids_inconsistent_with_manifest")
+        self.edit(lambda d: d["evidence"]["matched_trades"][0]["legs"].pop())
+        self.refused("legs_incomplete")
+
+    def test_identifier_of_another_order(self):
+        def swap(d):
+            a, b = d["evidence"]["matched_trades"][0]["legs"], d["evidence"]["matched_trades"][1]["legs"]
+            a[0]["link_values"], b[0]["link_values"] = b[0]["link_values"], a[0]["link_values"]
+        self.edit(swap)
+        self.refused("identifier_not_this_journal_order")
+
+    def test_one_execution_cannot_support_two_legs(self):
+        def dup(d):
+            t0, t1 = d["evidence"]["matched_trades"][:2]
+            t1["legs"][0]["statement_rows"] = list(t0["legs"][0]["statement_rows"])
+        self.edit(dup)
+        self.refused("statement_row_supports_two_legs")
+
+    def test_mismatched_journal_snapshot(self):
+        c = sqlite3.connect(self.V.journal)
+        with c:
+            c.execute("UPDATE loop_orders SET updated_at_utc='later'")
+        c.close()
+        self.refused("journal_snapshot_differs")
+
+    def test_other_statement_file(self):
+        with open(self.V.stmt, "a") as fh:
+            fh.write('"DUX0000001","ZZZ","BUY","M21L-999","X9-9"\n')
+        self.refused("statement_files_differ")
+
+    def test_stale_and_future_evidence(self):
+        old = datetime.now(timezone.utc) - timedelta(days=8)
+        self.edit(lambda d: d["evidence"].update(generated_at_utc=old.isoformat()))
+        self.refused("stale")
+        self.assertEqual(self.V.cli("--max-evidence-age-days", "30"), 0)          # the age limit is explicit
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        self.edit(lambda d: d["evidence"].update(generated_at_utc=future.isoformat()))
+        self.refused("generated_in_the_future")
+        self.edit(lambda d: d["evidence"].update(generated_at_utc="2026-10-30T12:00:00"))   # naive
+        self.refused("generation_time_unreadable")
+
+    def test_the_journal_order_must_be_a_closed_ibkr_paper_order(self):
+        for col, val in (("state", "OPEN"), ("data_source", "simulated")):
+            L = Ledger(self)
+            L.trades(2)
+            V = Evidence(self, L)
+            c = sqlite3.connect(V.journal)
+            with c:
+                c.execute("UPDATE loop_orders SET %s=? WHERE client_ref=?" % col, (val, V.doc["matched_trade_ids"][0]))
+            c.close()
+            doc = json.loads(json.dumps(V.doc))
+            doc["evidence"]["inputs"]["journal_db"]["sha256"] = sha(V.journal)
+            V.write(doc)
+            with self.assertRaisesRegex(SO.EvidenceRefused, "not_a_closed_ibkr_paper_order"):
+                V.verify()
+
+    def test_unsupported_account_scope(self):
+        self.edit(lambda d: d["evidence"]["account_scope"].update(status="UNSUPPORTED_ACCOUNT_SCOPE"))
+        self.refused("account_scope_not_verified")
+
+    def test_journal_account_must_be_the_verified_paper_account(self):
+        for acct in ("DUX0000002", None, "UX9999999"):
+            L = Ledger(self)
+            L.trades(2)
+            V = Evidence(self, L, account=acct)
+            V.write(dict(V.doc, evidence=dict(V.doc["evidence"], account_scope=self.V.doc["evidence"]["account_scope"])))
+            with self.assertRaisesRegex(SO.EvidenceRefused, "journal_account_not_the_verified_paper_account"):
+                V.verify()
+
+    def test_ledger_and_journal_must_describe_the_same_trades(self):
+        c = sqlite3.connect(self.V.journal)
+        with c:
+            c.execute("UPDATE loop_orders SET candidate_id='someone-else' WHERE client_ref=?",
+                      (self.V.doc["matched_trade_ids"][0],))
+        c.close()
+        self.edit(lambda d: d["evidence"]["inputs"]["journal_db"].update(sha256=sha(self.V.journal)))
+        self.V.verify()                                    # the journal copy itself is consistent with the report ...
+        self.assertEqual(self.V.cli(), 2)                  # ... but not with the ledger copy
+        rows = self.L.rows(self.V.doc["matched_trade_ids"])
+        with self.assertRaisesRegex(SO.EvidenceRefused, "ledger_and_journal_disagree"):
+            SO.check_ledger_link(rows, self.V.journal, self.V.doc["matched_trade_ids"])
+
+    def test_a_simulated_ledger_trade_is_refused_not_promoted(self):
+        L = Ledger(self)
+        L.add(60.0, src="simulated", trade_id="T-SIM")
+        L.trades(2)
+        V = Evidence(self, L)
+        rows = L.rows()
+        sim = next(r for r in rows if r["trade_id"] == "T-SIM")
+        c = sqlite3.connect(V.journal)
+        with c:
+            c.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, state, data_source, "
+                      "planned_at_utc, updated_at_utc, account, candidate_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                      ("T-SIM", sim["cycle_key"], sim["symbol"], "long", 100, "CLOSED", "ibkr_paper", NOW, NOW, PAPER,
+                       sim["candidate_id"]))
+        c.close()
+        with self.assertRaisesRegex(SO.EvidenceRefused, "ledger_source_is_not_ibkr_paper"):
+            SO.check_ledger_link(L.rows(["T-SIM"]), V.journal, ["T-SIM"])
+
+    def test_unknown_statement_fees_stay_unconfirmed(self):
+        L = Ledger(self)
+        L.trades(3)
+        V = Evidence(self, L, fees_known=False)
+        v = V.verify()
+        rows = L.rows(v["matched"])
+        c = SO._open_ro(L.path)
+        try:
+            rows = SO.load_candidates(c, matched_trade_ids=v["matched"], statement_fees_known=v["fees_known"])
+        finally:
+            c.close()
+        rep = SO.report(rows, statement_evidence=v["summary"])
+        cls = rep["classes"][SO.IBKR_MATCHED]
+        self.assertEqual((cls["resolved_trades"], cls["fees_unconfirmed_in_resolved"]), (3, 3))
+        self.assertEqual(rep["statement_evidence"]["fees_unknown_trades"], 3)
 
 
 if __name__ == "__main__":
