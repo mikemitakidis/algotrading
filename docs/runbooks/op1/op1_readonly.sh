@@ -13,9 +13,11 @@
 # NAMES (never values), and collects service/process evidence (op1_runtime_status.sh).
 # What it never does: write under OP1_ROOT, read .env values, start/stop/restart anything, connect to
 # a broker or data vendor, or print unit files, process arguments or environments.
-# WAL databases (data/historical.db): when no -wal file exists there is no unflushed content, and the copy
-# is taken with immutable=1 so SQLite creates no side files at all; when a -wal file exists the side files
-# are already there and mode=ro reads through them. The database file itself is never written.
+# Copies: a rollback-journal database (signals.db, written by the running bot) is read with mode=ro, which
+# takes a shared lock, so the copy is a consistent snapshot. A WAL-format database (data/historical.db) with no
+# -wal file has no unflushed content and is read with immutable=1 so SQLite creates no side files; with a -wal
+# file the side files already exist and mode=ro reads through them. Every copy gets PRAGMA quick_check.
+# The database files themselves are never written.
 set -u
 ROOT="${OP1_ROOT:-/opt/algo-trader}"
 OUT="${OP1_OUT:-/tmp/m21_op1}"
@@ -39,11 +41,17 @@ for db in signals paper_lifecycles historical; do
   src="$ROOT/data/$db.db"
   if [ -f "$src" ]; then
     uri="file:$src?mode=ro"
-    [ -e "$src-wal" ] || uri="$uri&immutable=1"
+    fmt=$(od -An -tu1 -j18 -N1 "$src" 2>/dev/null | tr -d ' ')          # SQLite header byte 18: 2 = WAL
+    [ "$fmt" = "2" ] && [ ! -e "$src-wal" ] && uri="$uri&immutable=1"
     if [ -n "$SQLITE" ]; then sqlite3 "$uri" ".backup '$OUT/${db}_copy.db'"
     else "$PY" -I "$HERE/op1_sql.py" backup "$src" "$OUT/${db}_copy.db"; fi 2>>"$LOG" \
-      && log "copied $db.db -> ${db}_copy.db sha256=$(sha256sum "$OUT/${db}_copy.db" | cut -c1-16)" \
+      && log "copied $db.db -> ${db}_copy.db sha256=$(sha256sum "$OUT/${db}_copy.db" | cut -c1-16) format=${fmt:-?}" \
       || log "COPY FAILED for $db.db (stop and report)"
+    if [ -f "$OUT/${db}_copy.db" ]; then
+      if [ -n "$SQLITE" ]; then qc=$(sqlite3 -readonly "$OUT/${db}_copy.db" 'PRAGMA quick_check;' 2>&1 | head -1)
+      else qc=$("$PY" -I "$HERE/op1_sql.py" check "$OUT/${db}_copy.db" 2>&1 | head -1); fi
+      log "quick_check ${db}_copy.db: $qc (anything but ok: re-run the copy, then report)"
+    fi
   else
     log "absent: $src"
   fi
@@ -102,7 +110,8 @@ log "deployment discovery -> deploy_discovery.txt ($(grep -m1 '^sync_sh_running=
 
 # ── 7. secret screen of everything produced, then a manifest ────────────────
 HITS=$(grep -rIEl '[0-9]{8,10}:[A-Za-z0-9_-]{30,}|(PASSWORD|SECRET|TOKEN|API_KEY)[A-Z_]*=[^<]|\b(DU|U)[0-9]{6,}\b' \
-       "$OUT" --exclude='*.db' --exclude=op1.log 2>/dev/null | wc -l)
+       "$OUT" --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='*.tgz' --exclude=op1.log \
+       --exclude-dir=src --exclude-dir=docs 2>/dev/null | wc -l)       # src/ and docs/ are the unpacked tarballs
 log "secret screen: $HITS output file(s) match a secret-like pattern (0 expected; review any before sharing)"
 ( cd "$OUT" && find . -maxdepth 2 -type f ! -name '*.db' ! -name 'src.tgz' ! -path './src/*' -printf '%P\n' | sort \
   | xargs -r sha256sum ) > "$OUT/MANIFEST.sha256"

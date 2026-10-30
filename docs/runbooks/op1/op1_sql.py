@@ -1,7 +1,9 @@
 """OP1 fallback when the sqlite3 command-line tool is not installed on the VPS (installing it would be a write).
 
-    python3 -I op1_sql.py backup <database> <copy>     read-only online backup (mode=ro; immutable=1 if no -wal)
+    python3 -I op1_sql.py backup <database> <copy>     read-only online backup (mode=ro; immutable=1 only for a
+                                                       WAL-format file without a -wal file)
     python3 -I op1_sql.py run <copy> <file.sql>        run a report file read-only (.print lines are echoed)
+    python3 -I op1_sql.py check <copy>                 PRAGMA quick_check on the copy (read-only)
 
 Standard library only. The source database is opened read-only; ``run`` opens the COPY read-only too.
 """
@@ -10,9 +12,16 @@ import sqlite3
 import sys
 
 
+def _wal_format(path):
+    with open(path, "rb") as fh:
+        head = fh.read(20)
+    return len(head) == 20 and head[18] == 2
+
+
 def _uri(path):
     p = os.path.realpath(path).replace("%", "%25").replace("?", "%3f").replace("#", "%23")
-    return "file:%s?mode=ro%s" % (p, "" if os.path.exists(path + "-wal") else "&immutable=1")
+    immutable = _wal_format(path) and not os.path.exists(path + "-wal")
+    return "file:%s?mode=ro%s" % (p, "&immutable=1" if immutable else "")
 
 
 def backup(src, dst):
@@ -57,6 +66,10 @@ if __name__ == "__main__":
         backup(a[1], a[2])
     elif len(a) == 3 and a[0] == "run":
         run(a[1], a[2])
+    elif len(a) == 2 and a[0] == "check":
+        c = sqlite3.connect(_uri(a[1]), uri=True)
+        print(c.execute("PRAGMA quick_check").fetchone()[0])
+        c.close()
     else:
         print(__doc__)
         sys.exit(2)

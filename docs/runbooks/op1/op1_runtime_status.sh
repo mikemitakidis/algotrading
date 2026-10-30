@@ -49,8 +49,8 @@ InactiveEnterTimestamp,ExecMainStartTimestamp,NRestarts,Result 2>/dev/null
     echo "(no logs/sync.log)"
   fi
   echo "== deployed checkout (read-only git queries; no fetch)"
-  git -C "$ROOT" log -1 --format='HEAD=%H committed=%cI' 2>/dev/null || echo "(not a git checkout or not readable)"
-  GIT_OPTIONAL_LOCKS=0 git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null | wc -l | sed 's/^/tracked_files_modified=/'
+  GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$ROOT" -C "$ROOT" log -1 --format='HEAD=%H committed=%cI' 2>/dev/null || echo "(not a git checkout or not readable)"
+  GIT_OPTIONAL_LOCKS=0 git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null | wc -l | sed 's/^/tracked_files_modified=/'
   echo "== bot_state.json: keys and timestamps only"
   if [ -f "$ROOT/data/bot_state.json" ]; then
     python3 -I -c 'import json,sys

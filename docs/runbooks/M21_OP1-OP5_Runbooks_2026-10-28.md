@@ -72,7 +72,8 @@ or (b) an export you download. Never hand-type a calendar. Without it, OP1.4 ski
 cd /tmp/m21_op1 && bash docs/docs/runbooks/op1/op1_readonly.sh
 ```
 It copies `signals.db`, `paper_lifecycles.db` and `historical.db` through read-only connections (`.backup` from a
-`mode=ro` URI; `immutable=1` when no `-wal` file exists, so SQLite creates no side files), runs
+`mode=ro` URI, which takes a shared lock so a database the bot is writing is copied consistently; `immutable=1` only
+for a WAL-format file with no `-wal` file, so SQLite creates no side files; `PRAGMA quick_check` on every copy), runs
 `docs/runbooks/sql/{op1_m16_inventory,old_paper_signals,old_paper_journal}.sql` on the **copies** with
 `sqlite3 -readonly`, summarises the parquet store (`op1_parquet_basis.py`), runs the WP11 readiness report when the
 calendar is present, records `.env*` permissions and `RISK_*`/broker variable **names**, collects runtime evidence
@@ -87,6 +88,17 @@ secrets in `.env`, `bot_state.json` and `logs/sync.log`, and the replica as a gi
 hash (including `.git`) identical before and after; no side files
 created; zero planted secrets in any output; all SQL ran without errors; the same with the `sqlite3` CLI absent
 (Python fallback); the readiness step ran read-only against a code checkout. `bash -n` clean.
+
+**Re-verified 30 Oct, under `strace -f`** (`docs/runbooks/op1/verify/`: `op1_replica_check.py` builds the replica and
+runs the session with the code tarball and a calendar file, so every step including readiness runs;
+`op1_trace_audit.py` reads the system-call log): 0 violations — no program outside the read-only set was executed (no
+`pip`, `kill`/`pkill`, `sudo`, `curl`, `rm`, `mv`, `chmod`; `systemctl` only `show`/`list-units`/`list-timers`; `git`
+only `rev-parse`/`log`/`remote`/`status`; `sqlite3` only with `mode=ro` or `-readonly`; `journalctl -u` reads), every
+file written is under `/tmp/m21_op1`, no signal was sent to any process, and the only socket connections were local
+`AF_UNIX` ones (no TCP/UDP: no broker, gateway or vendor connection). Replica tree including `.git` and
+`data/kill_switch.json` unchanged; `quick_check` ok on all copies; secret screen 0 (the unpacked `src/` and `docs/`
+tarballs are excluded from it, as they are from `MANIFEST.sha256`); the stand-in `sync.sh` daemon found, the decoy not
+matched.
 
 **Merge blocker (item 14).** `sync.sh` polls GitHub every 60 s; on a new `main` commit it runs `git reset --hard
 origin/main` in `/opt/algo-trader`, `pip install -r requirements.txt` and restarts **both** `algo-trader.service` and
