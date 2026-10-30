@@ -15,7 +15,11 @@ cost, is the IBKR statement the operator exports. This module reconciles the two
 * ``reconcile``         one class per claimed leg and per statement execution:
 
     MATCHED                         an id (execution id, orderRef, perm id) ties the leg to statement
-                                    executions and symbol, side, quantity, price, time and fees agree;
+                                    executions; symbol, side, quantity, price, time and fees agree; every
+                                    execution is on a POSITIVELY identified paper account (``DU…``; equal to the
+                                    journal's account when the journal recorded one) and is a stock; no
+                                    cancellation/correction row exists for that account and symbol; the order key
+                                    is not shared by another claim; an entry comes from one broker order;
     MISMATCH                        an id ties them but something disagrees (each reason listed);
     PROBABLE_MATCH                  only symbol, side, quantity and a +-time window agree: never proof;
     UNMATCHED_CLAIM                 the journal claims a fill the statement does not show;
@@ -23,7 +27,8 @@ cost, is the IBKR statement the operator exports. This module reconciles the two
     UNATTRIBUTED_EXECUTION          a statement execution no claim accounts for.
 
   Executions on an account that is not a paper account by IBKR's convention (ids starting ``DU``) raise a
-  LIVE_ACCOUNT_ACTIVITY alert. Account ids are masked in every output.
+  LIVE_ACCOUNT_ACTIVITY alert; executions with a blank or missing account raise ACCOUNT_UNVERIFIED_EXECUTIONS and
+  can never be MATCHED. Account ids are masked in every output.
 * ``fee_records``       MATCHED legs whose statement commission is known feed
                         ``research.economics.analysis.fee_calibration`` (statement commission vs the modelled
                         IBKR fee). A missing commission is reported and excluded, never treated as zero. The
@@ -53,7 +58,7 @@ import numpy as np
 from research.economics.analysis import fee_calibration
 from research.economics.fees import BUY as FEE_BUY, IBKR_PRO_FIXED, IBKR_PRO_TIERED, SELL as FEE_SELL, order_fees
 
-SCHEMA = "m21-e5-reconciliation/1"
+SCHEMA = "m21-e5-reconciliation/2"     # /2: MATCHED needs a positively verified paper account
 MATCHED, MISMATCH, PROBABLE = "MATCHED", "MISMATCH", "PROBABLE_MATCH"
 UNMATCHED_CLAIM, UNRECORDED, UNATTRIBUTED = "UNMATCHED_CLAIM", "UNRECORDED_FILL_OF_KNOWN_ORDER", \
     "UNATTRIBUTED_EXECUTION"
@@ -129,6 +134,7 @@ class Claim:
     exec_ids: Tuple[str, ...] = ()
     closed_trade: bool = False
     notes: Tuple[str, ...] = ()
+    account: Optional[str] = None       # the account the journal recorded for the order (never printed)
 
 
 @dataclass
@@ -141,6 +147,7 @@ class StatementFile:
     rows_ignored_by_level: int
     correction_rows: int
     executions: List[Execution] = field(default_factory=list)
+    corrections: List[Tuple[Optional[str], str]] = field(default_factory=list)   # (account, symbol)
 
 
 # ── statement parsing ────────────────────────────────────────────────────────
@@ -246,7 +253,7 @@ def parse_statement(path: str, *, tz: str) -> StatementFile:
         raise StatementRefused("%s: no execution, trade or order level rows (levels: %s)" % (
             name, ", ".join(sorted(present))))
     sf = StatementFile(name, hashlib.sha256(raw).hexdigest(), fmt, level, 0, 0, 0)
-    seen_exec = set()
+    seen_exec, seen_rows = set(), set()
     for lvl, g, n in parsed:
         if level is not None and lvl != level:
             sf.rows_ignored_by_level += 1
@@ -256,6 +263,7 @@ def parse_statement(path: str, *, tz: str) -> StatementFile:
         code = (g.get("code") or "").upper()
         if "(CA." in side_raw or "CA" in [c.strip() for c in code.replace(",", ";").split(";")]:
             sf.correction_rows += 1                       # a cancellation / correction: manual review
+            sf.corrections.append((g.get("account") or None, (g.get("symbol") or "").strip()))
             continue
         qty = _num(g["qty"], what="quantity", where=where)
         if qty == 0:
@@ -281,6 +289,11 @@ def parse_statement(path: str, *, tz: str) -> StatementFile:
         sym = g["symbol"].strip()
         if not sym:
             raise StatementRefused("%s: blank symbol" % where)
+        if exec_id is None and g.get("order_id"):
+            row_key = (g.get("account"), sym, side, qty, price, g["datetime"], g.get("order_ref"), g.get("order_id"))
+            if row_key in seen_rows:
+                raise StatementRefused("%s: the same broker order row is repeated (duplicated export?)" % where)
+            seen_rows.add(row_key)
         sf.executions.append(Execution(
             file=name, row=n, account=g.get("account") or None, asset_class=g.get("asset_class") or None,
             symbol=sym, side=side, qty=abs(qty), price=price, time_utc=_time(g["datetime"], zone, where),
@@ -376,7 +389,8 @@ def ws2_claims(journal_db: str) -> Tuple[List[Claim], Dict[str, Any]]:
                 side=sd, qty=float(o["qty"]), price=float(px), time_utc=t,
                 fees=None if fees is None else float(fees), ref_price=None if refpx is None else float(refpx),
                 order_refs=orefs, perm_ids=tuple(str(p) for p in perms),
-                exec_ids=tuple(execs.get((ref, leg), ())), closed_trade=closed, notes=(why,) if why else ()))
+                exec_ids=tuple(execs.get((ref, leg), ())), closed_trade=closed, notes=(why,) if why else (),
+                account=o.get("account") or None))
             stats["legs_claimed"] += 1
     return claims, stats
 
@@ -434,8 +448,12 @@ class LegResult:
         return float(sum(e.commission for e in self.executions))
 
 
-def _compare(c: Claim, group: Sequence[Execution], *, time_tol: timedelta, price_tol: float, fee_tol: float
-             ) -> List[str]:
+STOCK_CLASSES = ("STK", "Stocks")
+UNVERIFIED_ONLY = {"account_unverified", "asset_class_unverified"}
+
+
+def _compare(c: Claim, group: Sequence[Execution], *, time_tol: timedelta, price_tol: float, fee_tol: float,
+             corrections: frozenset = frozenset()) -> List[str]:
     why = []
     if any(e.symbol != c.symbol for e in group):
         why.append("symbol_differs")
@@ -457,20 +475,37 @@ def _compare(c: Claim, group: Sequence[Execution], *, time_tol: timedelta, price
         why.append("fees_differ:claimed=%.4f,statement=%.4f" % (c.fees, comm))
     if any(is_paper_account(e.account) is False for e in group):
         why.append("non_paper_account")
+    if any(is_paper_account(e.account) is None for e in group):
+        why.append("account_unverified")                  # unknown is never paper evidence
+    if c.account and any(e.account and e.account != c.account for e in group):
+        why.append("account_differs_from_journal")
+    if any(e.asset_class not in STOCK_CLASSES for e in group):
+        why.append("asset_class_unverified")
+    if any((e.account, e.symbol) in corrections or (None, e.symbol) in corrections for e in group):
+        why.append("correction_present_requires_review")
+    if c.leg == "entry" and len({e.order_id for e in group if e.order_id}) > 1:
+        why.append("entry_spans_multiple_broker_orders")
     return why
 
 
 def reconcile(executions: Sequence[Execution], claims: Sequence[Claim], *, known_order_refs: Iterable[str] = (),
-              time_tol_s: float = 120.0, price_tol: float = 0.01, fee_tol: float = 0.01
+              time_tol_s: float = 120.0, price_tol: float = 0.01, fee_tol: float = 0.01,
+              corrections: Iterable[Tuple[Optional[str], str]] = ()
               ) -> Tuple[List[LegResult], List[Tuple[Execution, str]]]:
     tol = timedelta(seconds=time_tol_s)
+    # an order key (orderRef or perm id) claimed by more than one leg on the same side cannot identify either
+    uses: Dict[Tuple[str, str, str], int] = {}
+    for c in claims:
+        for kind, keys in (("ref", c.order_refs), ("perm", c.perm_ids)):
+            for k in set(keys):
+                uses[(kind, c.side, k)] = uses.get((kind, c.side, k), 0) + 1
     unused = list(range(len(executions)))
     by_exec = {e.exec_id: i for i, e in enumerate(executions) if e.exec_id}
     results: List[LegResult] = []
     order = sorted(range(len(claims)), key=lambda k: (claims[k].system != "ws2_journal",
                                                       claims[k].time_utc or datetime.max.replace(tzinfo=ZoneInfo("UTC")),
                                                       claims[k].claim_id))
-    kw = dict(time_tol=tol, price_tol=price_tol, fee_tol=fee_tol)
+    kw = dict(time_tol=tol, price_tol=price_tol, fee_tol=fee_tol, corrections=frozenset(corrections))
     for k in order:
         c = claims[k]
         group: List[int] = []
@@ -488,6 +523,9 @@ def reconcile(executions: Sequence[Execution], claims: Sequence[Claim], *, known
             key = "perm_id_as_IBOrderID"
             group = [i for i in unused if executions[i].order_id in c.perm_ids and executions[i].side == c.side]
         if group:
+            if key == "order_ref" and any(uses[("ref", c.side, k)] > 1 for k in c.order_refs) or \
+                    key == "perm_id_as_IBOrderID" and any(uses[("perm", c.side, k)] > 1 for k in c.perm_ids):
+                extra.append("ambiguous_order_key")
             why = extra + _compare(c, [executions[i] for i in group], **kw)
             results.append(LegResult(c, MISMATCH if why else MATCHED, key, why, [executions[i] for i in group]))
             unused = [i for i in unused if i not in group]
@@ -497,8 +535,11 @@ def reconcile(executions: Sequence[Execution], claims: Sequence[Claim], *, known
                     and abs(executions[i].time_utc - c.time_utc) <= tol]
             if near and abs(sum(executions[i].qty for i in near) - c.qty) <= 1e-6:
                 why = [w for w in _compare(c, [executions[i] for i in near], **kw)]
-                results.append(LegResult(c, PROBABLE if not why else MISMATCH, "time_window", why or
-                                         ["no_id_link:symbol_side_quantity_time_only"],
+                # no id links them, so this is never proof; an unidentified account or asset class keeps it
+                # PROBABLE (listed), any real disagreement makes it a MISMATCH
+                klass = PROBABLE if set(why) <= UNVERIFIED_ONLY else MISMATCH
+                results.append(LegResult(c, klass, "time_window",
+                                         ["no_id_link:symbol_side_quantity_time_only"] + why,
                                          [executions[i] for i in near]))
                 unused = [i for i in unused if i not in near]
                 continue
@@ -543,7 +584,7 @@ def _ny_date(t: datetime) -> date:
 def fee_records(results: Sequence[LegResult], *, plan=IBKR_PRO_FIXED) -> Tuple[List[Dict[str, float]], Dict[str, int]]:
     """Calibration inputs from MATCHED legs only. Missing or non-USD commissions are counted, never zero."""
     recs, counts = [], {"matched_legs": 0, "with_statement_commission": 0, "commission_missing": 0,
-                        "commission_not_usd": 0, "zero_commission_reported": 0}
+                        "commission_not_usd": 0, "commission_currency_unknown": 0, "zero_commission_reported": 0}
     for r in results:
         if r.klass != MATCHED:
             continue
@@ -552,7 +593,10 @@ def fee_records(results: Sequence[LegResult], *, plan=IBKR_PRO_FIXED) -> Tuple[L
         if comm is None:
             counts["commission_missing"] += 1
             continue
-        ccys = {e.commission_ccy or e.currency for e in r.executions}
+        ccys = {e.commission_ccy for e in r.executions}
+        if None in ccys:                     # a missing commission currency is unknown, never assumed USD
+            counts["commission_currency_unknown"] += 1
+            continue
         if ccys != {"USD"}:
             counts["commission_not_usd"] += 1
             continue
@@ -600,8 +644,17 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
     ids = [e.exec_id for e in execs if e.exec_id]
     if len(ids) != len(set(ids)):
         raise StatementRefused("an execution id appears in more than one statement file (overlapping exports?)")
+    seen: Dict[Tuple, str] = {}
+    for e in execs:
+        if e.exec_id is None:
+            k = (e.account, e.symbol, e.side, e.qty, e.price, e.time_utc, e.order_ref, e.order_id)
+            if k in seen and seen[k] != e.file:
+                raise StatementRefused("an identical execution row appears in more than one statement file "
+                                       "(overlapping exports?)")
+            seen.setdefault(k, e.file)
     known = [r for s in claim_stats.values() if isinstance(s, dict) for r in s.get("known_order_refs", ())]
-    results, leftovers = reconcile(execs, claims, known_order_refs=known, **tol)
+    results, leftovers = reconcile(execs, claims, known_order_refs=known,
+                                   corrections=[c for f in files for c in f.corrections], **tol)
     trades = trade_status(results)
     recs, fee_counts = fee_records(results, plan=PLANS[plan])
     cal = fee_calibration(recs, min_n=min_n)
@@ -620,6 +673,10 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
     if live:
         alerts.append({"alert": LIVE_ALERT, "executions": len(live),
                        "detail": "executions on an account that is not a DU paper account: escalate, do not proceed"})
+    unverified = [e for e in execs if is_paper_account(e.account) is None]
+    if unverified:
+        alerts.append({"alert": "ACCOUNT_UNVERIFIED_EXECUTIONS", "executions": len(unverified),
+                       "detail": "executions without an account id can never be paper evidence"})
     if any(f.correction_rows for f in files):
         alerts.append({"alert": "CORRECTION_ROWS_PRESENT", "rows": sum(f.correction_rows for f in files),
                        "detail": "cancellation/correction rows were excluded from matching; review them manually"})
@@ -631,7 +688,7 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
                        "detail": "files without execution ids or order references can only give PROBABLE_MATCH"})
     return _jsonable({
         "schema": SCHEMA,
-        "statement": {"files": [{k: v for k, v in asdict(f).items() if k != "executions"} for f in files],
+        "statement": {"files": [{k: v for k, v in asdict(f).items() if k not in ("executions", "corrections")} for f in files],
                       "statement_tz": tz, "accounts": accounts},
         "claims": {k: {kk: vv for kk, vv in v.items() if kk != "known_order_refs"} for k, v in claim_stats.items()},
         "counts": counts, "alerts": alerts,
