@@ -12,14 +12,16 @@ project-wide reconciliation narrative lives in
 >
 > | Gate | State on 29 Oct 2026 |
 > |---|---|
-> | A. Engineering | All M21 work packages exist as code in **draft PRs, not merged**: #12, #1, #14, #13 and #15–#26 (proven to merge conflict-free onto `main` `80b4343`, tree `f1ff536`), plus E1–E6 #27–#32 (stacked on that tree) and this reconciliation (E7). Merge needs the operator's batch approval; `main` is still `80b4343`. |
+> | A. Engineering | The M21 work packages exist as code in **draft PRs, not merged** (except the dashboard flow for changing templates through WP14, A16): #12, #1, #14, #13 and #15–#26 (proven to merge conflict-free onto `main` `80b4343`, tree `f1ff536`), plus E1–E6 #27–#32 (stacked on that tree) and this reconciliation (E7). Merge needs the operator's batch approval; `main` is still `80b4343`. |
 > | B. Operational | **Not started.** OP1 (read-only VPS inspection + IBKR statement exports), OP2 (IBKR paper gateway), OP3 (activation), OP4 (10-day soak), OP5 (governance cycle) all need separate approvals. The paper loop is not running; the ledger migration is not deployed; every new runtime flag is OFF. |
 > | C. Performance validation | **Not started.** Needs real historical data (OP1) and genuine paper outcomes; the v3 canary is preregistered and NOT run (waits for approval of the optimiser's final source). |
 >
 > What is **complete and on `main`**: M21.U; M21.1extra D0, D1, supervised D2 and the D3 metrics **code** (D3's runtime
 > acceptance, A06, still needs a dashboard restart). What is **not** complete: everything else in M21, including the
-> unattended paper loop, real-data research runs, the Promotion & Approval cycle and the template dashboard UI
-> (E6: blueprint in PR #32; the protected `dashboard/app.py` wiring is a prepared patch, not applied).
+> unattended paper loop, real-data research runs, the Promotion & Approval cycle and changing templates from the
+> dashboard (E6, PR #32, is a read-only view; its `dashboard/app.py` wiring is a prepared patch, not applied).
+> **These statements describe the state on 29–30 Oct 2026. On merge day this file is updated to the merged SHAs
+> before PR #33 merges; it never describes a draft as merged.**
 > Authoritative checklist: `docs/handoffs/M21_Finish_Line_2026-10-28.md` §6 on the docs branch
 > `docs/full-canonical-handoff-2026-10-26`; all 71 register tasks are kept there.
 >

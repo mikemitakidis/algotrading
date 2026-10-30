@@ -13,7 +13,8 @@ narrative snapshot of where the project is right now, see
 
 > **Current state (reconciled 2026-10-29, M21 E7).** `main` is `80b4343`. M21 follows the June 2026
 > canonical roadmap (M21.U, M21.1, M21.1extra, M21.2–M21.7); see "M21 — canonical scope and status" below.
-> All remaining M21 engineering exists as **draft PRs, not merged** (#12, #1, #14, #13, #15–#26, E1–E6 #27–#32);
+> The remaining M21 engineering exists as **draft PRs, not merged** (#12, #1, #14, #13, #15–#26, E1–E6 #27–#32),
+> except a dashboard flow for changing templates through the Promotion & Approval process (A16; E6 is read-only);
 > operational acceptance (OP1–OP5) and performance validation have **not started**. Nothing is live; the paper
 > loop is not running. The paragraph below is the previous (June) snapshot, kept for history.
 >
@@ -384,7 +385,7 @@ RUNTIME_UNVERIFIED (never run against the real gateway/scheduler/dashboard) · B
 |---|---|---|---|
 | M21.U | Global universe foundation | CLOSED | `main` |
 | M21.1 | Scanner → enriched context → score; ranked output; read-only; candidate decision audit | PR_PENDING · TESTED_OFFLINE | A01 #12, A02 #14, WP5 #15, WP7 #17; score-vs-outcome report E4 #30 |
-| M21.1extra | Scheduled IBKR **paper** loop, outcome capture, dashboard metrics per strategy, kill switch, unattended operation, four templates with SL/TP, Phase-1 template controls | D0–D2 CLOSED; D3 CODE_MERGED (runtime acceptance pending); the rest PR_PENDING · RUNTIME_UNVERIFIED; activation BLOCKED (OP2/OP3) | WS2 #1, WP6 #16, WP10 #18, WP8 #21, WP9 #22, E2 #28, E5 #31, E6 #32 (dashboard wiring prepared, not applied) |
+| M21.1extra | Scheduled IBKR **paper** loop, outcome capture, dashboard metrics per strategy, kill switch, unattended operation, four templates with SL/TP, Phase-1 template controls | D0–D2 CLOSED; D3 CODE_MERGED (runtime acceptance pending); template changes from the dashboard NOT_STARTED (needs a WP14-backed flow); the rest PR_PENDING · RUNTIME_UNVERIFIED; activation BLOCKED (OP2/OP3) | WS2 #1, WP6 #16, WP10 #18, WP8 #21, WP9 #22, E2 #28, E5 #31, E6 #32 (read-only view; `dashboard/app.py` wiring prepared, not applied; a dashboard change flow through WP14 is not built) |
 | M21.2 | Parameter optimisation from real outcomes | PR_PENDING · DATA_UNVERIFIED | WP12 #19, WP11 #20, WP13 #24, E1 #27, E3 #29 |
 | M21.3 | Walk-forward optimiser; Promotion & Approval Model | PR_PENDING · DATA_UNVERIFIED / RUNTIME_UNVERIFIED | WP13 #24, WP14 #23; v3 canary NOT run |
 | M21.4 / 21.5 / 21.7 | Meta-labelling; regime thresholds; learned regime weights | PR_PENDING · DATA_UNVERIFIED (shadow only) | WP16–18 #26 |
