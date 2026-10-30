@@ -651,7 +651,11 @@ active. No M21 path is enabled by a restart.
 ### 7e.3 Gate B — read-only OP1 (ask first; changes nothing)
 
 **Execution packet: `docs/runbooks/M21_Gate_B_Packet_2026-10-30.md`** (exact commands with pinned SHAs and script
-sha256, permissions, the strace audit, what each output answers, stop conditions).
+sha256, permissions, the strace audit, what each output answers, stop conditions). **Final (30 Oct, evening):** two
+sessions — Session 1 deployment state only (no database, no `.env`), Session 2 data after review; a non-root account;
+scripts pinned at `14b641c`. A failed database copy or `quick_check` now stops the inspection (exit 3/4) before any
+report; a non-root account that cannot see other users' processes reports `sync_sh_running=UNKNOWN`. 13
+failure-injection tests pass (the failure cases fail on the previous scripts); the strace audit: 0 violations.
 
 **Permits only:** running `docs/runbooks/op1/op1_readonly.sh` as described in OP1.1 (read-only VPS account,
 `systemd-journal` group, writes only to `/tmp/m21_op1`), which now includes `op1_deploy_discovery.sh`; and your own

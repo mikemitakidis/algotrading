@@ -150,7 +150,13 @@ No M21 code path is enabled by a restart: the WS2 loop, the candidate-ledger wri
 configuration.
 
 **Limits of a non-root session:** root's crontab, the working directory of root-owned processes and some unit files
-are not readable; the report shows `Permission denied` or a blank, and D2/D4 stay partial. Then the cgroup line
+are not readable; the report shows `Permission denied` or a blank, and D2/D4 stay partial. If `/proc` hides other
+users' processes (`hidepid`), D1 is reported as `sync_sh_running=UNKNOWN`, never as a false "no".
+
+**Stop rules (30 Oct):** a database copy that fails stops the session (exit 3); a copy whose `PRAGMA quick_check` is
+not exactly `ok` stops it (exit 4); an output directory that already holds `*_copy.db` is refused (exit 2). No report
+or later step runs after a stop, and reports read only copies made and checked in the same run
+(`verify/op1_failure_injection.py`). Execution: `docs/runbooks/M21_Gate_B_Packet_2026-10-30.md`. Then the cgroup line
 (world-readable) still tells systemd from login session, and the remaining question goes into Gate A as a check you
 run yourself (`sudo crontab -l -u root`, read-only), not as an assumption.
 
