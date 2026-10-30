@@ -53,7 +53,7 @@ class Env:
 
     def order(self, *, symbol="AAA", direction="long", qty=100, entry=(10.0, T0, 1.0), exit=(11.0, T0 + timedelta(
             hours=2), 1.0), source="ibkr_paper", state="CLOSED", ref_price=9.99, perm="9001", order_ref=True,
-              exec_claims=None):
+              exec_claims=None, account=None):
         self.n += 1
         ref = "R%03d" % self.n
         oref = "M21L-%03d" % self.n if order_ref else None
@@ -64,11 +64,11 @@ class Env:
             c.execute(
                 "INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, entry_ref_price, state, "
                 "data_source, broker_perm_id, planned_at_utc, updated_at_utc, entry_fill_price, entry_filled_at_utc,"
-                " entry_fees, exit_fill_price, exit_filled_at_utc, exit_fees, order_ref, sl_perm_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " entry_fees, exit_fill_price, exit_filled_at_utc, exit_fees, order_ref, sl_perm_id, account) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ref, "scan:x", symbol, direction, qty, ref_price, state, source, perm, T0.isoformat(),
                  T0.isoformat(), e_px, e_t.isoformat() if e_t else None, e_f, x_px,
-                 x_t.isoformat() if x_t else None, x_f, oref, "9002"))
+                 x_t.isoformat() if x_t else None, x_f, oref, "9002", account))
             for exec_id, leg in (exec_claims or ()):
                 c.execute("INSERT INTO loop_exec_claims (exec_id, client_ref, leg, claimed_at_utc) VALUES (?,?,?,?)",
                           (exec_id, ref, leg, T0.isoformat()))
@@ -280,6 +280,147 @@ class AccountsAndFees(unittest.TestCase):
         self.assertAlmostEqual(rep2["entry_slippage_vs_reference_bps"]["median"], 20.0, places=6)
 
 
+class AccountIdentityAndEdgeCases(unittest.TestCase):
+    """Release-safety review (30 Oct): only positively verified PAPER executions can support paper evidence."""
+    EXIT_T = T0 + timedelta(hours=2)
+
+    def closed(self, E, **kw):
+        return E.order(**kw)
+
+    def pair(self, oref, *, acct=PAPER, sym="AAA", eid="E", asset="STK", ccy="USD"):
+        a = ex(sym=sym, oref=oref, eid=eid + "1", acct=acct, ccy=ccy)
+        b = ex(sym=sym, side="SELL", px=11.0, t=self.EXIT_T, oref=oref, eid=eid + "2", acct=acct, ccy=ccy)
+        a["AssetClass"] = b["AssetClass"] = asset
+        return [a, b]
+
+    def test_blank_account_is_never_paper_evidence(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        rep = run(E, [E.flex(self.pair(o1, acct=""))])
+        self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MISMATCH)
+        self.assertIn("account_unverified", leg(rep, r1 + ":entry")["reasons"])
+        self.assertEqual(rep["matched_trade_ids"], [])
+        self.assertEqual(rep["fees"]["counts"]["matched_legs"], 0)
+        self.assertIn("ACCOUNT_UNVERIFIED_EXECUTIONS", [a["alert"] for a in rep["alerts"]])
+
+    def test_statement_without_an_account_column_never_matches(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        head = [h for h in FLEX_HEAD if h != "ClientAccountID"]
+        rep = run(E, [E.flex(self.pair(o1), head=head)])
+        self.assertEqual(rep["matched_trade_ids"], [])
+        self.assertIn("account_unverified", leg(rep, r1 + ":exit")["reasons"])
+
+    def test_execution_on_another_paper_account_does_not_match_the_journal_account(self):
+        E = Env(self)
+        r1, o1 = self.closed(E, account="DUX0000001")
+        rep = run(E, [E.flex(self.pair(o1, acct="DUX0000002"))])
+        self.assertIn("account_differs_from_journal", leg(rep, r1 + ":entry")["reasons"])
+        self.assertEqual(rep["matched_trade_ids"], [])
+        E2 = Env(self)
+        r2, o2 = self.closed(E2, account="DUX0000001")
+        rep2 = run(E2, [E2.flex(self.pair(o2, acct="DUX0000001"))])
+        self.assertEqual(rep2["matched_trade_ids"], [r2])
+
+    def test_live_and_paper_in_one_export_with_identical_fills(self):
+        E = Env(self)
+        r1, _ = self.closed(E, order_ref=False, perm=None)
+        rows = self.pair("", acct=PAPER, eid="P") + self.pair("", acct=LIVE, eid="L")
+        rep = run(E, [E.flex(rows)])
+        self.assertNotEqual(leg(rep, r1 + ":entry")["class"], ST.MATCHED)
+        self.assertEqual(rep["matched_trade_ids"], [])
+        self.assertIn(ST.LIVE_ALERT, [a["alert"] for a in rep["alerts"]])
+        live = [e for e in rep["statement_only"] if e["account"] == "UX***99"]
+        self.assertTrue(live and all(e["class"] != ST.MATCHED for e in live))
+        r2, o2 = self.closed(E, symbol="BBB")
+        rep2 = run(E, [E.flex(self.pair(o2, acct=LIVE, sym="BBB", eid="Q"), name="l2.csv")])
+        self.assertEqual(leg(rep2, r2 + ":entry")["class"], ST.MISMATCH)
+        self.assertIn("non_paper_account", leg(rep2, r2 + ":entry")["reasons"])
+
+    def test_unknown_asset_class_is_not_evidence(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        rep = run(E, [E.flex(self.pair(o1, asset="OPT"))])
+        self.assertIn("asset_class_unverified", leg(rep, r1 + ":entry")["reasons"])
+        E2 = Env(self)
+        r2, o2 = self.closed(E2)
+        rep2 = run(E2, [E2.flex(self.pair(o2, asset=""))])
+        self.assertEqual(rep2["matched_trade_ids"], [])
+
+    def test_missing_commission_currency_is_unknown_not_usd(self):
+        E = Env(self)
+        _, o1 = self.closed(E)
+        rep = run(E, [E.flex(self.pair(o1, ccy=""))])
+        f = rep["fees"]["counts"]
+        self.assertEqual((f["matched_legs"], f["with_statement_commission"], f["commission_currency_unknown"]),
+                         (2, 0, 2))
+
+    def test_a_cancelled_execution_cannot_support_a_match(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        rows = self.pair(o1)
+        corr = ex(oref=o1, eid="C1", side="SELL")             # IBKR reverses the BUY with a cancellation row
+        corr["Buy/Sell"] = "SELL (Ca.)"
+        rep = run(E, [E.flex(rows + [corr])])
+        self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MISMATCH)
+        self.assertIn("correction_present_requires_review", leg(rep, r1 + ":entry")["reasons"])
+        self.assertEqual(rep["matched_trade_ids"], [])
+
+    def test_ambiguous_order_ref_and_perm_id(self):
+        E = Env(self)
+        _, o1 = self.closed(E)
+        c = sqlite3.connect(E.journal)
+        with self.assertRaises(sqlite3.IntegrityError):           # the journal itself refuses a reused orderRef
+            with c:
+                c.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, state, "
+                          "data_source, planned_at_utc, updated_at_utc, order_ref) "
+                          "VALUES ('R900','scan:y','AAA','long',100,'OPEN','ibkr_paper',?,?,?)",
+                          (T0.isoformat(), T0.isoformat(), o1))
+        c.close()
+        E2 = Env(self)
+        r2, _ = self.closed(E2, order_ref=False, perm="777", exit=None, state="OPEN")
+        r3, _ = self.closed(E2, order_ref=False, perm="777", symbol="BBB", exit=None, state="OPEN")
+        rep2 = run(E2, [E2.flex([ex(oid="777", eid="X1"), ex(oid="777", eid="X2", t=T0 + timedelta(seconds=1))])])
+        for r in (r2, r3):
+            self.assertNotEqual(leg(rep2, r + ":entry")["class"], ST.MATCHED)
+        self.assertIn("ambiguous_order_key", leg(rep2, r2 + ":entry")["reasons"])
+
+    def test_entry_split_across_two_broker_orders_is_ambiguous(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        a = ex(qty=40, oref=o1, oid="501", eid="A1")
+        b = ex(qty=60, oref=o1, oid="502", eid="A2", t=T0 + timedelta(seconds=2))
+        x = ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, oid="503", eid="A3")
+        rep = run(E, [E.flex([a, b, x])])
+        self.assertIn("entry_spans_multiple_broker_orders", leg(rep, r1 + ":entry")["reasons"])
+
+    def test_partial_fills_on_both_legs_still_match(self):
+        E = Env(self)
+        r1, o1 = self.closed(E)
+        rows = [ex(qty=30, px=9.9, oref=o1, oid="601", eid="B1", comm="-0.3"),
+                ex(qty=70, px=10.0428571428, oref=o1, oid="601", eid="B2", t=T0 + timedelta(seconds=3), comm="-0.7"),
+                ex(side="SELL", qty=50, px=11.0, t=self.EXIT_T, oref=o1, oid="602", eid="B3", comm="-0.5"),  # TP part
+                ex(side="SELL", qty=50, px=11.0, t=self.EXIT_T + timedelta(seconds=30), oref=o1, oid="603",
+                   eid="B4", comm="-0.5")]                                                      # stop for the rest
+        rep = run(E, [E.flex(rows)])
+        self.assertEqual(rep["matched_trade_ids"], [r1])
+        self.assertEqual(leg(rep, r1 + ":entry")["statement"]["executions"], 2)
+        self.assertEqual(leg(rep, r1 + ":exit")["statement"]["executions"], 2)
+
+    def test_duplicate_rows_across_files_are_refused(self):
+        E = Env(self)
+        _, o1 = self.closed(E)
+        head = [h for h in FLEX_HEAD if h != "IBExecID"]
+        rows = [dict(r) for r in self.pair(o1)]
+        a, b = E.flex(rows, name="a.csv", head=head), E.flex(rows, name="b.csv", head=head)
+        with self.assertRaisesRegex(ST.StatementRefused, "more than one statement file"):
+            run(E, [a, b])
+        with self.assertRaisesRegex(ST.StatementRefused, "repeated"):
+            ST.parse_statement(E.flex([dict(ex(oid="9", oref=o1)), dict(ex(oid="9", oref=o1))], name="d.csv",
+                                      head=head + ["IBOrderID"] if "IBOrderID" not in head else head),
+                               tz="America/New_York")
+
+
 class Parsing(unittest.TestCase):
     def _write(self, E, text, name="s.csv"):
         p = os.path.join(E.dir, name)
@@ -357,7 +498,9 @@ class Parsing(unittest.TestCase):
         rep = ST.build_report([sf], *[(c, {"ws2_journal": s}) for c, s in [ST.ws2_claims(E.journal)]][0],
                               tz="America/New_York")
         self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.PROBABLE)
+        self.assertIn("account_unverified", leg(rep, r1 + ":entry")["reasons"])     # no account column
         self.assertIn("NO_EXECUTION_IDS_IN_SOME_FILES", [a["alert"] for a in rep["alerts"]])
+        self.assertIn("ACCOUNT_UNVERIFIED_EXECUTIONS", [a["alert"] for a in rep["alerts"]])
 
 
 class Cli(unittest.TestCase):
