@@ -4333,6 +4333,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m20_paper_account_ledger.py",
             # M20.H: paper storage proof tests.
             "test_m20_paper_storage.py",
+            "test_m21_1_e4_score_outcome.py",
             # M20.UB: US universe expansion proof tests.
             "test_m20_universe_expansion.py",
             # M20.UC1: universe quality collector proof tests.
