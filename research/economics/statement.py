@@ -34,8 +34,21 @@ cost, is the IBKR statement the operator exports. This module reconciles the two
                         IBKR fee). A missing commission is reported and excluded, never treated as zero. The
                         calibration only SUGGESTS a multiplier; nothing is applied.
 
-A trade is statement-matched only when its entry and every exit leg are MATCHED; ``matched_trade_ids`` is
-what the E4 score-versus-outcome report accepts as genuine IBKR paper executions.
+A trade is statement-matched only when its entry and every exit leg are MATCHED and all matched trades are on
+ONE paper account, the one the journal recorded. Each statement execution is assigned to at most one claim
+(identifier-linked claims are matched before any time-window match; an internal check refuses the report if an
+execution were ever assigned twice).
+
+Evidence manifest (schema ``/3``). The report carries ``evidence``: generation time, this module's sha256 and
+the reconciliation parameters, the sha256 of every input (statement files, journal copy, legacy copy), the
+account scope (status, masked id, ``account_digest``), and for every matched trade the identifiers that link
+each leg to the statement (execution ids, orderRefs or perm ids, statement rows) and whether its statement fees
+are known. ``report_sha256`` is the sha256 of the canonical JSON of the rest of the report.
+``--verify-evidence`` re-runs the reconciliation from the same inputs and checks the stored report is exactly
+what they produce. E4 accepts ``matched_trade_ids`` only together with the same inputs and checks the manifest
+against them (``tools.candidate_ledger.score_outcome``). These digests bind the evidence to exact inputs and
+detect edits; they are NOT signatures: that the statement came from IBKR is established by the operator who
+exported it (runbook OP1.6).
 """
 from __future__ import annotations
 
@@ -58,7 +71,9 @@ import numpy as np
 from research.economics.analysis import fee_calibration
 from research.economics.fees import BUY as FEE_BUY, IBKR_PRO_FIXED, IBKR_PRO_TIERED, SELL as FEE_SELL, order_fees
 
-SCHEMA = "m21-e5-reconciliation/2"     # /2: MATCHED needs a positively verified paper account
+SCHEMA = "m21-e5-reconciliation/3"     # /2: MATCHED needs a verified paper account; /3: evidence manifest
+ACCOUNT_DIGEST_PREFIX = "m21-ibkr-account:"   # account_digest = sha256(prefix + account id); E4 uses the same
+CORRECTION_CODES = {"CA", "CO", "ADJ"}       # IBKR trade codes: cancelled, corrected, adjustment
 MATCHED, MISMATCH, PROBABLE = "MATCHED", "MISMATCH", "PROBABLE_MATCH"
 UNMATCHED_CLAIM, UNRECORDED, UNATTRIBUTED = "UNMATCHED_CLAIM", "UNRECORDED_FILL_OF_KNOWN_ORDER", \
     "UNATTRIBUTED_EXECUTION"
@@ -261,8 +276,9 @@ def parse_statement(path: str, *, tz: str) -> StatementFile:
         where = "%s row %d" % (name, n)
         side_raw = (g.get("side") or "").upper()
         code = (g.get("code") or "").upper()
-        if "(CA." in side_raw or "CA" in [c.strip() for c in code.replace(",", ";").split(";")]:
-            sf.correction_rows += 1                       # a cancellation / correction: manual review
+        if "(CA." in side_raw or "(CO." in side_raw or \
+                CORRECTION_CODES & {c.strip() for c in code.replace(",", ";").split(";")}:
+            sf.correction_rows += 1                       # cancelled / corrected / adjusted: manual review
             sf.corrections.append((g.get("account") or None, (g.get("symbol") or "").strip()))
             continue
         qty = _num(g["qty"], what="quantity", where=where)
@@ -313,6 +329,23 @@ def mask_account(a: Optional[str]) -> Optional[str]:
 def is_paper_account(a: Optional[str]) -> Optional[bool]:
     """IBKR convention: paper trading account ids start with DU. None = no account column."""
     return None if not a else a.upper().startswith("DU")
+
+
+def account_digest(a: str) -> str:
+    """An identifier for the account in evidence files (not a secret protection: ids are short)."""
+    return hashlib.sha256((ACCOUNT_DIGEST_PREFIX + a).encode()).hexdigest()
+
+
+def file_digest(path: str) -> Dict[str, Any]:
+    raw = Path(path).read_bytes()
+    return {"name": Path(path).name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def report_digest(doc: Mapping[str, Any]) -> str:
+    """sha256 of the canonical JSON of a report without its own ``report_sha256`` (E4 computes it the same way)."""
+    body = {k: v for k, v in doc.items() if k != "report_sha256"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                                     allow_nan=False).encode()).hexdigest()
 
 
 # ── claims ──────────────────────────────────────────────────────────────────
@@ -449,7 +482,7 @@ class LegResult:
 
 
 STOCK_CLASSES = ("STK", "Stocks")
-UNVERIFIED_ONLY = {"account_unverified", "asset_class_unverified"}
+UNVERIFIED_ONLY = {"account_unverified", "asset_class_unverified", "journal_account_unrecorded"}
 
 
 def _compare(c: Claim, group: Sequence[Execution], *, time_tol: timedelta, price_tol: float, fee_tol: float,
@@ -479,6 +512,8 @@ def _compare(c: Claim, group: Sequence[Execution], *, time_tol: timedelta, price
         why.append("account_unverified")                  # unknown is never paper evidence
     if c.account and any(e.account and e.account != c.account for e in group):
         why.append("account_differs_from_journal")
+    if c.system == "ws2_journal" and not c.account:
+        why.append("journal_account_unrecorded")          # the statement account cannot be tied to the journal
     if any(e.asset_class not in STOCK_CLASSES for e in group):
         why.append("asset_class_unverified")
     if any((e.account, e.symbol) in corrections or (None, e.symbol) in corrections for e in group):
@@ -499,52 +534,76 @@ def reconcile(executions: Sequence[Execution], claims: Sequence[Claim], *, known
         for kind, keys in (("ref", c.order_refs), ("perm", c.perm_ids)):
             for k in set(keys):
                 uses[(kind, c.side, k)] = uses.get((kind, c.side, k), 0) + 1
-    unused = list(range(len(executions)))
+    free = set(range(len(executions)))
     by_exec = {e.exec_id: i for i, e in enumerate(executions) if e.exec_id}
-    results: List[LegResult] = []
     order = sorted(range(len(claims)), key=lambda k: (claims[k].system != "ws2_journal",
                                                       claims[k].time_utc or datetime.max.replace(tzinfo=ZoneInfo("UTC")),
                                                       claims[k].claim_id))
     kw = dict(time_tol=tol, price_tol=price_tol, fee_tol=fee_tol, corrections=frozenset(corrections))
+    done: Dict[int, LegResult] = {}
+    notes: Dict[int, List[str]] = {k: [] for k in order}
+    keyed: Dict[int, Optional[str]] = {k: None for k in order}
+
+    def assign(k: int, key: str, group: List[int], why: List[str], klass: Optional[str] = None) -> None:
+        done[k] = LegResult(claims[k], klass or (MISMATCH if why else MATCHED), key, why,
+                            [executions[i] for i in group])
+        free.difference_update(group)
+
+    # pass 1: identifier links (execution ids first, for every claim), so no id-linked execution can be taken by a
+    # weaker key of another claim; each execution is assigned at most once (``free``)
     for k in order:
         c = claims[k]
-        group: List[int] = []
-        key, extra = None, []
-        if c.exec_ids:
-            key = "exec_id"
-            group = [by_exec[x] for x in c.exec_ids if x in by_exec and by_exec[x] in unused]
-            absent = [x for x in c.exec_ids if x not in by_exec]
-            if absent:
-                extra.append("claimed_exec_ids_absent_from_statement:%d" % len(absent))
-        if not group and c.order_refs:
+        if not c.exec_ids:
+            continue
+        keyed[k] = "exec_id"
+        present = [by_exec[x] for x in c.exec_ids if x in by_exec]
+        absent = len(c.exec_ids) - len(present)
+        if absent:
+            notes[k].append("claimed_exec_ids_absent_from_statement:%d" % absent)
+        taken = [i for i in present if i not in free]
+        if taken:
+            notes[k].append("claimed_exec_id_already_assigned_to_another_claim:%d" % len(taken))
+        group = [i for i in present if i in free]
+        if group:
+            assign(k, "exec_id", group, notes[k] + _compare(c, [executions[i] for i in group], **kw))
+    for k in order:
+        if k in done:
+            continue
+        c = claims[k]
+        group, key = [], keyed[k]
+        if c.order_refs:
             key = "order_ref"
-            group = [i for i in unused if executions[i].order_ref in c.order_refs and executions[i].side == c.side]
+            group = [i for i in sorted(free) if executions[i].order_ref in c.order_refs and executions[i].side == c.side]
         if not group and c.perm_ids:
             key = "perm_id_as_IBOrderID"
-            group = [i for i in unused if executions[i].order_id in c.perm_ids and executions[i].side == c.side]
+            group = [i for i in sorted(free) if executions[i].order_id in c.perm_ids and executions[i].side == c.side]
+        keyed[k] = key
         if group:
-            if key == "order_ref" and any(uses[("ref", c.side, k)] > 1 for k in c.order_refs) or \
-                    key == "perm_id_as_IBOrderID" and any(uses[("perm", c.side, k)] > 1 for k in c.perm_ids):
+            extra = list(notes[k])
+            if key == "order_ref" and any(uses[("ref", c.side, x)] > 1 for x in c.order_refs) or \
+                    key == "perm_id_as_IBOrderID" and any(uses[("perm", c.side, x)] > 1 for x in c.perm_ids):
                 extra.append("ambiguous_order_key")
-            why = extra + _compare(c, [executions[i] for i in group], **kw)
-            results.append(LegResult(c, MISMATCH if why else MATCHED, key, why, [executions[i] for i in group]))
-            unused = [i for i in unused if i not in group]
+            assign(k, key, group, extra + _compare(c, [executions[i] for i in group], **kw))
+    # pass 2: symbol/side/quantity/time only, from what no identifier claimed: never proof
+    for k in order:
+        if k in done or claims[k].time_utc is None:
             continue
-        if c.time_utc is not None:
-            near = [i for i in unused if executions[i].symbol == c.symbol and executions[i].side == c.side
-                    and abs(executions[i].time_utc - c.time_utc) <= tol]
-            if near and abs(sum(executions[i].qty for i in near) - c.qty) <= 1e-6:
-                why = [w for w in _compare(c, [executions[i] for i in near], **kw)]
-                # no id links them, so this is never proof; an unidentified account or asset class keeps it
-                # PROBABLE (listed), any real disagreement makes it a MISMATCH
-                klass = PROBABLE if set(why) <= UNVERIFIED_ONLY else MISMATCH
-                results.append(LegResult(c, klass, "time_window",
-                                         ["no_id_link:symbol_side_quantity_time_only"] + why,
-                                         [executions[i] for i in near]))
-                unused = [i for i in unused if i not in near]
-                continue
-        results.append(LegResult(c, UNMATCHED_CLAIM, key, extra + ["no_statement_execution_found"] +
-                                 list(c.notes), []))
+        c = claims[k]
+        near = [i for i in sorted(free) if executions[i].symbol == c.symbol and executions[i].side == c.side
+                and abs(executions[i].time_utc - c.time_utc) <= tol]
+        if near and abs(sum(executions[i].qty for i in near) - c.qty) <= 1e-6:
+            why = _compare(c, [executions[i] for i in near], **kw)
+            # an unidentified account, asset class or journal account keeps it PROBABLE (listed); any real
+            # disagreement makes it a MISMATCH
+            assign(k, "time_window", near, ["no_id_link:symbol_side_quantity_time_only"] + why,
+                   PROBABLE if set(why) <= UNVERIFIED_ONLY else MISMATCH)
+    results: List[LegResult] = []
+    for k in order:
+        if k not in done:
+            done[k] = LegResult(claims[k], UNMATCHED_CLAIM, keyed[k],
+                                notes[k] + ["no_statement_execution_found"] + list(claims[k].notes), [])
+        results.append(done[k])
+    unused = sorted(free)
     refs = set(known_order_refs)
     leftovers = []
     for i in unused:
@@ -573,8 +632,46 @@ def trade_status(results: Sequence[LegResult]) -> List[Dict[str, Any]]:
             why.append("trade_not_closed")
         elif not has_exit:
             why.append("no_exit_fill_claimed")
-        out.append({"trade_id": tid, "statement_matched": bool(ok), "reasons": why})
+        # statement fees: known only when every leg reports a commission in USD; unknown stays unknown (None)
+        fees_known = all(r.commission is not None and {e.commission_ccy for e in r.executions} == {"USD"}
+                         for r in legs)
+        out.append({"trade_id": tid, "statement_matched": bool(ok), "reasons": why, "fees_known": bool(fees_known),
+                    "statement_fees": float(sum(r.commission for r in legs)) if fees_known else None})
     return out
+
+
+def _check_single_use(results: Sequence[LegResult], leftovers: Sequence[Tuple[Execution, str]]) -> None:
+    """Fail closed if any statement execution was assigned to more than one claim (or also left over)."""
+    rows = [(e.file, e.row) for r in results for e in r.executions] + [(e.file, e.row) for e, _ in leftovers]
+    if len(rows) != len(set(rows)):
+        raise StatementRefused("internal check: a statement execution was assigned twice; nothing is reported")
+
+
+def _link_values(r: LegResult) -> List[str]:
+    if r.key == "exec_id":
+        return sorted({e.exec_id for e in r.executions if e.exec_id})
+    if r.key == "order_ref":
+        return sorted({e.order_ref for e in r.executions if e.order_ref})
+    if r.key == "perm_id_as_IBOrderID":
+        return sorted({e.order_id for e in r.executions if e.order_id})
+    return []
+
+
+def _account_scope(trades: List[Dict[str, Any]], results: Sequence[LegResult]) -> Dict[str, Any]:
+    """Matched trades must all be on ONE paper account, the one the journal recorded; otherwise none counts."""
+    tids = {t["trade_id"] for t in trades if t["statement_matched"]}
+    if not tids:
+        return {"status": "NO_MATCHED_TRADES", "account_masked": None, "account_digest": None}
+    legs = [r for r in results if r.claim.system == "ws2_journal" and r.claim.trade_id in tids]
+    stmt = {e.account for r in legs for e in r.executions}
+    journal = {r.claim.account for r in legs}
+    if len(stmt) == 1 and stmt == journal and None not in stmt and is_paper_account(next(iter(stmt))):
+        a = next(iter(stmt))
+        return {"status": "VERIFIED_SINGLE_PAPER_ACCOUNT", "account_masked": mask_account(a),
+                "account_digest": account_digest(a)}
+    return {"status": "UNSUPPORTED_ACCOUNT_SCOPE", "account_masked": None, "account_digest": None,
+            "detail": "matched trades span %d statement account(s) and %d journal account(s)" % (
+                len(stmt), len(journal))}
 
 
 def _ny_date(t: datetime) -> date:
@@ -639,7 +736,9 @@ def _exec_view(e: Execution) -> Dict[str, Any]:
 
 
 def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_stats: Mapping[str, Any], *,
-                 tz: str, plan: str = "fixed", min_n: int = 30, **tol) -> Dict[str, Any]:
+                 tz: str, plan: str = "fixed", min_n: int = 30, time_tol_s: float = 120.0, price_tol: float = 0.01,
+                 fee_tol: float = 0.01, db_inputs: Optional[Mapping[str, Any]] = None,
+                 generated_at_utc: Optional[str] = None) -> Dict[str, Any]:
     execs = [e for f in files for e in f.executions]
     ids = [e.exec_id for e in execs if e.exec_id]
     if len(ids) != len(set(ids)):
@@ -654,8 +753,39 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
             seen.setdefault(k, e.file)
     known = [r for s in claim_stats.values() if isinstance(s, dict) for r in s.get("known_order_refs", ())]
     results, leftovers = reconcile(execs, claims, known_order_refs=known,
-                                   corrections=[c for f in files for c in f.corrections], **tol)
+                                   corrections=[c for f in files for c in f.corrections], time_tol_s=time_tol_s,
+                                   price_tol=price_tol, fee_tol=fee_tol)
+    _check_single_use(results, leftovers)
     trades = trade_status(results)
+    scope = _account_scope(trades, results)
+    if scope["status"] == "UNSUPPORTED_ACCOUNT_SCOPE":
+        for t in trades:
+            if t["statement_matched"]:
+                t["statement_matched"] = False
+                t["reasons"].append("account_scope_unsupported")
+    matched_ids = [t["trade_id"] for t in trades if t["statement_matched"]]
+    by_trade: Dict[str, List[LegResult]] = {}
+    for r in results:
+        if r.claim.system == "ws2_journal" and r.claim.trade_id in matched_ids:
+            by_trade.setdefault(r.claim.trade_id, []).append(r)
+    tinfo = {t["trade_id"]: t for t in trades}
+    evidence = {
+        "generated_at_utc": generated_at_utc or datetime.now(ZoneInfo("UTC")).replace(microsecond=0).isoformat(),
+        "reconciler": {"schema": SCHEMA, "module_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+        "parameters": {"statement_tz": tz, "plan": plan, "min_n": min_n, "time_tol_s": time_tol_s,
+                       "price_tol": price_tol, "fee_tol": fee_tol},
+        "inputs": {"statements": [{"name": f.name, "sha256": f.sha256} for f in files],
+                   "journal_db": (db_inputs or {}).get("journal_db"),
+                   "legacy_signals_db": (db_inputs or {}).get("legacy_signals_db")},
+        "account_scope": scope,
+        "matched_trades": [{"trade_id": tid, "fees_known": tinfo[tid]["fees_known"],
+                            "statement_fees": tinfo[tid]["statement_fees"],
+                            "legs": [{"leg": r.claim.leg, "key": r.key, "link_values": _link_values(r),
+                                      "statement_rows": ["%s:%d" % (e.file, e.row) for e in r.executions]}
+                                     for r in by_trade[tid]]} for tid in matched_ids],
+        "caveat": "digests bind this report to exact inputs and detect edits; they are not signatures. That the "
+                  "statement came from IBKR is established by the operator who exported it.",
+    }
     recs, fee_counts = fee_records(results, plan=PLANS[plan])
     cal = fee_calibration(recs, min_n=min_n)
     counts: Dict[str, int] = {k: 0 for k in (MATCHED, MISMATCH, PROBABLE, UNMATCHED_CLAIM, UNRECORDED, UNATTRIBUTED)}
@@ -686,7 +816,7 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
     if not all(any(e.exec_id for e in f.executions) for f in files if f.executions):
         alerts.append({"alert": "NO_EXECUTION_IDS_IN_SOME_FILES",
                        "detail": "files without execution ids or order references can only give PROBABLE_MATCH"})
-    return _jsonable({
+    rep = _jsonable({
         "schema": SCHEMA,
         "statement": {"files": [{k: v for k, v in asdict(f).items() if k not in ("executions", "corrections")} for f in files],
                       "statement_tz": tz, "accounts": accounts},
@@ -702,12 +832,16 @@ def build_report(files: Sequence[StatementFile], claims: Sequence[Claim], claim_
                                 "executions": len(r.executions)}} for r in results],
         "statement_only": [dict(_exec_view(e), **{"class": k}) for e, k in leftovers],
         "trades": trades,
-        "matched_trade_ids": [t["trade_id"] for t in trades if t["statement_matched"]],
+        "matched_trade_ids": matched_ids,
+        "evidence": evidence,
         "fees": {"plan": PLANS[plan].name, "assumption": FEE_ASSUMPTION, "counts": fee_counts,
                  "calibration": asdict(cal),
                  "note": "suggestions are never applied; missing commissions are excluded, never zero"},
         "entry_slippage_vs_reference_bps": _q([r["realised_slippage_bps"] for r in recs]),
     })
+    rep = json.loads(json.dumps(rep, allow_nan=False))      # exactly what a reader of the JSON file sees
+    rep["report_sha256"] = report_digest(rep)
+    return rep
 
 
 def render_markdown(rep: Mapping[str, Any]) -> str:
@@ -719,7 +853,14 @@ def render_markdown(rep: Mapping[str, Any]) -> str:
     for a in rep["alerts"]:
         out.append("**ALERT %s** — %s" % (a["alert"], a.get("detail", a)))
     out += ["", "| class | count |", "|---|---|"] + ["| %s | %d |" % (k, v) for k, v in c.items()]
-    out += ["", "Statement-matched closed trades: %d of %d." % (len(rep["matched_trade_ids"]), len(rep["trades"]))]
+    ev = rep["evidence"]
+    out += ["", "Statement-matched closed trades: %d of %d." % (len(rep["matched_trade_ids"]), len(rep["trades"])),
+            "Account scope: %s%s. Fees unknown on %d matched trade(s) (unknown, never zero)." % (
+                ev["account_scope"]["status"], " (%s)" % ev["account_scope"]["account_masked"]
+                if ev["account_scope"]["account_masked"] else "",
+                sum(1 for t in ev["matched_trades"] if not t["fees_known"])),
+            "Evidence: generated %s; report sha256 `%s`; %s" % (ev["generated_at_utc"], rep["report_sha256"],
+                                                               ev["caveat"])]
     fc, cal = rep["fees"]["counts"], rep["fees"]["calibration"]
     out += ["", "## Fees", "",
             "Matched legs %d; with statement commission %d; commission missing %d (excluded, never zero); "
@@ -740,31 +881,90 @@ def render_markdown(rep: Mapping[str, Any]) -> str:
     return "\n".join(out) + "\n"
 
 
+def _run(statements: Sequence[str], tz: str, journal_db: Optional[str], legacy_db: Optional[str], *,
+         plan: str, min_n: int = 30, time_tol_s: float, price_tol: float = 0.01, fee_tol: float = 0.01,
+         generated_at_utc: Optional[str] = None) -> Dict[str, Any]:
+    files = [parse_statement(p, tz=tz) for p in statements]
+    claims, stats, dbs = [], {}, {}
+    if journal_db:
+        dbs["journal_db"] = file_digest(journal_db)
+        cl, stats["ws2_journal"] = ws2_claims(journal_db)
+        claims += cl
+    if legacy_db:
+        dbs["legacy_signals_db"] = file_digest(legacy_db)
+        cl, stats["legacy_intents"] = legacy_claims(legacy_db)
+        claims += cl
+    return build_report(files, claims, stats, tz=tz, plan=plan, min_n=min_n, time_tol_s=time_tol_s,
+                        price_tol=price_tol, fee_tol=fee_tol, db_inputs=dbs, generated_at_utc=generated_at_utc)
+
+
+def verify_evidence(doc: Mapping[str, Any], statements: Sequence[str], journal_db: Optional[str],
+                    legacy_db: Optional[str]) -> List[str]:
+    """Re-run the reconciliation from the given inputs with the report's own parameters and generation time.
+    Returns the problems found; an empty list means the stored report is exactly what these inputs produce."""
+    if doc.get("schema") != SCHEMA:
+        return ["schema_is_not_%s" % SCHEMA]
+    problems = []
+    if doc.get("report_sha256") != report_digest(doc):
+        problems.append("report_altered:report_sha256_does_not_match_content")
+    ev = doc.get("evidence") or {}
+    if (ev.get("reconciler") or {}).get("module_sha256") != hashlib.sha256(Path(__file__).read_bytes()).hexdigest():
+        problems.append("reconciler_code_differs_from_the_one_that_wrote_the_report")
+    prm = ev.get("parameters") or {}
+    try:
+        again = _run(statements, prm["statement_tz"], journal_db, legacy_db, plan=prm["plan"], min_n=prm["min_n"],
+                     time_tol_s=prm["time_tol_s"], price_tol=prm["price_tol"], fee_tol=prm["fee_tol"],
+                     generated_at_utc=ev["generated_at_utc"])
+    except KeyError as exc:
+        return problems + ["evidence_incomplete:%s" % exc]
+    if again["evidence"]["inputs"] != ev.get("inputs"):
+        problems.append("inputs_differ:statement_or_database_digest")
+    if again["report_sha256"] != doc.get("report_sha256"):
+        diff = sorted(k for k in set(again) | set(doc) if k != "report_sha256" and again.get(k) != doc.get(k))
+        problems.append("report_differs_from_reconciliation_of_these_inputs:%s" % ",".join(diff))
+    return problems
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m research.economics.statement",
                                  description="Reconcile IBKR paper statements with journal claims (read-only).")
     ap.add_argument("--statement", action="append", required=True, help="IBKR Flex Trades or Activity CSV")
-    ap.add_argument("--statement-tz", required=True, help="time zone of the statement times, e.g. America/New_York")
+    ap.add_argument("--statement-tz", help="time zone of the statement times, e.g. America/New_York (required "
+                                           "unless --verify-evidence, which uses the report's own)")
     ap.add_argument("--journal-db", help="COPY of the WS2/D2 loop journal")
     ap.add_argument("--legacy-signals-db", help="COPY of the old system's signals.db")
     ap.add_argument("--plan", choices=sorted(PLANS), default="fixed")
     ap.add_argument("--time-tolerance-s", type=float, default=120.0)
+    ap.add_argument("--verify-evidence", metavar="REPORT_JSON",
+                    help="check that REPORT_JSON is exactly what these inputs produce (nothing is written)")
     ap.add_argument("--out-json")
     ap.add_argument("--out-md")
     a = ap.parse_args(argv)
     if not a.journal_db and not a.legacy_signals_db:
         print("at least one claims source (--journal-db or --legacy-signals-db) is required", file=sys.stderr)
         return 2
+    if a.verify_evidence:
+        try:
+            doc = json.loads(Path(a.verify_evidence).read_text())
+            if a.statement_tz and a.statement_tz != ((doc.get("evidence") or {}).get("parameters") or {}).get(
+                    "statement_tz"):
+                raise StatementRefused("--statement-tz differs from the report's")
+            problems = verify_evidence(doc, a.statement, a.journal_db, a.legacy_signals_db)
+        except (StatementRefused, OSError, ValueError, sqlite3.Error) as exc:
+            print("NOT VERIFIED: %s" % exc, file=sys.stderr)
+            return 2
+        if problems:
+            print("NOT VERIFIED: " + "; ".join(problems), file=sys.stderr)
+            return 2
+        print("VERIFIED report_sha256=%s matched_trades=%d account_scope=%s" % (
+            doc["report_sha256"], len(doc["matched_trade_ids"]), doc["evidence"]["account_scope"]["status"]))
+        return 0
+    if not a.statement_tz:
+        print("--statement-tz is required (no default is assumed)", file=sys.stderr)
+        return 2
     try:
-        files = [parse_statement(p, tz=a.statement_tz) for p in a.statement]
-        claims, stats = [], {}
-        if a.journal_db:
-            cl, stats["ws2_journal"] = ws2_claims(a.journal_db)
-            claims += cl
-        if a.legacy_signals_db:
-            cl, stats["legacy_intents"] = legacy_claims(a.legacy_signals_db)
-            claims += cl
-        rep = build_report(files, claims, stats, tz=a.statement_tz, plan=a.plan, time_tol_s=a.time_tolerance_s)
+        rep = _run(a.statement, a.statement_tz, a.journal_db, a.legacy_signals_db, plan=a.plan,
+                   time_tol_s=a.time_tolerance_s)
     except (StatementRefused, OSError, sqlite3.Error) as exc:
         print("refused: %s" % exc, file=sys.stderr)
         return 2
@@ -784,4 +984,5 @@ if __name__ == "__main__":
 __all__ = ["SCHEMA", "MATCHED", "MISMATCH", "PROBABLE", "UNMATCHED_CLAIM", "UNRECORDED", "UNATTRIBUTED",
            "LIVE_ALERT", "StatementRefused", "Execution", "Claim", "StatementFile", "parse_statement",
            "mask_account", "is_paper_account", "ws2_claims", "legacy_claims", "reconcile", "trade_status",
-           "fee_records", "build_report", "render_markdown", "main"]
+           "fee_records", "build_report", "render_markdown", "account_digest", "file_digest", "report_digest",
+           "verify_evidence", "main"]

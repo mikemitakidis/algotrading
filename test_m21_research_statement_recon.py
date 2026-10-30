@@ -53,7 +53,7 @@ class Env:
 
     def order(self, *, symbol="AAA", direction="long", qty=100, entry=(10.0, T0, 1.0), exit=(11.0, T0 + timedelta(
             hours=2), 1.0), source="ibkr_paper", state="CLOSED", ref_price=9.99, perm="9001", order_ref=True,
-              exec_claims=None, account=None):
+              exec_claims=None, account=PAPER):
         self.n += 1
         ref = "R%03d" % self.n
         oref = "M21L-%03d" % self.n if order_ref else None
@@ -535,8 +535,165 @@ class Cli(unittest.TestCase):
         self.assertEqual(quiet(ST.main, ["--statement", p, "--statement-tz", "America/New_York",
                                          "--journal-db", missing]), 2)
         self.assertFalse(os.path.exists(missing))
-        with self.assertRaises(SystemExit):
-            quiet(ST.main, ["--statement", p, "--journal-db", E.journal])          # no time zone
+        self.assertEqual(quiet(ST.main, ["--statement", p, "--journal-db", E.journal]), 2)   # no time zone
+        with self.assertRaises(sqlite3.OperationalError):                # claims are read with mode=ro only
+            ST.ws2_claims(missing)
+        with self.assertRaises(sqlite3.OperationalError):
+            ST.legacy_claims(missing)
+        self.assertFalse(os.path.exists(missing))
+
+
+class MatchingUniqueness(unittest.TestCase):
+    """Final review (30 Oct): each statement execution supports at most one claim; corrected, cancelled and
+    unknown-fee executions never become unqualified confirmed trades."""
+    EXIT_T = T0 + timedelta(hours=2)
+
+    def test_journal_account_unrecorded_is_not_evidence(self):
+        E = Env(self)
+        r1, o1 = E.order(account=None)
+        rep = run(E, [E.flex([ex(oref=o1, eid="E1"), ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, eid="E2")])])
+        self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MISMATCH)
+        self.assertIn("journal_account_unrecorded", leg(rep, r1 + ":entry")["reasons"])
+        self.assertEqual(rep["matched_trade_ids"], [])
+
+    def test_a_time_window_claim_cannot_take_executions_an_identifier_links_to_another_claim(self):
+        E = Env(self)
+        ra, _ = E.order(order_ref=False, perm=None)                       # no identifiers, earlier claim time
+        rb, ob = E.order(entry=(10.0, T0 + timedelta(seconds=30), 1.0),
+                         exec_claims=[("B1", "entry"), ("B2", "take_profit")])
+        rows = [ex(t=T0 + timedelta(seconds=30), oref=ob, eid="B1"),
+                ex(side="SELL", px=11.0, t=self.EXIT_T, oref=ob, eid="B2")]
+        rep = run(E, [E.flex(rows)])
+        self.assertEqual(leg(rep, rb + ":entry")["class"], ST.MATCHED)
+        self.assertEqual(leg(rep, ra + ":entry")["class"], ST.UNMATCHED_CLAIM)
+        self.assertEqual(rep["matched_trade_ids"], [rb])
+        used = [r for t in rep["evidence"]["matched_trades"] for l in t["legs"] for r in l["statement_rows"]]
+        self.assertEqual(len(used), len(set(used)))
+
+    def test_an_extra_identical_fill_next_to_a_matched_claim_stays_unattributed(self):
+        E = Env(self)
+        r1, o1 = E.order(exec_claims=[("E1", "entry"), ("E2", "take_profit")])
+        rows = [ex(oref=o1, eid="E1"), ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, eid="E2"),
+                ex(t=T0 + timedelta(seconds=20), eid="M9")]               # same symbol/side/qty, no claim
+        rep = run(E, [E.flex(rows)])
+        self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MATCHED)
+        self.assertEqual([e["class"] for e in rep["statement_only"]], [ST.UNATTRIBUTED])
+        self.assertEqual(rep["matched_trade_ids"], [r1])
+
+    def test_an_execution_assigned_twice_refuses_the_report(self):
+        E = Env(self)
+        _, o1 = E.order()
+        sf = ST.parse_statement(E.flex([ex(oref=o1, eid="E1")]), tz="America/New_York")
+        claims, _ = ST.ws2_claims(E.journal)
+        e = sf.executions[0]
+        twice = [ST.LegResult(claims[0], ST.MATCHED, "exec_id", [], [e]),
+                 ST.LegResult(claims[1], ST.MATCHED, "order_ref", [], [e])]
+        with self.assertRaisesRegex(ST.StatementRefused, "assigned twice"):
+            ST._check_single_use(twice, [])
+        with self.assertRaisesRegex(ST.StatementRefused, "assigned twice"):
+            ST._check_single_use(twice[:1], [(e, ST.UNATTRIBUTED)])
+
+    def test_a_corrected_trade_code_is_not_an_unqualified_confirmation(self):
+        E = Env(self)
+        r1, o1 = E.order()
+        head = FLEX_HEAD + ["Code"]
+        a, b = ex(oref=o1, eid="E1"), ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, eid="E2")
+        co = dict(ex(oref=o1, eid="E3"), Code="Co")                     # IBKR "corrected trade"
+        rep = run(E, [E.flex([a, b, co], head=head)])
+        self.assertEqual(rep["statement"]["files"][0]["correction_rows"], 1)
+        self.assertIn("correction_present_requires_review", leg(rep, r1 + ":entry")["reasons"])
+        self.assertEqual(rep["matched_trade_ids"], [])
+
+    def test_unknown_commission_keeps_the_trade_fees_unknown(self):
+        E = Env(self)
+        r1, o1 = E.order()
+        rep = run(E, [E.flex([ex(oref=o1, eid="E1", comm=""),
+                              ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, eid="E2")])])
+        self.assertEqual(rep["matched_trade_ids"], [r1])                 # the fills are proven ...
+        t = rep["trades"][0]
+        self.assertEqual((t["fees_known"], t["statement_fees"]), (False, None))   # ... the fees are not
+        self.assertEqual(rep["evidence"]["matched_trades"][0]["fees_known"], False)
+        self.assertEqual(rep["fees"]["counts"]["commission_missing"], 1)
+
+    def test_matched_trades_on_two_paper_accounts_are_an_unsupported_scope(self):
+        E = Env(self)
+        r1, o1 = E.order(account="DUX0000001")
+        r2, o2 = E.order(symbol="BBB", account="DUX0000002")
+        rows = [ex(oref=o1, eid="E1", acct="DUX0000001"),
+                ex(side="SELL", px=11.0, t=self.EXIT_T, oref=o1, eid="E2", acct="DUX0000001"),
+                ex(sym="BBB", oref=o2, eid="E3", acct="DUX0000002"),
+                ex(sym="BBB", side="SELL", px=11.0, t=self.EXIT_T, oref=o2, eid="E4", acct="DUX0000002")]
+        rep = run(E, [E.flex(rows)])
+        self.assertEqual(rep["counts"][ST.MATCHED], 4)
+        self.assertEqual(rep["evidence"]["account_scope"]["status"], "UNSUPPORTED_ACCOUNT_SCOPE")
+        self.assertEqual(rep["matched_trade_ids"], [])
+        self.assertTrue(all("account_scope_unsupported" in t["reasons"] for t in rep["trades"]))
+
+
+class EvidenceManifest(unittest.TestCase):
+    """The report is bound to its exact inputs; --verify-evidence re-derives it (digests are not signatures)."""
+
+    def setUp(self):
+        E = self.E = Env(self)
+        self.r1, o1 = E.order(exec_claims=[("E1", "entry"), ("E2", "take_profit")])
+        self.r2, o2 = E.order(symbol="BBB")
+        self.stmt = E.flex([ex(oref=o1, eid="E1"), ex(side="SELL", px=11.0, t=T0 + timedelta(hours=2), oref=o1, eid="E2"),
+                            ex(sym="BBB", oref=o2, eid="E3"),
+                            ex(sym="BBB", side="SELL", px=12.5, t=T0 + timedelta(hours=2), oref=o2, eid="E4")])
+        self.out = os.path.join(E.dir, "recon.json")
+        self.base = ["--statement", self.stmt, "--journal-db", E.journal]
+        self.assertEqual(quiet(ST.main, self.base + ["--statement-tz", "America/New_York", "--out-json", self.out]), 0)
+        with open(self.out) as fh:
+            self.rep = json.load(fh)
+
+    def verify(self, doc=None, **kw):
+        path = self.out
+        if doc is not None:
+            path = os.path.join(self.E.dir, "edited.json")
+            with open(path, "w") as fh:
+                json.dump(doc, fh)
+        args = kw.get("args", self.base)
+        return quiet(ST.main, args + ["--verify-evidence", path])
+
+    def test_manifest_contents(self):
+        rep, ev = self.rep, self.rep["evidence"]
+        self.assertEqual(rep["schema"], "m21-e5-reconciliation/3")
+        self.assertEqual(rep["report_sha256"], ST.report_digest(rep))
+        self.assertEqual(ev["inputs"]["statements"], [{"name": "flex.csv", "sha256": sha(self.stmt)}])
+        self.assertEqual(ev["inputs"]["journal_db"]["sha256"], sha(self.E.journal))
+        self.assertEqual(ev["account_scope"], {"status": "VERIFIED_SINGLE_PAPER_ACCOUNT", "account_masked": "DU***01",
+                                               "account_digest": ST.account_digest(PAPER)})
+        self.assertEqual(rep["matched_trade_ids"], [self.r1])               # BBB exits at 12.5 vs claimed 11.0
+        legs = {l["leg"]: l for l in ev["matched_trades"][0]["legs"]}
+        self.assertEqual((legs["entry"]["key"], legs["entry"]["link_values"]), ("exec_id", ["E1"]))
+        self.assertEqual(ev["parameters"]["statement_tz"], "America/New_York")
+        self.assertNotIn(PAPER, json.dumps(rep))
+
+    def test_the_untouched_report_verifies(self):
+        self.assertEqual(self.verify(), 0)
+
+    def test_an_altered_report_is_refused(self):
+        doc = json.loads(json.dumps(self.rep))
+        doc["legs"][0]["claimed"]["price"] = 10.5                             # digest not recomputed
+        self.assertEqual(self.verify(doc), 2)
+
+    def test_forged_trade_ids_are_refused_even_with_a_recomputed_digest(self):
+        for forge in (lambda d: d["matched_trade_ids"].append(self.r2),     # a real trade the statement contradicts
+                      lambda d: d["matched_trade_ids"].append("R999")):     # an id that does not exist
+            doc = json.loads(json.dumps(self.rep))
+            forge(doc)
+            doc["report_sha256"] = ST.report_digest(doc)
+            self.assertEqual(self.verify(doc), 2)
+
+    def test_other_inputs_are_refused(self):
+        c = sqlite3.connect(self.E.journal)                                   # the journal moved on
+        with c:
+            c.execute("UPDATE loop_orders SET updated_at_utc=? WHERE client_ref=?", (T0.isoformat() + "x", self.r2))
+        c.close()
+        self.assertEqual(self.verify(), 2)
+        other = self.E.flex([ex(oref="X", eid="E9")], name="other.csv")
+        self.assertEqual(self.verify(args=["--statement", other, "--journal-db", self.E.journal]), 2)
+        self.assertEqual(self.verify(args=self.base + ["--statement-tz", "Europe/London"]), 2)
 
 
 if __name__ == "__main__":
