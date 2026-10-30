@@ -20,8 +20,9 @@ research score -> the REAL M14 gate on a temp signals DB -> WP7 ledger
 with a forged decision id refused at the same point.
 
 R1 (release candidate, E1-E7): IBKR-statement-proven paper trades flow from E5
-(statement reconciliation) into E4 (score versus outcome) while journal-only
-and simulated trades never become evidence; every new runtime path stays OFF.
+(statement reconciliation) into E4 (score versus outcome) while journal-only,
+unidentified-account and simulated trades never become evidence; every new
+runtime path stays OFF and the E6 view has no write route.
 """
 from __future__ import annotations
 
@@ -532,7 +533,8 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
             migrate(c, now_utc=self.T0.isoformat())
         w = CandidateLedgerWriter(lambda: sqlite3.connect(lpath), enabled=True)
         trades = [("R1", "AAA", 72.0, 1.5, "ibkr_paper"), ("R2", "BBB", 65.0, -1.0, "ibkr_paper"),
-                  ("R3", "CCC", 81.0, 2.0, "ibkr_paper"), ("R4", "DDD", 90.0, 3.0, "simulated")]
+                  ("R3", "CCC", 81.0, 2.0, "ibkr_paper"), ("R4", "DDD", 90.0, 3.0, "simulated"),
+                  ("R5", "EEE", 70.0, 1.0, "ibkr_paper")]
         rows = []
         jc = sqlite3.connect(jpath)
         for i, (ref, sym, score, r, src) in enumerate(trades):
@@ -556,15 +558,17 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
                 "outcome": "WIN" if r > 0 else "LOSS", "trade_id": ref, "r_multiple": r, "fees_final": 1,
                 "realized_pnl": 10 * r, "data_source": src})
             w.close(cid, "outcome_resolved", at_utc=t_out.isoformat())
-            if ref in ("R1", "R2"):                      # R3 never reached the statement; R4 is simulated
+            if ref in ("R1", "R2", "R5"):    # R3 never reached the statement; R4 is simulated; R5 has no account id
+                acct = "" if ref == "R5" else "DUX0000001"
                 ny = lambda t: (t - timedelta(hours=5)).strftime("%Y%m%d;%H%M%S")      # EST in November
-                rows.append(("DUX0000001", sym, "BUY", "10", "50", "-1", ny(t_in), oref, "X%sa" % ref))
-                rows.append(("DUX0000001", sym, "SELL", "-10", "%g" % (50.0 + r), "-1", ny(t_out), oref, "X%sb" % ref))
+                rows.append((acct, "STK", sym, "BUY", "10", "50", "-1", "USD", ny(t_in), oref, "X%sa" % ref))
+                rows.append((acct, "STK", sym, "SELL", "-10", "%g" % (50.0 + r), "-1", "USD", ny(t_out), oref,
+                             "X%sb" % ref))
         jc.close()
         stmt = os.path.join(d, "flex.csv")
         with open(stmt, "w") as fh:
-            fh.write("ClientAccountID,Symbol,Buy/Sell,Quantity,TradePrice,IBCommission,DateTime,OrderReference,"
-                     "IBExecID\n")
+            fh.write("ClientAccountID,AssetClass,Symbol,Buy/Sell,Quantity,TradePrice,IBCommission,"
+                     "IBCommissionCurrency,DateTime,OrderReference,IBExecID\n")
             fh.writelines(",".join(r) + "\n" for r in rows)
         return jpath, lpath, stmt
 
@@ -580,6 +584,8 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
             rec = E5.build_report(files, claims, {"ws2_journal": stats}, tz="America/New_York")
             self.assertEqual(rec["matched_trade_ids"], ["R1", "R2"])
             self.assertEqual(rec["counts"]["UNMATCHED_CLAIM"], 2)                 # both legs of R3
+            self.assertEqual(rec["counts"]["MISMATCH"], 2)                        # R5: account unverified
+            self.assertIn("ACCOUNT_UNVERIFIED_EXECUTIONS", [a["alert"] for a in rec["alerts"]])
             self.assertEqual(stats["orders_simulated_excluded"], 1)
             recon = os.path.join(d, "recon.json")
             with open(recon, "w") as fh:
@@ -595,12 +601,12 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
             self.assertEqual(cls[E4.IBKR_MATCHED]["resolved_trades"], 2)
             self.assertEqual(cls[E4.IBKR_MATCHED]["verdict"], E4.INSUFFICIENT)    # 2 < 30: no claim at all
             self.assertEqual((cls[E4.IBKR_PAPER]["resolved_trades"], cls[E4.IBKR_PAPER]["verdict"]),
-                             (1, E4.NOT_CONFIRMED))
+                             (2, E4.NOT_CONFIRMED))                       # R3 and the unverified-account R5
             self.assertEqual((cls[E4.SIMULATED]["resolved_trades"], cls[E4.SIMULATED]["verdict"]),
                              (1, E4.NOT_MARKET))
             # the reconciliation and the report only read their inputs
             c = sqlite3.connect("file:%s?mode=ro" % lpath, uri=True)
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidate_ledger").fetchone()[0], 4)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidate_ledger").fetchone()[0], 5)
             c.close()
 
     def test_new_runtime_paths_are_off_by_default(self):
@@ -611,7 +617,7 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
         from tools.paper_loop import m21_1extra_d2_3_scheduler as SCH
         from dashboard import template_controls_view as TV
         clean = {k: v for k, v in os.environ.items()
-                 if k not in (CA.FLAG, TV.DB_KEY, TV.WRITES_KEY)}
+                 if k not in (CA.FLAG, TV.DB_KEY)}
         with mock.patch.dict(os.environ, clean, clear=True):
             self.assertFalse(CA.enabled_from_env())
             self.assertIsNone(SCH._context_audit())                                # E2 shadow record OFF
@@ -620,6 +626,9 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
             app = Flask("r1")
             with app.app_context():
                 self.assertIsNone(TV._path())                                      # E6: 503 not_configured
-                self.assertFalse(TV._writes_enabled())                             # E6: read-only
+            app.register_blueprint(TV.bp)
+            self.assertEqual(sorted((r.rule, sorted(r.methods - {"HEAD", "OPTIONS"}))      # E6: read-only
+                                    for r in app.url_map.iter_rules() if r.endpoint.startswith("template_controls.")),
+                             [("/api/template-controls", ["GET"]), ("/template-controls", ["GET"])])
         self.assertNotIn("template_controls_view", (REPO / "dashboard" / "app.py").read_text())
         self.assertEqual(RT.LIVE_TEMPLATES, frozenset({"scanner"}))
