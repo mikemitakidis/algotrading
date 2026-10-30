@@ -277,7 +277,7 @@ class ReadOnlyCli(unittest.TestCase):
         before = sha(L.path)
         m = os.path.join(L.dir, "matches.json")
         with open(m, "w") as fh:
-            json.dump({"schema": "m21-e5-reconciliation/1", "matched_trade_ids": ids}, fh)
+            json.dump({"schema": "m21-e5-reconciliation/2", "matched_trade_ids": ids}, fh)
         out_j, out_m = os.path.join(L.dir, "r.json"), os.path.join(L.dir, "r.md")
         rc = quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", m, "--out-json", out_j,
                              "--out-md", out_m])
@@ -298,6 +298,12 @@ class ReadOnlyCli(unittest.TestCase):
         with open(bad, "w") as fh:
             fh.write("{\"schema\": 1}")
         self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", bad]), 2)
+        for doc in ({"schema": "m21-e5-reconciliation/1", "matched_trade_ids": ["T-001"]},   # pre-account-check
+                    {"matched_trade_ids": ["T-001"]},
+                    {"schema": "m21-e5-reconciliation/2", "matched_trade_ids": "T-001"}):
+            with open(bad, "w") as fh:
+                json.dump(doc, fh)
+            self.assertEqual(quiet(SO.main, ["--ledger-db", L.path, "--statement-matches", bad]), 2, doc)
 
     def test_connection_is_read_only(self):
         L = Ledger(self)
