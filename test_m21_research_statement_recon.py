@@ -337,6 +337,12 @@ class AccountIdentityAndEdgeCases(unittest.TestCase):
         self.assertEqual(leg(rep2, r2 + ":entry")["class"], ST.MISMATCH)
         self.assertIn("non_paper_account", leg(rep2, r2 + ":entry")["reasons"])
 
+    def test_time_window_with_a_real_disagreement_is_a_mismatch(self):
+        E = Env(self)
+        r1, _ = self.closed(E, order_ref=False, perm=None, exit=None, state="OPEN")
+        rep = run(E, [E.flex([ex(px=10.5, t=T0 + timedelta(seconds=20))])])
+        self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MISMATCH)
+
     def test_unknown_asset_class_is_not_evidence(self):
         E = Env(self)
         r1, o1 = self.closed(E)
@@ -365,6 +371,7 @@ class AccountIdentityAndEdgeCases(unittest.TestCase):
         self.assertEqual(leg(rep, r1 + ":entry")["class"], ST.MISMATCH)
         self.assertIn("correction_present_requires_review", leg(rep, r1 + ":entry")["reasons"])
         self.assertEqual(rep["matched_trade_ids"], [])
+        self.assertNotIn(PAPER, json.dumps(rep))                  # correction rows are not copied unmasked
 
     def test_ambiguous_order_ref_and_perm_id(self):
         E = Env(self)
