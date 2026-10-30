@@ -33,7 +33,7 @@ account; every identifier that links a leg to the statement appears in the state
 journal order; no identifier or statement row supports two legs; and the ledger and journal agree on each
 matched trade's candidate and symbol. Trades whose statement fees are unknown are reported with unconfirmed
 fees. Digests detect edits and bind the evidence to exact inputs; they are not signatures. The authoritative
-re-derivation is ``python -m research.economics.statement --verify-evidence`` on the same inputs, and that the
+re-derivation is the E5 reconciliation's own ``--verify-evidence`` run on the same inputs (runbook OP1.7), and that the
 statement came from IBKR is established by the operator who exported it (runbook OP1.6/OP1.7).
 
 Verdicts are deliberately weak. Only statement-matched IBKR paper trades can carry an association
@@ -68,7 +68,7 @@ NO_ASSOC, POS_ASSOC, NEG_ASSOC = "NO_ASSOCIATION_DETECTED", "POSITIVE_ASSOCIATIO
 BINS = (0, 40, 50, 60, 70, 80, 90, 101)
 RESOLVED = ("WIN", "LOSS", "TIMEOUT")
 E5_SCHEMA = "m21-e5-reconciliation/3"     # the E5 report version (tools never import the research package)
-ACCOUNT_DIGEST_PREFIX = "m21-ibkr-account:"   # = research.economics.statement.ACCOUNT_DIGEST_PREFIX
+ACCOUNT_DIGEST_PREFIX = "m21-ibkr-account:"   # the same prefix as the E5 reconciliation module
 VERIFIED_SCOPE = "VERIFIED_SINGLE_PAPER_ACCOUNT"
 MAX_EVIDENCE_AGE_DAYS = 7
 FUTURE_SKEW = timedelta(minutes=5)
@@ -179,7 +179,8 @@ def verify_statement_evidence(doc: Mapping[str, Any], *, statements: Sequence[st
             for r in c.execute("SELECT exec_id, leg FROM loop_exec_claims WHERE client_ref=?", (tid,)):
                 claimed[r["exec_id"]] = "entry" if r["leg"] == "entry" else "exit"
             oref = o.get("order_ref")
-            allowed = {"entry": {"order_ref": {oref} - {None}, "perm_id_as_IBOrderID": {o.get("broker_perm_id")} - {None}},
+            allowed = {"entry": {"order_ref": {oref} - {None},
+                                 "perm_id_as_IBOrderID": {o.get("broker_perm_id")} - {None}},
                        "exit": {"order_ref": {oref, (oref or "") + ":FLAT"} - {None, ":FLAT"},
                                 "perm_id_as_IBOrderID": {o.get(k) for k in ("tp_perm_id", "sl_perm_id",
                                                                              "flatten_perm_id")} - {None}}}
