@@ -39,8 +39,8 @@ InactiveEnterTimestamp,ExecMainStartTimestamp,NRestarts,Result 2>/dev/null
   ss -ltn 2>/dev/null | awk 'NR==1 || /:(4001|4002|7496|7497|8080) /'
   ROOT="${OP1_ROOT:-/opt/algo-trader}"
   echo "== GitHub auto-sync daemon (sync.sh: on a new main commit it resets the checkout, pip-installs and"
-  echo "   restarts BOTH services; a merge to main would then deploy within ~60 s). Count of processes only:"
-  n=$(pgrep -fc '[s]ync\.sh' 2>/dev/null); echo "sync_sh_processes=${n:-0}"
+  echo "   restarts BOTH services; a merge to main would then deploy within ~60 s)."
+  echo "(the exact daemon check is in deploy_discovery.txt: sync_sh_running=...)"
   echo "== sync.log: start/deploy/restart events only (redacted)"
   if [ -f "$ROOT/logs/sync.log" ]; then
     grep -E 'Sync daemon started|New commit detected|Updated to|Restarted|restart via|ERROR' "$ROOT/logs/sync.log" \

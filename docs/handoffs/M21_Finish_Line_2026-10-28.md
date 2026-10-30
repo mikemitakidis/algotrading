@@ -1,12 +1,23 @@
 # M21 Finish Line — requirements, remaining work, estimate, merge readiness, decisions
 
-**Date:** 28 Oct 2026, updated 29 Oct (Europe/London) · **Repo:** mikemitakidis/algotrading · **main:** `80b4343db4a22413aa670efd32e24952d53e532e`
+**Date:** 28 Oct 2026, updated 30 Oct (Europe/London) · **Repo:** mikemitakidis/algotrading · **main:** `80b4343db4a22413aa670efd32e24952d53e532e`
 **Scope source:** the 29 June 2026 canonical roadmap (“Algo_Trading_Bot_Canonical_Roadmap.docx”, v2.0) — sections M21.U, M21.1, M21.1extra, M21.2–M21.7, §5 learning loop, §8 safety rules, Appendix A. Task IDs (A01–E09) are from the canonical handoff register; **all 71 stay in the register** (see §4).
 **Status of this file:** the single authoritative M21 checklist (§6). It replaces separate plan documents; the canonical handoff links here.
 
 ---
 
 ## 0. In plain words (one screen)
+
+> **Update, 30 Oct — final safety blockers (§7e).**
+> - **A merge to `main` may itself be a production deployment.** `sync.sh` (started by `deploy.sh`) polls `main` every
+>   60 s and, on a new commit, resets the bot's checkout, installs dependencies and restarts the bot and the
+>   dashboard. Whether it runs on the VPS is **VPS VERIFICATION REQUIRED**. No merge until Gate B answers it.
+> - Corrections: #31 (an execution with an unknown account could count as paper evidence → account identity is now
+>   part of every match), #32 (its write routes bypassed WP14 → read-only), #30 (accepts only the corrected E5
+>   report), #28 (tests), #33 (wording). #27 and #29: no defect.
+> - Two separate approvals: **Gate B** = read-only OP1 including deployment discovery; **Gate A** = pause, the 23
+>   merges, one deliberate deployment, rollback — asked only after Gate B.
+> - Nothing merged; `main` is `80b4343`; every new runtime path is OFF.
 
 > **Update, 29 Oct (evening) — release preparation (§7d).**
 > - The 16 PR heads are re-verified unchanged; they still merge onto `main` `80b4343` conflict-free to tree `f1ff536`.
@@ -334,7 +345,7 @@ What each work package contains:
 
 **Phase 3 — remaining M21 capability**
 - [ ] WP8 — PR #21 `fbfc815` (REVIEW; templates 2–4 shadow-only; RUNTIME_UNVERIFIED)
-- [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). Dashboard UI = **E6, PR #32** (isolated blueprint; the protected `dashboard/app.py` wiring is a prepared patch, NOT applied). RUNTIME_UNVERIFIED.
+- [ ] WP9 — PR #22 `b4e9955` backend with compare-and-swap (REVIEW). Dashboard UI = **E6, PR #32**: a **read-only** view (its first write routes bypassed WP14 and were removed, 30 Oct); changes go only through WP14; a WP14-driven dashboard change flow (A16) is not built; the protected `dashboard/app.py` wiring is a prepared patch, NOT applied. RUNTIME_UNVERIFIED.
 - [ ] WP12 — PR #19 (REVIEW; verified in the corrections doc §8; spread, impact, slippage and borrow are assumptions → DATA_UNVERIFIED until paper fills)
 - [ ] WP11 (B-1) — PR #20 `4924844` (REVIEW; real-data entrances fail closed; G9 root cause fixed). Real run = OP1 → DATA_UNVERIFIED.
 - [ ] WP13 (C-1, C-2) — PR #24 `4b677bc` (REVIEW). **v3 canary preregistered, not run**; expected digest on the proposed `main` tree with E1–E7: `7c49b813…6b26b` (was `01b3f432…f262` before E1/E3/E5 changed its code paths). Report-card wiring = E1 (PR #27). DATA_UNVERIFIED.
@@ -347,7 +358,7 @@ What each work package contains:
 - [ ] E1 — walk-forward → report card — code in **PR #27** (REVIEW)
 - [ ] E2 — WS2 market-context shadow logging — code in **PR #28** (REVIEW; flag OFF) → DATA_UNVERIFIED
 - [ ] E4 — score-vs-outcome report from ledger joins (C-4) — code in **PR #30** (REVIEW); needs genuine paper outcomes
-- [ ] E5 — paper fill/fee statement reconciliation into `fee_calibration` (C-4) — code in **PR #31** (REVIEW); needs the IBKR statement
+- [ ] E5 — paper fill/fee statement reconciliation into `fee_calibration` (C-4) — code in **PR #31** (REVIEW; account identity is part of every match, report schema `/2`, 30 Oct); needs the IBKR statement
 - [ ] v3 canary — one run on merged `main` (acceptance packet §8)
 - [ ] Runbooks OP1–OP5 — prepared, with abort and rollback; **OP1 final (29 Oct)**: scripts verified read-only on a synthetic VPS replica, minimum permissions, IBKR Flex specification, E5 reconciliation; OP2/OP3 one-page gate. Not run.
 
@@ -590,6 +601,149 @@ any output; with and without the `sqlite3` CLI). Not run.
 runs of WP11/WP13/WP16–18 through E3, v3 canary, IBKR paper gateway (OP2), activation (OP3), 10-day soak (OP4),
 statement-matched paper outcomes for E4/E5 (C-4), the governance cycle (OP5), D3/E6 dashboard runtime acceptance.
 
+## 7e. Final safety blockers, 30 Oct — two separate approval gates
+
+**Nothing merged; `main` is `80b4343`; no VPS, IBKR, Vercel, CI or service action was taken.** This round found that a
+merge to `main` may itself be a production deployment (§7e.1), corrected four PRs (§7e.2) and splits the remaining
+approvals into **Gate B** (look, read-only) and **Gate A** (change). Permission to inspect the VPS is never permission
+to change it.
+
+### 7e.1 Two different deployments
+
+| | Vercel (website) | Trading bot + dashboard (VPS) |
+|---|---|---|
+| What is built | this repository, on **Vercel's servers** | `/opt/algo-trader` on the VPS: `main.py` (`algo-trader.service`), `dashboard/app.py` (`algo-trader-dashboard.service`) |
+| Trigger | GitHub integration: **Production** for every push to `main` (one per merge commit), **Preview** for every branch push (GitHub deployment records) | `sync.sh`, if it is running: polls `origin/main` every 60 s; on a new commit `git reset --hard origin/main`, `pip install`, import check, restart of **both** services |
+| Can it reach the bot? | No. It cannot deploy to, restart or configure the VPS | It **is** the bot's deployment |
+| Known | records only; settings not readable with the available access | source of `sync.sh`/`deploy.sh` on `main`; whether it runs: **VPS VERIFICATION REQUIRED** (Gate B) |
+
+From the source (runbook OP1.4b, D7–D8): `deploy.sh` starts `sync.sh` with `nohup` (never as a systemd unit); on the
+legacy path it also installs an `@reboot` cron that re-runs `deploy.sh`, so a reboot restarts the daemon; on the
+systemd path it removes that cron, so after a reboot the daemon runs only if someone started it again. A failed `pip`
+does not stop a deployment; a failed import check skips the restart but leaves the new code on disk and is never
+retried. A restart resumes the scanner loop, which submits to the broker in `BROKER` (IBKR paper in July) whenever
+risk, the M14 gate and the gateway watchdog pass — unless the persistent kill switch (`data/kill_switch.json`) is
+active. No M21 path is enabled by a restart.
+
+### 7e.2 Corrections this round (all on their own PRs; no merge)
+
+| PR | Finding | Correction |
+|---|---|---|
+| #31 E5 `0dd3d25` | A statement row with a **blank or missing account** could match a journal claim as PAPER evidence; a different `DU…` account than the journal's was not checked; cancellations/corrections, an entry split over two broker orders, a repeated id-less row and a perm id shared by two journal orders were not flagged; a missing commission currency was treated as USD | Account identity is a match condition: unknown → `account_unverified` (never CONFIRMED; at most PROBABLE, with the `ACCOUNT_UNVERIFIED_EXECUTIONS` alert), different → `account_differs_from_journal` (MISMATCH); also `asset_class_unverified`, `correction_present_requires_review`, `entry_spans_multiple_broker_orders`, `ambiguous_order_key`; duplicate id-less rows refused; missing commission currency counted as `commission_currency_unknown`, never fee 0. Schema `m21-e5-reconciliation/2`. No matching rule weakened. 13 new tests reproduce each case (they failed before the fix) |
+| #30 E4 `4984037` | The CLI accepted any JSON as an E5 report | Refuses (rc 2) unless schema is `m21-e5-reconciliation/2` and `matched_trade_ids` is a list |
+| #32 E6 `a409b37` | **The blueprint's propose/approve/activate routes changed the active template configuration without WP14** (no shadow evidence, change budget or operator token): reproduced, two activations in minutes | Rewritten **read-only**: `GET /api/template-controls` and `GET /template-controls` only (401 without a session, 503 unless `TEMPLATE_CONTROLS_DB_PATH`), SQLite `mode=ro`, no `TemplateControls` writer. Every former write URL → 404/405 and the store stays byte-identical (test). `TEMPLATE_CONTROLS_WRITES_ENABLED` no longer exists. The `dashboard/app.py` patch was regenerated (blob `63d3420`, sha256 `64f31599…ecb66d`) |
+| #28 E2 `f366f05` | no defect; two invariants were untested | tests: a future close never enters the record even if misclassified; the module imports nothing that can authorise trading or change M14 (`bot.risk*`, `bot.flywheel`, `bot.kill_switch`, `bot.templates`, `bot.promotion`, `bot.database`, `subprocess`) |
+| #33 E7 `6540e41` | wording | E6 described as read-only; the WP14-driven dashboard change flow (A16) recorded as **not built**; merge-day rule: updated to the merged SHAs before #33 merges, never describes a draft as merged |
+| #27 E1, #29 E3 | checked against the §3 invariants; no defect | none |
+
+### 7e.3 Gate B — read-only OP1 (ask first; changes nothing)
+
+**Permits only:** running `docs/runbooks/op1/op1_readonly.sh` as described in OP1.1 (read-only VPS account,
+`systemd-journal` group, writes only to `/tmp/m21_op1`), which now includes `op1_deploy_discovery.sh`; and your own
+two IBKR Flex exports (OP1.6). **Does not permit:** stopping, starting or killing anything (including `sync.sh`),
+editing cron or units, any write `git` operation or fetch, `pip`, kill-switch changes, reading `.env` values, or
+connecting to IBKR.
+
+**Returns:** D1–D8 (is `sync.sh` running, who manages it, which branch, any other deployment path, service state and
+restart policy, deployed `HEAD` and modified files, pip-failure path, what a restart would do); the data inventory and
+historical bars; old paper activity since June; M14 data freshness; the statement inputs for E5.
+
+### 7e.4 Gate A — controlled merge and deployment (ask only after Gate B; every VPS step needs this approval)
+
+**A0. Preconditions:** Gate B results reviewed; reviews of #27–#33 and C5b done; the Vercel choice (A2) made; a
+window outside US market hours with you available; the E6 `app.py` patch is **not** part of this gate.
+
+**A1. Pause (VPS changes; exact steps depend on Gate B):**
+1. If `sync_sh_running=yes`: stop exactly the PID(s) reported (`kill <pid>`; not `pkill -f sync.sh`, which matches
+   any command line containing the text). Re-run the discovery: `sync_sh_running=no`. Do not reboot during the window
+   if an `@reboot` entry re-runs `deploy.sh` (if Gate B could not read root's crontab, check it first:
+   `sudo crontab -l -u root`, read-only).
+2. Pause any other mechanism D4 found (timer, runner, webhook) the same way.
+3. Recommended: activate the kill switch from the dashboard (persists across restarts; blocks new submissions);
+   release it after A4.
+4. Record: deployed `HEAD` (expected `80b4343` if the daemon was running), modified tracked files (expected none; if
+   any, copy them first — a reset discards them), both units' state.
+
+**A2. Vercel:** merged one by one, the batch creates **23 Production deployments**. Choose: accept them; or pause
+production builds for the window (Ignored Build Step) and re-enable after; or disconnect. Your setting; Claude
+changes nothing.
+
+**A3. Merge order (merge commits only; a stacked PR is retargeted by merging `main` into it; check the `main` tree
+after every step and stop on any difference):**
+
+| # | PR @ head | tree | # | PR @ head | tree |
+|---|---|---|---|---|---|
+| 1 | #12 `47e9057` | `a31b018` | 13 | #20 `4924844` | `2fe8a31` |
+| 2 | #1 `0f3f9e6` | `9c57eb8` | 14 | #24 `4b677bc` | `4959afc` |
+| 3 | #14 `68ca7b4` | `1da598c` | 15 | #26 `89bc874` | `1153db9` |
+| 4 | #13 `6a8a690` | `a1aa8dd` | 16 | #25 `f05ed84` | **`f1ff536`** |
+| 5 | #15 `5394882` | `9a21419` | 17 | #27 E1 `c4a5ef1` | `b44a49c` |
+| 6 | #16 `bf92678` (C5b) | `ab74aab` | 18 | #28 E2 `f366f05` | `fc4f456` |
+| 7 | #17 `bf94f71` | `afa9322` | 19 | #29 E3 `4cff094` | `ac37c94` |
+| 8 | #21 `fbfc815` | `6dac788` | 20 | #30 E4 `4984037` | `a690daf` |
+| 9 | #22 `b4e9955` | `f08b79e` | 21 | #31 E5 `0dd3d25` | `bbef2d0` |
+| 10 | #23 `04bf5ca` | `fa238da` | 22 | #32 E6 `a409b37` | `cb138e7` |
+| 11 | #18 `9012711` | `fc763db` | 23 | #33 E7 `6540e41` | **`a26b6ec`** (recomputed on merge day: #33 is first updated to the merged SHAs) |
+| 12 | #19 `d7b8e66` | `c1ff0ca` | | | |
+
+**A4. One deliberate deployment (you run it, after step 23):**
+1. `cd /opt/algo-trader && git fetch origin main` — `git rev-parse origin/main` is the merge SHA shown on GitHub and
+   `git rev-parse 'origin/main^{tree}'` the expected final tree.
+2. `git reset --hard <that SHA>` (only if A1 recorded no modified tracked files).
+3. `venv/bin/pip install -r requirements.txt` — `requirements.txt` is unchanged by the batch; expect no change
+   (`venv/bin/pip freeze | sha256sum` before and after).
+4. Import check: `venv/bin/python3 -c "import yfinance, pandas, numpy, flask, dotenv, requests, bot.bar_completion, bot.scanner"`.
+5. Flags by name only: `grep -o -E '^(CANDIDATE_LEDGER_ENABLED|TEMPLATE_SHADOW_ENABLED|MARKET_CONTEXT_SHADOW_ENABLED|TEMPLATE_CONTROLS_DB_PATH|PAPER_LOOP_ENABLED)=' .env`
+   prints nothing unless one is set; `grep -E '^BROKER=' .env` shows the broker mode (not a secret). The WS2 loop is
+   not scheduled (D8).
+6. Restart the dashboard, then the bot (`systemctl restart algo-trader-dashboard.service`, then
+   `algo-trader.service`; or the legacy commands if Gate B shows no units).
+7. Check: both active; journal `[STARTUP] Broker:` shows the expected broker and the kill-switch state is as left;
+   the dashboard answers its login page on localhost; the first scanner cycle completes and its metadata records the
+   bar as-of (the only default-path change); no candidate-ledger, template-shadow or market-context lines; no new
+   tables (no migration was run).
+8. Release the kill switch if you engaged it.
+9. `sync.sh`: leave it stopped (recommended until deployment is deliberate) or restart it — if restarted, every
+   future merge to `main` deploys again.
+
+**A5. Rollback:** kill switch on; `git reset --hard 80b4343`; same pip command (requirements unchanged); restart both;
+check as in A4.7. No migration to undo. GitHub `main` is not reverted by this: keep `sync.sh` stopped, or revert
+`main` first (a separate PR), or it redeploys.
+
+**A6. Protected-file approvals:** C5b — `bot/scanner.py` (#12 bar as-of metadata, #16 opt-in completed-bar seam),
+`bot/providers/alpaca_provider.py` (#16 `adjustment=raw`), new `bot/providers/alpaca_corporate_actions.py` (#15),
+`_protected_baselines.py`. Unchanged by all 23: `main.py`, `dashboard/app.py`, `bot/risk.py`, `bot/brokers/*`,
+`bot/database.py`, `bot/flywheel.py`, `requirements.txt`, `sync.sh`, `deploy.sh`, `server_scripts/`. The E6 `app.py`
+patch is a separate approval after Gate A.
+
+**A7. Runtime after deployment, default configuration:** the scanner records the bar as-of; signals and decisions are
+unchanged; candidate ledger, template shadow, market-context shadow, the E6 view and the WS2 loop stay OFF; templates
+2–4 shadow-only; the minimum score unchanged.
+
+### 7e.5 Source identity and evidence (30 Oct)
+Python 3.12.3 · NumPy 1.26.4 · pandas 2.2.3 · SciPy 1.17.1 · scikit-learn 1.8.0 · Flask 3.1.0 · pyarrow 24.0.0 ·
+SQLite 3.45.1; C5a isolation; checkout outside `/tmp`.
+- **Proposed `main` tree** after the 23 merges in the A3 order (re-simulated 30 Oct from the heads read on GitHub,
+  conflict-free): **`a26b6ec`**.
+- **Tested tree:** `m21/integration` **`15bb236`** (tree `ad6f6c2e`) = `a26b6ec` + `test_m21_e2e_cross_lane.py` + one
+  allow-list line each in `test_m17_backtesting.py` and `test_m18_ml.py` (integration-only; in no PR). No production
+  file differs. **Full suite on exactly `15bb236`:** 135 modules, 0 failed, 1 without tests (`test_m12`, by design);
+  pre-existing skips m16 1, m17 2, m18 3, m20j 1. On merge day only #33's two documentation files change the final
+  tree; it is recomputed then.
+- **Branch tips** (own tests + related WP suites + guards): E1 `c4a5ef1` 11/11 · E2 `f366f05` 12/12 · E3 `4cff094`
+  11/11 · E4 `4984037` 11/11 · E5 `0dd3d25` 11/11 · E6 `a409b37` 12/12 · E7 `6540e41` 9/9 modules OK.
+- **Own tests:** E1 12 · E2 11 · E3 13 · E4 18 · E5 33 · E6 9.
+- **Mutants on the final heads (30 Oct):** E5 original 27/27 + 2/2 re-anchored to the new code + 13/13 for the
+  account-identity rules; E4 schema check 2/2; E6 read-only view 8/8. Unchanged source: E1 13/13, E2 10/11
+  (1 equivalent), E3 15/15, E4 21/21.
+- **E6 `app.py` patch** applied with the documented procedure on `a409b37` → `d53efcd`: 22/22 modules OK (protected
+  guards incl. the `test_m17` sha256 pin, M20 runtime guards, C5a, C5b, WP14 P6, WP9, D3, E6 real-app wiring,
+  `test_m18_ml`); resulting `dashboard/app.py` blob `63d3420`, sha256 `64f31599…ecb66d`, as documented.
+- **Deployment discovery** verified read-only on the synthetic replica (now a git checkout with a credential-bearing
+  remote, a running stand-in daemon and a decoy): replica including `.git` unchanged, no side files, no planted
+  secret in any output, the daemon found and attributed, the decoy not matched.
+- v3 canary expected digest on `a26b6ec`: `7c49b813835cfba77527379a17da4b2f8a0cf1757e794198c332a59016a5b26b`. Not run.
+
 ## 8. Decision list (only what is genuinely needed)
 
 | Gate | Decision | Recommendation |
@@ -605,6 +759,10 @@ Nothing else needs your approval for M21 engineering. Everything in §5 marked L
 **29 Oct:** the current grouped approvals are in the acceptance packet §20: G-review, C5b, G3a merges, the dashboard shape, G2/OP1 (with your IBKR statement exports), G3b OP2/OP3, G4 and the Vercel decision.
 
 **29 Oct (evening), added by §7d:** (1) how to handle the VPS `sync.sh` auto-deploy before merging (stop it for the merge window and deploy once — recommended — or accept it); (2) the Vercel Production deployments on `main`; (3) the E6 `dashboard/app.py` patch; (4) review of #27–#33. OP1 remains G2.
+
+**30 Oct, added by §7e:** Gate B (read-only OP1 with deployment discovery) first; Gate A (pause the deployment
+mechanism, the 23 merges, one deliberate deployment, rollback; the Vercel choice) only after its results; the E6
+`dashboard/app.py` patch after Gate A. Reviews of #27–#33 and C5b remain.
 
 ## 9. Working process (to stop the drift)
 

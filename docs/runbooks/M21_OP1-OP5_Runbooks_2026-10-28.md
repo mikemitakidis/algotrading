@@ -94,13 +94,64 @@ origin/main` in `/opt/algo-trader`, `pip install -r requirements.txt` and restar
 Before any merge, decide (separate approval): stop the daemon for the merge window and deploy once, deliberately
 (recommended), or accept automatic deployment. Do not merge while this is unknown.
 
-**Stop if:** `op1.log` shows `COPY FAILED`, any path outside `/tmp/m21_op1` being written, a secret-screen count
+**Stop if** `deploy_discovery.txt` shows the deployed `HEAD` is not `80b4343`, or tracked files are modified on the
+server: report before any merge. **Stop if:** `op1.log` shows `COPY FAILED`, any path outside `/tmp/m21_op1` being written, a secret-screen count
 above 0 (review before sharing), any `9_LIVE_SCOPE_ATTEMPT_ESCALATE` row, a non-paper scope holding positions in §9,
 or any SQL error other than `no such table`.
 
 **Share:** `MANIFEST.sha256` and the `.txt`, `.csv` and `readiness/` outputs. Keep the `*_copy.db` files; transfer them
 only by the route you choose (they are production data, no secrets): E5 needs `paper_lifecycles_copy.db` and
 `signals_copy.db`.
+
+### OP1.4b Deployment discovery (part of OP1.4; added 30 Oct)
+
+`op1_readonly.sh` also runs `op1_deploy_discovery.sh` → `deploy_discovery.txt`. It answers, read-only:
+
+| # | Question | Where in the output | How to read it |
+|---|---|---|---|
+| D1 | Is `sync.sh` running? | `sync_sh_running=` | Only a shell **running a script named `sync.sh`** counts; no other argument of any process is printed |
+| D2 | Who manages it? | `cgroup:` and `parent:` of each daemon | `/system.slice/<x>.service` = a systemd unit; `/user.slice/…/session-N.scope` = started from a login shell (`nohup … &`, as `deploy.sh` does); parent PID 1 = orphaned after that shell ended |
+| D3 | Which branch does it follow? | `BRANCH=` from the deployed `sync.sh`; its sha256 vs `main` | `main` means every merge to `main` is picked up within ~60 s |
+| D4 | Other deployment or restart mechanisms? | Q3: unit/timer names, unit files and cron entries mentioning sync/deploy/git, `@reboot`, rc.local/profile hooks, a GitHub Actions self-hosted runner, listening ports, non-sample git hooks | Any hit is a second path to production that must be paused too |
+| D5 | Are the bot and dashboard active? | Q4: `ActiveState`, `UnitFileState`, `Restart=`, `NRestarts`, start time; python processes with their owning unit | `Restart=always/on-failure` means a crash reloads whatever code is on disk |
+| D6 | Does the server's tree track `main`? | Q5: branch, upstream, deployed `HEAD`, the local `origin/main` ref, remote URL (credentials redacted), modified tracked files | Modified tracked files would be **discarded** by the daemon's `git reset --hard` |
+| D7 | What happens if dependency installation fails? | Q6: the deployed `sync.sh` lines | See below |
+| D8 | Could a restart resume trading? | Q7: the bot's last `[STARTUP] Broker:` line, `KILL_SWITCH` state on startup, kill-switch file, IBKR API ports listening, any schedule of the WS2 loop | See below |
+
+**D7, from `sync.sh` on `main` (static reading; confirm against the deployed copy):** after `git reset --hard
+origin/main` the new code is **already on disk** — before any restart. `pip install -r requirements.txt` runs with
+its output appended to `sync.log`; a pip failure does **not** stop the script. Only the import check
+(`yfinance, pandas, numpy, flask, dotenv, requests`) can prevent the restart; then it logs `ERROR … Not
+restarting`, sleeps and, because local `HEAD` now equals `origin/main`, **never retries**. The running processes
+keep old code in memory while the disk holds new code and possibly half-installed packages; any lazy import inside
+the running bot (`main.py` imports several modules inside functions), a crash with `Restart=` or a reboot then
+loads the new code without a deliberate deployment.
+
+**D8, from `main.py` on `main`:** on start the bot runs the scanner loop and, for each signal that passes
+`RiskManager` and the M14 portfolio gate, calls `broker.submit()` on the broker selected by `BROKER` in `.env`
+(IBKR paper per the July configuration; `ibkr_live` refuses to start without its live safety configuration;
+`etoro_real` cannot be selected). So a restart resumes **automatic paper order submission** as before, unless the
+kill switch is active: its state lives in `data/kill_switch.json` and survives restarts (start-up never clears it).
+No M21 code path is enabled by a restart: the WS2 loop, the candidate-ledger writer
+(`CANDIDATE_LEDGER_ENABLED`), template shadow (`TEMPLATE_SHADOW_ENABLED`), market-context shadow
+(`MARKET_CONTEXT_SHADOW_ENABLED`) and the template view (`TEMPLATE_CONTROLS_DB_PATH`) all need explicit
+configuration.
+
+**Limits of a non-root session:** root's crontab, the working directory of root-owned processes and some unit files
+are not readable; the report shows `Permission denied` or a blank, and D2/D4 stay partial. Then the cgroup line
+(world-readable) still tells systemd from login session, and the remaining question goes into Gate A as a check you
+run yourself (`sudo crontab -l -u root`, read-only), not as an assumption.
+
+**Verified offline (30 Oct):** on the synthetic replica (now a git checkout with a credential-bearing remote URL,
+a deployed `sync.sh`, a kill-switch file, a stand-in daemon process and a decoy process whose arguments mention
+`sync.sh` and a fake password): the daemon was found and attributed, the decoy was not matched and its arguments
+never printed, the remote URL credential was redacted, the replica (including `.git`) was unchanged.
+
+**Vercel is a different thing.** The Vercel project builds this GitHub repository on Vercel's servers
+(Production for `main`, Preview for every branch). It does not run on the VPS and cannot deploy to, restart or
+reconfigure the trading bot. The VPS deploys itself only through `sync.sh` (or whatever D4 finds). What the Vercel
+site serves could not be checked from here (the project settings are not readable with the available access and
+its URL is not reachable from this workspace).
 
 ### OP1.5 The nine evidence categories (reported separately, never added together)
 

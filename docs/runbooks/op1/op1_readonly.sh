@@ -96,6 +96,10 @@ log "env metadata -> env_metadata.txt"
 OP1_ROOT="$ROOT" bash "$HERE/op1_runtime_status.sh" "$OUT" > /dev/null 2>&1
 log "runtime status -> runtime_status.txt, journal_*.txt"
 
+# ── 6b. deployment discovery: would a merge to main reach this server, and what would a restart do? ──
+OP1_ROOT="$ROOT" bash "$HERE/op1_deploy_discovery.sh" "$OUT" > /dev/null 2>&1
+log "deployment discovery -> deploy_discovery.txt ($(grep -m1 '^sync_sh_running=' "$OUT/deploy_discovery.txt"))"
+
 # ── 7. secret screen of everything produced, then a manifest ────────────────
 HITS=$(grep -rIEl '[0-9]{8,10}:[A-Za-z0-9_-]{30,}|(PASSWORD|SECRET|TOKEN|API_KEY)[A-Z_]*=[^<]|\b(DU|U)[0-9]{6,}\b' \
        "$OUT" --exclude='*.db' --exclude=op1.log 2>/dev/null | wc -l)
