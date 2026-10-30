@@ -540,16 +540,17 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
         for i, (ref, sym, score, r, src) in enumerate(trades):
             t_in, t_out = self.T0 + timedelta(minutes=i), self.T0 + timedelta(hours=2, minutes=i)
             oref = "M21L-%s" % ref
-            with jc:
-                jc.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, entry_ref_price, "
-                           "state, data_source, planned_at_utc, updated_at_utc, entry_fill_price, entry_filled_at_utc, "
-                           "entry_fees, exit_fill_price, exit_filled_at_utc, exit_fees, order_ref) "
-                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (ref, "scan:x", sym, "long", 10, 50.0, "CLOSED", src, t_in.isoformat(), t_out.isoformat(),
-                            50.0, t_in.isoformat(), 1.0, 50.0 + r, t_out.isoformat(), 1.0, oref))
             at = t_in.isoformat()
             cid = w.open_candidate(symbol=sym, direction="long", strategy_id="scanner:v1", decision_ts_utc=at,
                                    cycle_key="scan:%s" % at, scanner_stage="final_signal", at_utc=at)
+            with jc:          # the production loop records the paper account and the candidate on every order
+                jc.execute("INSERT INTO loop_orders (client_ref, cycle_key, symbol, direction, qty, entry_ref_price, "
+                           "state, data_source, planned_at_utc, updated_at_utc, entry_fill_price, entry_filled_at_utc, "
+                           "entry_fees, exit_fill_price, exit_filled_at_utc, exit_fees, order_ref, account, candidate_id)"
+                           " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (ref, "scan:x", sym, "long", 10, 50.0, "CLOSED", src, t_in.isoformat(), t_out.isoformat(),
+                            50.0, t_in.isoformat(), 1.0, 50.0 + r, t_out.isoformat(), 1.0, oref,
+                            "DUX0000001" if src == "ibkr_paper" else None, cid))
             w.record(cid, "scored", at_utc=at, payload={"research_rank": score, "selectable": True})
             w.record(cid, "risk_evaluated", at_utc=at, payload={"verdict": "pass", "evidence": "M14_LIVE"})
             w.record(cid, "intent_logged", at_utc=at, payload={"data_source": src})
@@ -579,24 +580,38 @@ class R1_ReleaseCandidateChain(unittest.TestCase):
         from tools.candidate_ledger import score_outcome as E4
         with tempfile.TemporaryDirectory() as d:
             jpath, lpath, stmt = self._fixture(d)
-            files = [E5.parse_statement(stmt, tz="America/New_York")]
-            claims, stats = E5.ws2_claims(jpath)
-            rec = E5.build_report(files, claims, {"ws2_journal": stats}, tz="America/New_York")
+            import contextlib
+            import io
+            recon, out = os.path.join(d, "recon.json"), os.path.join(d, "so.json")
+            inputs = ["--statement", stmt, "--journal-db", jpath]
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(E5.main(inputs + ["--statement-tz", "America/New_York", "--out-json", recon]), 0)
+                self.assertEqual(E5.main(inputs + ["--verify-evidence", recon]), 0)      # re-derived from inputs
+            with open(recon) as fh:
+                rec = json.load(fh)
             self.assertEqual(rec["matched_trade_ids"], ["R1", "R2"])
+            self.assertEqual(rec["evidence"]["account_scope"]["status"], "VERIFIED_SINGLE_PAPER_ACCOUNT")
             self.assertEqual(rec["counts"]["UNMATCHED_CLAIM"], 2)                 # both legs of R3
             self.assertEqual(rec["counts"]["MISMATCH"], 2)                        # R5: account unverified
             self.assertIn("ACCOUNT_UNVERIFIED_EXECUTIONS", [a["alert"] for a in rec["alerts"]])
-            self.assertEqual(stats["orders_simulated_excluded"], 1)
-            recon = os.path.join(d, "recon.json")
-            with open(recon, "w") as fh:
-                json.dump(rec, fh)
-            out = os.path.join(d, "so.json")
-            import contextlib
-            import io
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(E4.main(["--ledger-db", lpath, "--statement-matches", recon, "--out-json", out]), 0)
+            self.assertEqual(rec["claims"]["ws2_journal"]["orders_simulated_excluded"], 1)
+            # a forged report (R3 added, digest recomputed) is refused by both ends
+            forged = json.loads(json.dumps(rec))
+            forged["matched_trade_ids"].append("R3")
+            forged["evidence"]["matched_trades"].append(dict(forged["evidence"]["matched_trades"][0], trade_id="R3"))
+            forged["report_sha256"] = E4.canonical_digest(forged)
+            fpath = os.path.join(d, "forged.json")
+            with open(fpath, "w") as fh:
+                json.dump(forged, fh)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(E5.main(inputs + ["--verify-evidence", fpath]), 2)
+                self.assertEqual(E4.main(["--ledger-db", lpath, "--statement-matches", fpath] + inputs), 2)
+                self.assertEqual(E4.main(["--ledger-db", lpath, "--statement-matches", recon]), 2)  # no inputs
+                self.assertEqual(E4.main(["--ledger-db", lpath, "--statement-matches", recon, "--out-json", out]
+                                         + inputs), 0)
             with open(out) as fh:
                 so = json.load(fh)
+            self.assertEqual(so["statement_evidence"]["report_sha256"], rec["report_sha256"])
             cls = so["classes"]
             self.assertEqual(cls[E4.IBKR_MATCHED]["resolved_trades"], 2)
             self.assertEqual(cls[E4.IBKR_MATCHED]["verdict"], E4.INSUFFICIENT)    # 2 < 30: no claim at all
