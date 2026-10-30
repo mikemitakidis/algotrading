@@ -15,7 +15,8 @@ Reads the A02 candidate ledger READ-ONLY (SQLite ``mode=ro``) and reports, per e
 Execution classes are kept apart and never pooled:
 
 * ``IBKR_PAPER_STATEMENT_MATCHED`` — IBKR paper trades whose journal trade id the E5 statement
-                                 reconciliation MATCHED to the operator's IBKR statement (``matched_trade_ids``);
+                                 reconciliation MATCHED to the operator's IBKR statement (``matched_trade_ids`` of an
+                                 ``m21-e5-reconciliation/2`` report: positively verified paper account);
 * ``IBKR_PAPER_JOURNAL``       — IBKR paper trades known only from OUR journal: database rows are not
                                  proof, so no association verdict is ever stated for them;
 * ``SIMULATED``                — the local simulated broker: describes the machinery, never markets;
@@ -50,6 +51,7 @@ NO_ASSOC, POS_ASSOC, NEG_ASSOC = "NO_ASSOCIATION_DETECTED", "POSITIVE_ASSOCIATIO
     "NEGATIVE_ASSOCIATION_IN_SAMPLE"
 BINS = (0, 40, 50, 60, 70, 80, 90, 101)
 RESOLVED = ("WIN", "LOSS", "TIMEOUT")
+E5_SCHEMA = "m21-e5-reconciliation/2"     # the E5 report version (tools never import the research package)
 CAVEAT = ("Descriptive and in-sample: an association between score and paper outcomes is not predictive "
           "performance. Predictive claims need the pre-registered C-4 evaluation on enough out-of-sample trades.")
 
@@ -292,6 +294,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.statement_matches:
         try:
             doc = json.loads(Path(a.statement_matches).read_text())
+            if doc.get("schema") != E5_SCHEMA or not isinstance(doc["matched_trade_ids"], list):
+                # only the E5 report version whose MATCHED requires a positively verified paper account
+                raise ValueError("not an %s report" % E5_SCHEMA)
             matched = [str(t) for t in doc["matched_trade_ids"]]
             note = "%s (%s, %d matched trades)" % (Path(a.statement_matches).name, doc.get("schema"), len(matched))
         except (OSError, ValueError, KeyError, TypeError) as exc:
