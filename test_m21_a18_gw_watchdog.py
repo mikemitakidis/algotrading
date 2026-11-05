@@ -407,6 +407,18 @@ class A5_ThreadLoopAndStaticGuards(unittest.TestCase):
         self.assertIs(threading.current_thread(), threading.main_thread())
         self.assertIsNone(gw.ensure_thread_event_loop())
 
+    def test_main_thread_loop_is_never_created_or_touched(self):
+        # Fresh interpreter, no loop in the main thread, deprecation warnings as
+        # errors: the helper must not ask the policy to create a main-thread loop.
+        code = ("import sys, warnings; sys.path.insert(0, %r)\n"
+                "warnings.simplefilter('error', DeprecationWarning)\n"
+                "import bot.gateway_watchdog as gw\n"
+                "print('result=%%s' %% gw.ensure_thread_event_loop())\n") % REPO
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           timeout=60, cwd=REPO)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("result=None", r.stdout)
+
     def test_thread_gets_one_loop_and_the_second_call_reuses_it(self):
         out = {}
 
