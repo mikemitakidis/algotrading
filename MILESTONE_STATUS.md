@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.1 (roadmap v3.0), 5 Nov 2026
+> ## Current operating state: status 3.0.2 (roadmap v3.0), 5 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-05T12:04Z UTC (2026-11-05 12:04 GMT Europe/London, GMT).
+> - **Written:** 2026-11-05T15:24Z UTC (same in Europe/London, GMT). This replaces the draft status 3.0.1 of 12:04Z; the change is recorded in `ROADMAP.md` R16, entry 6.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -25,23 +25,34 @@ project-wide reconciliation narrative lives in
 > | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
 > | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. BLOCKED_BY_APPROVAL (Gate A-0, then A-2). | [VPS-R] |
 > | Historical data | DATA_UNVERIFIED; Session 2 prepared, not run | [DEC] |
-> | IBKR paper activation | NOT_STARTED; the gateway is **failed**; BLOCKED_BY_APPROVAL (OP2/OP3) | [VPS-R] |
+> | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (D-9) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
 > | 10-day soak (B-3) | NOT_STARTED | — |
 > | 20-day outcomes (C-4) | NOT_STARTED; E4/E5 code [PR]; Flex statements from the operator | — |
 > | Statistics (C-1…C-3, C-5) | NOT_STARTED; synthetic machinery only; v3 canary NOT run | [OFF] |
 > | Full acceptance | **not FULLY_ACCEPTED** | — |
 >
-> **VPS, reported observations** (Gate B Session 1, 2026-11-05T10:00:48Z, run as `nobody`; not re-verified by Claude):
-> - **Git:** checkout `015d2ce`, no modified tracked files.
-> - **`sync.sh`:** not running (conclusive).
-> - **Automation:** no system cron, timer, hook or runner found. Root's crontab is UNKNOWN until P1.
-> - **`algo-trader.service`:** inactive, but **enabled** at boot; last start 2026-06-30.
-> - **`algo-trader-dashboard.service`:** active since 2026-10-29.
-> - **`ibgateway.service`:** failed, enabled.
-> - **IBKR API ports:** none listening.
+> **VPS, reported observations** (operator-run, read-only; not re-verified by Claude):
+> - From Gate B Session 1 (2026-11-05T10:00:48Z, as `nobody`).
+> - From H1/P1/P2 (about 15:12Z; H1 as `nobody`, P1/P2 as root).
+>
+> **Git and deployment:**
+> - Checkout `015d2ce`, clean. Its whole history matches GitHub.
+> - `sync.sh` has not run since 2 Jun 21:03. Since then the checkout has been operated by hand, including branch switches while the bot ran.
+> - Root's crontab has **no algo/deploy/@reboot entries**. No system cron, timer, hook or runner.
+> - **No reboot since 5 Mar 2026.** The systemd units have never been through a boot.
+>
+> **Services and broker:**
+> - **Bot:** inactive since an **explicit stop, 6 Jul 14:22:43 UTC** (SIGTERM, `Result=success`; initiator unknown). Still **enabled** at boot.
+> - **Bot's last start:** 30 Jun 06:37:17, HEAD `04bf872`, broker **`signal_only:ibkr_paper`** (no IBKR submissions possible); kill switch off.
+> - **Dashboard:** active since a restart on 29 Oct 06:46 (no SSH login logged; initiator unknown).
+> - **Gateway:** down since an **explicit stop, 3 Sep 06:46:27** (exit status 1). No IBKR API port.
 > - **Kill switch:** **inactive**.
 >
-> Detail: `docs/reviews/M21_Gate_B_Session1_Report_2026-11-05.md` (docs branch @ `7d19f39`). H1/P1/P2 results and the A-0 proposal are in `docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md` (this PR).
+> **Defects and patterns:**
+> - **`gw-watchdog`** (reproduced offline): fails closed for the scanner's IBKR path; makes gateway monitoring misleading. Present in the proposed tree.
+> - **Restarts:** all observed ones fall between 06:14 and 06:48 UTC (unattended upgrades plus `needrestart`: a hypothesis).
+>
+> Detail: `docs/reviews/M21_Gate_B_Session1_Report_2026-11-05.md` (docs branch @ `7d19f39`). H1/P1/P2 results, the watchdog analysis and the revised A-0 proposal are in `docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md` (this PR, revision 2).
 >
 > **Open PR heads [GH]:**
 > - #1 `0f3f9e6` · #12 `47e9057` · #13 `6a8a690` · #14 `68ca7b4` · #15 `5394882`
@@ -52,16 +63,18 @@ project-wide reconciliation narrative lives in
 >
 > **Blockers:**
 > - operator approvals: Session 2, Gate A-0, Gate A-1, Gate A-2, OP2–OP5;
-> - the failed IB Gateway (OP2);
+> - the stopped IB Gateway (OP2);
+> - the `gw-watchdog` defect (D-9, before OP2);
 > - genuine paper outcomes (C-4);
 > - for M22, C01 (HARD).
 >
-> **Next approved action:** the operator runs H1/P1/P2 (read-only, approved 5 Nov).
+> **Next approved action:** none pending. H1/P1/P2 were completed on 5 Nov.
 >
 > **Next proposed actions, not approved:**
-> - Gate A-0 containment;
-> - Session 2;
-> - Track B C01 implementation, offline.
+> - **Gate A-0** containment (a, b, b2; c is a no-op; ± A-0f);
+> - **Session 2** + S2-P (allocation policy) + S2-W (watchdog count) (± S2-U);
+> - the **D-9** watchdog fix, offline;
+> - Track B **C01**, offline.
 >
 > **M22–M25:**
 > - M22: NOT_STARTED (C01 design only, #13).

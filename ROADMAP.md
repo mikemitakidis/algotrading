@@ -417,7 +417,8 @@ validated trading edge are four different states. Opening eToro (M22) needs a fe
 ## Roadmap v3.0: numbering reconciliation, M21–M25, parallel tracks and the update system
 
 > **Version:** Roadmap **v3.0**. Status: **DRAFT for review**, not approved.
-> - **Written:** 2026-11-05T12:04Z UTC (2026-11-05 12:04 GMT Europe/London, GMT).
+> - **Written:** 2026-11-05T12:04Z UTC (12:04 Europe/London, GMT).
+> - **Amended:** 2026-11-05T15:24Z UTC (same in London), with the H1/P1/P2 evidence. Changelog entry 6.
 > - **Author/source:** Claude (Claude Code session), from the sources in R2. Each source was read in full before this section was edited.
 > - **Verified GitHub base:** `main` = `80b4343db4a22413aa670efd32e24952d53e532e`, checked through the GitHub API at the time above.
 > - **PR:** #34, draft, stacked on E7 (#33). Linked from Issue #3.
@@ -518,9 +519,9 @@ The checklist is the Finish Line §6; it is not copied here. This table is the d
 | Completed portions | — | M21.U CLOSED; M21.1extra D0, D1, supervised D2 CLOSED; D3 code MERGED (runtime acceptance A06 pending); research lanes #4–#11 MERGED 27 Oct (Issue #2) | [GH] |
 | Engineering | Finish Line gate A-1…A-5 | ENGINEERING_COMPLETE (offline) on 23 draft PRs, except **A16** (a dashboard template-change flow through WP14), which is NOT_STARTED. Latest heads of #30 E4 `14daa55` and #31 E5 `d99f127` (30 Oct) await an exact-head review. | independent review → Gate A-1 [PR]/[OFF] |
 | PR merge | all mandatory PRs merged in the A3 order (Finish Line §7e.4) | **not merged**. `main` = `80b4343`. | **BLOCKED_BY_APPROVAL**: Gate A-1 (+ C5b protected-file approval, the Vercel choice) |
-| VPS / deployment | the merged tree deployed deliberately; dashboard restarted; checks pass | VPS checkout = `015d2ce` (26 Oct), **older than `main`** (eight research/docs-only merges). No M21 PR code is deployed. The auto-deploy daemon `sync.sh` is not running. The bot is inactive (last start 30 Jun). The dashboard has been active since 29 Oct. The gateway is failed. | [VPS-R]. Gate A-0 (containment), then A-2 (deployment). BLOCKED_BY_APPROVAL |
+| VPS / deployment | the merged tree deployed deliberately; dashboard restarted; checks pass | VPS checkout = `015d2ce` (26 Oct), **older than `main`** (eight research/docs-only merges). No M21 PR code is deployed. The auto-deploy daemon `sync.sh` is not running. The bot has been inactive since an explicit stop on 6 Jul. Its last start was 30 Jun, as `signal_only:ibkr_paper` on HEAD `04bf872`. The dashboard has been active since 29 Oct. The gateway has been down since an explicit stop on 3 Sep. Root's crontab has no algo entries. No reboot since 5 Mar. | [VPS-R]. Gate A-0 (containment), then A-2 (deployment). BLOCKED_BY_APPROVAL |
 | Historical data | B-1: read-only inventory of the VPS M16/M18 store + real-bar `scanner_replica` parity | **DATA_UNVERIFIED**. Session 2 is prepared, not run. | Session 2 approval [DEC] |
-| IBKR paper activation | B-2 (adapter verified in a real paper session) + OP2 (gateway) + OP3 (scheduled loop on) | NOT_STARTED. The gateway is **failed** [VPS-R]; the ledger migration is not deployed; all new flags are OFF. | OP2, then OP3: BLOCKED_BY_APPROVAL |
+| IBKR paper activation | B-2 (adapter verified in a real paper session) + OP2 (gateway) + OP3 (scheduled loop on) | NOT_STARTED. The gateway is **down** (stopped 3 Sep) [VPS-R]. The `gw-watchdog` defect blocks the scanner's IBKR path and makes gateway monitoring misleading (D-9; it does not affect WS2). The ledger migration is not deployed; all new flags are OFF. | OP2, then OP3: BLOCKED_BY_APPROVAL |
 | 10-day soak | B-3: 10 consecutive trading days unattended, zero duplicates, zero unknown exposure, kill-switch drill, a closure/half-day observed | NOT_STARTED | after OP3 |
 | 20-day outcomes | C-4: ≥ 20 trading days → score-vs-outcome (E4), fills vs simulated, fee reconciliation (E5), sample size | NOT_STARTED. E4/E5 code [PR]. | after OP3 + 20 trading days; IBKR Flex statements from the operator |
 | Statistics | C-1…C-3, C-5: walk-forward on real adjusted bars, plateau checks, AI models vs baselines, integrity, canary ≤ 5 % | NOT_STARTED. Synthetic machinery only. The v3 canary is preregistered and NOT run (expected digest on `5b0f40b`: `4350bb54…2b82`). | Session 2 data + approval of the optimiser source |
@@ -800,16 +801,16 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-05T12:04Z UTC |
+| Item | Value at 2026-11-05T15:24Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.1 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.2 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
-| VPS deployed | `015d2ce` [VPS-R, 5 Nov 10:00 UTC] |
+| VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | H1/P1/P2 (granted 5 Nov, run by the operator); Session 2; Gate A-0; Gate A-1 + C5b + Vercel; Gate A-2; OP2/OP3; roadmap v3.0 and D-1…D-8 |
-| Next task | Track A: interpret H1/P1/P2, then the Gate A-0 decision. Track B: C01 implementation, offline, after approval to start. |
+| Open approvals | Gate A-0 (± A-0f); Session 2 + S2-P/S2-W (± S2-U); Gate A-1 + C5b + Vercel; Gate A-2; OP2/OP3; roadmap v3.0 and D-1…D-10. H1/P1/P2 are done (5 Nov). |
+| Next task | Track A: the Gate A-0 decision, then Session 2. Engineering: the D-9 watchdog fix (offline), then C01 (Track B). Both after approval to start. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
@@ -824,6 +825,8 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | D-6 | Start Track B (C01 implementation, offline, draft PR) now | Start |
 | D-7 | Resolve R15-1 (the M15 heading here says PARTIAL; STATUS says CLOSED) | Change the heading after review: STATUS has the closure evidence |
 | D-8 | Refresh `docs/NEXT_WORK_REGISTER.md` and `docs/PROJECT_STATUS_RECONCILIATION.md` (stale; E08) or mark them historical | Mark historical, linking to STATUS |
+| D-9 | Add a register task for the **`gw-watchdog` event-loop defect** (report §2a): fix offline (a per-thread event loop; `IB()` inside the `try`) with a regression test, before OP2 | Add it to M21 (it bears on B-6 monitoring); fix before OP2 |
+| D-10 | Add hardening tasks: (a) the five dashboard routes that start the bot outside systemd; (b) no working copy or branch switching in `/opt/algo-trader` while the bot runs; (c) unattended restarts (`needrestart`) during the soak | Add (a) to M22 C03; make (b) an operating rule now; check (c) before OP4 |
 
 **Not decided here, and not duplicated:** the M21 operational approvals (Gate B/A, OP1–OP5, G4 data sources, the Vercel choice, C5b, the E6 `app.py` patch). They live in the Finish Line §8 and the Session 1 report §14.
 
@@ -837,6 +840,9 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 6. **The 4 Jun section in this file** still describes M18 "Advanced signal scoring + paper-trade automation (2-4 weeks)", M19 "Optimiser", M20 "News", M21 "Universe diagnostics" and M22 "Outcome learning loop". R3 is the reconciliation; the sketch is kept as history.
 7. **`docs/PROJECT_STATUS_RECONCILIATION.md`** (linked at the top of both files) is a June narrative and predates M19–M21. → D-8.
 8. **The Session 1 report §12 item 3b** says that disabling `algo-trader.service` is respected by `deploy.sh`. That is true of `deploy.sh` itself, but the `sync.sh` it launches runs `systemctl restart` on the bot after any new `main` commit, regardless of the enabled state. The Gate A-0 proposal (`docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md`) corrects this.
+9. **Session 1 described the gateway as "failed".** H1/P2 show that its last transition was an explicit stop on 3 Sep 06:46:27, which ended with exit status 1. systemd's `failed` label comes from that exit status; the gateway did not crash on its own at the end.
+10. **Session 1 §6 listed `/api/start` as the dashboard's way to start the bot.** There are five routes: `/api/start`, `/api/restart`, `/api/telegram/save`, `/api/strategy/save`, `/api/strategy/reset`. Each starts the bot whether or not it was running.
+11. **The bot process of 30 Jun–6 Jul ran while the production checkout was switched between branches** (reflog). Its lazily imported modules may come from different commits, so that run is not a clean operational baseline.
 
 ### R16. Roadmap changelog (append-only)
 
@@ -853,3 +859,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 3 | 2026-06-29 (time not recorded) | **v2.0** (docx, outside the repo) | Canonical roadmap: M21.U–M21.7, M22.1–6, M23.1–5; numbering promise; §5–§9 | one map; stop renumbering | M21–M23 | — | n/a (document sha256 `1b3c4064…169e`) |
 | 4 | 2026-10-29 (time not recorded) | v2.0 + E7 reconciliation | M21 canonical scope and status table; status blocks reconciled | E08: docs must match the code | M21 | PR #33 (draft) | none; not merged |
 | 5 | 2026-11-05T12:04Z (2026-11-05 12:04 GMT) | **v3.0** (DRAFT) | Added R1–R16: authority, sources, numbering table, M21 dimensions, M22/M23 definitions, M24/M25 UNDEFINED, tracks, vocabulary, convention, protocol, handoff, decisions, discrepancies, changelog | operator assignment "M21 operational readiness + canonical GitHub roadmap v3.0" (5 Nov) | M1–M25 | PR #34 (draft), Issue #3 | pending operator approval |
+| 6 | 2026-11-05T15:24Z (same in London) | v3.0 (DRAFT), amended | Added the H1/P1/P2 evidence: R5 deployment and paper rows, R13, decisions D-9/D-10, discrepancies 9–11. Status 3.0.2 | operator's H1/P1/P2 output (5 Nov) | M21, M22 | PR #34, Issue #3 | pending operator approval |
