@@ -407,23 +407,44 @@ A-0 does not change the policy. It lives in a production database, and the dashb
 
 **S2-U (unattended upgrades) is not approved yet.**
 
-**The exact command** (one paste in the VS Code root terminal; everything runs as `nobody`):
-- It downloads the docs tarball at `14b641c` (the same commit as Session 1) into a fresh, private `/tmp/m21_op1_s2` (umask 077) and verifies all eight sha256 values (re-verified against GitHub on 5 Nov).
-- It then runs `op1_readonly.sh` with `OP1_OUT=/tmp/m21_op1_s2`, then S2-P on the verified `signals_copy.db`, then S2-W on `bot.log`.
-- Finally it prints the text outputs with account ids and the host name masked.
-- The block is the one sent to the operator on 5 Nov at about 16:00 UTC, and is recorded here verbatim:
+**The exact command, revision 2** (2026-11-05T16:46Z). It carries three corrections from the independent review:
+1. **Sanitised output.** Only aggregate counts and date ranges are printed. Positions, quantities, exposures, P&L and journal rows are never printed; the detailed reports stay private in `/tmp/m21_op1_s2`.
+2. **Explicit S2-P states.** `NOT_VERIFIED table_absent | row_absent | invalid_json | not_an_object | query_failed` when the policy cannot be read. Authorisation windows are evaluated against the current UTC time, with the deployed rules: `missing`, `malformed`, non-UTC or `expired` deny. Any lane still `AUTHORISED` is flagged.
+3. **Disk-space preflight.** At least 2 × the database size + 1 GiB must be free under `/tmp`, or it stops before anything is downloaded or copied.
+
+The run ends `SESSION 2 COMPLETE` only if every step succeeded and no lane is authorised. Otherwise it ends `FINISHED WITH WARNINGS` (exit 3).
 
 ```bash
-runuser -u nobody -- env HOME=/tmp PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin bash -c '
-echo "===== S2-1 Session 2: copies, reports, evidence (as $(id -un), read-only)"
+runuser -u nobody -- env HOME=/tmp PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin bash -s <<'S2_EOF'
 umask 077
 O=/tmp/m21_op1_s2
-mkdir "$O" || { echo "STOP: $O already exists (an earlier Session 2 run): report it, do not reuse it"; exit 1; }
-cd "$O" || exit 1
 H=$(hostname -s)
 mask() { sed -E -e "s/\b(DU|DF|U)[0-9]{5,}\b/\1***/g" -e "s/$H/<host>/g" "$@"; }
+WARN=""
+
+echo "===== S2-0 preflight: account, fresh directory, disk space (as $(id -un), read-only)"
+[ "$(id -un)" = nobody ] || { echo "STOP: not running as nobody"; exit 1; }
+[ -e "$O" ] && { echo "STOP: $O already exists (an earlier Session 2 run): report it, do not reuse it"; exit 1; }
+D=/opt/algo-trader/data
+total=0
+for f in signals paper_lifecycles historical; do
+  for p in "$D/$f.db" "$D/$f.db-wal"; do
+    if [ -e "$p" ]; then
+      s=$(stat -c %s "$p" 2>/dev/null) || { echo "STOP: cannot read the size of $p as nobody - nothing was copied"; exit 1; }
+      total=$((total + s)); echo "size $(basename "$p") = $((s / 1048576)) MiB"
+    fi
+  done
+done
+avail_kb=$(df -Pk /tmp | awk 'NR==2 {print $4}')
+case "$avail_kb" in ''|*[!0-9]*) echo "STOP: cannot read free space under /tmp - nothing was copied"; exit 1;; esac
+avail=$((avail_kb * 1024)); need=$((2 * total + 1073741824))
+echo "databases=$((total / 1048576)) MiB  free_under_/tmp=$((avail / 1048576)) MiB  required=$((need / 1048576)) MiB (2 x databases + 1 GiB margin)"
+[ "$avail" -ge "$need" ] || { echo "STOP: not enough free space under /tmp - nothing was downloaded or copied"; exit 1; }
+mkdir "$O" && cd "$O" || { echo "STOP: cannot create $O"; exit 1; }
+
+echo "===== S2-1 Session 2: pinned scripts, database copies, private reports"
 DOCS=14b641c635fe3cb80815292b8bba940f5885b7f0
-curl -fsSL -o docs.tgz https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$DOCS || { echo "STOP: DOWNLOAD FAILED"; exit 1; }
+curl -fsSL -o docs.tgz "https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$DOCS" || { echo "STOP: DOWNLOAD FAILED"; exit 1; }
 mkdir docs && tar -xzf docs.tgz -C docs --strip-components=1 || { echo "STOP: UNPACK FAILED"; exit 1; }
 sha256sum -c - <<SUMS || { echo "STOP: CHECKSUM MISMATCH - nothing was run"; exit 1; }
 e2c5c25609f0f3391a282b1db78c335ab6c667d80c09a65048cc352182b4fc29  docs/docs/runbooks/op1/op1_deploy_discovery.sh
@@ -435,47 +456,226 @@ eec185efca64b310b60e2ea981270839fbe8dbfaf3b76dddf12f8aedbd7634ab  docs/docs/runb
 fe4195c5d50d7173e9b70d4e1ef3d2766b52bc765a2f9f908bcd290cf46d2f36  docs/docs/runbooks/sql/old_paper_signals.sql
 030df4bb55d5ae8a4dcfbde04da4c80b7235b52d8fade83925bf34cf2cc48abb  docs/docs/runbooks/sql/op1_m16_inventory.sql
 SUMS
-OP1_OUT="$O" bash docs/docs/runbooks/op1/op1_readonly.sh > /dev/null; rc=$?
+OP1_OUT="$O" bash docs/docs/runbooks/op1/op1_readonly.sh > /dev/null < /dev/null; rc=$?
 echo "op1_exit=$rc"
 if [ "$rc" != 0 ]; then
   echo "STOP: Session 2 stopped itself (exit $rc). Nothing else runs. Send only this op1.log; do not use or share any *_copy.db:"
   mask op1.log; exit 1
 fi
+mask op1.log
 
-echo "===== S2-P broker allocation policy (verified copy only)"
-grep -qE "copied signals\.db -> signals_copy\.db .*quick_check=ok" op1.log || { echo "STOP: no verified signals_copy.db"; mask op1.log; exit 1; }
-python3 -I - <<"PY"
-import sqlite3, json
-c = sqlite3.connect("file:/tmp/m21_op1_s2/signals_copy.db?mode=ro", uri=True)
-r = c.execute("SELECT value FROM portfolio_risk_state WHERE key=?", ("broker_allocation_policy",)).fetchone()
-if r is None:
-    print("broker_allocation_policy: ABSENT (the bot would use the runtime fail-safe)")
-else:
-    p = json.loads(r[0]); F = ("auto_trading_enabled", "auto_trading_enabled_until_utc", "kill_switch")
-    for blk in ("global", "ibkr_paper", "ibkr_live", "ibkr", "etoro"):
-        b = p.get(blk) or {}; print(blk, {k: b.get(k) for k in F if k in b})
-    rt = p.get("routing") or {}; print("routing", {k: rt.get(k) for k in ("allowed_brokers", "etoro_live_enabled", "default_broker")})
+echo "===== S2-P broker allocation policy (verified copy only; rules mirrored from the deployed code at 015d2ce)"
+if grep -qE "copied signals\.db -> signals_copy\.db .*quick_check=ok" op1.log; then
+python3 -I - "$O/signals_copy.db" <<'PY'
+import json, sqlite3, sys
+from datetime import datetime, timedelta, timezone
+NOW = datetime.now(timezone.utc)
+print("evaluated_at_utc=%s, against the policy as stored when this session copied signals.db"
+      % NOW.isoformat(timespec="seconds"))
+def done(status, code):
+    print("S2P_STATUS=%s" % status); sys.exit(code)
+try:
+    c = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+    t = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='portfolio_risk_state'").fetchone()
+    if t is None:
+        print("portfolio_risk_state table ABSENT: the bot would create it and use DEFAULT_POLICY (auto-trading disabled everywhere)")
+        done("NOT_VERIFIED table_absent", 10)
+    r = c.execute("SELECT value FROM portfolio_risk_state WHERE key='broker_allocation_policy'").fetchone()
+except sqlite3.Error as e:
+    done("NOT_VERIFIED query_failed %s" % type(e).__name__, 10)
+if r is None or r[0] is None:
+    print("broker_allocation_policy row ABSENT: the bot would use DEFAULT_POLICY (auto-trading disabled everywhere)")
+    done("NOT_VERIFIED row_absent", 10)
+try:
+    p = json.loads(r[0])
+except (TypeError, ValueError) as e:
+    print("broker_allocation_policy JSON INVALID (%s): the bot would use DEFAULT_POLICY" % type(e).__name__)
+    done("NOT_VERIFIED invalid_json", 10)
+if not isinstance(p, dict):
+    print("broker_allocation_policy is not a JSON object: the bot would use DEFAULT_POLICY")
+    done("NOT_VERIFIED not_an_object", 10)
+
+def window(b):  # same rules as _authorization_expiry_reason
+    raw = b.get("auto_trading_enabled_until_utc")
+    if raw is None: return "missing", None
+    if not isinstance(raw, str): return "malformed", repr(raw)[:40]
+    try: u = datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw)
+    except ValueError: return "malformed", raw[:40]
+    if u.tzinfo is None or u.utcoffset() != timedelta(0): return "malformed", raw[:40]
+    return ("active" if u > NOW else "expired"), raw
+
+for blk in ("global", "ibkr_paper", "ibkr_live", "ibkr", "etoro"):
+    b = p.get(blk)
+    if not isinstance(b, dict):
+        print("%-10s ABSENT or not an object" % blk); continue
+    w = "%s (until %s)" % window(b) if blk in ("global", "ibkr_paper", "ibkr_live") else "no time box"
+    print("%-10s auto_trading_enabled=%r kill_switch=%r window=%s"
+          % (blk, b.get("auto_trading_enabled"), b.get("kill_switch"), w))
+rt = p.get("routing")
+print("routing    allowed_brokers=%r etoro_live_enabled=%r" % (rt.get("allowed_brokers"), rt.get("etoro_live_enabled"))
+      if isinstance(rt, dict) else "routing    ABSENT or not an object")
+
+def decide(name):  # mirror of determine_signal_only_reason (015d2ce)
+    g = p.get("global")
+    if not isinstance(g, dict): return "SIGNAL_ONLY policy_missing_or_invalid"
+    if g.get("kill_switch") is True: return "SIGNAL_ONLY kill_switch_active_global"
+    if g.get("auto_trading_enabled") is not True: return "SIGNAL_ONLY auto_trading_disabled_global"
+    w = window(g)[0]
+    if w != "active": return "SIGNAL_ONLY auto_trading_global_" + ("expired" if w == "expired" else "expiry_" + w)
+    rt = p.get("routing")
+    if not isinstance(rt, dict): return "SIGNAL_ONLY policy_missing_or_invalid"
+    al = rt.get("allowed_brokers")
+    if not isinstance(al, list) or name not in al: return "SIGNAL_ONLY broker_not_in_allowed_brokers"
+    if name == "etoro_real" and rt.get("etoro_live_enabled") is not True: return "SIGNAL_ONLY etoro_live_disabled_policy"
+    blk = name if name in ("ibkr_paper", "ibkr_live") else ("etoro" if name.startswith("etoro") else None)
+    if blk:
+        b = p.get(blk)
+        if not isinstance(b, dict): return "SIGNAL_ONLY policy_missing_or_invalid"
+        if b.get("kill_switch") is True: return "SIGNAL_ONLY kill_switch_active_broker"
+        if b.get("auto_trading_enabled") is not True: return "SIGNAL_ONLY auto_trading_disabled_broker"
+        if blk != "etoro":
+            w = window(b)[0]
+            if w != "active": return "SIGNAL_ONLY auto_trading_lane_" + ("expired" if w == "expired" else "expiry_" + w)
+    return "AUTHORISED: submissions would be attempted"
+
+authorised = []
+for name in ("paper", "ibkr_paper", "ibkr_live", "etoro_paper", "etoro_real"):
+    d = decide(name); print("policy decision for %-11s %s" % (name + ":", d))
+    if d.startswith("AUTHORISED"): authorised.append(name)
+if authorised:
+    print("WARNING: auto-trading is AUTHORISED by the stored policy for: %s" % ", ".join(authorised))
+    done("READ_OK authorised_lanes=%s" % ",".join(authorised), 12)
+done("READ_OK no lane authorised (every broker signal-only by policy)", 0)
 PY
+  prc=$?
+  [ "$prc" = 0 ] || WARN="$WARN S2-P(exit $prc)"
+else
+  echo "S2P_STATUS=NOT_VERIFIED no verified signals_copy.db"; WARN="$WARN S2-P(no copy)"
+fi
+
+echo "===== S2-S sanitised aggregates (counts and date ranges only; no symbols, positions, quantities, exposures or P&L)"
+python3 -I - "$O" <<'PY'
+import os, sqlite3, sys
+O = sys.argv[1]; FAIL = []
+def open_copy(n):
+    p = os.path.join(O, n)
+    return sqlite3.connect("file:%s?mode=ro" % p, uri=True) if os.path.exists(p) else None
+def show(c, need, title, sql, args=()):
+    print("-- " + title)
+    if c is None: print("   copy absent"); return
+    try:
+        have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        miss = [t for t in need if t not in have]
+        if miss: print("   table(s) absent: " + ", ".join(miss)); return
+        cur = c.execute(sql, args); rows = cur.fetchall()
+    except sqlite3.Error as e:
+        FAIL.append(title); print("   QUERY_FAILED %s: %s" % (type(e).__name__, str(e)[:100])); return
+    print("   " + " | ".join(d[0] for d in cur.description))
+    for r in rows[:40]: print("   " + " | ".join("-" if v is None else str(v) for v in r))
+    if len(rows) > 40: print("   ... %d more rows in the private report" % (len(rows) - 40))
+    if not rows: print("   (no rows)")
+J = "2026-06-01"
+h = open_copy("historical_copy.db")
+print("## HISTORICAL DATA (historical_copy.db)")
+show(h, ["historical_symbols"], "symbols by asset class and active flag",
+     "SELECT asset_class, is_active, COUNT(*) AS symbols FROM historical_symbols GROUP BY 1, 2 ORDER BY 1, 2")
+show(h, ["historical_coverage"], "coverage by provider and timeframe",
+     "SELECT provider, timeframe, COUNT(*) AS symbols, SUM(bar_count) AS bars, MIN(first_ts_utc) AS earliest_utc, "
+     "MAX(last_ts_utc) AS latest_utc, SUM(missing_count) AS missing_bars, SUM(duplicate_count) AS duplicate_bars, "
+     "SUM(missing_count > 0) AS symbols_with_gaps, COALESCE(source_timeframe, '-') AS derived_from "
+     "FROM historical_coverage GROUP BY provider, timeframe, source_timeframe ORDER BY 1, 2")
+show(h, ["historical_coverage"], "quality and freshness status counts",
+     "SELECT provider, timeframe, quality_status, freshness_status, COUNT(*) AS symbols, MAX(last_refresh_at_utc) AS last_refresh_utc "
+     "FROM historical_coverage GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4")
+show(h, ["historical_quality_events"], "quality events by severity and kind",
+     "SELECT severity, kind, COUNT(*) AS n, SUM(created_at_utc >= ?) AS since_june, MAX(created_at_utc) AS last_utc "
+     "FROM historical_quality_events GROUP BY 1, 2 ORDER BY 1, 2", (J,))
+show(h, ["historical_refresh_runs"], "refresh runs",
+     "SELECT provider, mode, status, COUNT(*) AS runs, SUM(symbols_failed) AS symbols_failed, "
+     "SUM(symbols_rate_limited) AS rate_limited, MAX(started_at_utc) AS last_utc FROM historical_refresh_runs GROUP BY 1, 2, 3 ORDER BY 1, 2, 3")
+show(h, ["historical_refresh_lock"], "refresh lock held now",
+     "SELECT COUNT(*) AS rows, SUM(owner_host IS NOT NULL) AS held FROM historical_refresh_lock")
+s = open_copy("signals_copy.db")
+print("## OLD PAPER ACTIVITY SINCE %s (signals_copy.db; rows are our code's CLAIMS, not broker proof)" % J)
+show(s, ["signals"], "candidate signals by direction, route and strategy version",
+     "SELECT direction, COALESCE(NULLIF(route, ''), '-') AS route, strategy_version, COUNT(*) AS n, MIN(timestamp) AS first_utc, "
+     "MAX(timestamp) AS last_utc FROM signals WHERE timestamp >= ? GROUP BY 1, 2, 3 ORDER BY 1, 2, 3", (J,))
+show(s, ["candidate_snapshots"], "candidate snapshots by stage",
+     "SELECT stage, COUNT(*) AS n, MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc FROM candidate_snapshots "
+     "WHERE timestamp >= ? GROUP BY 1 ORDER BY 1", (J,))
+show(s, ["execution_intents"], "order intents by broker and status, with identity-evidence counts",
+     "SELECT broker, status, COUNT(*) AS n, SUM(COALESCE(broker_order_id, '') <> '') AS with_broker_order_id, "
+     "SUM(submitted_at IS NOT NULL) AS with_submitted_at, SUM(fill_price IS NOT NULL) AS with_fill_price, "
+     "MIN(timestamp) AS first_utc, MAX(timestamp) AS last_utc FROM execution_intents WHERE timestamp >= ? "
+     "GROUP BY 1, 2 ORDER BY 1, 2", (J,))
+show(s, ["execution_intents"], "intents with a live-scope broker name (must be zero)",
+     "SELECT COUNT(*) AS live_scope_intents FROM execution_intents WHERE timestamp >= ? AND "
+     "(lower(broker) LIKE '%live%' OR lower(broker) IN ('etoro_real', 'etoro_live'))", (J,))
+show(s, ["signal_outcomes"], "signal outcomes (price-path outcomes, not fills)",
+     "SELECT COALESCE(resolution_method, '-') AS method, COALESCE(outcome, '-') AS outcome, (intent_id IS NOT NULL) AS linked_to_intent, "
+     "COUNT(*) AS n FROM signal_outcomes WHERE COALESCE(resolved_at, '') >= ? OR outcome = 'OPEN' GROUP BY 1, 2, 3 ORDER BY 1, 2, 3", (J,))
+show(s, ["broker_positions"], "broker position snapshots per scope (counts only)",
+     "SELECT broker_scope, COUNT(DISTINCT exposure_batch_id) AS batches, MIN(fetched_at_utc) AS first_utc, MAX(fetched_at_utc) AS last_utc "
+     "FROM broker_positions WHERE date >= ? GROUP BY 1 ORDER BY 1", (J,))
+show(s, ["broker_positions"], "latest snapshot per scope: does it record any non-zero position? (no symbols, quantities or exposure)",
+     "SELECT p.broker_scope, p.fetched_at_utc AS latest_utc, COUNT(*) AS rows, SUM(COALESCE(p.qty, 0) <> 0) AS nonzero_positions "
+     "FROM broker_positions p JOIN (SELECT broker_scope, MAX(fetched_at_utc) AS m FROM broker_positions GROUP BY 1) l "
+     "ON l.broker_scope = p.broker_scope AND l.m = p.fetched_at_utc GROUP BY 1, 2 ORDER BY 1")
+show(s, ["risk_decisions"], "M14 risk decisions by scope, action, result and source",
+     "SELECT broker_scope, requested_action, result, source, COUNT(*) AS n, MAX(taken_at) AS last_utc FROM risk_decisions "
+     "WHERE taken_at >= ? GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4", (J,))
+show(s, ["daily_state_per_broker"], "M14 daily state per scope (flags only; no P&L or capital values)",
+     "SELECT d.broker_scope, COUNT(*) AS days_since_june, MAX(d.date) AS latest_date, "
+     "(SELECT open_positions > 0 FROM daily_state_per_broker x WHERE x.broker_scope = d.broker_scope ORDER BY x.date DESC LIMIT 1) AS latest_has_open_positions, "
+     "(SELECT daily_loss_block_active FROM daily_state_per_broker x WHERE x.broker_scope = d.broker_scope ORDER BY x.date DESC LIMIT 1) AS latest_daily_loss_block "
+     "FROM daily_state_per_broker d WHERE d.date >= ? GROUP BY 1 ORDER BY 1", (J,))
+show(s, ["risk_snapshots"], "M14 risk snapshots",
+     "SELECT source, policy_version, COUNT(*) AS snapshots, MIN(taken_at) AS first_utc, MAX(taken_at) AS last_utc FROM risk_snapshots "
+     "WHERE taken_at >= ? GROUP BY 1, 2 ORDER BY 1, 2", (J,))
+l = open_copy("paper_lifecycles_copy.db")
+print("## WS2/D2 LOOP JOURNAL (paper_lifecycles_copy.db)")
+show(l, ["loop_orders"], "loop orders by data source and state (no prices)",
+     "SELECT data_source, state, COUNT(*) AS n, SUM(broker_perm_id IS NOT NULL) AS with_perm_id, SUM(entry_fill_price IS NOT NULL) AS with_entry_fill, "
+     "SUM(exit_fill_price IS NOT NULL) AS with_exit_fill, MIN(planned_at_utc) AS first_utc, MAX(planned_at_utc) AS last_utc "
+     "FROM loop_orders GROUP BY 1, 2 ORDER BY 1, 2")
+show(l, ["paper_trade_outcomes"], "closed-trade outcome records (counts only; no P&L)",
+     "SELECT data_source, record_kind, is_edge_outcome, COUNT(*) AS n, SUM(fees IS NOT NULL) AS with_fees, "
+     "MIN(exit_filled_at_utc) AS first_exit_utc, MAX(exit_filled_at_utc) AS last_exit_utc FROM paper_trade_outcomes GROUP BY 1, 2, 3 ORDER BY 1, 2, 3")
+print("S2S_STATUS=%s" % ("OK" if not FAIL else "QUERY_FAILED in: " + "; ".join(FAIL)))
+sys.exit(0 if not FAIL else 11)
+PY
+src=$?; [ "$src" = 0 ] || WARN="$WARN S2-S(exit $src)"
 
 echo "===== S2-W watchdog evidence and the 30 Jun signal-only reason (bot.log, read-only)"
 L=/opt/algo-trader/logs/bot.log
-echo "tick_errors=$(grep -c "\[GW-WATCHDOG\] tick error" $L) no_loop=$(grep -c "no current event loop in thread .gw-watchdog." $L)"
-echo "first=$(grep -m1 "\[GW-WATCHDOG\] tick error" $L | cut -c1-23) last=$(grep "\[GW-WATCHDOG\] tick error" $L | tail -n1 | cut -c1-23)"
-grep -m1 -A12 "\[GW-WATCHDOG\] tick error" $L | cut -c1-160
-grep -E "\[BROKER\] (wrapping|policy unavailable)" $L | tail -n 2 | cut -c1-200
+if [ -r "$L" ]; then
+  echo "tick_errors=$(grep -c '\[GW-WATCHDOG\] tick error' "$L") no_loop=$(grep -c "no current event loop in thread .gw-watchdog." "$L")"
+  echo "first=$(grep -m1 '\[GW-WATCHDOG\] tick error' "$L" | cut -c1-23) last=$(grep '\[GW-WATCHDOG\] tick error' "$L" | tail -n1 | cut -c1-23)"
+  grep -m1 -A12 '\[GW-WATCHDOG\] tick error' "$L" | cut -c1-160 | mask
+  grep -E '\[BROKER\] (wrapping|policy unavailable)' "$L" | tail -n 2 | cut -c1-200 | mask
+else
+  echo "S2W_STATUS=NOT_AVAILABLE bot.log not readable as nobody"; WARN="$WARN S2-W"
+fi
 
-echo "===== S2-R results to share (text only; account ids and host name masked; each file cut at 250 lines)"
-for f in op1.log m16_inventory.txt old_paper_signals.txt old_paper_journal.txt parquet_basis_summary.txt env_metadata.txt runtime_status.txt deploy_discovery.txt; do
+echo "===== S2-R non-sensitive status files (masked; first 150 lines each)"
+for f in parquet_basis_summary.txt env_metadata.txt runtime_status.txt deploy_discovery.txt; do
   [ -f "$f" ] || { echo "===== $f: absent"; continue; }
-  echo "===== $f ($(wc -l < "$f") lines)"
-  mask "$f" | head -n 250
+  echo "===== $f ($(wc -l < "$f") lines)"; mask "$f" | head -n 150
 done
-ls -l "$O"/*_copy.db | awk "{print \$1, \$3, \$5, \$9}"
-echo "===== SESSION 2 COMPLETE"
-'
+echo "===== private (NOT printed, not to be shared or uploaded): detailed reports and database copies in $O"
+ls -l "$O" | awk 'NR > 1 && $NF !~ /^docs/ {print "   " $1, $5, $NF}'
+if [ -z "$WARN" ]; then
+  echo "===== SESSION 2 COMPLETE: every step finished; policy read and parsed; no lane authorised"
+else
+  echo "===== SESSION 2 FINISHED WITH WARNINGS:$WARN (S2-P exit 10 = policy NOT verified, 12 = a lane is AUTHORISED; S2-S exit 11 = a summary query failed). Review the lines above."
+  exit 3
+fi
+S2_EOF
+echo "session2_exit=$?"
 ```
 
 **It stops by itself, and nothing further runs, when:**
+- the account is not `nobody`, or the free space under `/tmp` is below the requirement (checked before any download or copy);
 - the download or unpack fails, or any checksum is wrong (nothing is run);
 - `/tmp/m21_op1_s2` already exists (each run needs a fresh directory);
 - `op1_readonly.sh` exits with 2 (refused), 3 (a DB copy failed) or 4 (`quick_check` not ok). Then only the masked `op1.log` is printed, and no `*_copy.db` may be used or shared;
