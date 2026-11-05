@@ -421,6 +421,30 @@ class A5_ThreadLoopAndStaticGuards(unittest.TestCase):
         self.assertIsNone(out["second"])
         self.assertIs(out["current"], out["first"])
 
+    def test_watchdog_thread_loop_is_closed_when_the_watchdog_stops(self):
+        made = []
+        real = gw.ensure_thread_event_loop
+
+        def spy():
+            loop = real()
+            if loop is not None:
+                made.append(loop)
+            return loop
+        fw = _FakeFlywheel()
+        wd = gw.GatewayWatchdog(_cfg(_closed_port()), fw)
+        with mock.patch.object(gw, "ensure_thread_event_loop", side_effect=spy), \
+             mock.patch.object(gw, "preimport_ib_insync", return_value=True), \
+             mock.patch.object(gw, "systemd_probe", return_value=False):
+            wd.start()
+            deadline = time.time() + 10
+            while time.time() < deadline and not fw.states:
+                time.sleep(0.05)
+            wd.stop(timeout=10)
+        self.assertEqual(len(made), 1)
+        self.assertTrue(made[0].is_closed())
+        self.assertFalse(wd._thread.is_alive())
+        self.assertEqual(fw.states[0]["state"], gw.STATE_UNKNOWN)   # 1 failure < failures_to_down
+
     def _tree(self):
         with open(os.path.join(REPO, "bot", "gateway_watchdog.py")) as f:
             return ast.parse(f.read())
