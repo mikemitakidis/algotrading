@@ -84,6 +84,10 @@ that mention sync/deploy/git, the redacted remote URL, redacted start-up journal
 
 ## 4. Session 2 — data and the old paper system (only after we review Session 1)
 
+> **5 Nov:** Session 1 ran as `nobody` via `runuser` from the root SSH login (no non-root SSH account exists). The
+> same commands, wrapped the same way, are in `docs/reviews/M21_Gate_B_Session1_Report_2026-11-05.md` §13 — use that
+> form.
+
 ```bash
 CODE=6c82b1a6117213efbf8e2bc2f8c52335ea18f83d    # m21/integration, the tested tree (used only by the readiness step)
 cd /tmp/m21_op1
