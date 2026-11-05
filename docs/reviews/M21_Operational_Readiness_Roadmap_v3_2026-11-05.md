@@ -6,9 +6,10 @@
 - **Written:** 2026-11-05T12:04Z UTC (12:04 GMT Europe/London).
 - **Revision 2:** 2026-11-05T15:24Z UTC (same in Europe/London, GMT). Adds the H1/P1/P2 evidence, the `gw-watchdog` analysis and the corrections to Gate A-0.
 - **Revision 3:** 2026-11-05T16:13Z UTC (same in London). Records the operator decisions of 15:48 UTC (§0), the A18 fix (PR #35), the corrected Gate A-0 procedure (§4) and the approved Session 2 command (§5). Roadmap decision ids are renamed `RD-n` (§0).
+- **Revision 4:** 2026-11-05T17:37Z UTC (same in London). Records the Session 2 results (§5, CLOSED). Gate A-0 gets an IBKR position/working-order attestation precondition, the `.env`-backup permission fix (A-0s, register task E07) and a completed containment claim (§4).
 - **GitHub `main`:** `80b4343db4a22413aa670efd32e24952d53e532e` [GH].
 - **VPS deployed:** `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R].
-- **Roadmap:** v3.0 (DRAFT); status 3.0.3.
+- **Roadmap:** v3.0 (DRAFT); status 3.0.4.
 - **PR:** #34 (draft; this report is part of it). Checkpoint in Issue #3.
 
 **Nothing in this report was executed on the VPS by Claude. Nothing was merged, deployed, started, stopped or changed.**
@@ -163,7 +164,27 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | **4. The IB Gateway comes back** | It was stopped explicitly on 3 Sep. Only a manual start or a reboot restarts it. The gateway alone sends no orders; no bot or WS2 loop is running or scheduled. | CONFIRMED | the same. If a bot is started, the kill switch blocks IBKR. |
 | **5. `main` receives new merges** | **No VPS change**: no `sync.sh`, no cron entry, no timer, runner or hook. Vercel makes a Production deployment per merge. Latent: a manual `deploy.sh` or `sync.sh` start deploys `main`. An unattended `needrestart` restart (F-11) reloads whatever is **on disk**; it does not fetch. | CONFIRMED (needrestart: INFERRED) | merges cannot reach the VPS automatically. **`sync.sh` stays stopped** (A-0d). |
 
-## 4. Gate A-0: corrected containment procedure (revision 3, NOT approved, NOT executed)
+## 4. Gate A-0: containment procedure (revision 4, NOT approved, NOT executed)
+
+**Readiness at 2026-11-05T17:37Z UTC: ready for the operator's approval once two things are done.**
+1. **IBKR position and working-order confirmation** (paper **and** live), made by the operator in the IBKR Client Portal or the TWS/IBKR mobile app (step 1 below).
+2. The independent review of this revision.
+
+No other blocker remains. Session 2 is closed; S2-P is verified; the seven revision-3 corrections are in place.
+
+**What Session 2 changed for A-0:**
+- **S2-P:** the stored policy makes **all five broker lanes signal-only** (paper, ibkr_paper, ibkr_live, etoro_paper, etoro_real). That is a second, independent barrier for every broker, including eToro, which the file kill switch does not cover.
+- **A-0 is therefore defence in depth, not an emergency stop.** Its purpose is to keep everything closed through Gate A-1/A-2, when code changes on disk and policy settings may be touched. It holds even if the policy is changed by mistake.
+
+**Position confirmation (required; Session 2 cannot provide it):**
+- **Why Session 2 can't answer this:** `broker_positions` and the M14 daily state hold only what our own code last ingested. The gateway has been down since 3 Sep, so these rows say nothing about today. **Missing or zero rows are not proof of zero exposure.**
+- **Why it matters:** once A-0a is on, the bot cannot flatten anything automatically. Resting GTC/bracket (OCA) orders at IBKR can still fill whatever the kill switch says.
+- **What the operator checks**, for **both** the IBKR paper account and the IBKR live account (M12 proved a live account exists):
+  - open positions (count);
+  - working orders, including GTC, stop and OCA legs (count).
+- **Where to check:** the IBKR Client Portal or the TWS/IBKR mobile app, at a stated UTC time. A Flex statement is end-of-day, does not list working orders, and is **not** sufficient for this.
+- **How to record it:** in `A0_POSITIONS`, as counts only, with no account numbers. The block refuses to run without it and stores the text in the snapshot.
+- **If anything is open:** decide **before** A-0, either to close or cancel it manually at IBKR, or to keep it. The kill switch blocks only the bot's own automated flatten and submissions, never a manual action at IBKR.
 
 **Status:**
 - Revision 2 was reviewed independently on 5 Nov. On **2026-11-05 15:48 UTC** the operator found the approach reasonable but **did not approve execution**.
@@ -179,7 +200,7 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | 4 | Keep systemd-controlled starts distinct from dashboard/direct Python starts | §4.4 and the final verification lines. The guard covers systemd starts only; the kill switch covers IBKR orders on every path. |
 | 5 | Keep the dashboard running; do not use its five start routes or the kill-switch release | §4.4: an operator rule from now until OP3. **A-0f is withdrawn**: the operator decided to keep the dashboard running. |
 | 6 | State that an active kill switch also blocks IBKR automated flattening | §4.4 |
-| 7 | Check the current broker allocation policy before claiming all broker execution is contained | §4.4. The claim is **conditional on S2-P** (Session 2). It is filled in once the Session 2 output arrives. |
+| 7 | Check the current broker allocation policy before claiming all broker execution is contained | §4.4. **Completed in revision 4** with the verified S2-P result. |
 
 **Approval and scope:**
 - A-0 changes three things, all reversible: the kill-switch file (A-0a), the bot unit's boot link (A-0b) and a drop-in start guard (A-0b2).
@@ -192,9 +213,18 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 - `systemctl mask` cannot be used: the unit file lives in `/etc/systemd/system`.
 - So A-0b2 adds `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START`, and every systemd start is *skipped* while that file is absent. An `Assert…=` would fail the start job instead; a `Condition…=` skips it silently ([systemd-devel](https://lists.freedesktop.org/archives/systemd-devel/2022-March/047575.html)).
 
-### 4.1 Commands (one block; runs in a child shell, so a STOP or a failure ends only the block, not the terminal)
+### 4.1 Commands
+
+**Step 1 (operator, after the IBKR check):** type this with your own counts and time. It records no account numbers:
 
 ```bash
+export A0_POSITIONS='paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=2026-11-06T09:00Z'
+```
+
+**Step 2:** paste the block. It runs in a child shell, so a STOP or a failure ends only the block, not the terminal.
+
+```bash
+# Requires A0_POSITIONS to be exported first (step 1); the block refuses to run without it.
 bash -euo pipefail <<'GATEA0'
 cd /opt/algo-trader
 TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -215,6 +245,7 @@ report() {
   echo "unit_file_state=$(systemctl is-enabled $UNIT 2>&1 || true) active=$(systemctl is-active $UNIT 2>&1 || true)"
   echo "drop_in=$([ -e $DROPIN ] && echo present || echo absent) allow_file=$([ -e $ALLOW ] && echo PRESENT || echo absent)"
   ps -eo pid,args | grep -E "$RUN_RE" || echo "processes: no main.py or sync.sh"
+  stat -c 'env_file_mode=%a %n' /opt/algo-trader/.env* 2>/dev/null | sed 's#/opt/algo-trader/##' || true
   if [ "$rc" != 0 ] && [ "$STAGE" = preconditions ]; then
     echo "A-0 STOPPED BEFORE ANY CHANGE. Send this output."
   elif [ "$rc" != 0 ]; then
@@ -226,6 +257,7 @@ trap report EXIT
 
 # 0. PRECONDITIONS (read-only). Any STOP happens before anything is changed.
 stop() { echo "STOP (nothing changed): $*"; exit 2; }
+case "${A0_POSITIONS:-}" in ""|*REPLACE*) stop "A0_POSITIONS not set: confirm IBKR paper AND live positions and working orders first";; esac
 if ps -eo pid,args | grep -E "$RUN_RE"; then stop "main.py or sync.sh is running"; fi
 [ "$(systemctl is-active $UNIT || true)" = inactive ]                  || stop "bot unit is not inactive"
 [ "$(systemctl show -p FragmentPath --value $UNIT)" = "$UNIT_FILE" ]   || stop "unexpected unit file location"
@@ -244,13 +276,30 @@ install -d -m 0700 "$SNAP"
 git rev-parse HEAD > "$SNAP/head.txt"
 cp -p "$KS" "$SNAP/kill_switch.json.before"
 if [ -f data/bot_state.json ]; then cp -p data/bot_state.json "$SNAP/bot_state.json.before"; else echo absent > "$SNAP/bot_state.absent"; fi
-sha256sum .env > "$SNAP/env.sha256"
+stat -c '%s %Y %n' .env > "$SNAP/env.stat"      # size + mtime only; .env is never read
+printf '%s\n' "$A0_POSITIONS" > "$SNAP/positions_attestation.txt"
 systemctl show $UNIT algo-trader-dashboard.service ibgateway.service \
   -p Id,UnitFileState,ActiveState,SubState,FragmentPath,DropInPaths > "$SNAP/units.before"
 ls -l /etc/systemd/system/multi-user.target.wants/ > "$SNAP/wants.before"
 crontab -l -u root > "$SNAP/root_crontab.before" 2> "$SNAP/root_crontab.err" || true
 chmod 600 "$SNAP"/*
 echo "preserved: $SNAP"
+
+# A-0s. .env BACKUP PERMISSIONS: owner-only. chmod/stat only; no .env file is read, shown or copied.
+STAGE=A-0s
+for f in /opt/algo-trader/.env*; do
+  [ -e "$f" ] || continue
+  rel=${f#/opt/algo-trader/}
+  if git ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then echo "A-0s: $rel is a tracked template; left as is"; continue; fi
+  if [ -L "$f" ] || [ ! -f "$f" ]; then echo "A-0s: $rel is not a regular file; left as is (report it)"; continue; fi
+  before=$(stat -c '%a %s %Y' "$f")
+  [ $((8#${before%% *} & 077)) -eq 0 ] || chmod go-rwx "$f"
+  after=$(stat -c '%a %s %Y' "$f")
+  [ "${before#* }" = "${after#* }" ] || { echo "A-0s: size or mtime of $rel changed"; exit 3; }
+  [ $((8#${after%% *} & 077)) -eq 0 ] || { echo "A-0s: $rel is still group/world accessible"; exit 3; }
+  echo "A-0s: $rel mode ${before%% *} -> ${after%% *} (owner $(stat -c %U "$f"))" | tee -a "$SNAP/env_modes.txt"
+done
+chmod 600 "$SNAP"/*
 
 STAGE=A-0a
 # A-0a. KILL SWITCH ON (the repository's own function; writes data/kill_switch.json only). Verified by re-reading.
@@ -297,23 +346,25 @@ fi
 # 2. FINAL VERIFY (read-only)
 STAGE=final-verify
 [ "$(git rev-parse HEAD)" = "$(cat "$SNAP/head.txt")" ] && echo "HEAD unchanged" || { echo "HEAD CHANGED"; exit 3; }
-sha256sum -c "$SNAP/env.sha256"
+[ "$(stat -c '%s %Y %n' .env)" = "$(cat "$SNAP/env.stat")" ] && echo ".env: size and mtime unchanged" || { echo ".env CHANGED"; exit 3; }
 echo "crontab deploy.sh lines: $(crontab -l -u root 2>/dev/null | grep -c 'deploy\.sh' || true)"
 echo "systemd-controlled starts (boot, deploy.sh, sync.sh restart, needrestart, systemctl start): SKIPPED by the guard; boot link removed"
 echo "dashboard routes and direct 'python3 main.py': NOT stopped by A-0b/A-0b2; IBKR orders and flatten refused by the kill switch"
 echo "GATE A-0 DONE, snapshot $SNAP"
 GATEA0
 echo "gate_a0_exit=$?"
+unset A0_POSITIONS
 ```
 
 **Expected on success:**
 - `preconditions: OK`;
+- `A-0s: …` one line per `.env*` file: the backup `644 -> 600`, `.env` unchanged, `.env.example` (tracked template) left as is;
 - `A-0a: kill_switch_active=True`;
 - `A-0b: disabled; boot link removed`;
 - `A-0b2: guard loaded; ConditionPathExists evaluates FALSE …`;
 - `A-0c: … nothing changed`;
 - `HEAD unchanged`;
-- `.env: OK`;
+- `.env: size and mtime unchanged`;
 - the two scope lines;
 - `GATE A-0 DONE`;
 - the `STATE AT EXIT (exit=0)` summary;
@@ -344,6 +395,9 @@ echo "gate_a0_exit=$?"
 | T15: the condition would evaluate true | `A-0b2: condition would PASS`; kill switch ON; nothing undone | pass |
 | T16: a `dashboard/app.py` process is running | not treated as the bot; `exit=0` | pass |
 | T17: the crontab has an `@reboot deploy.sh` line | only that line removed; the other kept | pass |
+| T0a/T0b (rev 4): `A0_POSITIONS` unset, or still `REPLACE` | STOP before any change; the backup stays 644 | pass |
+| T1b (rev 4): normal run with the attestation | the backup `644 -> 600`; `.env` unchanged; the tracked `.env.example` and a symlink left as is; size and mtime unchanged; the attestation stored in the snapshot; then A-0a/b/b2 as T1. The block reads no `.env` content (0 references). | pass |
+| T19 (rev 4): `chmod` of the backup fails | stage `A-0s`; the kill switch **not** yet engaged; nothing undone | pass |
 
 **Incidental finding (no change proposed now):** `systemd-analyze verify` reports that the deployed `infra/systemd/algo-trader.service` puts `StartLimitIntervalSec` in `[Service]`, where systemd 255 **ignores** it ("Unknown key name … ignoring"). Its restart rate limit therefore uses the default interval. This is recorded as a hardening item under RD-10 (M22 C03).
 
@@ -351,6 +405,7 @@ echo "gate_a0_exit=$?"
 
 | Step | Undo | Restore only when |
 |---|---|---|
+| A-0s | not recommended: re-opening a secrets backup to other users is never needed. The previous modes are in `$SNAP/env_modes.txt`. | — |
 | A-0c | `crontab -u root "$SNAP/root_crontab.before"` (the exact previous crontab) | not expected: P1 found no line, so nothing was removed |
 | A-0b2 | `rm /etc/systemd/system/algo-trader.service.d/gate-a0.conf && rmdir --ignore-fail-on-non-empty /etc/systemd/system/algo-trader.service.d && systemctl daemon-reload`. For one supervised start instead: `touch /var/lib/algo-trader/ALLOW_BOT_START`, then remove it after. | at OP3 activation (approved), or for a supervised start the operator approves |
 | A-0b | `systemctl enable algo-trader.service` (re-creates the boot link; starts nothing) | at OP3, when the bot is meant to run unattended |
@@ -387,12 +442,15 @@ A-0 does not change the policy. It lives in a production database, and the dashb
 
 **The kill switch also blocks IBKR automated flattening:** `IBKRBroker.flatten()` checks it before any broker action (CONFIRMED in code at `015d2ce`). While A-0a is on, any open IBKR paper position can only be closed manually in TWS/Gateway or the IBKR web portal. Session 2 (the latest recorded `broker_positions`) and the Flex statements show whether any position is open. Review them before approving A-0.
 
-**Containment claim:** *pending S2-P.*
-- IBKR orders on every path are blocked by A-0a. That holds whatever the policy says.
-- eToro paper and eToro live are not covered by the file kill switch. They are contained only if the allocation policy (S2-P) shows them disabled or killed. eToro live is reachable only through the operator's own CLI.
-- This row is completed from the S2-P output **before** A-0 goes back for its final review.
+**Containment claim (completed with S2-P):**
+- **IBKR paper and live:** every order and every automated flatten is refused by A-0a on every start path. Independently, the stored policy makes both lanes signal-only (S2-P).
+- **eToro paper and live:** not covered by the file kill switch. They are signal-only by the stored policy (S2-P), and eToro live is reachable only through the operator's own CLI.
+- **Local `paper`:** signal-only by policy; it contacts no broker.
+- **Limits of the claim:**
+  - the policy reading is as of the Session 2 copy (5 Nov), and an authenticated dashboard user can change it (operator rule §4.4);
+  - nothing here covers orders already resting at IBKR (see the position confirmation above).
 
-## 5. Session 2 (APPROVED 2026-11-05 15:48 UTC; to be run by the operator)
+## 5. Session 2: CLOSED (run by the operator; independently reviewed and accepted)
 
 **Approved:** Gate B Session 2, read-only, as `nobody`, using the pinned, checksum-verified scripts, with S2-P and S2-W.
 
@@ -699,7 +757,20 @@ echo "session2_exit=$?"
 
 **Operator inputs:** the two IBKR Flex exports (paper and live, 1 June → the export date), provided separately, as specified in runbook OP1.6.
 
-**Evidence:** *pending the operator's output.* It will be recorded here with exact UTC timestamps.
+**Results** (sanitised aggregates as reported by the operator after an independent review; recorded 2026-11-05T17:37Z UTC). The detailed reports and DB copies stay private on the VPS in `/tmp/m21_op1_s2`.
+
+| Item | Result | Class |
+|---|---|---|
+| Run | `session2_exit=0`; 8/8 checksums; all three DB copies passed `quick_check` | CONFIRMED |
+| Broker policy (S2-P) | `READ_OK`: **all five lanes signal-only** (no lane authorised) | CONFIRMED (as of the copy) |
+| Watchdog (S2-W) | **27,994** `no current event loop in thread 'gw-watchdog'` errors in `bot.log`. This confirms §2a; the fix is A18, PR #35. | CONFIRMED |
+| Historical data | **very thin**: one symbol in the M16 store, last refreshed in June 2026 | CONFIRMED. M21 B-1 and C-1…C-3 need a real data backfill (WP11/E3 path); this is not an A-0 item. |
+| WS2/D2 journal (`paper_lifecycles.db`) | the journal tables are absent, so the 6 Jul supervised D2 records are **NOT_VERIFIED** from this database | evidence gap; the Flex statement is the proof for 6 Jul |
+| Runtime | bot inactive and still enabled at boot; gateway failed (stopped); dashboard active; kill switch inactive | CONFIRMED (matches Session 1 and H1/P2) |
+| Secrets hygiene | a `.env` backup is **world-readable (644)** | CONFIRMED. Register task **E07**; fixed by A-0s (permissions only). |
+| Current IBKR positions | **not established** by Session 2 | must be confirmed at IBKR before A-0 (§4) |
+
+Session 2 is closed and will not be repeated.
 
 ## 6. Roadmap reconciliation (in this PR)
 
@@ -726,25 +797,23 @@ echo "session2_exit=$?"
   - the pre-June future table labelled historical.
 - **Untouched:** the 71 register tasks, the M21 Finish Line, every historical milestone requirement. No renumbering.
 
-## 7. Open questions for the final A-0 review (after Session 2)
+## 7. Open questions for the review of revision 4
 
-1. Are the seven corrections (§4, corrections table) complete and correctly implemented, in particular the effective-condition verification and the no-automatic-release rule for partial failures?
-2. Once S2-P is in: does the allocation policy keep IBKR paper and live, and eToro paper and live, from attempting submissions? If not, does A-0 need a policy step? That would be a production-DB write, needing its own approval.
-3. Do Session 2's `broker_positions` and the Flex statements show any open IBKR position that would need a manual close while the kill switch blocks the automated flatten?
-4. PR #35 (A18): is the protected-file transition acceptable (`_protected_baselines.py`), and should A18 be required before OP2?
-5. The roadmap questions are unchanged: RD-2 (the M22 sub-numbers); C01 merging after the soak; RD-1 (the M18–M20 meanings).
+1. Is the attestation gate (`A0_POSITIONS`, counts only, both IBKR accounts, positions **and** working orders) sufficient as the position confirmation?
+2. Is A-0s (owner-only modes on untracked `.env*` files, with no content read) the right minimal E07 fix?
+3. Any objection to approving A-0 as defence in depth, given that S2-P already makes all five lanes signal-only?
 
 ## 8. Returned items
 
 | Item | Value |
 |---|---|
-| Exact UTC timestamp | 2026-11-05T16:13Z UTC (same in Europe/London, GMT) |
+| Exact UTC timestamp | 2026-11-05T17:37Z UTC (same in Europe/London, GMT) |
 | GitHub `main` | `80b4343db4a22413aa670efd32e24952d53e532e` [GH] |
 | VPS deployed | `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R] |
-| Roadmap / status | v3.0 (DRAFT) / status 3.0.3 |
+| Roadmap / status | v3.0 (DRAFT) / status 3.0.4 |
 | Documentation PR | #34 (draft); head SHA in the PR record and Issue #3 (R11) |
 | Watchdog fix | **A18**, PR #35 (draft), head `da56e12a9e9baec8634b618cb936be1f40a84a78` |
-| Session 2 | APPROVED; command sent; **output pending** |
-| Gate A-0 | NOT approved; corrected (§4) and tested offline (17 cases); final review after Session 2 |
-| Next operational step | the operator runs Session 2 and provides the Flex exports. Then S2-P and the positions complete §4.4, and A-0 goes back for final review. |
+| Session 2 | **CLOSED**: exit 0, 8/8 checksums, three copies OK, all five lanes signal-only |
+| Gate A-0 | revision 4, **ready for approval after the IBKR position/working-order confirmation**; 21 offline cases pass |
+| Next operational step | the operator confirms IBKR positions and working orders (paper + live), then approves Gate A-0 rev 4 |
 | Next engineering task | the review of PR #35 (A18); then C01 (Track B) after approval to start |

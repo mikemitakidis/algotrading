@@ -520,7 +520,7 @@ The checklist is the Finish Line §6; it is not copied here. This table is the d
 | Engineering | Finish Line gate A-1…A-5 | ENGINEERING_COMPLETE (offline) on 23 draft PRs, except **A16** (a dashboard template-change flow through WP14), which is NOT_STARTED. Latest heads of #30 E4 `14daa55` and #31 E5 `d99f127` (30 Oct) await an exact-head review. | independent review → Gate A-1 [PR]/[OFF] |
 | PR merge | all mandatory PRs merged in the A3 order (Finish Line §7e.4) | **not merged**. `main` = `80b4343`. | **BLOCKED_BY_APPROVAL**: Gate A-1 (+ C5b protected-file approval, the Vercel choice) |
 | VPS / deployment | the merged tree deployed deliberately; dashboard restarted; checks pass | VPS checkout = `015d2ce` (26 Oct), **older than `main`** (eight research/docs-only merges). No M21 PR code is deployed. The auto-deploy daemon `sync.sh` is not running. The bot has been inactive since an explicit stop on 6 Jul. Its last start was 30 Jun, as `signal_only:ibkr_paper` on HEAD `04bf872`. The dashboard has been active since 29 Oct. The gateway has been down since an explicit stop on 3 Sep. Root's crontab has no algo entries. No reboot since 5 Mar. | [VPS-R]. Gate A-0 (containment), then A-2 (deployment). BLOCKED_BY_APPROVAL |
-| Historical data | B-1: read-only inventory of the VPS M16/M18 store + real-bar `scanner_replica` parity | **DATA_UNVERIFIED**. Session 2 is prepared, not run. | Session 2 approval [DEC] |
+| Historical data | B-1: read-only inventory of the VPS M16/M18 store + real-bar `scanner_replica` parity | **Inventory done (Session 2, 5 Nov): the store is very thin, one symbol, last refreshed June 2026.** B-1 is not met; C-1…C-3 need a real-data backfill. | data backfill via the WP11/E3 path (after Gate A-1) [DEC] |
 | IBKR paper activation | B-2 (adapter verified in a real paper session) + OP2 (gateway) + OP3 (scheduled loop on) | NOT_STARTED. The gateway is **down** (stopped 3 Sep) [VPS-R]. The `gw-watchdog` defect blocks the scanner's IBKR path and makes gateway monitoring misleading (task A18; fix in draft PR #35; it does not affect WS2). The ledger migration is not deployed; all new flags are OFF. | OP2, then OP3: BLOCKED_BY_APPROVAL |
 | 10-day soak | B-3: 10 consecutive trading days unattended, zero duplicates, zero unknown exposure, kill-switch drill, a closure/half-day observed | NOT_STARTED | after OP3 |
 | 20-day outcomes | C-4: ≥ 20 trading days → score-vs-outcome (E4), fills vs simulated, fee reconciliation (E5), sample size | NOT_STARTED. E4/E5 code [PR]. | after OP3 + 20 trading days; IBKR Flex statements from the operator |
@@ -801,16 +801,16 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-05T16:13Z UTC |
+| Item | Value at 2026-11-05T17:37Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.3 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.4 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | Gate A-0 (corrected; final review after Session 2); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 was APPROVED 15:48 UTC (output pending); the A18 fix was APPROVED 15:48 UTC (PR #35). H1/P1/P2 are done. A-0f was withdrawn (the dashboard stays running). |
-| Next task | Track A: Session 2 output, then the S2-P-dependent A-0 claim, then A-0's final review. Engineering: the review of PR #35 (A18); then C01 (Track B) after approval to start. |
+| Open approvals | **Gate A-0 rev 4** (after the operator's IBKR position/working-order confirmation); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
+| Next task | Track A: the IBKR position/working-order confirmation, then Gate A-0 rev 4 approval and execution; then Gate A-1/A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
@@ -861,3 +861,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 5 | 2026-11-05T12:04Z (2026-11-05 12:04 GMT) | **v3.0** (DRAFT) | Added R1–R16: authority, sources, numbering table, M21 dimensions, M22/M23 definitions, M24/M25 UNDEFINED, tracks, vocabulary, convention, protocol, handoff, decisions, discrepancies, changelog | operator assignment "M21 operational readiness + canonical GitHub roadmap v3.0" (5 Nov) | M1–M25 | PR #34 (draft), Issue #3 | pending operator approval |
 | 6 | 2026-11-05T15:24Z (same in London) | v3.0 (DRAFT), amended | Added the H1/P1/P2 evidence: R5 deployment and paper rows, R13, decisions D-9/D-10, discrepancies 9–11. Status 3.0.2 | operator's H1/P1/P2 output (5 Nov) | M21, M22 | PR #34, Issue #3 | pending operator approval |
 | 7 | 2026-11-05T16:13Z (same in London) | v3.0 (DRAFT), amended | The operator decisions of 15:48 UTC are recorded: Session 2 approved; the A18 fix approved (PR #35); Gate A-0 not approved and corrected. **Roadmap decisions renamed `D-n` → `RD-n`**, to avoid confusion with the register's M23 tasks D01–D10 and the C01 design's D-1…D-6 (entries 5–6 keep their original wording). Status 3.0.3. | operator decisions after the independent review of #34 head `7802442` | M21, M22 | PR #34, PR #35, Issue #3 | pending operator approval |
+| 8 | 2026-11-05T17:37Z (same in London) | v3.0 (DRAFT), amended | Session 2 closed (sanitised results: all five lanes signal-only; 27,994 watchdog errors; one-symbol historical store; journal tables absent; a world-readable `.env` backup = E07). Gate A-0 revision 4: IBKR position/working-order attestation, the A-0s permission fix, the completed containment claim. R5 historical-data row updated. Status 3.0.4. | Session 2 output, independently reviewed | M21 | PR #34, Issue #3 | pending operator approval |

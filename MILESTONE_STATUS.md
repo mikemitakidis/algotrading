@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.3 (roadmap v3.0), 5 Nov 2026
+> ## Current operating state: status 3.0.4 (roadmap v3.0), 5 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-05T16:13Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.2 (15:24Z); the change is recorded in `ROADMAP.md` R16, entry 7.
+> - **Written:** 2026-11-05T17:37Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.3; the change is recorded in `ROADMAP.md` R16, entry 8.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -23,6 +23,17 @@ project-wide reconciliation narrative lives in
 > - **The dashboard stays running.** Its five bot-start routes and the kill-switch release are not used until OP3; A-0f is withdrawn.
 > - **All PRs stay drafts.**
 >
+> **Session 2: CLOSED** (5 Nov; independently reviewed; sanitised results in report §5):
+> - **Run:** exit 0; 8/8 checksums; three DB copies OK.
+> - **Policy:** **all five broker lanes signal-only**.
+> - **Watchdog:** 27,994 event-loop errors (A18).
+> - **Historical store:** one symbol, last refreshed June 2026.
+> - **WS2/D2 journal:** tables absent (NOT_VERIFIED).
+> - **Secrets:** a world-readable `.env` backup (E07).
+> - **IBKR positions:** current positions are **not** established.
+>
+> **Gate A-0 revision 4:** ready for approval once the operator has confirmed IBKR positions and working orders (paper + live).
+>
 > **Current milestone:** M21 (v2.0 scope: M21.U, M21.1, M21.1extra, M21.2–M21.7). **IBKR paper only;** no IBKR live, no eToro real orders.
 >
 > | M21 dimension | Status | Evidence |
@@ -31,7 +42,7 @@ project-wide reconciliation narrative lives in
 > | Engineering | ENGINEERING_COMPLETE on 23 draft PRs (#1, #12–#33), except **A16** (a WP14-driven dashboard template-change flow): NOT_STARTED. Exact-head review is still needed for #30 `14daa55` and #31 `d99f127`. | [PR]/[OFF] |
 > | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
 > | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. BLOCKED_BY_APPROVAL (Gate A-0, then A-2). | [VPS-R] |
-> | Historical data | DATA_UNVERIFIED; Session 2 prepared, not run | [DEC] |
+> | Historical data | **inventory done**: one symbol, last refreshed June 2026; B-1 not met; a real-data backfill is needed | [VPS-R] |
 > | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (task **A18**, fix in draft PR #35) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
 > | 10-day soak (B-3) | NOT_STARTED | — |
 > | 20-day outcomes (C-4) | NOT_STARTED; E4/E5 code [PR]; Flex statements from the operator | — |
@@ -75,10 +86,10 @@ project-wide reconciliation narrative lives in
 > - genuine paper outcomes (C-4);
 > - for M22, C01 (HARD).
 >
-> **Next approved action:** the operator runs **Session 2** (approved 15:48 UTC) and provides the Flex exports.
+> **Next approved action:** none. Next: the operator confirms IBKR positions and working orders (paper + live) and the Flex exports are provided.
 >
 > **Next proposed actions, not approved:**
-> - **Gate A-0** (corrected; final review after the S2-P result);
+> - **Gate A-0 rev 4** (attestation + A-0s + A-0a/b/b2);
 > - S2-U;
 > - the review of **PR #35** (A18);
 > - Track B **C01**, offline.
