@@ -418,7 +418,7 @@ validated trading edge are four different states. Opening eToro (M22) needs a fe
 
 > **Version:** Roadmap **v3.0**. Status: **DRAFT for review**, not approved.
 > - **Written:** 2026-11-05T12:04Z UTC (12:04 Europe/London, GMT).
-> - **Amended:** 2026-11-05T15:24Z UTC (same in London), with the H1/P1/P2 evidence. Changelog entry 6.
+> - **Amended:** 2026-11-05T15:24Z UTC, with the H1/P1/P2 evidence (changelog entry 6), and 2026-11-05T16:13Z UTC, with the 15:48 UTC decisions (entry 7). London time equals UTC (GMT).
 > - **Author/source:** Claude (Claude Code session), from the sources in R2. Each source was read in full before this section was edited.
 > - **Verified GitHub base:** `main` = `80b4343db4a22413aa670efd32e24952d53e532e`, checked through the GitHub API at the time above.
 > - **PR:** #34, draft, stacked on E7 (#33). Linked from Issue #3.
@@ -485,17 +485,17 @@ The other schemes stay in the files as history.
 
 | Milestone | Historical description(s) | Canonical description (v3.0) | Source of the canonical text | Requirements preserved (where) | Ambiguity | Operator decision |
 |---|---|---|---|---|---|---|
-| M1–M15 | Original 15-milestone plan | unchanged | this file, "Original 15-Milestone Plan (intact)" | all sub-milestones, in this file and in STATUS | M15 heading says "⚠ PARTIAL" here; STATUS says CLOSED (R15-1) | **[DEC] D-7** |
+| M1–M15 | Original 15-milestone plan | unchanged | this file, "Original 15-Milestone Plan (intact)" | all sub-milestones, in this file and in STATUS | M15 heading says "⚠ PARTIAL" here; STATUS says CLOSED (R15-1) | **[DEC] RD-7** |
 | M16 | pre-4 Jun: "Strategy/Historical Intelligence"; 4 Jun: "Historical data + first signal engine" | Historical data + first signal engine (CLOSED 2026-06-05) | this file; STATUS | yes | none | — |
 | M17 | pre-4 Jun: "Outcome learning loop / closed-loop ML"; 4 Jun: "Backtesting + parameter rules" | Backtesting engine (scanner_replica, multi-TF) (CLOSED 2026-06-07) | STATUS; `docs/M17_*_closeout.md` | closed-loop ML moved to M22 (4 Jun), then to the v2.0 loop (M21.1extra §5) | the "parameter rules / sweeps" deferral now sits in M21.2/M21.3 | — |
-| M18 | pre-4 Jun: "News / sentiment / macro"; 4 Jun: "Advanced signal scoring + paper-trade automation" | **ML strategy/criteria foundation** (read-only, shadow-only), as delivered (CLOSED, `264fba84`) | STATUS; `docs/M18_ACCEPTANCE.md` | 4 Jun scoring → delivered M19; paper automation → M20 and M21.1extra; news → M20 (sketch), M21.6 and M23.4 | three different meanings for M18 | **[DEC] D-1** (confirm the delivered meaning is canonical) |
-| M19 | pre-4 Jun: "Universe diagnostics"; 4 Jun: "Optimiser / adaptive sizing" | **Signal scoring engine**, as delivered (CLOSED) | STATUS; `bot/signal_scoring/M19_STATUS.md` | the optimiser → M21.2/M21.3; adaptive sizing → M21.4 (meta-labelling, "never size up") and M23.3; universe diagnostics → M21.U | as for M18 | **D-1** |
-| M20 | pre-4 Jun: "Optimiser / adaptive sizing"; 4 Jun: "News / sentiment / macro overlay" | **Paper decision/orchestration**, as delivered (CLOSED) | STATUS; `docs/ROADMAP_M20.md` | news/macro → M21.6 (context) and M23.4 (advanced) | as for M18 | **D-1** |
+| M18 | pre-4 Jun: "News / sentiment / macro"; 4 Jun: "Advanced signal scoring + paper-trade automation" | **ML strategy/criteria foundation** (read-only, shadow-only), as delivered (CLOSED, `264fba84`) | STATUS; `docs/M18_ACCEPTANCE.md` | 4 Jun scoring → delivered M19; paper automation → M20 and M21.1extra; news → M20 (sketch), M21.6 and M23.4 | three different meanings for M18 | **[DEC] RD-1** (confirm the delivered meaning is canonical) |
+| M19 | pre-4 Jun: "Universe diagnostics"; 4 Jun: "Optimiser / adaptive sizing" | **Signal scoring engine**, as delivered (CLOSED) | STATUS; `bot/signal_scoring/M19_STATUS.md` | the optimiser → M21.2/M21.3; adaptive sizing → M21.4 (meta-labelling, "never size up") and M23.3; universe diagnostics → M21.U | as for M18 | **RD-1** |
+| M20 | pre-4 Jun: "Optimiser / adaptive sizing"; 4 Jun: "News / sentiment / macro overlay" | **Paper decision/orchestration**, as delivered (CLOSED) | STATUS; `docs/ROADMAP_M20.md` | news/macro → M21.6 (context) and M23.4 (advanced) | as for M18 | **RD-1** |
 | M21 | pre-4 Jun: "First funded eToro go-live"; 4 Jun: "Universe diagnostics & discovery"; v2.0: Universe + scoring + paper loop + optimisation + AI | **v2.0:** M21.U, M21.1, M21.1extra, M21.2–M21.7 (binding scope since 29 Jun) | v2.0 §3/§4; this file, "M21 — canonical scope and status"; Finish Line | eToro go-live → M22; universe diagnostics → M21.U | none since 29 Jun | — |
-| M22 | pre-4 Jun: "Semi-automated live trading"; 4 Jun: "Outcome learning loop / closed-loop ML"; v2.0: Controlled live readiness + production hardening | **v2.0:** M22.1–M22.6 Controlled live readiness (foundation, very-limited live, broker safety, manual approval, kill switch, exposure limits) + production hardening | v2.0 §3/§4/§6/§7; register §4 C (C01–C11) | closed-loop ML (4 Jun) → v2.0 §5 loop (M21) and M23.1/M23.2; semi-automated live → M22 capital progression (§6 step 4) | **the sub-number → deliverable mapping is not fixed** (register §4 C). Only M22.4 = manual approval is stated (v2.0 §6). | **[DEC] D-2** |
-| M23 | pre-4 Jun: "Full advanced intelligence"; 4 Jun: unnumbered "Fully autonomous advanced live bot"; v2.0: Advanced tier | **v2.0:** M23.1 Champion/Challenger (+ template breeding), M23.2 Drift, M23.3 Portfolio correlation/exposure, M23.4 Advanced macro/news, M23.5 Multi-strategy | v2.0 §3/§4; register §4 D (D01–D05 = M23.1–M23.5; D06–D10 "M23 extended") | correlation-aware sizing, broker failover and compliance audit (pre-4 Jun M23 / 4 Jun "fully autonomous") → M23.3, M22 C03 and D09 | the unnumbered "Fully autonomous" item (`AUTO_ALLOWED`) has no v2.0 number. v2.0 places autonomy inside the M22 capital progression plus §7 phases C–D. | **[DEC] D-3** |
-| **M24** | — (never used) | **UNDEFINED** | none | n/a | no source defines it | **[DEC] D-3** |
-| **M25** | — (never used) | **UNDEFINED** | none | n/a | no source defines it | **[DEC] D-3** |
+| M22 | pre-4 Jun: "Semi-automated live trading"; 4 Jun: "Outcome learning loop / closed-loop ML"; v2.0: Controlled live readiness + production hardening | **v2.0:** M22.1–M22.6 Controlled live readiness (foundation, very-limited live, broker safety, manual approval, kill switch, exposure limits) + production hardening | v2.0 §3/§4/§6/§7; register §4 C (C01–C11) | closed-loop ML (4 Jun) → v2.0 §5 loop (M21) and M23.1/M23.2; semi-automated live → M22 capital progression (§6 step 4) | **the sub-number → deliverable mapping is not fixed** (register §4 C). Only M22.4 = manual approval is stated (v2.0 §6). | **[DEC] RD-2** |
+| M23 | pre-4 Jun: "Full advanced intelligence"; 4 Jun: unnumbered "Fully autonomous advanced live bot"; v2.0: Advanced tier | **v2.0:** M23.1 Champion/Challenger (+ template breeding), M23.2 Drift, M23.3 Portfolio correlation/exposure, M23.4 Advanced macro/news, M23.5 Multi-strategy | v2.0 §3/§4; register §4 D (D01–D05 = M23.1–M23.5; D06–D10 "M23 extended") | correlation-aware sizing, broker failover and compliance audit (pre-4 Jun M23 / 4 Jun "fully autonomous") → M23.3, M22 C03 and D09 | the unnumbered "Fully autonomous" item (`AUTO_ALLOWED`) has no v2.0 number. v2.0 places autonomy inside the M22 capital progression plus §7 phases C–D. | **[DEC] RD-3** |
+| **M24** | — (never used) | **UNDEFINED** | none | n/a | no source defines it | **[DEC] RD-3** |
+| **M25** | — (never used) | **UNDEFINED** | none | n/a | no source defines it | **[DEC] RD-3** |
 
 **Stale table:** the "Future milestones (M17–M23)" table in `MILESTONE_STATUS.md` uses the **pre-4-June** numbering. v3.0 keeps it and labels it historical (R15-2).
 
@@ -521,7 +521,7 @@ The checklist is the Finish Line §6; it is not copied here. This table is the d
 | PR merge | all mandatory PRs merged in the A3 order (Finish Line §7e.4) | **not merged**. `main` = `80b4343`. | **BLOCKED_BY_APPROVAL**: Gate A-1 (+ C5b protected-file approval, the Vercel choice) |
 | VPS / deployment | the merged tree deployed deliberately; dashboard restarted; checks pass | VPS checkout = `015d2ce` (26 Oct), **older than `main`** (eight research/docs-only merges). No M21 PR code is deployed. The auto-deploy daemon `sync.sh` is not running. The bot has been inactive since an explicit stop on 6 Jul. Its last start was 30 Jun, as `signal_only:ibkr_paper` on HEAD `04bf872`. The dashboard has been active since 29 Oct. The gateway has been down since an explicit stop on 3 Sep. Root's crontab has no algo entries. No reboot since 5 Mar. | [VPS-R]. Gate A-0 (containment), then A-2 (deployment). BLOCKED_BY_APPROVAL |
 | Historical data | B-1: read-only inventory of the VPS M16/M18 store + real-bar `scanner_replica` parity | **DATA_UNVERIFIED**. Session 2 is prepared, not run. | Session 2 approval [DEC] |
-| IBKR paper activation | B-2 (adapter verified in a real paper session) + OP2 (gateway) + OP3 (scheduled loop on) | NOT_STARTED. The gateway is **down** (stopped 3 Sep) [VPS-R]. The `gw-watchdog` defect blocks the scanner's IBKR path and makes gateway monitoring misleading (D-9; it does not affect WS2). The ledger migration is not deployed; all new flags are OFF. | OP2, then OP3: BLOCKED_BY_APPROVAL |
+| IBKR paper activation | B-2 (adapter verified in a real paper session) + OP2 (gateway) + OP3 (scheduled loop on) | NOT_STARTED. The gateway is **down** (stopped 3 Sep) [VPS-R]. The `gw-watchdog` defect blocks the scanner's IBKR path and makes gateway monitoring misleading (task A18; fix in draft PR #35; it does not affect WS2). The ledger migration is not deployed; all new flags are OFF. | OP2, then OP3: BLOCKED_BY_APPROVAL |
 | 10-day soak | B-3: 10 consecutive trading days unattended, zero duplicates, zero unknown exposure, kill-switch drill, a closure/half-day observed | NOT_STARTED | after OP3 |
 | 20-day outcomes | C-4: ≥ 20 trading days → score-vs-outcome (E4), fills vs simulated, fee reconciliation (E5), sample size | NOT_STARTED. E4/E5 code [PR]. | after OP3 + 20 trading days; IBKR Flex statements from the operator |
 | Statistics | C-1…C-3, C-5: walk-forward on real adjusted bars, plateau checks, AI models vs baselines, integrity, canary ≤ 5 % | NOT_STARTED. Synthetic machinery only. The v3 canary is preregistered and NOT run (expected digest on `5b0f40b`: `4350bb54…2b82`). | Session 2 data + approval of the optimiser source |
@@ -537,7 +537,7 @@ Merged ≠ deployed ≠ running in paper ≠ statistically validated ≠ accepte
   - (b) Live readiness: broker safety, manual approval, kill switch, strict exposure limits and paper/live separation.
 
   M22 is "the gate between lab and shop window". The first tiny real eToro trade sits inside it.
-- **Sub-milestones:** v2.0 lists six labels in this order: foundation, very-limited live, broker safety, manual approval, kill switch, exposure limits. Only **M22.4 = manual approval** is stated outright (v2.0 §6). The register forbids inventing the mapping before it is reconciled. The mapping below is therefore **PROPOSED, for operator decision D-2**:
+- **Sub-milestones:** v2.0 lists six labels in this order: foundation, very-limited live, broker safety, manual approval, kill switch, exposure limits. Only **M22.4 = manual approval** is stated outright (v2.0 §6). The register forbids inventing the mapping before it is reconciled. The mapping below is therefore **PROPOSED, for operator decision RD-2**:
 
   | Sub | v2.0 label | Register tasks (proposed placement) |
   |---|---|---|
@@ -545,7 +545,7 @@ Merged ≠ deployed ≠ running in paper ≠ statistically validated ≠ accepte
   | M22.2 | very-limited live | C05 eToro API feasibility proof, C07 tiny-live permission gate |
   | M22.3 | broker safety | C04 recovery under partial broker truth, C08 post-trade funded reconciliation |
   | M22.4 | manual approval (stated in v2.0 §6) | C06 per-order human approval |
-  | M22.5 | kill switch | **no dedicated register task.** Live-lane kill-switch drills currently sit inside C02/C03/C06 acceptance. Adding a task is decision D-2b. |
+  | M22.5 | kill switch | **no dedicated register task.** Live-lane kill-switch drills currently sit inside C02/C03/C06 acceptance. Adding a task is decision RD-2b. |
   | M22.6 | exposure limits | C09 controlled promotion and capital progression (caps); the M14 gate set via C01 |
   | cross-cutting | — | C10 public track record and copying objective; C11 persistent broker paper laboratory |
 
@@ -679,7 +679,7 @@ Merged ≠ deployed ≠ running in paper ≠ statistically validated ≠ accepte
   - v2.0 estimates as written, not commitments: M23.1 3–5 weeks; M23.2 2–3; M23.3 2–3; M23.4 3–5; M23.5 3–5; horizon "Mo 6+".
   - **Blockers:** M21 + M22 acceptance; real data; for D04, the G4 data-source decision.
 
-### R8. M24 and M25: UNDEFINED, operator decision D-3
+### R8. M24 and M25: UNDEFINED, operator decision RD-3
 
 No source defines M24 or M25. v3.0 **does not invent their scope**.
 
@@ -688,11 +688,11 @@ No source defines M24 or M25. v3.0 **does not invent their scope**.
 - **(b)** v2.0 §7 capital phases C ("small controlled") and D ("meaningful capital, trade for a living").
 - **(c)** Register "M23 extended" D06–D10.
 
-**Options for D-3 (no option is adopted):**
+**Options for RD-3 (no option is adopted):**
 1. Leave M24/M25 unallocated. (a)–(c) stay where the sources put them: (a) inside the M22 capital progression and M23; (b) as §7 phases; (c) inside M23. This matches the v2.0 numbering promise ("new work is layered INTO existing numbers… never by inventing a new scheme").
 2. Allocate M24 and/or M25 to some of (a)–(c), with operator-written definitions. This becomes roadmap v4.0 with a changelog entry, and nothing is moved without its requirements.
 
-Until D-3 is decided, every reference to M24/M25 reads **UNDEFINED**.
+Until RD-3 is decided, every reference to M24/M25 reads **UNDEFINED**.
 
 ### R9. Two parallel tracks
 
@@ -801,44 +801,44 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-05T15:24Z UTC |
+| Item | Value at 2026-11-05T16:13Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.2 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.3 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | Gate A-0 (± A-0f); Session 2 + S2-P/S2-W (± S2-U); Gate A-1 + C5b + Vercel; Gate A-2; OP2/OP3; roadmap v3.0 and D-1…D-10. H1/P1/P2 are done (5 Nov). |
-| Next task | Track A: the Gate A-0 decision, then Session 2. Engineering: the D-9 watchdog fix (offline), then C01 (Track B). Both after approval to start. |
+| Open approvals | Gate A-0 (corrected; final review after Session 2); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 was APPROVED 15:48 UTC (output pending); the A18 fix was APPROVED 15:48 UTC (PR #35). H1/P1/P2 are done. A-0f was withdrawn (the dashboard stays running). |
+| Next task | Track A: Session 2 output, then the S2-P-dependent A-0 claim, then A-0's final review. Engineering: the review of PR #35 (A18); then C01 (Track B) after approval to start. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
 
 | ID | Decision | Recommendation |
 |---|---|---|
-| D-1 | Confirm the delivered meanings of M18–M20 (ML foundation; signal scoring; paper orchestration) as canonical, with the 4 Jun sketches kept as history | Confirm |
-| D-2 | Fix the M22.1–M22.6 → C01–C11 mapping (R6 proposal). D-2b: add a dedicated M22.5 kill-switch task or not. | Approve the R6 mapping; add D-2b as a register task at the next phase gate |
-| D-3 | M24/M25: leave UNDEFINED (option 1) or define (option 2) | Option 1 until M22 starts |
-| D-4 | Adopt the R10 vocabulary, the R11 convention and the R12 protocol | Adopt |
-| D-5 | Merge the docs branch `docs/full-canonical-handoff-2026-10-26` (register, Finish Line, runbooks, reports) to `main` so that the links in this file resolve on `main`. The bundled Gate B scripts stay docs, not runtime. | Merge with the Gate A-1 batch, after review |
-| D-6 | Start Track B (C01 implementation, offline, draft PR) now | Start |
-| D-7 | Resolve R15-1 (the M15 heading here says PARTIAL; STATUS says CLOSED) | Change the heading after review: STATUS has the closure evidence |
-| D-8 | Refresh `docs/NEXT_WORK_REGISTER.md` and `docs/PROJECT_STATUS_RECONCILIATION.md` (stale; E08) or mark them historical | Mark historical, linking to STATUS |
-| D-9 | Add a register task for the **`gw-watchdog` event-loop defect** (report §2a): fix offline (a per-thread event loop; `IB()` inside the `try`) with a regression test, before OP2 | Add it to M21 (it bears on B-6 monitoring); fix before OP2 |
-| D-10 | Add hardening tasks: (a) the five dashboard routes that start the bot outside systemd; (b) no working copy or branch switching in `/opt/algo-trader` while the bot runs; (c) unattended restarts (`needrestart`) during the soak | Add (a) to M22 C03; make (b) an operating rule now; check (c) before OP4 |
+| RD-1 | Confirm the delivered meanings of M18–M20 (ML foundation; signal scoring; paper orchestration) as canonical, with the 4 Jun sketches kept as history | Confirm |
+| RD-2 | Fix the M22.1–M22.6 → C01–C11 mapping (R6 proposal). RD-2b: add a dedicated M22.5 kill-switch task or not. | Approve the R6 mapping; add RD-2b as a register task at the next phase gate |
+| RD-3 | M24/M25: leave UNDEFINED (option 1) or define (option 2) | Option 1 until M22 starts |
+| RD-4 | Adopt the R10 vocabulary, the R11 convention and the R12 protocol | Adopt |
+| RD-5 | Merge the docs branch `docs/full-canonical-handoff-2026-10-26` (register, Finish Line, runbooks, reports) to `main` so that the links in this file resolve on `main`. The bundled Gate B scripts stay docs, not runtime. | Merge with the Gate A-1 batch, after review |
+| RD-6 | Start Track B (C01 implementation, offline, draft PR) now | Start |
+| RD-7 | Resolve R15-1 (the M15 heading here says PARTIAL; STATUS says CLOSED) | Change the heading after review: STATUS has the closure evidence |
+| RD-8 | Refresh `docs/NEXT_WORK_REGISTER.md` and `docs/PROJECT_STATUS_RECONCILIATION.md` (stale; E08) or mark them historical | Mark historical, linking to STATUS |
+| RD-9 | Add register task **A18** (the `gw-watchdog` event-loop defect, report §2a; linked to M21 B-6 / OP2). **Fix APPROVED 2026-11-05 15:48 UTC** (offline, draft PR, no merge or deployment): **PR #35**. The register entry is added at the next register update. | Merge with the Gate A-1 batch after review; required before OP2 |
+| RD-10 | Add hardening tasks: (a) the five dashboard routes that start the bot outside systemd; (b) no working copy or branch switching in `/opt/algo-trader` while the bot runs; (c) unattended restarts (`needrestart`) during the soak | Add (a) to M22 C03; make (b) an operating rule now; check (c) before OP4 |
 
 **Not decided here, and not duplicated:** the M21 operational approvals (Gate B/A, OP1–OP5, G4 data sources, the Vercel choice, C5b, the E6 `app.py` patch). They live in the Finish Line §8 and the Session 1 report §14.
 
 ### R15. Known discrepancies (reported, not silently resolved)
 
-1. **M15 status:** in `ROADMAP.md` the M15 heading says "⚠ PARTIAL" and M15.3 says "PENDING". In `MILESTONE_STATUS.md` the quick table says M15 is "CLOSED", but the per-milestone heading at line ~233 says "(PARTIAL)". STATUS records closures through M15.3.C on 2026-06-05. → D-7.
+1. **M15 status:** in `ROADMAP.md` the M15 heading says "⚠ PARTIAL" and M15.3 says "PENDING". In `MILESTONE_STATUS.md` the quick table says M15 is "CLOSED", but the per-milestone heading at line ~233 says "(PARTIAL)". STATUS records closures through M15.3.C on 2026-06-05. → RD-7.
 2. **The `MILESTONE_STATUS.md` "Future milestones (M17–M23)" table** uses the pre-4-June numbering (18 News … 23 Full advanced). It is kept and labelled historical.
-3. **The authoritative M21 checklist and the 71-task register are on an unmerged docs branch** (`7d19f39`), and `MILESTONE_STATUS.md` on `main` points to them. → D-5.
+3. **The authoritative M21 checklist and the 71-task register are on an unmerged docs branch** (`7d19f39`), and `MILESTONE_STATUS.md` on `main` points to them. → RD-5.
 4. **The Finish Line §7e.4 A5 rollback target is `80b4343`, but the VPS runs `015d2ce`** [VPS-R]. The correct rollback baseline is the recorded pre-deployment state, `015d2ce` (Session 1 report §11).
 5. **v2.0 marks M22.1–6 "PARTIAL"** (because M12–M15 foundations exist), while the register marks M22 "not started (C01 design only)". Both are kept. v3.0 reports M22 as NOT_STARTED for its C-tasks and lists the reusable foundations in R6.
 6. **The 4 Jun section in this file** still describes M18 "Advanced signal scoring + paper-trade automation (2-4 weeks)", M19 "Optimiser", M20 "News", M21 "Universe diagnostics" and M22 "Outcome learning loop". R3 is the reconciliation; the sketch is kept as history.
-7. **`docs/PROJECT_STATUS_RECONCILIATION.md`** (linked at the top of both files) is a June narrative and predates M19–M21. → D-8.
+7. **`docs/PROJECT_STATUS_RECONCILIATION.md`** (linked at the top of both files) is a June narrative and predates M19–M21. → RD-8.
 8. **The Session 1 report §12 item 3b** says that disabling `algo-trader.service` is respected by `deploy.sh`. That is true of `deploy.sh` itself, but the `sync.sh` it launches runs `systemctl restart` on the bot after any new `main` commit, regardless of the enabled state. The Gate A-0 proposal (`docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md`) corrects this.
 9. **Session 1 described the gateway as "failed".** H1/P2 show that its last transition was an explicit stop on 3 Sep 06:46:27, which ended with exit status 1. systemd's `failed` label comes from that exit status; the gateway did not crash on its own at the end.
 10. **Session 1 §6 listed `/api/start` as the dashboard's way to start the bot.** There are five routes: `/api/start`, `/api/restart`, `/api/telegram/save`, `/api/strategy/save`, `/api/strategy/reset`. Each starts the bot whether or not it was running.
@@ -860,3 +860,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 4 | 2026-10-29 (time not recorded) | v2.0 + E7 reconciliation | M21 canonical scope and status table; status blocks reconciled | E08: docs must match the code | M21 | PR #33 (draft) | none; not merged |
 | 5 | 2026-11-05T12:04Z (2026-11-05 12:04 GMT) | **v3.0** (DRAFT) | Added R1–R16: authority, sources, numbering table, M21 dimensions, M22/M23 definitions, M24/M25 UNDEFINED, tracks, vocabulary, convention, protocol, handoff, decisions, discrepancies, changelog | operator assignment "M21 operational readiness + canonical GitHub roadmap v3.0" (5 Nov) | M1–M25 | PR #34 (draft), Issue #3 | pending operator approval |
 | 6 | 2026-11-05T15:24Z (same in London) | v3.0 (DRAFT), amended | Added the H1/P1/P2 evidence: R5 deployment and paper rows, R13, decisions D-9/D-10, discrepancies 9–11. Status 3.0.2 | operator's H1/P1/P2 output (5 Nov) | M21, M22 | PR #34, Issue #3 | pending operator approval |
+| 7 | 2026-11-05T16:13Z (same in London) | v3.0 (DRAFT), amended | The operator decisions of 15:48 UTC are recorded: Session 2 approved; the A18 fix approved (PR #35); Gate A-0 not approved and corrected. **Roadmap decisions renamed `D-n` → `RD-n`**, to avoid confusion with the register's M23 tasks D01–D10 and the C01 design's D-1…D-6 (entries 5–6 keep their original wording). Status 3.0.3. | operator decisions after the independent review of #34 head `7802442` | M21, M22 | PR #34, PR #35, Issue #3 | pending operator approval |

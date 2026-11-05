@@ -5,9 +5,10 @@
 - **Prepared by:** Claude (Claude Code session).
 - **Written:** 2026-11-05T12:04Z UTC (12:04 GMT Europe/London).
 - **Revision 2:** 2026-11-05T15:24Z UTC (same in Europe/London, GMT). Adds the H1/P1/P2 evidence, the `gw-watchdog` analysis and the corrections to Gate A-0.
+- **Revision 3:** 2026-11-05T16:13Z UTC (same in London). Records the operator decisions of 15:48 UTC (§0), the A18 fix (PR #35), the corrected Gate A-0 procedure (§4) and the approved Session 2 command (§5). Roadmap decision ids are renamed `RD-n` (§0).
 - **GitHub `main`:** `80b4343db4a22413aa670efd32e24952d53e532e` [GH].
 - **VPS deployed:** `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R].
-- **Roadmap:** v3.0 (DRAFT); status 3.0.2.
+- **Roadmap:** v3.0 (DRAFT); status 3.0.3.
 - **PR:** #34 (draft; this report is part of it). Checkpoint in Issue #3.
 
 **Nothing in this report was executed on the VPS by Claude. Nothing was merged, deployed, started, stopped or changed.**
@@ -24,6 +25,21 @@ The repository is public. This report omits the server's IP address and hostname
 Every VPS finding is also classed **CONFIRMED** (seen in output or code), **INFERRED** (follows from confirmed facts) or **UNKNOWN**.
 
 ---
+
+## 0. Operator decisions, 2026-11-05 15:48 UTC (after an independent review of PR #34 head `7802442`)
+
+| Decision | What it allows / requires | Where it is handled | Status at 2026-11-05T16:13Z |
+|---|---|---|---|
+| **APPROVED: Gate B Session 2** (read-only, as `nobody`, pinned and checksum-verified scripts, with S2-P and S2-W; S2-U **not** yet) | no production DB changes, no service/broker/git/deployment actions; review the output before sharing; never publish DB copies or statements; stop on any failed copy or integrity check | §5 (the exact command, stop conditions, offline test) | command sent to the operator about 16:00 UTC; **output pending** |
+| **APPROVED: offline watchdog fix** with regression tests; draft PR; no merge or deployment; **not** called "D-9" (conflicts with M23 task D09) | a new register task **A18**, linked to M21 B-6 / OP2 | PR **#35** (`m21/a18-gw-watchdog-event-loop`, base `m21/rc-base`) | opened; head `da56e12`; tests in the PR |
+| **NOT YET APPROVED: Gate A-0 execution**; correct the procedure first (7 points) | precondition order; effective-condition and disabled-state verification; no automatic release of the kill switch; systemd vs dashboard/direct starts; keep the dashboard running and don't use its start routes or kill-switch release; document the flatten block; check the broker policy before claiming containment | §4 (the corrections table, the corrected block, 17 offline tests, rollback, scope) | corrected and tested offline; **final review after the Session 2 results** |
+| Keep all PRs as drafts; keep `ROADMAP.md` v3.0, `MILESTONE_STATUS.md` and this report current; don't merge #34 or change the approved roadmap baseline | — | this PR | done; nothing merged |
+
+**Identifier change:**
+- The roadmap decisions formerly written `D-1`…`D-10` are now **`RD-1`…`RD-10`**.
+- They used to look like the register's M23 tasks `D01`–`D10` and the C01 design's decisions `D-1`…`D-6`.
+- The watchdog task is **A18**. RD-9 is the decision to add A18 to the register.
+- The changelog's earlier entries keep their original wording (append-only); entry 7 records the rename.
 
 ## 1. H1 / P1 / P2 read-only checks
 
@@ -131,7 +147,7 @@ Of these, Gate A-0 closes the systemd paths and blocks IBKR orders on every path
 **Proposed handling (not done; code change needs approval):**
 - a small offline fix on an isolated branch: give the watchdog thread its own event loop at thread start, and move `IB()` inside the `try`;
 - a regression test that constructs the probe in a named non-main thread;
-- recorded as a **new register task** (decision D-9).
+- recorded as the new register task **A18** (decision RD-9). **Approved and implemented offline: PR #35.**
 
 Fix it before OP2 so that the B-6 drill is meaningful. It does not block Gate A-0.
 
@@ -147,34 +163,203 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | **4. The IB Gateway comes back** | It was stopped explicitly on 3 Sep. Only a manual start or a reboot restarts it. The gateway alone sends no orders; no bot or WS2 loop is running or scheduled. | CONFIRMED | the same. If a bot is started, the kill switch blocks IBKR. |
 | **5. `main` receives new merges** | **No VPS change**: no `sync.sh`, no cron entry, no timer, runner or hook. Vercel makes a Production deployment per merge. Latent: a manual `deploy.sh` or `sync.sh` start deploys `main`. An unattended `needrestart` restart (F-11) reloads whatever is **on disk**; it does not fetch. | CONFIRMED (needrestart: INFERRED) | merges cannot reach the VPS automatically. **`sync.sh` stays stopped** (A-0d). |
 
-## 4. Gate A-0 proposal: containment, no deployment (NOT executed)
+## 4. Gate A-0: corrected containment procedure (revision 3, NOT approved, NOT executed)
+
+**Status:**
+- Revision 2 was reviewed independently on 5 Nov. On **2026-11-05 15:48 UTC** the operator found the approach reasonable but **did not approve execution**.
+- This revision makes the corrections that were asked for. It comes back for a final independent review **after the Session 2 results**, because one claim depends on them (row 7 below).
+
+**Corrections asked for, and where they are made:**
+
+| # | Correction | Where |
+|---|---|---|
+| 1 | Check that `ALLOW_BOT_START` is absent in the preconditions, before anything is changed | §4.1 step 0. A leftover `gate-a0.conf` drop-in also stops the run there. |
+| 2 | Verify the *effective* systemd `ConditionPathExists` and the disabled state | §4.1 A-0b checks `is-enabled=disabled` and that the boot link is gone. A-0b2 checks, after `daemon-reload`: `NeedDaemonReload=no`; the drop-in listed in `DropInPaths`; the condition present in `systemctl cat` (the loaded unit); and `systemd-analyze condition` evaluating it **false**. No test start is attempted. |
+| 3 | Partial-failure recovery never auto-releases the kill switch | §4.1 `report()` runs on every exit and is read-only. On a failure it names the stage. **Nothing is rolled back automatically, and the kill switch is never released.** §4.3: undo only with approval. |
+| 4 | Keep systemd-controlled starts distinct from dashboard/direct Python starts | §4.4 and the final verification lines. The guard covers systemd starts only; the kill switch covers IBKR orders on every path. |
+| 5 | Keep the dashboard running; do not use its five start routes or the kill-switch release | §4.4: an operator rule from now until OP3. **A-0f is withdrawn**: the operator decided to keep the dashboard running. |
+| 6 | State that an active kill switch also blocks IBKR automated flattening | §4.4 |
+| 7 | Check the current broker allocation policy before claiming all broker execution is contained | §4.4. The claim is **conditional on S2-P** (Session 2). It is filled in once the Session 2 output arrives. |
 
 **Approval and scope:**
-- Run only after the operator's separate written approval, in the root terminal.
 - A-0 changes three things, all reversible: the kill-switch file (A-0a), the bot unit's boot link (A-0b) and a drop-in start guard (A-0b2).
-- **A-0c is now a no-op.** P1 found no `deploy.sh` line in root's crontab. The block checks again and prints "nothing changed".
-- It does **not** stop or start any process. It does **not** touch `.env`, the databases, git, the dashboard, the gateway, `sync.sh` or Vercel.
+- A-0c is a no-op. P1 found no `deploy.sh` line; the block checks again.
+- It does **not** stop or start any process. It does **not** touch `.env`, the databases, git, the dashboard, the gateway, `sync.sh`, the broker policy or Vercel.
 
-**Purpose (from the assignment):**
-- kill switch on;
-- no boot-time bot activation;
-- the legacy cron entry removed if it exists;
-- `sync.sh` kept stopped;
-- the state preserved;
-- verified rollback.
+**Why `systemctl disable` alone is not enough** (correction to the Session 1 report §12-3b, kept from revision 2):
+- `deploy.sh` skips a disabled unit, but it then launches `sync.sh`.
+- `sync.sh` runs `systemctl restart algo-trader.service` whenever `origin/main` differs from the checkout, regardless of the enabled state.
+- `systemctl mask` cannot be used: the unit file lives in `/etc/systemd/system`.
+- So A-0b2 adds `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START`, and every systemd start is *skipped* while that file is absent. An `Assert…=` would fail the start job instead; a `Condition…=` skips it silently ([systemd-devel](https://lists.freedesktop.org/archives/systemd-devel/2022-March/047575.html)).
 
-**Correction to the Session 1 report §12-3b:** `systemctl disable` alone is **not enough**.
-- `deploy.sh` respects a disabled unit (CONFIRMED, `deploy.sh` at `015d2ce` lines ~104–117).
-- But `deploy.sh` then launches `sync.sh`.
-- `sync.sh` at `015d2ce` runs `systemctl restart algo-trader.service` whenever `origin/main` differs from the checkout. It does this **regardless of the enabled state** (CONFIRMED, `sync.sh` lines ~45–62).
-- `origin/main` (`80b4343`) already differs from the checkout (`015d2ce`). So if `deploy.sh` runs for any reason, the bot starts within about 60 s on `80b4343`.
-- `systemctl mask` is not available either: the unit file is installed in `/etc/systemd/system`, and `mask` refuses to replace it.
+### 4.1 Commands (one block; runs in a child shell, so a STOP or a failure ends only the block, not the terminal)
 
-A-0 therefore proposes **A-0b2**, a drop-in `ConditionPathExists=` guard. Every systemd start of the bot is then *skipped* until an allow-file exists: boot, `deploy.sh`, the `sync.sh` restart, and a manual `systemctl start`. Nothing fails and nothing else changes.
+```bash
+bash -euo pipefail <<'GATEA0'
+cd /opt/algo-trader
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+UNIT=algo-trader.service
+UNIT_FILE=/etc/systemd/system/algo-trader.service
+DROPIN=/etc/systemd/system/algo-trader.service.d/gate-a0.conf
+ALLOW=/var/lib/algo-trader/ALLOW_BOT_START
+KS=/opt/algo-trader/data/kill_switch.json
+RUN_RE='[p]ython3?[^ ]* +([^ ]*/)?main\.py( |$)|[b]ash +([^ ]*/)?sync\.sh( |$)'   # bot (any launcher) or sync.sh
+SNAP=/var/lib/algo-trader/gate_a0/$TS
+STAGE=preconditions
 
-**What the kill switch covers (A-0a), in light of the new evidence:**
-- It blocks every IBKR submission **and** the IBKR flatten path (CONFIRMED, `bot/brokers/ibkr_broker.py` ~240 and ~640).
-- If IBKR paper positions are open, they must be closed manually in the Gateway/TWS while it is on.
+# Read-only state report on EVERY exit. It never changes, undoes or releases anything.
+report() {
+  rc=$?
+  echo "----- STATE AT EXIT (exit=$rc) -----"
+  python3 -I -c 'import json,sys; s=json.load(open(sys.argv[1])); print("kill_switch_active=%s reason=%s" % (s.get("active"), s.get("reason")))' "$KS" 2>&1 || true
+  echo "unit_file_state=$(systemctl is-enabled $UNIT 2>&1 || true) active=$(systemctl is-active $UNIT 2>&1 || true)"
+  echo "drop_in=$([ -e $DROPIN ] && echo present || echo absent) allow_file=$([ -e $ALLOW ] && echo PRESENT || echo absent)"
+  ps -eo pid,args | grep -E "$RUN_RE" || echo "processes: no main.py or sync.sh"
+  if [ "$rc" != 0 ] && [ "$STAGE" = preconditions ]; then
+    echo "A-0 STOPPED BEFORE ANY CHANGE. Send this output."
+  elif [ "$rc" != 0 ]; then
+    echo "A-0 DID NOT COMPLETE (failed during: $STAGE). Nothing was rolled back automatically and the kill switch was NOT released."
+    echo "Every partial state is safe. Send this output; undo nothing without approval."
+  fi
+}
+trap report EXIT
+
+# 0. PRECONDITIONS (read-only). Any STOP happens before anything is changed.
+stop() { echo "STOP (nothing changed): $*"; exit 2; }
+if ps -eo pid,args | grep -E "$RUN_RE"; then stop "main.py or sync.sh is running"; fi
+[ "$(systemctl is-active $UNIT || true)" = inactive ]                  || stop "bot unit is not inactive"
+[ "$(systemctl show -p FragmentPath --value $UNIT)" = "$UNIT_FILE" ]   || stop "unexpected unit file location"
+[ "$(systemctl show -p NeedDaemonReload --value $UNIT)" = no ]         || stop "unit files changed on disk but not loaded"
+[ ! -e "$ALLOW" ]                                                      || stop "allow-file $ALLOW already exists"
+[ ! -e "$DROPIN" ]                                                     || stop "a gate-a0 drop-in already exists"
+command -v systemd-analyze >/dev/null                                  || stop "systemd-analyze missing (needed to verify the guard)"
+python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$KS"    || stop "kill_switch.json missing or unreadable"
+[ "$(git rev-parse HEAD)" = 015d2cea927b9b4db3ee65604e0b4ebb58211e61 ] || stop "HEAD is not 015d2ce"
+[ -z "$(git status --porcelain --untracked-files=no)" ]                || stop "modified tracked files"
+echo "preconditions: OK"
+
+# 1. PRESERVE (nothing printed; .env is hashed, never copied)
+STAGE=preserve
+install -d -m 0700 "$SNAP"
+git rev-parse HEAD > "$SNAP/head.txt"
+cp -p "$KS" "$SNAP/kill_switch.json.before"
+if [ -f data/bot_state.json ]; then cp -p data/bot_state.json "$SNAP/bot_state.json.before"; else echo absent > "$SNAP/bot_state.absent"; fi
+sha256sum .env > "$SNAP/env.sha256"
+systemctl show $UNIT algo-trader-dashboard.service ibgateway.service \
+  -p Id,UnitFileState,ActiveState,SubState,FragmentPath,DropInPaths > "$SNAP/units.before"
+ls -l /etc/systemd/system/multi-user.target.wants/ > "$SNAP/wants.before"
+crontab -l -u root > "$SNAP/root_crontab.before" 2> "$SNAP/root_crontab.err" || true
+chmod 600 "$SNAP"/*
+echo "preserved: $SNAP"
+
+STAGE=A-0a
+# A-0a. KILL SWITCH ON (the repository's own function; writes data/kill_switch.json only). Verified by re-reading.
+venv/bin/python3 -I -c 'import sys; sys.path.insert(0, "/opt/algo-trader")
+from bot.kill_switch import activate_kill_switch, get_kill_switch_state
+reason = "Gate A-0 containment, operator-approved, " + sys.argv[1]
+activate_kill_switch(reason)
+s = get_kill_switch_state(); print("A-0a: kill_switch_active=%s" % s["active"])
+sys.exit(0 if (s["active"] is True and s.get("reason") == reason) else 3)' "$TS"
+
+# A-0b. NO START AT BOOT. Verified: disabled and the boot link gone.
+STAGE=A-0b
+systemctl disable $UNIT
+[ "$(systemctl is-enabled $UNIT || true)" = disabled ]                  || { echo "A-0b: still enabled"; exit 3; }
+[ ! -e /etc/systemd/system/multi-user.target.wants/$UNIT ]             || { echo "A-0b: boot link still present"; exit 3; }
+echo "A-0b: disabled; boot link removed"
+
+# A-0b2. NO SYSTEMD START BY ANY PATH until the allow-file exists. Verified as LOADED by systemd, and evaluated.
+STAGE=A-0b2
+install -d -m 0755 "$(dirname "$DROPIN")"
+printf '[Unit]\n# Gate A-0 %s: systemd starts this unit only while %s exists.\nConditionPathExists=%s\n' "$TS" "$ALLOW" "$ALLOW" > "$DROPIN"
+systemctl daemon-reload
+[ "$(systemctl show -p NeedDaemonReload --value $UNIT)" = no ]         || { echo "A-0b2: reload not effective"; exit 3; }
+DIP=$(systemctl show -p DropInPaths --value $UNIT)
+case " $DIP " in *" $DROPIN "*) ;; *) echo "A-0b2: drop-in not loaded"; exit 3;; esac
+LOADED=$(systemctl cat $UNIT)
+grep -qxF "ConditionPathExists=$ALLOW" <<< "$LOADED"                    || { echo "A-0b2: condition not in the loaded unit"; exit 3; }
+if systemd-analyze condition "ConditionPathExists=$ALLOW" >/dev/null 2>&1; then echo "A-0b2: condition would PASS"; exit 3; fi
+[ "$(systemctl is-active $UNIT || true)" = inactive ]                  || { echo "A-0b2: unit not inactive"; exit 3; }
+echo "A-0b2: guard loaded; ConditionPathExists evaluates FALSE (a systemd start would be skipped)"
+
+STAGE=A-0c
+# A-0c. Only if root's crontab has a deploy.sh line (P1 found none: expected no-op).
+if grep -q 'deploy\.sh' "$SNAP/root_crontab.before"; then
+  grep -v 'deploy\.sh' "$SNAP/root_crontab.before" > "$SNAP/root_crontab.after" || true
+  chmod 600 "$SNAP/root_crontab.after"; crontab -u root "$SNAP/root_crontab.after"
+  echo "A-0c: removed $(grep -c 'deploy\.sh' "$SNAP/root_crontab.before") line(s)"
+else
+  echo "A-0c: no deploy.sh line in root's crontab; nothing changed"
+fi
+
+# A-0d (sync.sh stays stopped) and A-0e (gateway untouched): no action.
+
+# 2. FINAL VERIFY (read-only)
+STAGE=final-verify
+[ "$(git rev-parse HEAD)" = "$(cat "$SNAP/head.txt")" ] && echo "HEAD unchanged" || { echo "HEAD CHANGED"; exit 3; }
+sha256sum -c "$SNAP/env.sha256"
+echo "crontab deploy.sh lines: $(crontab -l -u root 2>/dev/null | grep -c 'deploy\.sh' || true)"
+echo "systemd-controlled starts (boot, deploy.sh, sync.sh restart, needrestart, systemctl start): SKIPPED by the guard; boot link removed"
+echo "dashboard routes and direct 'python3 main.py': NOT stopped by A-0b/A-0b2; IBKR orders and flatten refused by the kill switch"
+echo "GATE A-0 DONE, snapshot $SNAP"
+GATEA0
+echo "gate_a0_exit=$?"
+```
+
+**Expected on success:**
+- `preconditions: OK`;
+- `A-0a: kill_switch_active=True`;
+- `A-0b: disabled; boot link removed`;
+- `A-0b2: guard loaded; ConditionPathExists evaluates FALSE …`;
+- `A-0c: … nothing changed`;
+- `HEAD unchanged`;
+- `.env: OK`;
+- the two scope lines;
+- `GATE A-0 DONE`;
+- the `STATE AT EXIT (exit=0)` summary;
+- `gate_a0_exit=0`.
+
+### 4.2 Offline tests of the corrected block (mock, not the VPS)
+
+**Mock layout:**
+- `/opt/algo-trader` was a detached checkout of `015d2ce`, with the real `bot/kill_switch.py` and the real `infra/systemd/algo-trader.service` installed at `/etc/systemd/system`.
+- `systemctl` and `crontab` were stubs. The `systemctl` stub refuses `start`/`restart`/`stop` and records every call.
+- `systemd-analyze` was the **real systemd 255** (the same major version as Ubuntu 24.04): it evaluated the condition, and `verify` loaded the drop-in.
+- The tests ran from a script file, so the harness's own command line could not match the process check.
+
+| Test | Expected | Result |
+|---|---|---|
+| T1: normal run | `exit=0`; the kill switch is on with this run's reason; `disabled`; boot link gone; drop-in loaded; the condition evaluates false (real `systemd-analyze`); no start/restart/stop attempted | pass |
+| T2: rollback in reverse order (§4.3) | `kill_switch.json` byte-identical; boot link restored; `DropInPaths` empty | pass |
+| T3: `ALLOW_BOT_START` exists | STOP before any change (no snapshot, kill switch untouched, still enabled) | pass |
+| T4: a `gate-a0.conf` already exists | STOP before any change | pass |
+| T5–T6: `python3 …/main.py` (direct start) or `bash …/sync.sh` running | STOP before any change | pass |
+| T7: unit changed on disk, not loaded (`NeedDaemonReload=yes`) | STOP before any change | pass |
+| T8: the unit is loaded from an unexpected path | STOP before any change | pass |
+| T9–T10: HEAD ≠ `015d2ce`; a modified tracked file | STOP before any change | pass |
+| T11: the kill-switch write fails | stage `A-0a`; **nothing else changed**; still enabled; no drop-in | pass |
+| T12: `systemctl disable` fails | stage `A-0b`; **the kill switch stays ON**; no drop-in; nothing undone | pass |
+| T13: `daemon-reload` fails | stage `A-0b2`; kill switch ON; disabled; nothing undone | pass |
+| T14: the drop-in was written but not loaded | `A-0b2: drop-in not loaded`; kill switch ON; nothing undone | pass |
+| T15: the condition would evaluate true | `A-0b2: condition would PASS`; kill switch ON; nothing undone | pass |
+| T16: a `dashboard/app.py` process is running | not treated as the bot; `exit=0` | pass |
+| T17: the crontab has an `@reboot deploy.sh` line | only that line removed; the other kept | pass |
+
+**Incidental finding (no change proposed now):** `systemd-analyze verify` reports that the deployed `infra/systemd/algo-trader.service` puts `StartLimitIntervalSec` in `[Service]`, where systemd 255 **ignores** it ("Unknown key name … ignoring"). Its restart rate limit therefore uses the default interval. This is recorded as a hardening item under RD-10 (M22 C03).
+
+### 4.3 Rollback and restore (each step separately, in reverse order, each with its own approval)
+
+| Step | Undo | Restore only when |
+|---|---|---|
+| A-0c | `crontab -u root "$SNAP/root_crontab.before"` (the exact previous crontab) | not expected: P1 found no line, so nothing was removed |
+| A-0b2 | `rm /etc/systemd/system/algo-trader.service.d/gate-a0.conf && rmdir --ignore-fail-on-non-empty /etc/systemd/system/algo-trader.service.d && systemctl daemon-reload`. For one supervised start instead: `touch /var/lib/algo-trader/ALLOW_BOT_START`, then remove it after. | at OP3 activation (approved), or for a supervised start the operator approves |
+| A-0b | `systemctl enable algo-trader.service` (re-creates the boot link; starts nothing) | at OP3, when the bot is meant to run unattended |
+| A-0a | `cp -p "$SNAP/kill_switch.json.before" data/kill_switch.json` (exact restore), or `deactivate_kill_switch("…")` | **only at OP3**, after OP2 gateway acceptance, with explicit approval. Never as part of a merge, a deployment or a partial-failure recovery. |
+| **Partial failure** | **none automatic.** The block stops, prints the read-only `STATE AT EXIT` and exits. Every partial state is safe: an active kill switch, a disabled unit or an unloaded drop-in each make a start *less* likely. The operator sends the output; any undo of A-0b/A-0b2 is a separate approval. **The kill switch is never released as recovery.** | — |
+
+**Restore conditions:** the operator approves OP3, the gateway passes OP2, and the deployed tree is the reviewed merge.
+
+### 4.4 What A-0 contains and what it does not (systemd vs direct starts)
 
 **Which control covers which order path (code at `015d2ce`; unchanged in `5b0f40b`):**
 
@@ -190,167 +375,79 @@ So **A-0a covers every IBKR order path, including one started from the dashboard
 
 A-0 does not change the policy. It lives in a production database, and the dashboard's broker-allocation control is the audited way to change it. Instead, **S2-P reads it** (§5) to confirm whether the second barrier is closed.
 
-**A-0's scope:** A-0 protects against **automatic and accidental** activation (reboot, `deploy.sh`/`sync.sh`, `needrestart`, a stray `systemctl start`). It **does not** protect against an authenticated dashboard user, who can start the bot (five routes) and deactivate the kill switch. Two ways to close that:
-- the operator's rule, until OP3: do not use those five dashboard actions, the kill-switch release, or the broker-allocation controls;
-- optionally **A-0f**: stop the dashboard as well (`systemctl stop algo-trader-dashboard.service`; undo with `systemctl start`). The cost is losing the dashboard as the operator's view until Gate A-2.
+| Start path | After A-0 | Control |
+|---|---|---|
+| Boot; `deploy.sh`; the `sync.sh` restart; `needrestart`; a manual `systemctl start`/`restart` (**systemd-controlled**) | **skipped**: the unit does not start | A-0b (no boot link) + A-0b2 (`ConditionPathExists` false) |
+| The five dashboard routes (`/api/start`, `/api/restart`, `/api/telegram/save`, `/api/strategy/save`, `/api/strategy/reset`) and a direct `python3 main.py` (**outside systemd**) | **not prevented**: the process can start | for IBKR orders: the kill switch (A-0a) refuses every submission **and every automated flatten**. For any broker: the allocation policy (S2-P) decides whether a submission is even attempted. |
 
-**Not recommended by default.** Hardening the dashboard (start routes, root service, exposure) is M22 C03 / M15.3 scope, and a code change.
+**Operator rule from now until OP3:**
+- keep the dashboard running (A-0f withdrawn);
+- do **not** use the five bot-start routes;
+- do **not** use the kill-switch release, or change the broker-allocation controls.
 
-### 4.1 Commands (one block; runs in a child shell, so a STOP or a failure ends only the block, not the terminal)
+**The kill switch also blocks IBKR automated flattening:** `IBKRBroker.flatten()` checks it before any broker action (CONFIRMED in code at `015d2ce`). While A-0a is on, any open IBKR paper position can only be closed manually in TWS/Gateway or the IBKR web portal. Session 2 (the latest recorded `broker_positions`) and the Flex statements show whether any position is open. Review them before approving A-0.
+
+**Containment claim:** *pending S2-P.*
+- IBKR orders on every path are blocked by A-0a. That holds whatever the policy says.
+- eToro paper and eToro live are not covered by the file kill switch. They are contained only if the allocation policy (S2-P) shows them disabled or killed. eToro live is reachable only through the operator's own CLI.
+- This row is completed from the S2-P output **before** A-0 goes back for its final review.
+
+## 5. Session 2 (APPROVED 2026-11-05 15:48 UTC; to be run by the operator)
+
+**Approved:** Gate B Session 2, read-only, as `nobody`, using the pinned, checksum-verified scripts, with S2-P and S2-W.
+
+**Restrictions** (from the approval):
+- no production DB changes;
+- no service starts, stops or restarts;
+- no broker API connections or orders;
+- no git reset, deployment or merges;
+- review the output before sharing;
+- never publish DB copies or IBKR statements in the public repo;
+- stop immediately on a failed copy or a failed integrity check.
+
+**S2-U (unattended upgrades) is not approved yet.**
+
+**The exact command** (one paste in the VS Code root terminal; everything runs as `nobody`):
+- It downloads the docs tarball at `14b641c` (the same commit as Session 1) into a fresh, private `/tmp/m21_op1_s2` (umask 077) and verifies all eight sha256 values (re-verified against GitHub on 5 Nov).
+- It then runs `op1_readonly.sh` with `OP1_OUT=/tmp/m21_op1_s2`, then S2-P on the verified `signals_copy.db`, then S2-W on `bot.log`.
+- Finally it prints the text outputs with account ids and the host name masked.
+- The block is the one sent to the operator on 5 Nov at about 16:00 UTC, and is recorded here verbatim:
 
 ```bash
-bash -euo pipefail <<'GATEA0'
-cd /opt/algo-trader
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-SNAP=/var/lib/algo-trader/gate_a0/$TS
-install -d -m 0700 "$SNAP"
-echo "snapshot dir: $SNAP"
-
-# 0. Preconditions (read-only). Any STOP means: do nothing more, report the output.
-RUN_RE='[p]ython3?[^ ]* +([^ ]*/)?main\.py( |$)|[b]ash +([^ ]*/)?sync\.sh( |$)'   # bot (any launcher) or sync.sh
-if ps -eo pid,args | grep -E "$RUN_RE"; then echo "STOP: main.py or sync.sh is running"; exit 2; fi
-[ "$(systemctl is-active algo-trader.service || true)" = inactive ] || { echo "STOP: bot unit not inactive"; exit 2; }
-git rev-parse HEAD > "$SNAP/head.txt"
-[ "$(cat "$SNAP/head.txt")" = 015d2cea927b9b4db3ee65604e0b4ebb58211e61 ] || { echo "STOP: HEAD is not 015d2ce"; exit 2; }
-git status --porcelain --untracked-files=no > "$SNAP/git_status.txt"
-[ ! -s "$SNAP/git_status.txt" ] || { echo "STOP: modified tracked files"; exit 2; }
-
-# 1. Preserve (nothing is printed; .env is hashed, not copied)
-cp -p data/kill_switch.json "$SNAP/kill_switch.json.before"
-[ -f data/bot_state.json ] && cp -p data/bot_state.json "$SNAP/bot_state.json.before" || echo absent > "$SNAP/bot_state.absent"
-sha256sum .env > "$SNAP/env.sha256"
-stat -c '%a %U %G %s %y %n' .env data/kill_switch.json > "$SNAP/files.stat"
-systemctl show algo-trader.service algo-trader-dashboard.service ibgateway.service \
-  -p Id,UnitFileState,ActiveState,SubState,FragmentPath,DropInPaths > "$SNAP/units.before"
-ls -l /etc/systemd/system/multi-user.target.wants/ > "$SNAP/wants.before"
-crontab -l -u root > "$SNAP/root_crontab.before" 2> "$SNAP/root_crontab.err" || true
-chmod 600 "$SNAP"/*
-
-# A-0a. Kill switch ON (the repository's own function; writes data/kill_switch.json only)
-venv/bin/python3 -I -c 'import sys; sys.path.insert(0, "/opt/algo-trader")
-from bot.kill_switch import activate_kill_switch, get_kill_switch_state
-activate_kill_switch("Gate A-0 containment, operator-approved, " + sys.argv[1])
-s = get_kill_switch_state(); print("kill_switch_active=%s" % s["active"]); sys.exit(0 if s["active"] is True else 3)' "$TS"
-
-# A-0b. No start at boot
-systemctl disable algo-trader.service
-[ "$(systemctl is-enabled algo-trader.service || true)" = disabled ] || { echo "STOP: unit still enabled"; exit 3; }
-
-# A-0b2. No systemd start by any path until an allow-file exists (covers deploy.sh -> sync.sh -> systemctl restart)
-install -d -m 0755 /etc/systemd/system/algo-trader.service.d
-printf '[Unit]\n# Gate A-0 %s: the bot starts only while this file exists.\nConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START\n' "$TS" \
-  > /etc/systemd/system/algo-trader.service.d/gate-a0.conf
-[ ! -e /var/lib/algo-trader/ALLOW_BOT_START ] || { echo "STOP: allow-file exists"; exit 3; }
-systemctl daemon-reload
-
-# A-0c. Only if P1 found a deploy.sh line in root's crontab
-if grep -q 'deploy\.sh' "$SNAP/root_crontab.before"; then
-  grep -v 'deploy\.sh' "$SNAP/root_crontab.before" > "$SNAP/root_crontab.after" || true
-  chmod 600 "$SNAP/root_crontab.after"
-  crontab -u root "$SNAP/root_crontab.after"
-  echo "A-0c: removed $(grep -c 'deploy\.sh' "$SNAP/root_crontab.before") crontab line(s)"
-else
-  echo "A-0c: no deploy.sh line in root's crontab; nothing changed"
+runuser -u nobody -- env HOME=/tmp PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin bash -c '
+echo "===== S2-1 Session 2: copies, reports, evidence (as $(id -un), read-only)"
+umask 077
+O=/tmp/m21_op1_s2
+mkdir "$O" || { echo "STOP: $O already exists (an earlier Session 2 run): report it, do not reuse it"; exit 1; }
+cd "$O" || exit 1
+H=$(hostname -s)
+mask() { sed -E -e "s/\b(DU|DF|U)[0-9]{5,}\b/\1***/g" -e "s/$H/<host>/g" "$@"; }
+DOCS=14b641c635fe3cb80815292b8bba940f5885b7f0
+curl -fsSL -o docs.tgz https://codeload.github.com/mikemitakidis/algotrading/tar.gz/$DOCS || { echo "STOP: DOWNLOAD FAILED"; exit 1; }
+mkdir docs && tar -xzf docs.tgz -C docs --strip-components=1 || { echo "STOP: UNPACK FAILED"; exit 1; }
+sha256sum -c - <<SUMS || { echo "STOP: CHECKSUM MISMATCH - nothing was run"; exit 1; }
+e2c5c25609f0f3391a282b1db78c335ab6c667d80c09a65048cc352182b4fc29  docs/docs/runbooks/op1/op1_deploy_discovery.sh
+3df72bc0a788d3587ccd2fe60b43e9453dc3af7058f655fff41255819e16e8ce  docs/docs/runbooks/op1/op1_readonly.sh
+f3de98868ae779c11c6f8b991ac6dd5ba1cf925549aee7ae6e2a58811c250d32  docs/docs/runbooks/op1/op1_runtime_status.sh
+dcaf78169bfadd1aacf9e2f0275deef4ba73f05d58624284d14052957f9f800e  docs/docs/runbooks/op1/op1_parquet_basis.py
+f7022b398dafe2e11a2007092b90a602abe18cdc908fd615db2ac5b397f21f64  docs/docs/runbooks/op1/op1_sql.py
+eec185efca64b310b60e2ea981270839fbe8dbfaf3b76dddf12f8aedbd7634ab  docs/docs/runbooks/sql/old_paper_journal.sql
+fe4195c5d50d7173e9b70d4e1ef3d2766b52bc765a2f9f908bcd290cf46d2f36  docs/docs/runbooks/sql/old_paper_signals.sql
+030df4bb55d5ae8a4dcfbde04da4c80b7235b52d8fade83925bf34cf2cc48abb  docs/docs/runbooks/sql/op1_m16_inventory.sql
+SUMS
+OP1_OUT="$O" bash docs/docs/runbooks/op1/op1_readonly.sh > /dev/null; rc=$?
+echo "op1_exit=$rc"
+if [ "$rc" != 0 ]; then
+  echo "STOP: Session 2 stopped itself (exit $rc). Nothing else runs. Send only this op1.log; do not use or share any *_copy.db:"
+  mask op1.log; exit 1
 fi
 
-# A-0d. sync.sh stays stopped: no action (checked in step 0 and again below). A-0e. Gateway: no action.
-
-# 2. Verify (read-only)
-python3 -I -c 'import json; print("kill_switch_active=%s" % json.load(open("/opt/algo-trader/data/kill_switch.json"))["active"])'
-echo "bot enabled: $(systemctl is-enabled algo-trader.service || true)"
-systemctl show -p DropInPaths algo-trader.service
-systemctl is-active algo-trader.service algo-trader-dashboard.service ibgateway.service || true
-echo "crontab deploy.sh lines: $(crontab -l -u root 2>/dev/null | grep -c 'deploy\.sh' || true)"
-ps -eo pid,args | grep -E "$RUN_RE" || echo "no main.py or sync.sh process"
-[ "$(git rev-parse HEAD)" = "$(cat "$SNAP/head.txt")" ] && echo "HEAD unchanged" || echo "HEAD CHANGED"
-sha256sum -c "$SNAP/env.sha256"
-echo "GATE A-0 DONE, snapshot $SNAP"
-GATEA0
-echo "gate_a0_exit=$?"
-```
-
-**Expected result:**
-- `kill_switch_active=True`;
-- `bot enabled: disabled`;
-- `DropInPaths=/etc/systemd/system/algo-trader.service.d/gate-a0.conf`;
-- `inactive` / `active` / `failed` for bot / dashboard / gateway (unchanged);
-- `crontab deploy.sh lines: 0`;
-- no `main.py`/`sync.sh` process;
-- `HEAD unchanged`;
-- `.env: OK`;
-- `gate_a0_exit=0`.
-
-Claude has **not** run this block on the VPS. It was exercised in a mock of the VPS layout, with stub `systemctl`/`crontab` and the real `bot/kill_switch.py` from `015d2ce`; results are in §4.2. It must be reviewed before use.
-
-### 4.2 Offline test of the block (mock, not the VPS)
-
-**Mock layout:**
-- `/opt/algo-trader` was a detached checkout of `015d2ce`, carrying the real `bot/kill_switch.py`.
-- `data/kill_switch.json` matched the observed content (inactive, "test cleanup").
-- `systemctl` and `crontab` were stubs that record calls and state.
-- Every test ran from a script file, so the test harness's own command line could not match the process check.
-
-| Test | Expected | Result |
-|---|---|---|
-| T1: cron has `@reboot … deploy.sh` and an unrelated line | `exit=0`; kill switch True; disabled; drop-in present; one line removed, the other kept; HEAD unchanged; `.env: OK` | pass |
-| T2: rollback in reverse order | crontab byte-identical; drop-in removed; enabled; `kill_switch.json` byte-identical (inactive) | pass |
-| T3: a `python3 …/main.py` process running | `STOP`, `exit=2`, nothing changed | pass |
-| T4: a `bash …/sync.sh` process running | `STOP`, `exit=2`, nothing changed | pass |
-| T5: HEAD ≠ `015d2ce` | `STOP`, `exit=2`, nothing changed | pass |
-| T6: a modified tracked file | `STOP`, `exit=2`, nothing changed | pass |
-| T7: no root crontab | `A-0c: … nothing changed`, `exit=0` | pass |
-| T8: crontab without `deploy.sh` | crontab untouched, `exit=0` | pass |
-| T9: a `dashboard/app.py` process running | not treated as the bot, `exit=0` | pass |
-
-**Not testable offline:** systemd's behaviour when a condition fails, because the stubs cannot show it.
-- Per systemd's documentation, a failing `Condition…=` *skips* the start silently and does not fail the unit. An `Assert…=` would fail the start job ([systemd-devel thread quoting systemd.unit(5)](https://lists.freedesktop.org/archives/systemd-devel/2022-March/047575.html)).
-- After A-0 the operator verifies only with `systemctl show -p DropInPaths`. **No test start is attempted.**
-
-### 4.3 Rollback (each step separately; reverse order; each needs approval)
-
-| Step | Undo | Restore only when |
-|---|---|---|
-| A-0c | `crontab -u root "$SNAP/root_crontab.before"` (the exact previous crontab) | not recommended. The legacy `@reboot deploy.sh` path is superseded by systemd (M15.0). Only if A-0c demonstrably caused a problem. |
-| A-0b2 | `rm /etc/systemd/system/algo-trader.service.d/gate-a0.conf && rmdir --ignore-fail-on-non-empty /etc/systemd/system/algo-trader.service.d && systemctl daemon-reload`. For a single supervised start instead: `touch /var/lib/algo-trader/ALLOW_BOT_START`, then remove it after. | at OP3 activation (approved), or for a supervised start the operator approves |
-| A-0b | `systemctl enable algo-trader.service` (re-creates the boot link; starts nothing) | at OP3, when the bot is meant to run unattended |
-| A-0a | `cp -p "$SNAP/kill_switch.json.before" data/kill_switch.json` (exact restore), or `deactivate_kill_switch("…")` | **only at OP3**, after OP2 gateway acceptance, with explicit approval. Never as part of a merge or deployment. |
-| Partial failure | if the block stops after A-0a or A-0b, undo the completed steps in reverse order, or keep them and report (all of them are safe states) | — |
-
-**Restore conditions:** the operator approves OP3, the gateway passes OP2, and the deployed tree is the reviewed merge.
-
-**What A-0 changes:** with A-0 in place, no automatic path can start the bot: reboot, `deploy.sh`/`sync.sh`, `needrestart`, or a stray `systemctl start`. Gate A-1's merges cannot reach the VPS either. The ways that remain:
-- the five dashboard routes (F-7);
-- a manual `main.py` launch.
-
-On any of these, **every IBKR order and flatten is refused** while the kill switch is on. A dashboard user can still release the kill switch; that is out of A-0's scope (see A-0f).
-
-## 5. Session 2 readiness (NOT executed)
-
-**What is ready:**
-- the command block in `docs/reviews/M21_Gate_B_Session1_Report_2026-11-05.md` §13 (docs branch @ `7d19f39`), unchanged;
-- the source pinned at `6c82b1a`, with an eight-file sha256 manifest;
-- runs as `nobody`;
-- writes only `/tmp/m21_op1`;
-- stops with exit 2/3/4 on a refusal, a failed copy or a failed integrity check.
-
-**What it answers:**
-- historical coverage and completed-bar/timestamp integrity (`m16_inventory.txt`, `parquet_basis.*`);
-- old paper activity since 1 June: signals, orders, claimed fills, positions/outcomes and M14 records (`old_paper_signals.txt`, `old_paper_journal.txt`);
-- inputs for the E5 Flex reconciliation (`signals_copy.db`, `paper_lifecycles_copy.db`).
-
-**Operator inputs:** two IBKR Flex exports (paper and live, 1 June → the export date) as specified in runbook OP1.6, with `ClientAccountID` kept as exported. Claude does not request or store credentials.
-
-**Independent of A-0:** Session 2 can run before or after it, and it changes nothing.
-
-**Add-ons recommended with Session 2.** All are read-only; each prints only flags, counts and fixed log formats.
-
-- **S2-P: the broker allocation policy** (the second barrier, F-5). Run as `nobody` on the **copy** Session 2 makes. It prints only the gating flags, no amounts:
-
-```bash
-runuser -u nobody -- env HOME=/tmp PATH=/usr/bin:/bin python3 -I - <<'PY'
+echo "===== S2-P broker allocation policy (verified copy only)"
+grep -qE "copied signals\.db -> signals_copy\.db .*quick_check=ok" op1.log || { echo "STOP: no verified signals_copy.db"; mask op1.log; exit 1; }
+python3 -I - <<"PY"
 import sqlite3, json
-c = sqlite3.connect("file:/tmp/m21_op1/signals_copy.db?mode=ro", uri=True)
-r = c.execute("SELECT value FROM portfolio_risk_state WHERE key='broker_allocation_policy'").fetchone()
+c = sqlite3.connect("file:/tmp/m21_op1_s2/signals_copy.db?mode=ro", uri=True)
+r = c.execute("SELECT value FROM portfolio_risk_state WHERE key=?", ("broker_allocation_policy",)).fetchone()
 if r is None:
     print("broker_allocation_policy: ABSENT (the bot would use the runtime fail-safe)")
 else:
@@ -359,29 +456,50 @@ else:
         b = p.get(blk) or {}; print(blk, {k: b.get(k) for k in F if k in b})
     rt = p.get("routing") or {}; print("routing", {k: rt.get(k) for k in ("allowed_brokers", "etoro_live_enabled", "default_broker")})
 PY
-```
 
-- **S2-W: the watchdog error count, its period, and why the bot was signal-only on 30 Jun.** Run as `nobody` on `bot.log`:
-
-```bash
-runuser -u nobody -- env HOME=/tmp PATH=/usr/bin:/bin bash -c '
+echo "===== S2-W watchdog evidence and the 30 Jun signal-only reason (bot.log, read-only)"
 L=/opt/algo-trader/logs/bot.log
 echo "tick_errors=$(grep -c "\[GW-WATCHDOG\] tick error" $L) no_loop=$(grep -c "no current event loop in thread .gw-watchdog." $L)"
 echo "first=$(grep -m1 "\[GW-WATCHDOG\] tick error" $L | cut -c1-23) last=$(grep "\[GW-WATCHDOG\] tick error" $L | tail -n1 | cut -c1-23)"
-grep -m1 -A12 "\[GW-WATCHDOG\] tick error" $L | cut -c1-160   # the full first traceback: shows whether it passes through api_probe → IB()
+grep -m1 -A12 "\[GW-WATCHDOG\] tick error" $L | cut -c1-160
 grep -E "\[BROKER\] (wrapping|policy unavailable)" $L | tail -n 2 | cut -c1-200
+
+echo "===== S2-R results to share (text only; account ids and host name masked; each file cut at 250 lines)"
+for f in op1.log m16_inventory.txt old_paper_signals.txt old_paper_journal.txt parquet_basis_summary.txt env_metadata.txt runtime_status.txt deploy_discovery.txt; do
+  [ -f "$f" ] || { echo "===== $f: absent"; continue; }
+  echo "===== $f ($(wc -l < "$f") lines)"
+  mask "$f" | head -n 250
+done
+ls -l "$O"/*_copy.db | awk "{print \$1, \$3, \$5, \$9}"
+echo "===== SESSION 2 COMPLETE"
 '
 ```
 
-- **S2-U (optional; root; read-only): were the 06:xx UTC restarts unattended upgrades?** It answers Q7 and matters for the OP4 soak, not for A-0:
+**It stops by itself, and nothing further runs, when:**
+- the download or unpack fails, or any checksum is wrong (nothing is run);
+- `/tmp/m21_op1_s2` already exists (each run needs a fresh directory);
+- `op1_readonly.sh` exits with 2 (refused), 3 (a DB copy failed) or 4 (`quick_check` not ok). Then only the masked `op1.log` is printed, and no `*_copy.db` may be used or shared;
+- S2-P is about to run without a verified `signals_copy.db`.
 
-```bash
-grep -h -A3 -E "^Start-Date: 2026-(06-26|06-30|09-01|09-03|10-02|10-22|10-24|10-29)" /var/log/apt/history.log* 2>/dev/null | grep -E "Start-Date|Commandline" | cut -c1-160
-zgrep -h -iE "restarting services|systemctl restart" /var/log/apt/term.log* 2>/dev/null | tail -n 12 | cut -c1-200
-grep -hE "nrconf\{restart\}" /etc/needrestart/needrestart.conf /etc/needrestart/conf.d/*.conf 2>/dev/null
-```
+**Offline test of this exact block** (mock VPS; the `curl` stub serves the real `14b641c` tarball from `git archive`):
 
-**Approval:** it needs its own approval (Session 1 report §14, row 3).
+| Case | Result |
+|---|---|
+| normal run | `op1_exit=0`; three copies made and checked; S2-P, S2-W, S2-R printed; outputs mode 700/600, owned by `nobody` |
+| run again | STOP: the directory exists |
+| a database copy fails | `op1_exit=3`; STOP; only `op1.log` printed |
+| a tampered script in the tarball | `CHECKSUM MISMATCH`; nothing run |
+
+**What it answers:**
+- historical coverage and completed-bar/timestamp integrity;
+- old paper activity since 1 June: signals, intents, claimed fills, positions/outcomes, M14 records;
+- inputs for the E5 Flex reconciliation;
+- S2-P: the current allocation-policy gates;
+- S2-W: the watchdog-error count, its period and the first full traceback, plus the reason the bot was signal-only on 30 Jun.
+
+**Operator inputs:** the two IBKR Flex exports (paper and live, 1 June → the export date), provided separately, as specified in runbook OP1.6.
+
+**Evidence:** *pending the operator's output.* It will be recorded here with exact UTC timestamps.
 
 ## 6. Roadmap reconciliation (in this PR)
 
@@ -398,7 +516,7 @@ grep -hE "nrconf\{restart\}" /etc/needrestart/needrestart.conf /etc/needrestart/
   - the version/timestamp convention;
   - the update protocol;
   - the handoff block;
-  - operator decisions D-1…D-8;
+  - operator decisions RD-1…RD-8;
   - discrepancies;
   - the append-only changelog.
 - **`MILESTONE_STATUS.md`:**
@@ -408,25 +526,25 @@ grep -hE "nrconf\{restart\}" /etc/needrestart/needrestart.conf /etc/needrestart/
   - the pre-June future table labelled historical.
 - **Untouched:** the 71 register tasks, the M21 Finish Line, every historical milestone requirement. No renumbering.
 
-## 7. Open questions for the reviewer
+## 7. Open questions for the final A-0 review (after Session 2)
 
-1. A-0 is scoped to automatic and accidental activation. Should it also include **A-0f** (stop the dashboard until Gate A-2), given that F-7 lets an authenticated dashboard user start the bot and release the kill switch?
-2. Is the A-0b2 drop-in guard acceptable as "prevent boot-time bot activation"? With P1 clean, the `deploy.sh` path needs a manual run.
-3. Is the `gw-watchdog` analysis (§2a) sound, and should its fix (D-9) be required before OP2?
-4. Should the hardening items be added to the register? They are: the five dashboard start routes (F-7); no working copy in `/opt/algo-trader` while the bot runs (F-10); unattended restarts during the soak (F-11).
-5. The roadmap questions are unchanged: the M22 sub-number proposal (D-2); merging C01 after the soak; the M18–M20 meanings (D-1).
+1. Are the seven corrections (§4, corrections table) complete and correctly implemented, in particular the effective-condition verification and the no-automatic-release rule for partial failures?
+2. Once S2-P is in: does the allocation policy keep IBKR paper and live, and eToro paper and live, from attempting submissions? If not, does A-0 need a policy step? That would be a production-DB write, needing its own approval.
+3. Do Session 2's `broker_positions` and the Flex statements show any open IBKR position that would need a manual close while the kill switch blocks the automated flatten?
+4. PR #35 (A18): is the protected-file transition acceptable (`_protected_baselines.py`), and should A18 be required before OP2?
+5. The roadmap questions are unchanged: RD-2 (the M22 sub-numbers); C01 merging after the soak; RD-1 (the M18–M20 meanings).
 
 ## 8. Returned items
 
 | Item | Value |
 |---|---|
-| Exact UTC timestamp | 2026-11-05T15:24Z UTC (same in Europe/London, GMT) |
-| Latest GitHub `main` SHA | `80b4343db4a22413aa670efd32e24952d53e532e` [GH] |
-| VPS deployed SHA | `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R]. The bot last started on 30 Jun with HEAD `04bf872`. |
-| Roadmap version | **v3.0** (DRAFT); status 3.0.2 |
-| Documentation PR | https://github.com/mikemitakidis/algotrading/pull/34 (draft). Head SHA is in the PR record and Issue #3 (R11). |
-| M21 status | **engineering:** ENGINEERING_COMPLETE on 23 draft PRs; A16 NOT_STARTED; new defect D-9 (`gw-watchdog`) not yet fixed. **Merge:** not merged (BLOCKED_BY_APPROVAL). **Deployment:** none of the M21 PR code. **Paper:** NOT_STARTED; the gateway is stopped. **Acceptance:** not FULLY_ACCEPTED. |
-| M22–M25 | M22 (M22.1–6, C01–C11; sub-number mapping proposed); M23 (M23.1–5, D01–D10); **M24/M25 UNDEFINED** |
-| Unresolved operator decisions | **roadmap:** D-1…D-10 (`ROADMAP.md` R14). **Operational:** Gate A-0 (± A-0f), Session 2 + S2-P/S2-W (± S2-U) + Flex exports, Gate A-1, Gate A-2, OP2–OP5. |
-| Next recommended operational step | **Gate A-0 (a, b, b2; c no-op; d, e)**; then Session 2 with S2-P and S2-W |
-| Next recommended engineering task | **D-9:** fix the `gw-watchdog` event-loop defect offline (small; needed for a meaningful B-6/OP2). Then **C01** (Track B). Both on isolated branches, draft PRs, no deployment. |
+| Exact UTC timestamp | 2026-11-05T16:13Z UTC (same in Europe/London, GMT) |
+| GitHub `main` | `80b4343db4a22413aa670efd32e24952d53e532e` [GH] |
+| VPS deployed | `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R] |
+| Roadmap / status | v3.0 (DRAFT) / status 3.0.3 |
+| Documentation PR | #34 (draft); head SHA in the PR record and Issue #3 (R11) |
+| Watchdog fix | **A18**, PR #35 (draft), head `da56e12a9e9baec8634b618cb936be1f40a84a78` |
+| Session 2 | APPROVED; command sent; **output pending** |
+| Gate A-0 | NOT approved; corrected (§4) and tested offline (17 cases); final review after Session 2 |
+| Next operational step | the operator runs Session 2 and provides the Flex exports. Then S2-P and the positions complete §4.4, and A-0 goes back for final review. |
+| Next engineering task | the review of PR #35 (A18); then C01 (Track B) after approval to start |

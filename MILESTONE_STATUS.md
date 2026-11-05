@@ -5,16 +5,23 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.2 (roadmap v3.0), 5 Nov 2026
+> ## Current operating state: status 3.0.3 (roadmap v3.0), 5 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-05T15:24Z UTC (same in Europe/London, GMT). This replaces the draft status 3.0.1 of 12:04Z; the change is recorded in `ROADMAP.md` R16, entry 6.
+> - **Written:** 2026-11-05T16:13Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.2 (15:24Z); the change is recorded in `ROADMAP.md` R16, entry 7.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
 > - **PR:** docs PR #34 (draft); checkpoint in Issue #3.
 > - **Vocabulary, evidence classes and update rules:** `ROADMAP.md` R10–R12.
 > - **This block's own commit SHA:** recorded after the commit, in the PR and in Issue #3 (`ROADMAP.md` R11).
+>
+> **Operator decisions, 2026-11-05 15:48 UTC** (after an independent review of PR #34 head `7802442`):
+> - **Session 2: APPROVED** (read-only, with S2-P/S2-W; S2-U not yet). The command was sent; **output pending**.
+> - **Watchdog fix: APPROVED** as task **A18** (M21 B-6/OP2): draft **PR #35**, head `da56e12`.
+> - **Gate A-0: NOT approved.** The procedure is corrected and tested offline (report §4); final review after Session 2.
+> - **The dashboard stays running.** Its five bot-start routes and the kill-switch release are not used until OP3; A-0f is withdrawn.
+> - **All PRs stay drafts.**
 >
 > **Current milestone:** M21 (v2.0 scope: M21.U, M21.1, M21.1extra, M21.2–M21.7). **IBKR paper only;** no IBKR live, no eToro real orders.
 >
@@ -25,7 +32,7 @@ project-wide reconciliation narrative lives in
 > | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
 > | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. BLOCKED_BY_APPROVAL (Gate A-0, then A-2). | [VPS-R] |
 > | Historical data | DATA_UNVERIFIED; Session 2 prepared, not run | [DEC] |
-> | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (D-9) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
+> | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (task **A18**, fix in draft PR #35) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
 > | 10-day soak (B-3) | NOT_STARTED | — |
 > | 20-day outcomes (C-4) | NOT_STARTED; E4/E5 code [PR]; Flex statements from the operator | — |
 > | Statistics (C-1…C-3, C-5) | NOT_STARTED; synthetic machinery only; v3 canary NOT run | [OFF] |
@@ -64,22 +71,22 @@ project-wide reconciliation narrative lives in
 > **Blockers:**
 > - operator approvals: Session 2, Gate A-0, Gate A-1, Gate A-2, OP2–OP5;
 > - the stopped IB Gateway (OP2);
-> - the `gw-watchdog` defect (D-9, before OP2);
+> - the `gw-watchdog` defect (A18, PR #35; before OP2);
 > - genuine paper outcomes (C-4);
 > - for M22, C01 (HARD).
 >
-> **Next approved action:** none pending. H1/P1/P2 were completed on 5 Nov.
+> **Next approved action:** the operator runs **Session 2** (approved 15:48 UTC) and provides the Flex exports.
 >
 > **Next proposed actions, not approved:**
-> - **Gate A-0** containment (a, b, b2; c is a no-op; ± A-0f);
-> - **Session 2** + S2-P (allocation policy) + S2-W (watchdog count) (± S2-U);
-> - the **D-9** watchdog fix, offline;
+> - **Gate A-0** (corrected; final review after the S2-P result);
+> - S2-U;
+> - the review of **PR #35** (A18);
 > - Track B **C01**, offline.
 >
 > **M22–M25:**
 > - M22: NOT_STARTED (C01 design only, #13).
 > - M23: NOT_STARTED (offline foundations D06 partial, D07 merged).
-> - **M24/M25: UNDEFINED**, operator decision D-3 (`ROADMAP.md` R8).
+> - **M24/M25: UNDEFINED**, operator decision RD-3 (`ROADMAP.md` R8).
 >
 > ## Previous operating state (reconciled 2026-10-29, M21 E7), kept for history
 >
@@ -192,8 +199,8 @@ project-wide reconciliation narrative lives in
 | 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (reconciled 2026-10-29). M21.U CLOSED; D0/D1/supervised D2 CLOSED; D3 code merged (runtime acceptance A06 pending a dashboard restart); A01 truthful scoring, A02 candidate ledger, WS2 paper loop, WP5–WP10 and E2/E4/E5/E6 on **draft PRs, not merged**; unattended paper loop NOT running | `bot/paper_loop_d2/`, `dashboard/paper_metrics_view.py` on `main`; PRs #12, #1, #14, #15–#18, #21, #22, #28, #30–#32; operational gates OP1–OP4 not started |
 | 21.2 | Parameter optimisation | ENGINEERING ON DRAFT PRs, not merged (WP12 #19, WP11 #20, WP13 #24, E1 #27, E3 #29); real-data runs need OP1; v3 canary preregistered, NOT run | Synthetic machinery only; every real-data result is DATA_UNVERIFIED |
 | 21.3–21.7 | Walk-forward + Promotion & Approval (21.3), meta-labelling (21.4), regime thresholds (21.5), market context (21.6), learned regime weights (21.7) | ENGINEERING ON DRAFT PRs, not merged (WP14 #23, WP16–18 #26, WP15 #25, E2 #28); shadow-only; no trading authority | Promotion cycle (OP5) and real-data runs not done |
-| 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later**. Definitions: `ROADMAP.md` R6 (M22.1–M22.6, C01–C11; the sub-number mapping is a proposal, D-2) and R7 (M23.1–M23.5, D01–D10) |
-| 24 / 25 | — | **UNDEFINED**: no source defines them | Operator decision D-3 (`ROADMAP.md` R8); nothing is assigned to them |
+| 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later**. Definitions: `ROADMAP.md` R6 (M22.1–M22.6, C01–C11; the sub-number mapping is a proposal, RD-2) and R7 (M23.1–M23.5, D01–D10) |
+| 24 / 25 | — | **UNDEFINED**: no source defines them | Operator decision RD-3 (`ROADMAP.md` R8); nothing is assigned to them |
 
 ---
 
