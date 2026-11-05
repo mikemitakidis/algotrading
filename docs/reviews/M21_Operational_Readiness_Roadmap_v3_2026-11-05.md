@@ -270,7 +270,7 @@ python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$KS"    || stop "
 [ -z "$(git status --porcelain --untracked-files=no)" ]                || stop "modified tracked files"
 echo "preconditions: OK"
 
-# 1. PRESERVE (nothing printed; .env is hashed, never copied)
+# 1. PRESERVE (nothing printed; .env is never read or copied: only its size and mtime are recorded)
 STAGE=preserve
 install -d -m 0700 "$SNAP"
 git rev-parse HEAD > "$SNAP/head.txt"
