@@ -53,6 +53,9 @@ _GUARD_BASELINES = {
     "dashboard/app.py": ("e823fe6",),
     # M21 WP6: test_m20_universe_quality_collector freezes the provider at M19.
     "bot/providers/alpaca_provider.py": ("e823fe6",),
+    # M21 A18: the M15.3.A/.A.2/.B/.C, M15.5 and M16 guards freeze the watchdog.
+    "bot/gateway_watchdog.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
+                                "d73a04a", "ceb8cd5"),
 }
 # M21.1 A01's approved scanner content (produced by 6242bde); WP6 builds on it.
 _A01_SCANNER_BLOB = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"
@@ -99,6 +102,25 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
     def test_table_covers_exactly_the_approved_files(self):
         # Adding an entry must be a reviewed change to this test as well.
         self.assertEqual(sorted(PB.APPROVED_CHANGES), sorted(_GUARD_BASELINES))
+
+    def test_gateway_watchdog_transition_is_only_the_a18_fix(self):
+        # A18 adds no subprocess/systemctl/restart/order call and removes no
+        # state-machine rule (STATE_*, derive_state, hysteresis, health gate).
+        e = PB.APPROVED_CHANGES["bot/gateway_watchdog.py"]
+        rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l[1:] for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:] for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        code_added = [l for l in added if l.strip() and not l.strip().startswith("#")]
+        for tok in ("subprocess", "systemctl", "restart", "placeOrder",
+                    "cancelOrder", "os.system", "Popen"):
+            self.assertFalse([l for l in code_added if tok in l and "M15.1" not in l
+                              and '"""' not in l], tok)
+        for tok in ("STATE_", "def derive_state", "failures_to_down",
+                    "def is_healthy_for_submission", "_declared_state ="):
+            self.assertFalse([l for l in removed if tok in l], tok)
 
     def test_dashboard_app_transition_is_exactly_the_d3_wiring(self):
         # The fourth transition is narrow: from the frozen app.py it adds the
