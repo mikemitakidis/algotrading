@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.4 (roadmap v3.0), 5 Nov 2026
+> ## Current operating state: status 3.0.5 (roadmap v3.0), 5 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-05T17:37Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.3; the change is recorded in `ROADMAP.md` R16, entry 8.
+> - **Written:** 2026-11-05T17:57Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.4; the change is recorded in `ROADMAP.md` R16, entry 9.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -32,7 +32,7 @@ project-wide reconciliation narrative lives in
 > - **Secrets:** a world-readable `.env` backup (E07).
 > - **IBKR positions:** current positions are **not** established.
 >
-> **Gate A-0 revision 4:** ready for approval once the operator has confirmed IBKR positions and working orders (paper + live).
+> **Gate A-0 revision 5:** approved in principle (independent review of revision 4). Revision 5 adds three review corrections: strict `A0_POSITIONS` validation, an invalid step-1 placeholder, and a fail-closed process check. Execution follows the operator's IBKR confirmation (paper + live, all counts zero, checked within 30 minutes) and approval.
 >
 > **Current milestone:** M21 (v2.0 scope: M21.U, M21.1, M21.1extra, M21.2–M21.7). **IBKR paper only;** no IBKR live, no eToro real orders.
 >
@@ -89,7 +89,7 @@ project-wide reconciliation narrative lives in
 > **Next approved action:** none. Next: the operator confirms IBKR positions and working orders (paper + live) and the Flex exports are provided.
 >
 > **Next proposed actions, not approved:**
-> - **Gate A-0 rev 4** (attestation + A-0s + A-0a/b/b2);
+> - **Gate A-0 rev 5** (attestation + A-0s + A-0a/b/b2);
 > - S2-U;
 > - the review of **PR #35** (A18);
 > - Track B **C01**, offline.

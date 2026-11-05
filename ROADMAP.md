@@ -801,16 +801,16 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-05T17:37Z UTC |
+| Item | Value at 2026-11-05T17:57Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.4 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.5 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | **Gate A-0 rev 4** (after the operator's IBKR position/working-order confirmation); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
-| Next task | Track A: the IBKR position/working-order confirmation, then Gate A-0 rev 4 approval and execution; then Gate A-1/A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
+| Open approvals | **Gate A-0 rev 5** (approved in principle; execution after the operator's IBKR position/working-order confirmation); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
+| Next task | Track A: the IBKR position/working-order confirmation, then Gate A-0 rev 5 approval and execution; then Gate A-1/A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
@@ -862,3 +862,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 6 | 2026-11-05T15:24Z (same in London) | v3.0 (DRAFT), amended | Added the H1/P1/P2 evidence: R5 deployment and paper rows, R13, decisions D-9/D-10, discrepancies 9–11. Status 3.0.2 | operator's H1/P1/P2 output (5 Nov) | M21, M22 | PR #34, Issue #3 | pending operator approval |
 | 7 | 2026-11-05T16:13Z (same in London) | v3.0 (DRAFT), amended | The operator decisions of 15:48 UTC are recorded: Session 2 approved; the A18 fix approved (PR #35); Gate A-0 not approved and corrected. **Roadmap decisions renamed `D-n` → `RD-n`**, to avoid confusion with the register's M23 tasks D01–D10 and the C01 design's D-1…D-6 (entries 5–6 keep their original wording). Status 3.0.3. | operator decisions after the independent review of #34 head `7802442` | M21, M22 | PR #34, PR #35, Issue #3 | pending operator approval |
 | 8 | 2026-11-05T17:37Z (same in London) | v3.0 (DRAFT), amended | Session 2 closed (sanitised results: all five lanes signal-only; 27,994 watchdog errors; one-symbol historical store; journal tables absent; a world-readable `.env` backup = E07). Gate A-0 revision 4: IBKR position/working-order attestation, the A-0s permission fix, the completed containment claim. R5 historical-data row updated. Status 3.0.4. | Session 2 output, independently reviewed | M21 | PR #34, Issue #3 | pending operator approval |
+| 9 | 2026-11-05T17:57Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 5: the three corrections from the independent review of revision 4 (strict `A0_POSITIONS` validation; an invalid step-1 placeholder; a fail-closed process check that sees interpreter options). Status 3.0.5. | independent review of #34 head `78a8f3a` | M21 | PR #34, Issue #3 | pending operator approval |

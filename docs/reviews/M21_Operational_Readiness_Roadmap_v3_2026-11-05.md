@@ -7,9 +7,10 @@
 - **Revision 2:** 2026-11-05T15:24Z UTC (same in Europe/London, GMT). Adds the H1/P1/P2 evidence, the `gw-watchdog` analysis and the corrections to Gate A-0.
 - **Revision 3:** 2026-11-05T16:13Z UTC (same in London). Records the operator decisions of 15:48 UTC (§0), the A18 fix (PR #35), the corrected Gate A-0 procedure (§4) and the approved Session 2 command (§5). Roadmap decision ids are renamed `RD-n` (§0).
 - **Revision 4:** 2026-11-05T17:37Z UTC (same in London). Records the Session 2 results (§5, CLOSED). Gate A-0 gets an IBKR position/working-order attestation precondition, the `.env`-backup permission fix (A-0s, register task E07) and a completed containment claim (§4).
+- **Revision 5:** 2026-11-05T17:57Z UTC (same in London). Three corrections from the independent review of revision 4 (head `78a8f3a`): `A0_POSITIONS` is validated strictly (exact format, all four counts zero, a valid UTC time no more than 30 minutes old and not in the future); the step-1 example is an invalid placeholder; the process check reads every process's exact arguments and fails closed (§4). The rest of revision 4 is unchanged.
 - **GitHub `main`:** `80b4343db4a22413aa670efd32e24952d53e532e` [GH].
 - **VPS deployed:** `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R].
-- **Roadmap:** v3.0 (DRAFT); status 3.0.4.
+- **Roadmap:** v3.0 (DRAFT); status 3.0.5.
 - **PR:** #34 (draft; this report is part of it). Checkpoint in Issue #3.
 
 **Nothing in this report was executed on the VPS by Claude. Nothing was merged, deployed, started, stopped or changed.**
@@ -164,11 +165,11 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | **4. The IB Gateway comes back** | It was stopped explicitly on 3 Sep. Only a manual start or a reboot restarts it. The gateway alone sends no orders; no bot or WS2 loop is running or scheduled. | CONFIRMED | the same. If a bot is started, the kill switch blocks IBKR. |
 | **5. `main` receives new merges** | **No VPS change**: no `sync.sh`, no cron entry, no timer, runner or hook. Vercel makes a Production deployment per merge. Latent: a manual `deploy.sh` or `sync.sh` start deploys `main`. An unattended `needrestart` restart (F-11) reloads whatever is **on disk**; it does not fetch. | CONFIRMED (needrestart: INFERRED) | merges cannot reach the VPS automatically. **`sync.sh` stays stopped** (A-0d). |
 
-## 4. Gate A-0: containment procedure (revision 4, NOT approved, NOT executed)
+## 4. Gate A-0: containment procedure (revision 5, NOT approved, NOT executed)
 
-**Readiness at 2026-11-05T17:37Z UTC: ready for the operator's approval once two things are done.**
+**Readiness at 2026-11-05T17:57Z UTC: the approach is approved in principle (independent review of revision 4). Execution needs two things.**
 1. **IBKR position and working-order confirmation** (paper **and** live), made by the operator in the IBKR Client Portal or the TWS/IBKR mobile app (step 1 below).
-2. The independent review of this revision.
+2. The independent review of the three revision-5 corrections, then the operator's approval.
 
 No other blocker remains. Session 2 is closed; S2-P is verified; the seven revision-3 corrections are in place.
 
@@ -183,14 +184,28 @@ No other blocker remains. Session 2 is closed; S2-P is verified; the seven revis
   - open positions (count);
   - working orders, including GTC, stop and OCA legs (count).
 - **Where to check:** the IBKR Client Portal or the TWS/IBKR mobile app, at a stated UTC time. A Flex statement is end-of-day, does not list working orders, and is **not** sufficient for this.
-- **How to record it:** in `A0_POSITIONS`, as counts only, with no account numbers. The block refuses to run without it and stores the text in the snapshot.
+- **How to record it:** in `A0_POSITIONS`, as counts only, with no account numbers, in exactly this form:
+  `paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ`.
+  The block (revision 5) stops before any change unless:
+  - the text matches that form exactly (single spaces, this order, minutes precision, a capital `Z`; `00`, `-0`, `0.0` or extra text are rejected);
+  - all four counts are `0` (a non-zero count stops with "do not run A-0; send the counts");
+  - `checked_at_utc` is a real date and time, no more than **30 minutes** old and not in the future (more than 60 seconds ahead of the VPS clock).
+  The accepted text is stored in the snapshot.
 - **If anything is open:** decide **before** A-0, either to close or cancel it manually at IBKR, or to keep it. The kill switch blocks only the bot's own automated flatten and submissions, never a manual action at IBKR.
 
 **Status:**
 - Revision 2 was reviewed independently on 5 Nov. On **2026-11-05 15:48 UTC** the operator found the approach reasonable but **did not approve execution**.
 - This revision makes the corrections that were asked for. It comes back for a final independent review **after the Session 2 results**, because one claim depends on them (row 7 below).
 
-**Corrections asked for, and where they are made:**
+**Revision 5: the three corrections from the independent review of revision 4** (everything else unchanged):
+
+| # | Correction | Where |
+|---|---|---|
+| R5-1 | Validate `A0_POSITIONS` strictly: exact format; zero paper and live position and working-order counts; a fresh, valid UTC time. Reject malformed, non-zero, stale and future-dated text | §4.1 step 0, `ATTEST`. Tests C1 (§4.2). |
+| R5-2 | Replace the future-dated zero-count example with a clearly invalid placeholder | §4.1 step 1. The placeholder itself is rejected (tests T0b, C1). |
+| R5-3 | Detect bot launches with interpreter options (`python3 -u main.py`); fail closed if bot activity cannot be ruled out | §4.1 step 0, `SCAN`: every process's exact arguments from `/proc`. Any argument, or word inside one, named `main.py` or `sync.sh` stops the run, whatever the interpreter or options. If the scan cannot complete, the run stops. Tests C3. |
+
+**Corrections asked for in revision 3, and where they are made:**
 
 | # | Correction | Where |
 |---|---|---|
@@ -215,16 +230,19 @@ No other blocker remains. Session 2 is closed; S2-P is verified; the seven revis
 
 ### 4.1 Commands
 
-**Step 1 (operator, after the IBKR check):** type this with your own counts and time. It records no account numbers:
+**Step 1 (operator, after the IBKR check):** replace every `<N>` with the count you saw and `<YYYY-MM-DDTHH:MMZ>` with the UTC time of the check (for example `2026-11-06T09:05Z`). Left as it is, the placeholder is rejected. The text records no account numbers:
 
 ```bash
-export A0_POSITIONS='paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=2026-11-06T09:00Z'
+export A0_POSITIONS='paper positions=<N> working_orders=<N> | live positions=<N> working_orders=<N> | checked_at_utc=<YYYY-MM-DDTHH:MMZ>'
 ```
+
+Run step 2 within 30 minutes of the check, in the same shell.
 
 **Step 2:** paste the block. It runs in a child shell, so a STOP or a failure ends only the block, not the terminal.
 
 ```bash
-# Requires A0_POSITIONS to be exported first (step 1); the block refuses to run without it.
+# Requires a valid A0_POSITIONS from step 1 (exact format, all four counts 0, checked within the last 30 minutes).
+# Anything else stops the block before any change.
 bash -euo pipefail <<'GATEA0'
 cd /opt/algo-trader
 TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -233,7 +251,53 @@ UNIT_FILE=/etc/systemd/system/algo-trader.service
 DROPIN=/etc/systemd/system/algo-trader.service.d/gate-a0.conf
 ALLOW=/var/lib/algo-trader/ALLOW_BOT_START
 KS=/opt/algo-trader/data/kill_switch.json
-RUN_RE='[p]ython3?[^ ]* +([^ ]*/)?main\.py( |$)|[b]ash +([^ ]*/)?sync\.sh( |$)'   # bot (any launcher) or sync.sh
+# Attestation check: exact format, all four counts zero, checked_at_utc valid, not stale (> 30 min), not future (> 60 s).
+ATTEST='import re, sys, datetime as dt
+m = re.fullmatch(r"paper positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*) \| live positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*) \| checked_at_utc=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z)", sys.argv[1])
+if not m:
+    sys.exit("malformed; the exact format is: paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ")
+if any(int(n) != 0 for n in m.groups()[:4]):
+    sys.exit("a position or working-order count is not zero: do not run A-0; send the counts")
+try:
+    t = dt.datetime.strptime(m.group(5), "%Y-%m-%dT%H:%MZ").replace(tzinfo=dt.timezone.utc)
+except ValueError:
+    sys.exit("checked_at_utc is not a valid date and time")
+age = (dt.datetime.now(dt.timezone.utc) - t).total_seconds()
+if age < -60:
+    sys.exit("checked_at_utc is in the future")
+if age > 1800:
+    sys.exit("checked_at_utc is more than 30 minutes old: re-check both accounts")
+print("attestation: OK (paper and live: 0 positions, 0 working orders; checked %d min ago)" % max(0, age // 60))'
+# Process scan: every process's exact argv from /proc; any argument (or word inside one) named main.py or sync.sh counts,
+# whatever the interpreter options (python3 -u main.py, venv/bin/python3 /opt/algo-trader/main.py, sh -c "...", bash -x sync.sh).
+# Exit 0 = none; 3 = found; anything else = the scan did not complete, so bot activity cannot be ruled out.
+SCAN='import os, sys
+try:
+    me = os.getpid(); skip = set(); p = me
+    while p > 1:   # this scan and the shells running this block are never the bot
+        skip.add(p)
+        with open("/proc/%d/status" % p) as f:
+            p = int([l.split()[1] for l in f if l.startswith("PPid:")][0])
+    pids = [d for d in os.listdir("/proc") if d.isdigit()]
+    seen, hits = 0, []
+    for d in pids:
+        try:
+            with open("/proc/%s/cmdline" % d, "rb") as f:
+                argv = f.read().decode("utf-8", "replace").split("\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue   # exited during the scan
+        seen += 1
+        if int(d) in skip:
+            continue
+        names = {os.path.basename(w.strip("\"`;&|()" + chr(39))) for a in argv for w in a.split()}
+        if names & {"main.py", "sync.sh"}:
+            hits.append("bot process: %s %s" % (d, " ".join(argv).strip()[:200]))
+    if str(me) not in pids or seen < 2:
+        raise RuntimeError("process list unreadable")
+except Exception as e:
+    print("process scan FAILED: %r" % (e,)); sys.exit(2)
+print("\n".join(hits) if hits else "processes: no main.py or sync.sh (%d checked)" % seen)
+sys.exit(3 if hits else 0)'
 SNAP=/var/lib/algo-trader/gate_a0/$TS
 STAGE=preconditions
 
@@ -244,7 +308,7 @@ report() {
   python3 -I -c 'import json,sys; s=json.load(open(sys.argv[1])); print("kill_switch_active=%s reason=%s" % (s.get("active"), s.get("reason")))' "$KS" 2>&1 || true
   echo "unit_file_state=$(systemctl is-enabled $UNIT 2>&1 || true) active=$(systemctl is-active $UNIT 2>&1 || true)"
   echo "drop_in=$([ -e $DROPIN ] && echo present || echo absent) allow_file=$([ -e $ALLOW ] && echo PRESENT || echo absent)"
-  ps -eo pid,args | grep -E "$RUN_RE" || echo "processes: no main.py or sync.sh"
+  python3 -I -c "$SCAN" 2>&1 || true
   stat -c 'env_file_mode=%a %n' /opt/algo-trader/.env* 2>/dev/null | sed 's#/opt/algo-trader/##' || true
   if [ "$rc" != 0 ] && [ "$STAGE" = preconditions ]; then
     echo "A-0 STOPPED BEFORE ANY CHANGE. Send this output."
@@ -257,8 +321,14 @@ trap report EXIT
 
 # 0. PRECONDITIONS (read-only). Any STOP happens before anything is changed.
 stop() { echo "STOP (nothing changed): $*"; exit 2; }
-case "${A0_POSITIONS:-}" in ""|*REPLACE*) stop "A0_POSITIONS not set: confirm IBKR paper AND live positions and working orders first";; esac
-if ps -eo pid,args | grep -E "$RUN_RE"; then stop "main.py or sync.sh is running"; fi
+[ -n "${A0_POSITIONS:-}" ] || stop "A0_POSITIONS not set: confirm IBKR paper AND live positions and working orders first (step 1)"
+ATT_RC=0; ATT=$(python3 -I -c "$ATTEST" "$A0_POSITIONS" 2>&1) || ATT_RC=$?
+[ "$ATT_RC" = 0 ] || stop "A0_POSITIONS rejected: $ATT"
+echo "$ATT"
+SCAN_RC=0; PROCS=$(python3 -I -c "$SCAN" 2>&1) || SCAN_RC=$?
+echo "$PROCS"
+[ "$SCAN_RC" != 3 ] || stop "main.py or sync.sh is running"
+[ "$SCAN_RC" = 0 ]  || stop "bot activity cannot be ruled out (the process scan did not complete)"
 [ "$(systemctl is-active $UNIT || true)" = inactive ]                  || stop "bot unit is not inactive"
 [ "$(systemctl show -p FragmentPath --value $UNIT)" = "$UNIT_FILE" ]   || stop "unexpected unit file location"
 [ "$(systemctl show -p NeedDaemonReload --value $UNIT)" = no ]         || stop "unit files changed on disk but not loaded"
@@ -357,6 +427,8 @@ unset A0_POSITIONS
 ```
 
 **Expected on success:**
+- `attestation: OK (paper and live: 0 positions, 0 working orders; checked N min ago)`;
+- `processes: no main.py or sync.sh (N checked)`;
 - `preconditions: OK`;
 - `A-0s: …` one line per `.env*` file: the backup `644 -> 600`, `.env` unchanged, `.env.example` (tracked template) left as is;
 - `A-0a: kill_switch_active=True`;
@@ -376,7 +448,7 @@ unset A0_POSITIONS
 - `/opt/algo-trader` was a detached checkout of `015d2ce`, with the real `bot/kill_switch.py` and the real `infra/systemd/algo-trader.service` installed at `/etc/systemd/system`.
 - `systemctl` and `crontab` were stubs. The `systemctl` stub refuses `start`/`restart`/`stop` and records every call.
 - `systemd-analyze` was the **real systemd 255** (the same major version as Ubuntu 24.04): it evaluated the condition, and `verify` loaded the drop-in.
-- The tests ran from a script file, so the harness's own command line could not match the process check.
+- The process scan skips only itself and the shells running the block (its ancestors). Test C3-self runs the whole block as one `bash -c` string, the way Claude Code on the VPS would, and it is not flagged.
 
 | Test | Expected | Result |
 |---|---|---|
@@ -395,9 +467,18 @@ unset A0_POSITIONS
 | T15: the condition would evaluate true | `A-0b2: condition would PASS`; kill switch ON; nothing undone | pass |
 | T16: a `dashboard/app.py` process is running | not treated as the bot; `exit=0` | pass |
 | T17: the crontab has an `@reboot deploy.sh` line | only that line removed; the other kept | pass |
-| T0a/T0b (rev 4): `A0_POSITIONS` unset, or still `REPLACE` | STOP before any change; the backup stays 644 | pass |
+| T0a/T0b: `A0_POSITIONS` unset, or the step-1 placeholder exactly as published | STOP before any change; the backup stays 644 | pass |
 | T1b (rev 4): normal run with the attestation | the backup `644 -> 600`; `.env` unchanged; the tracked `.env.example` and a symlink left as is; size and mtime unchanged; the attestation stored in the snapshot; then A-0a/b/b2 as T1. The block reads no `.env` content (0 references). | pass |
 | T19 (rev 4): `chmod` of the backup fails | stage `A-0s`; the kill switch **not** yet engaged; nothing undone | pass |
+| **C1 (rev 5), 30 rejections:** the placeholder; the revision-4 example (future-dated); free text; a double space; the live part missing; live before paper; `PAPER`; no timestamp; lowercase `z`; seconds; `+00:00`; counts `00`, `-0`, `0.0` and a non-ASCII zero; trailing text, a leading space, a trailing newline; each of the four counts = 1; 31 minutes and 1 day old; 2 minutes and 1 day in the future; 30 Feb, hour 24, minute 60, month 13 | each one: STOP before any change (exit 2; kill switch off; still enabled; no snapshot; backup still 644), with the specific reason | pass |
+| C1 (rev 5), accepted: checked now; checked 29 minutes ago | `GATE A-0 DONE`, `exit=0` | pass |
+| **C3 (rev 5), 10 launches:** `python3 -u main.py` (relative); `python3 -u /abs/main.py`; `venv/bin/python3 -X dev -u /abs/main.py --x`; the dashboard's own form `venv/bin/python3 /abs/main.py`; `python3 -W ignore -B main.py`; `nohup python3 -u main.py`; an `sh -c '…main.py…'` wrapper; `bash -x sync.sh`; `/bin/bash /abs/sync.sh`; `sh sync.sh` | each one: STOP before any change, naming the process | pass |
+| C3 (rev 5), not the bot: `python3 -u …/dashboard/app.py`; `python3 -u …/not_main.py` | `GATE A-0 DONE` | pass |
+| C3 (rev 5), the process scan cannot complete | STOP: "bot activity cannot be ruled out"; nothing changed | pass |
+| C3-self (rev 5): the whole block run as one `bash -c` string | not flagged; `GATE A-0 DONE` | pass |
+| Gap check: the revision-4 pattern on `python3 -u main.py` | 0 matches, which is the gap closed | confirmed |
+
+All 21 revision-4 cases were re-run against revision 5 with the same results: **67 cases in total, all pass.** The embedded Python parses as Python 3.8.
 
 **Incidental finding (no change proposed now):** `systemd-analyze verify` reports that the deployed `infra/systemd/algo-trader.service` puts `StartLimitIntervalSec` in `[Service]`, where systemd 255 **ignores** it ("Unknown key name … ignoring"). Its restart rate limit therefore uses the default interval. This is recorded as a hardening item under RD-10 (M22 C03).
 
@@ -797,23 +878,24 @@ Session 2 is closed and will not be repeated.
   - the pre-June future table labelled historical.
 - **Untouched:** the 71 register tasks, the M21 Finish Line, every historical milestone requirement. No renumbering.
 
-## 7. Open questions for the review of revision 4
+## 7. Open questions for the review of revision 5
 
-1. Is the attestation gate (`A0_POSITIONS`, counts only, both IBKR accounts, positions **and** working orders) sufficient as the position confirmation?
-2. Is A-0s (owner-only modes on untracked `.env*` files, with no content read) the right minimal E07 fix?
-3. Any objection to approving A-0 as defence in depth, given that S2-P already makes all five lanes signal-only?
+1. Are the 30-minute freshness limit and the 60-second clock-skew allowance acceptable?
+2. The process check is deliberately broad: **any** process with an argument named `main.py` or `sync.sh` stops the run, including one unrelated to the bot. That is fail-closed by design; the output names the process. Acceptable?
+
+(The revision-4 questions on the attestation, A-0s and defence in depth were answered by the approval in principle.)
 
 ## 8. Returned items
 
 | Item | Value |
 |---|---|
-| Exact UTC timestamp | 2026-11-05T17:37Z UTC (same in Europe/London, GMT) |
+| Exact UTC timestamp | 2026-11-05T17:57Z UTC (same in Europe/London, GMT) |
 | GitHub `main` | `80b4343db4a22413aa670efd32e24952d53e532e` [GH] |
 | VPS deployed | `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R] |
-| Roadmap / status | v3.0 (DRAFT) / status 3.0.4 |
+| Roadmap / status | v3.0 (DRAFT) / status 3.0.5 |
 | Documentation PR | #34 (draft); head SHA in the PR record and Issue #3 (R11) |
 | Watchdog fix | **A18**, PR #35 (draft), head `da56e12a9e9baec8634b618cb936be1f40a84a78` |
 | Session 2 | **CLOSED**: exit 0, 8/8 checksums, three copies OK, all five lanes signal-only |
-| Gate A-0 | revision 4, **ready for approval after the IBKR position/working-order confirmation**; 21 offline cases pass |
-| Next operational step | the operator confirms IBKR positions and working orders (paper + live), then approves Gate A-0 rev 4 |
+| Gate A-0 | revision 5 (revision 4 + the three review corrections), **approved in principle; execution after the IBKR position/working-order confirmation and approval**; 67 offline cases pass |
+| Next operational step | review of revision 5; the operator confirms IBKR positions and working orders (paper + live); approval; Gate A-0 execution |
 | Next engineering task | the review of PR #35 (A18); then C01 (Track B) after approval to start |
