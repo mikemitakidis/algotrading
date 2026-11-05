@@ -32,9 +32,28 @@ Notes:
     wedged trading client does not contaminate the verdict.
   - systemd config (Restart=always, RestartSec=30, max 3/300s,
     AutoRestartTime=23:59) is intentionally LEFT UNCHANGED in M15.1.
+
+M21 A18 (event-loop defect, 5 Nov 2026; linked to M21 B-6 / OP2):
+  ib_insync -> eventkit binds an asyncio event loop at IMPORT time
+  (eventkit.util: ``main_event_loop = get_event_loop()``). The probe used to
+  import ib_insync and construct IB() for the first time inside the
+  'gw-watchdog' thread, which has no event loop, so every probe raised
+  ``RuntimeError: There is no current event loop in thread 'gw-watchdog'``
+  OUTSIDE api_probe's try-block. _tick() then aborted before recording the
+  probe: the watchdog never reached api_up_healthy (fail-closed for
+  submissions) and stopped persisting truthful state while the port was open.
+  Fix, without changing any state-machine rule:
+    1. start() imports ib_insync once in the CALLING (main) thread, so
+       eventkit binds the main thread's loop as before;
+    2. the watchdog thread gets its OWN event loop for its lifetime;
+    3. api_probe() never raises: an import, construction or connect failure
+       is a failed probe with a named reason;
+    4. _tick() records a failed probe (never a healthy one) if api_probe()
+       raises anyway, so the state and its persistence stay truthful.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import socket
@@ -176,14 +195,65 @@ def systemd_probe(unit: str) -> Optional[bool]:
         return None
 
 
+# --- event loop for a non-main thread (M21 A18) ------------------------------
+def ensure_thread_event_loop() -> Optional[asyncio.AbstractEventLoop]:
+    """Give the CURRENT non-main thread its own asyncio event loop if it has
+    none. Returns the loop it created (the caller owns and closes it), or None
+    when nothing was created (main thread, or a loop is already set)."""
+    if threading.current_thread() is threading.main_thread():
+        return None
+    try:
+        asyncio.get_event_loop_policy().get_event_loop()
+        return None                       # this thread already has a loop
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
+def preimport_ib_insync() -> bool:
+    """Import ib_insync in the calling thread (call it from the main thread),
+    so eventkit binds the main thread's loop at import time. Never raises."""
+    try:
+        import ib_insync  # noqa: F401
+        return True
+    except Exception as e:                # ImportError, or an import-time error
+        log.warning('[GW-WATCHDOG] ib_insync pre-import failed: %s: %s',
+                    type(e).__name__, e)
+        return False
+
+
 # --- API probe (independent IB client; never reuses trading client) ----------
 def api_probe(host: str, port: int, client_id: int,
               timeout_sec: int) -> Tuple[bool, Optional[int], Optional[str]]:
+    """connect -> reqCurrentTime -> disconnect. NEVER raises (M21 A18): any
+    import, construction or connection failure is (False, None, reason).
+    In a non-main thread without a loop, a loop is created for this probe
+    and closed afterwards (the watchdog thread already owns one)."""
+    created = ensure_thread_event_loop()  # no-op in the main thread
+    try:
+        return _api_probe_once(host, port, client_id, timeout_sec)
+    finally:
+        if created is not None:
+            try:
+                asyncio.set_event_loop(None)
+                created.close()
+            except Exception:
+                pass
+
+
+def _api_probe_once(host: str, port: int, client_id: int,
+                    timeout_sec: int) -> Tuple[bool, Optional[int], Optional[str]]:
     try:
         from ib_insync import IB
     except ImportError:
         return False, None, 'ib_insync_not_installed'
-    ib = IB()
+    except Exception as e:                # e.g. RuntimeError at import time
+        return False, None, f'ib_insync_import_failed: {type(e).__name__}: {e}'[:200]
+    try:
+        ib = IB()
+    except Exception as e:                # was outside any try before A18
+        return False, None, f'ib_construct_failed: {type(e).__name__}: {e}'[:200]
     t0 = time.monotonic()
     try:
         ib.connect(host, port, clientId=client_id, timeout=timeout_sec, readonly=True)
@@ -236,6 +306,9 @@ class GatewayWatchdog:
             return
         if self._thread and self._thread.is_alive():
             return
+        # M21 A18: bind eventkit's import-time loop to the calling (main)
+        # thread, never to the watchdog thread.
+        preimport_ib_insync()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop, name='gw-watchdog', daemon=True,
@@ -265,6 +338,7 @@ class GatewayWatchdog:
                 'tcp_ok': p.tcp_ok if p else None,
                 'api_ok': p.api_ok if p else None,
                 'api_latency_ms': p.api_latency_ms if p else None,
+                'last_probe_error': p.error if p else None,
                 'last_success_ts': _utc_iso(self._last_success_ts),
                 'last_probe_ts': _utc_iso(p.ts) if p else None,
                 'probe_age_seconds': (
@@ -300,12 +374,21 @@ class GatewayWatchdog:
 
     # ---------- internal ----------
     def _loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                self._tick()
-            except Exception:
-                log.exception('[GW-WATCHDOG] tick error')
-            self._stop.wait(self.config.interval_sec)
+        loop = ensure_thread_event_loop()     # M21 A18: this thread's own loop
+        try:
+            while not self._stop.is_set():
+                try:
+                    self._tick()
+                except Exception:
+                    log.exception('[GW-WATCHDOG] tick error')
+                self._stop.wait(self.config.interval_sec)
+        finally:
+            if loop is not None:
+                try:
+                    asyncio.set_event_loop(None)
+                    loop.close()
+                except Exception:
+                    pass
 
     def _tick(self) -> None:
         ts = _utc_now()
@@ -315,10 +398,14 @@ class GatewayWatchdog:
         else:
             tcp_ok = tcp_probe(self.config.host, self.config.port)
             if tcp_ok:
-                api_ok, api_lat, err = api_probe(
-                    self.config.host, self.config.port,
-                    WATCHDOG_CLIENT_ID, self.config.api_timeout_sec,
-                )
+                try:
+                    api_ok, api_lat, err = api_probe(
+                        self.config.host, self.config.port,
+                        WATCHDOG_CLIENT_ID, self.config.api_timeout_sec,
+                    )
+                except Exception as e:    # M21 A18: record a FAILED probe
+                    api_ok, api_lat = False, None
+                    err = f'api_probe_raised: {type(e).__name__}: {e}'[:200]
             else:
                 api_ok, api_lat, err = False, None, 'tcp_unreachable'
 
