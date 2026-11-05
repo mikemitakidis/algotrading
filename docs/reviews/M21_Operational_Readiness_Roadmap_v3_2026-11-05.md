@@ -8,9 +8,10 @@
 - **Revision 3:** 2026-11-05T16:13Z UTC (same in London). Records the operator decisions of 15:48 UTC (§0), the A18 fix (PR #35), the corrected Gate A-0 procedure (§4) and the approved Session 2 command (§5). Roadmap decision ids are renamed `RD-n` (§0).
 - **Revision 4:** 2026-11-05T17:37Z UTC (same in London). Records the Session 2 results (§5, CLOSED). Gate A-0 gets an IBKR position/working-order attestation precondition, the `.env`-backup permission fix (A-0s, register task E07) and a completed containment claim (§4).
 - **Revision 5:** 2026-11-05T17:57Z UTC (same in London). Three corrections from the independent review of revision 4 (head `78a8f3a`): `A0_POSITIONS` is validated strictly (exact format, all four counts zero, a valid UTC time no more than 30 minutes old and not in the future); the step-1 example is an invalid placeholder; the process check reads every process's exact arguments and fails closed (§4). The rest of revision 4 is unchanged.
+- **Revision 6:** 2026-11-05T18:47Z UTC (same in London). One narrow change at the operator's request: the attestation may record **one pre-existing live position**, only with the explicit acknowledgement `live_position_ack=manual_only_while_kill_switch_active`. Paper positions and all working orders must still be zero. Every other revision-5 control is unchanged (§4).
 - **GitHub `main`:** `80b4343db4a22413aa670efd32e24952d53e532e` [GH].
 - **VPS deployed:** `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R].
-- **Roadmap:** v3.0 (DRAFT); status 3.0.5.
+- **Roadmap:** v3.0 (DRAFT); status 3.0.6.
 - **PR:** #34 (draft; this report is part of it). Checkpoint in Issue #3.
 
 **Nothing in this report was executed on the VPS by Claude. Nothing was merged, deployed, started, stopped or changed.**
@@ -165,11 +166,13 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | **4. The IB Gateway comes back** | It was stopped explicitly on 3 Sep. Only a manual start or a reboot restarts it. The gateway alone sends no orders; no bot or WS2 loop is running or scheduled. | CONFIRMED | the same. If a bot is started, the kill switch blocks IBKR. |
 | **5. `main` receives new merges** | **No VPS change**: no `sync.sh`, no cron entry, no timer, runner or hook. Vercel makes a Production deployment per merge. Latent: a manual `deploy.sh` or `sync.sh` start deploys `main`. An unattended `needrestart` restart (F-11) reloads whatever is **on disk**; it does not fetch. | CONFIRMED (needrestart: INFERRED) | merges cannot reach the VPS automatically. **`sync.sh` stays stopped** (A-0d). |
 
-## 4. Gate A-0: containment procedure (revision 5, NOT approved, NOT executed)
+## 4. Gate A-0: containment procedure (revision 6, NOT approved, NOT executed)
 
-**Readiness at 2026-11-05T17:57Z UTC: the approach is approved in principle (independent review of revision 4). Execution needs two things.**
+**Readiness at 2026-11-05T18:47Z UTC: the approach is approved in principle (independent review of revision 4). Execution needs two things.**
 1. **IBKR position and working-order confirmation** (paper **and** live), made by the operator in the IBKR Client Portal or the TWS/IBKR mobile app (step 1 below).
-2. The independent review of the three revision-5 corrections, then the operator's approval.
+2. The independent review of revision 6 (revision 5 plus the live-position acknowledgement), then the operator's approval.
+
+**Operator check, 5 Nov 2026 (IBKR Mobile), recorded as reported:** paper: 0 open positions, no working orders. Live: **one small pre-existing fractional position**, no working orders. The operator keeps the live position and does not want it liquidated for this project. It must be re-checked within 30 minutes before the run (step 1).
 
 No other blocker remains. Session 2 is closed; S2-P is verified; the seven revision-3 corrections are in place.
 
@@ -184,18 +187,35 @@ No other blocker remains. Session 2 is closed; S2-P is verified; the seven revis
   - open positions (count);
   - working orders, including GTC, stop and OCA legs (count).
 - **Where to check:** the IBKR Client Portal or the TWS/IBKR mobile app, at a stated UTC time. A Flex statement is end-of-day, does not list working orders, and is **not** sufficient for this.
-- **How to record it:** in `A0_POSITIONS`, as counts only, with no account numbers, in exactly this form:
-  `paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ`.
-  The block (revision 5) stops before any change unless:
-  - the text matches that form exactly (single spaces, this order, minutes precision, a capital `Z`; `00`, `-0`, `0.0` or extra text are rejected);
-  - all four counts are `0` (a non-zero count stops with "do not run A-0; send the counts");
+- **How to record it:** in `A0_POSITIONS`, as counts only, with no account numbers, symbols or quantities, in exactly one of these two forms:
+  - no live position: `paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ`;
+  - one pre-existing live position (revision 6): `paper positions=0 working_orders=0 | live positions=1 working_orders=0 | live_position_ack=manual_only_while_kill_switch_active | checked_at_utc=YYYY-MM-DDTHH:MMZ`.
+
+  The block stops before any change unless:
+  - the text matches one of those forms exactly (single spaces, this order, minutes precision, a capital `Z`; `00`, `-0`, `0.0` or extra text are rejected);
+  - paper positions, paper working orders and live working orders are all `0` (otherwise: "do not run A-0; send the counts");
+  - live positions are `0` with no acknowledgement, or exactly `1` **with** the exact acknowledgement. Two or more live positions stop the run; so do `1` without the acknowledgement and an acknowledgement with `0`;
   - `checked_at_utc` is a real date and time, no more than **30 minutes** old and not in the future (more than 60 seconds ahead of the VPS clock).
   The accepted text is stored in the snapshot.
-- **If anything is open:** decide **before** A-0, either to close or cancel it manually at IBKR, or to keep it. The kill switch blocks only the bot's own automated flatten and submissions, never a manual action at IBKR.
+- **If anything is open:**
+  - **any paper position, or any working order in either account:** close or cancel it manually at IBKR **before** A-0, or do not run A-0;
+  - **one live position:** it may be kept, **only** with the acknowledgement above. The operator thereby states that it stays **managed manually** at IBKR while the kill switch is on.
+- **What the acknowledgement does not do (revision 6):**
+  - it authorises **no** live trading;
+  - it changes no policy: `ibkr_live` stays signal-only (S2-P);
+  - the kill switch still refuses every IBKR order and flatten from the bot, so the bot cannot sell, add to or flatten that position;
+  - A-0 makes no broker call and does not close or cancel anything;
+  - the kill switch blocks only the bot, never a manual action at IBKR.
 
 **Status:**
 - Revision 2 was reviewed independently on 5 Nov. On **2026-11-05 15:48 UTC** the operator found the approach reasonable but **did not approve execution**.
 - This revision makes the corrections that were asked for. It comes back for a final independent review **after the Session 2 results**, because one claim depends on them (row 7 below).
+
+**Revision 6: one change at the operator's request** (everything else in revision 5 unchanged):
+
+| # | Change | Where |
+|---|---|---|
+| R6-1 | Permit one pre-existing live position only with the explicit acknowledgement `live_position_ack=manual_only_while_kill_switch_active`. Paper positions stay zero; working orders stay zero in both accounts; no live trading is authorised; no broker call, close or cancel | §4.1 `ATTEST` (the only code that changed) and step 1 (a second placeholder form). Tests C4 (§4.2). |
 
 **Revision 5: the three corrections from the independent review of revision 4** (everything else unchanged):
 
@@ -232,8 +252,16 @@ No other blocker remains. Session 2 is closed; S2-P is verified; the seven revis
 
 **Step 1 (operator, after the IBKR check):** replace every `<N>` with the count you saw and `<YYYY-MM-DDTHH:MMZ>` with the UTC time of the check (for example `2026-11-06T09:05Z`). Left as it is, the placeholder is rejected. The text records no account numbers:
 
+Use **form A** if the live account has no position, **form B** if it has one pre-existing position that stays manually managed. Both placeholders are rejected as published.
+
+Form A:
 ```bash
 export A0_POSITIONS='paper positions=<N> working_orders=<N> | live positions=<N> working_orders=<N> | checked_at_utc=<YYYY-MM-DDTHH:MMZ>'
+```
+
+Form B (with the acknowledgement):
+```bash
+export A0_POSITIONS='paper positions=<N> working_orders=<N> | live positions=<N> working_orders=<N> | live_position_ack=manual_only_while_kill_switch_active | checked_at_utc=<YYYY-MM-DDTHH:MMZ>'
 ```
 
 Run step 2 within 30 minutes of the check, in the same shell.
@@ -241,7 +269,8 @@ Run step 2 within 30 minutes of the check, in the same shell.
 **Step 2:** paste the block. It runs in a child shell, so a STOP or a failure ends only the block, not the terminal.
 
 ```bash
-# Requires a valid A0_POSITIONS from step 1 (exact format, all four counts 0, checked within the last 30 minutes).
+# Requires a valid A0_POSITIONS from step 1 (exact format; paper positions and all working orders 0; live positions 0,
+# or exactly 1 with the explicit manual-management acknowledgement; checked within the last 30 minutes).
 # Anything else stops the block before any change.
 bash -euo pipefail <<'GATEA0'
 cd /opt/algo-trader
@@ -251,15 +280,24 @@ UNIT_FILE=/etc/systemd/system/algo-trader.service
 DROPIN=/etc/systemd/system/algo-trader.service.d/gate-a0.conf
 ALLOW=/var/lib/algo-trader/ALLOW_BOT_START
 KS=/opt/algo-trader/data/kill_switch.json
-# Attestation check: exact format, all four counts zero, checked_at_utc valid, not stale (> 30 min), not future (> 60 s).
+# Attestation check: exact format; paper positions and all working orders 0; live positions 0, or exactly 1 with the
+# explicit acknowledgement that it stays manually managed while the kill switch is on (this authorises no live trading);
+# checked_at_utc valid, not stale (> 30 min), not future (> 60 s).
 ATTEST='import re, sys, datetime as dt
-m = re.fullmatch(r"paper positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*) \| live positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*) \| checked_at_utc=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z)", sys.argv[1])
+m = re.fullmatch(r"paper positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*) \| live positions=(0|[1-9][0-9]*) working_orders=(0|[1-9][0-9]*)( \| live_position_ack=manual_only_while_kill_switch_active)? \| checked_at_utc=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}Z)", sys.argv[1])
 if not m:
-    sys.exit("malformed; the exact format is: paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ")
-if any(int(n) != 0 for n in m.groups()[:4]):
-    sys.exit("a position or working-order count is not zero: do not run A-0; send the counts")
+    sys.exit("malformed; the exact format is: paper positions=0 working_orders=0 | live positions=0 working_orders=0 | checked_at_utc=YYYY-MM-DDTHH:MMZ (with one live position: live positions=1 working_orders=0 | live_position_ack=manual_only_while_kill_switch_active | checked_at_utc=YYYY-MM-DDTHH:MMZ)")
+pp, pw, lp, lw = (int(n) for n in m.groups()[:4]); ack = m.group(5) is not None
+if pp or pw or lw:
+    sys.exit("a paper position or a working order (paper or live) is not zero: do not run A-0; send the counts")
+if lp > 1:
+    sys.exit("more than one live position: do not run A-0; send the counts")
+if lp == 1 and not ack:
+    sys.exit("live positions=1 needs the explicit acknowledgement: live_position_ack=manual_only_while_kill_switch_active")
+if lp == 0 and ack:
+    sys.exit("live_position_ack is given but live positions=0: remove it or correct the count")
 try:
-    t = dt.datetime.strptime(m.group(5), "%Y-%m-%dT%H:%MZ").replace(tzinfo=dt.timezone.utc)
+    t = dt.datetime.strptime(m.group(6), "%Y-%m-%dT%H:%MZ").replace(tzinfo=dt.timezone.utc)
 except ValueError:
     sys.exit("checked_at_utc is not a valid date and time")
 age = (dt.datetime.now(dt.timezone.utc) - t).total_seconds()
@@ -267,7 +305,8 @@ if age < -60:
     sys.exit("checked_at_utc is in the future")
 if age > 1800:
     sys.exit("checked_at_utc is more than 30 minutes old: re-check both accounts")
-print("attestation: OK (paper and live: 0 positions, 0 working orders; checked %d min ago)" % max(0, age // 60))'
+live = "1 pre-existing position, ACKNOWLEDGED as managed manually only while the kill switch is on (no live trading authorised)" if lp else "0 positions"
+print("attestation: OK (paper: 0 positions, 0 working orders; live: %s, 0 working orders; checked %d min ago)" % (live, max(0, age // 60)))'
 # Process scan: every process's exact argv from /proc; any argument (or word inside one) named main.py or sync.sh counts,
 # whatever the interpreter options (python3 -u main.py, venv/bin/python3 /opt/algo-trader/main.py, sh -c "...", bash -x sync.sh).
 # Exit 0 = none; 3 = found; anything else = the scan did not complete, so bot activity cannot be ruled out.
@@ -427,7 +466,8 @@ unset A0_POSITIONS
 ```
 
 **Expected on success:**
-- `attestation: OK (paper and live: 0 positions, 0 working orders; checked N min ago)`;
+- form A: `attestation: OK (paper: 0 positions, 0 working orders; live: 0 positions, 0 working orders; checked N min ago)`;
+- form B: `attestation: OK (paper: 0 positions, 0 working orders; live: 1 pre-existing position, ACKNOWLEDGED as managed manually only while the kill switch is on (no live trading authorised), 0 working orders; checked N min ago)`;
 - `processes: no main.py or sync.sh (N checked)`;
 - `preconditions: OK`;
 - `A-0s: …` one line per `.env*` file: the backup `644 -> 600`, `.env` unchanged, `.env.example` (tracked template) left as is;
@@ -478,7 +518,12 @@ unset A0_POSITIONS
 | C3-self (rev 5): the whole block run as one `bash -c` string | not flagged; `GATE A-0 DONE` | pass |
 | Gap check: the revision-4 pattern on `python3 -u main.py` | 0 matches, which is the gap closed | confirmed |
 
-All 21 revision-4 cases were re-run against revision 5 with the same results: **67 cases in total, all pass.** The embedded Python parses as Python 3.8.
+| **C4 (rev 6), accepted:** live=1 with the acknowledgement, checked now and 29 minutes ago; all zero without it | `GATE A-0 DONE`; the attestation stored with mode 600 in the snapshot; the kill switch on | pass |
+| **C4 (rev 6), 20 rejections:** both published placeholders; live=1 without the acknowledgement; live=2; live=0 with it; paper positions=1, paper working_orders=1 and live working_orders=1, each with it; the acknowledgement as `yes`, in capitals, truncated, with extra text, before the live section, after the timestamp, twice, or without its separator; `live positions=01`; 31 minutes old; 2 minutes ahead; 30 Feb | each one: STOP before any change, with the specific reason | pass |
+| C4 (rev 6): live=1 with the acknowledgement while a bot process runs | STOP: the process check is unaffected | pass |
+| C4 (rev 6): the block names no symbol, quantity or account | 0 matches | confirmed |
+
+All 67 revision-5 cases were re-run against revision 6: every verdict, exit code and end state is the same; only the wording of the attestation messages changed. **91 cases in total, all pass.** The embedded Python parses as Python 3.8.
 
 **Incidental finding (no change proposed now):** `systemd-analyze verify` reports that the deployed `infra/systemd/algo-trader.service` puts `StartLimitIntervalSec` in `[Service]`, where systemd 255 **ignores** it ("Unknown key name … ignoring"). Its restart rate limit therefore uses the default interval. This is recorded as a hardening item under RD-10 (M22 C03).
 
@@ -878,7 +923,9 @@ Session 2 is closed and will not be repeated.
   - the pre-June future table labelled historical.
 - **Untouched:** the 71 register tasks, the M21 Finish Line, every historical milestone requirement. No renumbering.
 
-## 7. Open questions for the review of revision 5
+## 7. Open questions for the review of revisions 5 and 6
+
+0. (Revision 6) Is the acknowledgement acceptable as the only way to keep one pre-existing live position: at most one position, the exact text `live_position_ack=manual_only_while_kill_switch_active`, zero working orders, no symbol or quantity in the public block?
 
 1. Are the 30-minute freshness limit and the 60-second clock-skew allowance acceptable?
 2. The process check is deliberately broad: **any** process with an argument named `main.py` or `sync.sh` stops the run, including one unrelated to the bot. That is fail-closed by design; the output names the process. Acceptable?
@@ -889,13 +936,13 @@ Session 2 is closed and will not be repeated.
 
 | Item | Value |
 |---|---|
-| Exact UTC timestamp | 2026-11-05T17:57Z UTC (same in Europe/London, GMT) |
+| Exact UTC timestamp | 2026-11-05T18:47Z UTC (same in Europe/London, GMT) |
 | GitHub `main` | `80b4343db4a22413aa670efd32e24952d53e532e` [GH] |
 | VPS deployed | `015d2cea927b9b4db3ee65604e0b4ebb58211e61` [VPS-R] |
-| Roadmap / status | v3.0 (DRAFT) / status 3.0.5 |
+| Roadmap / status | v3.0 (DRAFT) / status 3.0.6 |
 | Documentation PR | #34 (draft); head SHA in the PR record and Issue #3 (R11) |
 | Watchdog fix | **A18**, PR #35 (draft), head `da56e12a9e9baec8634b618cb936be1f40a84a78` |
 | Session 2 | **CLOSED**: exit 0, 8/8 checksums, three copies OK, all five lanes signal-only |
-| Gate A-0 | revision 5 (revision 4 + the three review corrections), **approved in principle; execution after the IBKR position/working-order confirmation and approval**; 67 offline cases pass |
-| Next operational step | review of revision 5; the operator confirms IBKR positions and working orders (paper + live); approval; Gate A-0 execution |
+| Gate A-0 | revision 6 (revision 5 + the one-live-position acknowledgement), **approved in principle; execution after the review of revision 6, a fresh IBKR check and approval**; 91 offline cases pass |
+| Next operational step | review of revision 6; approval; then a fresh IBKR check (form B) within 30 minutes before the run; Gate A-0 execution |
 | Next engineering task | the review of PR #35 (A18); then C01 (Track B) after approval to start |
