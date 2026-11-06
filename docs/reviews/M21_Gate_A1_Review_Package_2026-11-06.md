@@ -3,6 +3,12 @@
 - **Prepared:** 2026-11-06T17:52Z UTC (same in London).
 - **Status:** NOT approved, NOT executed. Nothing has been merged; `main` is `80b4343`.
 - **Scope:** GitHub merges only. No VPS change, deployment, service action, broker connection, Vercel setting or CI change.
+- **Revision 2:** 2026-11-06T18:29Z UTC, after Claude's own engineering review (`docs/reviews/M21_Gate_A1_Engineering_Review_2026-11-06.md`):
+  - one necessary correction: the ready-for-review step now also works through the Claude Code GitHub proxy (finding F1);
+  - one hardening: VPS-0 also checks the VPS checkout (F2);
+  - the full suite now also runs on the exact final trees.
+
+  The merge order, heads and expected trees are unchanged.
 - **Design reused, not changed:** Finish Line §7e.4 (A0 preconditions, A2 Vercel, A3 merge order, A6 protected files), from `docs/handoffs/M21_Finish_Line_2026-10-28.md` on `docs/full-canonical-handoff-2026-10-26`. Gate A-0 (6 Nov) replaces §7e.4 A1 "pause". Gate A-2 (deployment) is a separate gate.
 
 ## 0. On one screen
@@ -21,7 +27,8 @@
   - the re-simulation matches the A3 table at **23/23** steps;
   - the protected-file changes are exactly the C5b set;
   - the full suite was run on the exact tested tree (§2.4);
-  - the merge script passes 17 offline cases;
+  - the full suite passes on the exact final `main` trees: `5b0f40b` 134/0, `f04d1d6` (with #35) 135/0;
+  - the merge script passes 20 offline cases;
   - the real GitHub preflight passes (read-only).
 - **Decisions needed before execution (§3):**
   - D-A1-1: approve C5b;
@@ -98,7 +105,10 @@ The 23 merges change **123 files**.
 | `m21/integration` **`6c82b1a`** (tree `04d3231`) | the final tree `5b0f40b` + the cross-lane E2E test + one G10 allow-list line each in `test_m17_backtesting.py` and `test_m18_ml.py` (integration-only; no production file differs) | **full suite: 135 modules, 0 failed**, 1 without tests (`test_m12`, by design). Expected skips: m16 1, m17 2, m18 3, m20j 1, the same as the 30 Oct full run on `15bb236`. |
 | `6c82b1a` + #35 → `ae803b1` (tree `20405d2`) | the same + step 24 (A18) | **full suite: 136 modules, 0 failed**, the same skips. Includes `test_m21_a18_gw_watchdog` and the C5b guard. |
 
-On 30 Oct the full suite was claimed only for `15bb236`. It now covers the exact tested tree.
+| **Simulated final `main` (revision 2): merge commit `834a3d9`, tree `5b0f40b`** | exactly what `main` will be after step 23 (merges of the PR refs fetched from GitHub on 6 Nov) | **full suite: 134 modules, 0 failed**, the same skips |
+| **Simulated final `main` with #35: `e1a9a56`, tree `f04d1d6`** | exactly what `main` will be after step 24 | **full suite: 135 modules, 0 failed**, the same skips |
+
+On 30 Oct the full suite was claimed only for `15bb236`. It now covers the exact tested tree **and the exact final merged trees**. The only module in the integration run that is not on the final tree is `test_m21_e2e_cross_lane` (integration-only); carrying it into `main` is a follow-up.
 
 ### 2.5 Real GitHub preflight (read-only; `bash gate_a1.sh preflight --with-35`, 2026-11-06T17:52Z)
 
@@ -172,7 +182,7 @@ PREFLIGHT OK: 24 merge(s) to go (steps 1-24). Nothing was changed.
 
 1. **VPS-0 (Claude Code on the VPS, read-only, immediately before step 1).** Expected: `VPS-0 OK`. Any `VPS-0 STOP`: do not start A-1.
 2. **Preflight (GitHub, read-only):** `bash gate_a1.sh preflight [--with-35]`. Expected: `PREFLIGHT OK: 23 (or 24) merge(s) to go`.
-3. **Execute:** `A1_APPROVAL_REF='<operator approval: date/time UTC, Issue #3 comment link>' A1_VERCEL_CHOICE=<accept|paused|disconnected> bash gate_a1.sh execute [--with-35]`. Claude runs it in this session with the GitHub CLI, or the operator runs it.
+3. **Execute:** `A1_APPROVAL_REF='<operator approval: date/time UTC, Issue #3 comment link>' A1_VERCEL_CHOICE=<accept|paused|disconnected> bash gate_a1.sh execute [--with-35]`. Claude runs it in this session, or the operator runs it on their own machine. In this session GitHub GraphQL is not available, so `gh pr ready` is refused. The script then uses the proxy's REST ready-for-review route and verifies the result (F1).
 
    For each step, the script:
    - checks that `main`'s tree is the previous expected tree;
@@ -189,7 +199,9 @@ PREFLIGHT OK: 24 merge(s) to go (steps 1-24). Nothing was changed.
    - a missing approval reference or Vercel choice.
 
    On a STOP, nothing is reverted and no further merge is made. A re-run resumes from the step whose expected tree `main` has, and only after review and approval.
-6. **Afterwards:** record the merge SHAs and the final tree on Issue #3, update PR #34's status, then hold an independent review before Gate A-2.
+
+   A GitHub CLI error outside these checks (for example the API being unreachable) ends the run with exit 1 and the CLI's message. That is also a stop: no further merge is made, and the preflight shows where `main` is.
+6. **Afterwards:** run **VPS-0 again**. It must be `VPS-0 OK` with `vps_head=015d2cea927b`, the direct evidence that nothing reached the VPS. Then record the merge SHAs and the final tree on Issue #3, update PR #34's status, and hold an independent review before Gate A-2. Gate A-2 must not start unless Gate A-1 is DONE; a partial `main` is never deployed.
 
 **After A-1:**
 - the VPS still runs `015d2ce`, unchanged;
@@ -198,7 +210,7 @@ PREFLIGHT OK: 24 merge(s) to go (steps 1-24). Nothing was changed.
 
 **Rollback:** nothing is deployed, so a rollback has no runtime effect. Reverting `main` is a separate PR (`git revert -m 1` of the merge commits in reverse order; never a force-push) and needs approval. With Vercel `accept`, the website redeploys.
 
-## Appendix A: `gate_a1.sh` (sha256 `72e2c51331efe4f8f7d497f5e74a4d597778ec5e096c12abd2723d7bb0e05196`)
+## Appendix A: `gate_a1.sh`, revision 2 (sha256 `3c991a141e6a4e59941bffd40a205548bfca7d53a74b0cd85798a7d1c92c8adc`)
 
 ```bash
 #!/usr/bin/env bash
@@ -281,8 +293,10 @@ for s in $(seq $((K+1)) $LAST); do
   prev=$(tree_of $((s-1)))
   [ "$(main_tree)" = "$prev" ] || stop "before step $s: main tree is not the expected $prev"
   [ "$(pr $n .head.sha)" = "$h" ] || stop "step $s #$n head moved"
-  if [ "$(pr $n .base.ref)" != main ]; then gh api -X PATCH "repos/$REPO/pulls/$n" -f base=main --jq .base.ref >/dev/null; [ "$(pr $n .base.ref)" = main ] || stop "step $s #$n could not be retargeted to main"; fi
-  if [ "$(pr $n .draft)" = true ]; then gh pr ready "$n" -R "$REPO" >/dev/null; [ "$(pr $n .draft)" = false ] || stop "step $s #$n is still a draft"; fi
+  if [ "$(pr $n .base.ref)" != main ]; then gh api -X PATCH "repos/$REPO/pulls/$n" -f base=main --jq .base.ref >/dev/null 2>&1 || true; [ "$(pr $n .base.ref)" = main ] || stop "step $s #$n could not be retargeted to main"; fi
+  # Ready for review: 'gh pr ready' (GraphQL) where available; otherwise the REST route of the Claude Code GitHub proxy
+  # (GraphQL is not available there). The result is verified either way.
+  if [ "$(pr $n .draft)" = true ]; then gh pr ready "$n" -R "$REPO" >/dev/null 2>&1 || gh api -X POST "repos/$REPO/pulls/$n/ccr/ready_for_review" >/dev/null 2>&1 || true; [ "$(pr $n .draft)" = false ] || stop "step $s #$n is still a draft (could not mark it ready for review)"; fi
   m=null; for _ in 1 2 3 4 5 6 7 8 9 10; do m=$(pr $n .mergeable); [ "$m" != null ] && break; sleep 3; done
   [ "$m" = true ] || stop "step $s #$n is not mergeable (mergeable=$m)"
   c5b=""; case $n in 12|15|16|35) c5b=" C5b: the protected-file change in this PR is approved under this Gate A-1 approval (Finish Line 7e.4 A6).";; esac
@@ -297,13 +311,13 @@ done
 echo "GATE A-1 DONE: main $(main_sha) tree $(main_tree) (steps 1-$LAST)."
 ```
 
-## Appendix B: VPS-0 (sha256 `37537052a59b0c46b4ab1b87774ab0ee772062ad65925ef03eed1eb2bc8d0da8`)
+## Appendix B: VPS-0, revision 2 (sha256 `652ad548fdf5fff167fef9cabce0d6a8062700ae03adab97d88c5eee5404f623`)
 
-The `SCAN` code is byte-identical to the approved Gate A-0 revision 6 process scan.
+Run it before step 1 and again after `GATE A-1 DONE`. The `SCAN` code is byte-identical to the approved Gate A-0 revision 6 process scan. Revision 2 also requires the VPS checkout to be `015d2ce`.
 
 ```bash
 bash -u <<'VPS0'
-# Gate A-1 VPS-0: read-only. Run on the VPS immediately before step 1. Changes nothing.
+# Gate A-1 VPS-0: read-only. Run on the VPS immediately before step 1, and again after GATE A-1 DONE. Changes nothing.
 SCAN='import os, sys
 try:
     me = os.getpid(); skip = set(); p = me
@@ -337,9 +351,10 @@ KS=$(python3 -I -c 'import json; print(json.load(open("/opt/algo-trader/data/kil
 EN=$(systemctl is-enabled algo-trader.service 2>&1); AC=$(systemctl is-active algo-trader.service 2>&1)
 if systemd-analyze condition 'ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START' >/dev/null 2>&1; then G=PASSES; else G=FALSE; fi
 if [ -e /var/lib/algo-trader/ALLOW_BOT_START ]; then AL=PRESENT; else AL=absent; fi
-echo "kill_switch_active=$KS bot_unit=$EN/$AC guard_condition=$G allow_file=$AL"
-if [ "$rc" = 0 ] && [ "$KS" = True ] && [ "$EN" = disabled ] && [ "$AC" = inactive ] && [ "$G" = FALSE ] && [ "$AL" = absent ]; then
-  echo "VPS-0 OK: no main.py or sync.sh process, Gate A-0 containment in place; a merge to GitHub main cannot reach the VPS."
+HD=$(git -C /opt/algo-trader rev-parse HEAD 2>&1)
+echo "kill_switch_active=$KS bot_unit=$EN/$AC guard_condition=$G allow_file=$AL vps_head=${HD:0:12}"
+if [ "$rc" = 0 ] && [ "$KS" = True ] && [ "$EN" = disabled ] && [ "$AC" = inactive ] && [ "$G" = FALSE ] && [ "$AL" = absent ] && [ "$HD" = 015d2cea927b9b4db3ee65604e0b4ebb58211e61 ]; then
+  echo "VPS-0 OK: no main.py or sync.sh process, Gate A-0 containment in place, VPS code still 015d2ce; a merge to GitHub main cannot reach the VPS."
 else
   echo "VPS-0 STOP: do not start Gate A-1. Send this output."
 fi
@@ -348,7 +363,7 @@ VPS0
 
 ## Appendix C: offline tests
 
-**`gate_a1.sh`, 17 cases.** The tests use a GitHub CLI stand-in that keeps PR state and a local `main` and performs real `git` merges.
+**`gate_a1.sh`, 20 cases (revision 2).** The tests use a GitHub CLI stand-in that keeps PR state and a local `main` and performs real `git` merges.
 
 | Case | Result |
 |---|---|
@@ -365,10 +380,14 @@ VPS0
 | T14 a PR not mergeable at step 5 | STOP before merging it |
 | T15 `main` moved outside the gate | STOP |
 | T16 full run in one go | `GATE A-1 DONE`, tree `5b0f40b`; 23 first-parent merge commits |
+| T17 no GraphQL (the Claude Code proxy): `gh pr ready` refused | the proxy's ready route is used; full run, `GATE A-1 DONE`, tree `5b0f40b` |
+| T18 no way to mark a PR ready | STOP at step 1 before any merge ("still a draft") |
+| T19 retarget refused at step 3 | STOP with a message (not a raw exit); `main` at the step-2 tree |
+| (revision 1 script, proxy without GraphQL) | exit 1 at step 1 with 0 merges: safe, but it could not run from this session. This is F1. |
 
-**VPS-0, 8 cases:**
-- OK only when nothing is running and every containment control is in place;
-- STOP for each of the following on its own: `sync.sh` running; `python3 -u main.py` running; the kill switch released; the unit re-enabled; the unit active; the allow-file present; the kill-switch file missing.
+**VPS-0, 9 cases (revision 2):**
+- OK only when nothing is running, every containment control is in place and the VPS checkout is `015d2ce`;
+- STOP for each of the following on its own: the VPS checkout moved; `sync.sh` running; `python3 -u main.py` running; the kill switch released; the unit re-enabled; the unit active; the allow-file present; the kill-switch file missing.
 
 <details><summary>Test harness (stand-in GitHub CLI, reset, cases)</summary>
 
@@ -388,6 +407,7 @@ def out(obj, jq):
 def err(msg, code): sys.stderr.write(f"gh: {msg} (HTTP {code})\n"); sys.exit(1)
 a = sys.argv[1:]
 if a[:2] == ["pr", "ready"]:
+    if os.environ.get("STUB_NO_GRAPHQL"): err("GitHub GraphQL is not available from Claude Code sessions", 403)
     prs[a[2]]["draft"] = False; save(); sys.exit(0)
 assert a[0] == "api"; a = a[1:]
 method, fields, jq, path = "GET", {}, None, None
@@ -409,7 +429,11 @@ elif p[3] == "pulls":
         out({"number": int(n), "state": pr["state"], "merged": pr["merged"], "draft": pr["draft"], "head": {"sha": head},
              "base": {"ref": pr["base"]}, "mergeable": (False if on("mergeable_false", n) else (None if pr["merged"] else True))}, jq)
     elif len(p) == 5 and method == "PATCH":
+        if on("patch_fail", n): err("Validation Failed", 422)
         pr["base"] = fields["base"]; save(); out({"base": {"ref": pr["base"]}}, jq)
+    elif p[5:] == ["ccr", "ready_for_review"] and method == "POST":
+        if not os.environ.get("STUB_NO_GRAPHQL") or os.environ.get("STUB_NO_READY"): err("Not Found", 404)
+        pr["draft"] = False; save(); out({"draft": False}, jq)
     elif p[5:] == ["merge"] and method == "PUT":
         if pr["draft"]: err("Pull Request is still a draft", 405)
         if fields.get("sha") != pr["head"]: err("Head branch was modified. Review and try the merge again.", 409)
@@ -467,6 +491,9 @@ bash $SP/a1/stub/reset.sh; fault '{"merge_refused": "14"}'; r "T13 GitHub refuse
 bash $SP/a1/stub/reset.sh; fault '{"mergeable_false": "15"}'; r "T14 #15 not mergeable at step 5: STOP before merging" env A1_APPROVAL_REF="$APP" A1_VERCEL_CHOICE=accept bash $G execute
 bash $SP/a1/stub/reset.sh; fault '{}'; git -C $STUB_DIR/state update-ref refs/heads/main 6c82b1a; r "T15 main moved outside the gate before the start" bash $G preflight
 bash $SP/a1/stub/reset.sh; r "T16 full run in one go (23 steps)" env A1_APPROVAL_REF="$APP" A1_VERCEL_CHOICE=accept bash $G execute; echo "   final tree $(git -C $STUB_DIR/state rev-parse --short=7 'main^{tree}'); merge commits on main: $(git -C $STUB_DIR/state rev-list --merges --count 80b4343..main) (first-parent: $(git -C $STUB_DIR/state rev-list --first-parent --count 80b4343..main))"
+bash $SP/a1/stub/reset.sh; fault '{}'; r "T17 no GraphQL (Claude Code proxy): 'gh pr ready' refused, proxy ready route used; full run" env STUB_NO_GRAPHQL=1 A1_APPROVAL_REF="$APP" A1_VERCEL_CHOICE=accept bash $G execute; echo "   final tree $(git -C $STUB_DIR/state rev-parse --short=7 'main^{tree}')"
+bash $SP/a1/stub/reset.sh; r "T18 no way to mark ready: STOP before any merge" env STUB_NO_GRAPHQL=1 STUB_NO_READY=1 A1_APPROVAL_REF="$APP" A1_VERCEL_CHOICE=accept bash $G execute
+bash $SP/a1/stub/reset.sh; fault '{"patch_fail": "14"}'; r "T19 retarget of #14 refused at step 3: STOP (no raw exit)" env A1_APPROVAL_REF="$APP" A1_VERCEL_CHOICE=accept bash $G execute
 rm -rf $STUB_DIR
 ```
 
