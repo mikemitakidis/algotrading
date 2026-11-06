@@ -4274,6 +4274,7 @@ class G10_Hygiene(unittest.TestCase):
             "docs/M22_C01_risk_authority_parity_design.md",
             # M21 roadmap v3.0 consolidated review report (documentation only).
             "docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md",
+            "docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md",
             # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",

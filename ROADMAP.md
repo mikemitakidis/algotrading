@@ -801,16 +801,16 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-05T18:47Z UTC |
+| Item | Value at 2026-11-06T17:52Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.6 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.7 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | **Gate A-0 rev 6** (approved in principle; execution after the operator's IBKR position/working-order confirmation); S2-U; Gate A-1 + C5b + Vercel (+ A18 #35); Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
-| Next task | Track A: the IBKR position/working-order confirmation, then Gate A-0 rev 6 approval and execution; then Gate A-1/A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
+| Open approvals | **Gate A-1** + C5b + Vercel (+ A18 #35) (package prepared 6 Nov; Gate A-0 EXECUTED and CLOSED 6 Nov); S2-U; Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
+| Next task | Track A: the independent review of the Gate A-1 package, decisions D-A1-1…4 and approval; then Gate A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
@@ -864,3 +864,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 8 | 2026-11-05T17:37Z (same in London) | v3.0 (DRAFT), amended | Session 2 closed (sanitised results: all five lanes signal-only; 27,994 watchdog errors; one-symbol historical store; journal tables absent; a world-readable `.env` backup = E07). Gate A-0 revision 4: IBKR position/working-order attestation, the A-0s permission fix, the completed containment claim. R5 historical-data row updated. Status 3.0.4. | Session 2 output, independently reviewed | M21 | PR #34, Issue #3 | pending operator approval |
 | 9 | 2026-11-05T17:57Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 5: the three corrections from the independent review of revision 4 (strict `A0_POSITIONS` validation; an invalid step-1 placeholder; a fail-closed process check that sees interpreter options). Status 3.0.5. | independent review of #34 head `78a8f3a` | M21 | PR #34, Issue #3 | pending operator approval |
 | 10 | 2026-11-05T18:47Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 6: at the operator's request, the attestation may record one pre-existing live position, only with an explicit manual-management acknowledgement. Paper positions and all working orders stay zero; no live trading is authorised. Status 3.0.6. | operator IBKR check, 5 Nov 2026 | M21 | PR #34, Issue #3 | pending operator approval |
+| 11 | 2026-11-06T17:52Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 6 EXECUTED and CLOSED on 6 Nov (`gate_a0_exit=0`; kill switch active; bot unit disabled and guarded; E07 fixed; record in Issue #3). Gate A-1 review package added (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`): re-simulation 23/23, pinned merge script, VPS-0 check. Status 3.0.7. | Claude Code execution report, accepted by ChatGPT | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |

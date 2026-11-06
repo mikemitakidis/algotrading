@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.6 (roadmap v3.0), 5 Nov 2026
+> ## Current operating state: status 3.0.7 (roadmap v3.0), 6 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-05T18:47Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.5; the change is recorded in `ROADMAP.md` R16, entry 10.
+> - **Written:** 2026-11-06T17:52Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.6; the change is recorded in `ROADMAP.md` R16, entry 11.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -32,10 +32,16 @@ project-wide reconciliation narrative lives in
 > - **Secrets:** a world-readable `.env` backup (E07).
 > - **IBKR positions:** not established by Session 2. Operator check in IBKR Mobile, 5 Nov: paper 0 positions, 0 working orders; live **one small pre-existing position** (kept, manually managed), 0 working orders.
 >
-> **Gate A-0 revision 6:** approved in principle (independent review of revision 4).
-> - Revision 5 added strict `A0_POSITIONS` validation, an invalid step-1 placeholder and a fail-closed process check.
-> - Revision 6 permits one pre-existing live position, only with an explicit manual-management acknowledgement. Paper positions and all working orders must be zero; no live trading is authorised.
-> - Execution follows the review of revision 6, approval, and a fresh IBKR check within 30 minutes.
+> **Gate A-0 revision 6: EXECUTED and CLOSED** (6 Nov; approved at PR #34 head `f179029`, script sha256 `86f9f752…eace7`; run by Claude Code on the VPS; result reviewed and accepted by ChatGPT; record in Issue #3):
+> - `gate_a0_exit=0`;
+> - the kill switch is **active**;
+> - the bot unit is **disabled** and **inactive**, with the boot link removed;
+> - the systemd start guard is loaded and evaluates **FALSE**; `ALLOW_BOT_START` is absent;
+> - the `.env` backup is **644 → 600** (E07);
+> - no broker call, order, service action or deployment; the pre-existing live holding is untouched and manually managed.
+> - **Evidence note:** H3/H4 were not run as separate steps; the evidence is the block's final verification and its `STATE AT EXIT` report.
+>
+> **Gate A-1 (23 merges): review package prepared** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
 >
 > **Current milestone:** M21 (v2.0 scope: M21.U, M21.1, M21.1extra, M21.2–M21.7). **IBKR paper only;** no IBKR live, no eToro real orders.
 >
@@ -44,7 +50,7 @@ project-wide reconciliation narrative lives in
 > | Completed portions | M21.U, D0, D1, supervised D2: CLOSED (≈ FULLY_ACCEPTED under the process of their time). D3 code: MERGED, RUNTIME_UNVERIFIED (A06). Research lanes #4–#11: MERGED, DATA_UNVERIFIED. | [GH] |
 > | Engineering | ENGINEERING_COMPLETE on 23 draft PRs (#1, #12–#33), except **A16** (a WP14-driven dashboard template-change flow): NOT_STARTED. Exact-head review is still needed for #30 `14daa55` and #31 `d99f127`. | [PR]/[OFF] |
 > | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
-> | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. BLOCKED_BY_APPROVAL (Gate A-0, then A-2). | [VPS-R] |
+> | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. **Gate A-0 containment in place (6 Nov).** BLOCKED_BY_APPROVAL (Gate A-1, then A-2). | [VPS-R] |
 > | Historical data | **inventory done**: one symbol, last refreshed June 2026; B-1 not met; a real-data backfill is needed | [VPS-R] |
 > | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (task **A18**, fix in draft PR #35) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
 > | 10-day soak (B-3) | NOT_STARTED | — |
@@ -83,16 +89,16 @@ project-wide reconciliation narrative lives in
 > - #31 `d99f127` · #32 `a409b37` · #33 `6540e41`
 >
 > **Blockers:**
-> - operator approvals: Session 2, Gate A-0, Gate A-1, Gate A-2, OP2–OP5;
+> - operator approvals: Gate A-1, Gate A-2, OP2–OP5;
 > - the stopped IB Gateway (OP2);
 > - the `gw-watchdog` defect (A18, PR #35; before OP2);
 > - genuine paper outcomes (C-4);
 > - for M22, C01 (HARD).
 >
-> **Next approved action:** none. Next: the operator confirms IBKR positions and working orders (paper + live) and the Flex exports are provided.
+> **Next approved action:** none. Next: the independent review of the Gate A-1 package, then the operator's decisions D-A1-1…D-A1-4 and approval.
 >
 > **Next proposed actions, not approved:**
-> - **Gate A-0 rev 6** (attestation + A-0s + A-0a/b/b2);
+> - **Gate A-1** (23 merges, + #35 if D-A1-3; package in `docs/reviews/`);
 > - S2-U;
 > - the review of **PR #35** (A18);
 > - Track B **C01**, offline.

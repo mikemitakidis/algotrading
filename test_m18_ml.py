@@ -10441,6 +10441,7 @@ class G10_Hygiene(unittest.TestCase):
             "docs/M22_C01_risk_authority_parity_design.md",
             # M21 roadmap v3.0 consolidated review report (documentation only).
             "docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md",
+            "docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md",
             "docs/NEXT_WORK_REGISTER.md",
             # M18 recovery-scope artifacts (this branch reconstructs
             # M18 from transcripts; these document/support that effort).
