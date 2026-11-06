@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.8 (roadmap v3.0), 6 Nov 2026
+> ## Current operating state: status 3.0.9 (roadmap v3.0), 6 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-06T18:29Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.7; the change is recorded in `ROADMAP.md` R16, entry 12.
+> - **Written:** 2026-11-06T18:46Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.8; the change is recorded in `ROADMAP.md` R16, entry 13.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -32,7 +32,7 @@ project-wide reconciliation narrative lives in
 > - **Secrets:** a world-readable `.env` backup (E07).
 > - **IBKR positions:** not established by Session 2. Operator check in IBKR Mobile, 5 Nov: paper 0 positions, 0 working orders; live **one small pre-existing position** (kept, manually managed), 0 working orders.
 >
-> **Gate A-0 revision 6: EXECUTED and CLOSED** (6 Nov; approved at PR #34 head `f179029`, script sha256 `86f9f752…eace7`; run by Claude Code on the VPS; result reviewed and accepted by ChatGPT; record in Issue #3):
+> **Gate A-0 revision 6: EXECUTED and CLOSED** (run 5 Nov, about 19:31 UTC; recorded 6 Nov; approved at PR #34 head `f179029`, script sha256 `86f9f752…eace7`; run by Claude Code on the VPS; result reviewed and accepted by ChatGPT; record in Issue #3):
 > - `gate_a0_exit=0`;
 > - the kill switch is **active**;
 > - the bot unit is **disabled** and **inactive**, with the boot link removed;
@@ -41,7 +41,8 @@ project-wide reconciliation narrative lives in
 > - no broker call, order, service action or deployment; the pre-existing live holding is untouched and manually managed.
 > - **Evidence note:** H3/H4 were not run as separate steps; the evidence is the block's final verification and its `STATE AT EXIT` report.
 >
-> **Gate A-1 (23 merges): review package revision 2** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
+> **Gate A-1 (23 merges): review package revision 3** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
+> - Revision 3 adds the independent review's VPS-0 correction: the Gate A-0 guard must be loaded in the bot unit; 19 offline cases.
 > - **Claude's engineering review** (`docs/reviews/M21_Gate_A1_Engineering_Review_2026-11-06.md`): **BLOCK at `578af1e`** on one necessary correction (F1: `gh pr ready` needs GraphQL, which this session lacks). **Corrected in revision 2 → PASS** for independent review.
 > - Full suite on the exact final trees: `5b0f40b` 134/0; `f04d1d6` (with #35) 135/0.
 > - Recommended: D-A1-1 approve C5b; D-A1-2 accept the Vercel builds; D-A1-3 include #35 (if it is reviewed at `da56e12`); D-A1-4 merge #33 as reviewed.
@@ -53,7 +54,7 @@ project-wide reconciliation narrative lives in
 > | Completed portions | M21.U, D0, D1, supervised D2: CLOSED (≈ FULLY_ACCEPTED under the process of their time). D3 code: MERGED, RUNTIME_UNVERIFIED (A06). Research lanes #4–#11: MERGED, DATA_UNVERIFIED. | [GH] |
 > | Engineering | ENGINEERING_COMPLETE on 23 draft PRs (#1, #12–#33), except **A16** (a WP14-driven dashboard template-change flow): NOT_STARTED. Exact-head review is still needed for #30 `14daa55` and #31 `d99f127`. | [PR]/[OFF] |
 > | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
-> | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. **Gate A-0 containment in place (6 Nov).** BLOCKED_BY_APPROVAL (Gate A-1, then A-2). | [VPS-R] |
+> | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. **Gate A-0 containment in place (since 5 Nov).** BLOCKED_BY_APPROVAL (Gate A-1, then A-2). | [VPS-R] |
 > | Historical data | **inventory done**: one symbol, last refreshed June 2026; B-1 not met; a real-data backfill is needed | [VPS-R] |
 > | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (task **A18**, fix in draft PR #35) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
 > | 10-day soak (B-3) | NOT_STARTED | — |

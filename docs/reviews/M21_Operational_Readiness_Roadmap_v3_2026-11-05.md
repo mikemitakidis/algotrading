@@ -166,9 +166,9 @@ The scenarios describe the state after H1/P1/P2 (before Gate A-0). The last colu
 | **4. The IB Gateway comes back** | It was stopped explicitly on 3 Sep. Only a manual start or a reboot restarts it. The gateway alone sends no orders; no bot or WS2 loop is running or scheduled. | CONFIRMED | the same. If a bot is started, the kill switch blocks IBKR. |
 | **5. `main` receives new merges** | **No VPS change**: no `sync.sh`, no cron entry, no timer, runner or hook. Vercel makes a Production deployment per merge. Latent: a manual `deploy.sh` or `sync.sh` start deploys `main`. An unattended `needrestart` restart (F-11) reloads whatever is **on disk**; it does not fetch. | CONFIRMED (needrestart: INFERRED) | merges cannot reach the VPS automatically. **`sync.sh` stays stopped** (A-0d). |
 
-## 4. Gate A-0: containment procedure (revision 6, APPROVED and EXECUTED 6 Nov 2026)
+## 4. Gate A-0: containment procedure (revision 6, APPROVED and EXECUTED 5 Nov 2026)
 
-**Executed 6 Nov 2026** by Claude Code on the VPS, from PR #34 head `f179029` (script sha256 `86f9f752…eace7`): `gate_a0_exit=0`. The result was accepted by an independent review. The record is in Issue #3. Gate A-0 is CLOSED and must not be repeated. The text below is the procedure as approved.
+**Executed 5 Nov, about 19:31 UTC (the attestation time in the accepted run report; recorded on GitHub 6 Nov)** by Claude Code on the VPS, from PR #34 head `f179029` (script sha256 `86f9f752…eace7`): `gate_a0_exit=0`. The result was accepted by an independent review. The record is in Issue #3. Gate A-0 is CLOSED and must not be repeated. The text below is the procedure as approved.
 
 **Readiness at 2026-11-05T18:47Z UTC: the approach is approved in principle (independent review of revision 4). Execution needs two things.**
 1. **IBKR position and working-order confirmation** (paper **and** live), made by the operator in the IBKR Client Portal or the TWS/IBKR mobile app (step 1 below).
@@ -945,6 +945,6 @@ Session 2 is closed and will not be repeated.
 | Documentation PR | #34 (draft); head SHA in the PR record and Issue #3 (R11) |
 | Watchdog fix | **A18**, PR #35 (draft), head `da56e12a9e9baec8634b618cb936be1f40a84a78` |
 | Session 2 | **CLOSED**: exit 0, 8/8 checksums, three copies OK, all five lanes signal-only |
-| Gate A-0 | revision 6, **EXECUTED and CLOSED 6 Nov** (`gate_a0_exit=0`; Issue #3) |
+| Gate A-0 | revision 6, **EXECUTED and CLOSED** (run 5 Nov about 19:31 UTC; recorded 6 Nov; `gate_a0_exit=0`; Issue #3) |
 | Next operational step | Gate A-1 (package: `docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`) |
 | Next engineering task | the review of PR #35 (A18); then C01 (Track B) after approval to start |

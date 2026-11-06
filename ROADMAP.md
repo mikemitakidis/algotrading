@@ -801,15 +801,15 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-06T18:29Z UTC |
+| Item | Value at 2026-11-06T18:46Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.8 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.9 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | **Gate A-1** + C5b + Vercel (+ A18 #35) (package prepared 6 Nov; Gate A-0 EXECUTED and CLOSED 6 Nov); S2-U; Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
+| Open approvals | **Gate A-1** + C5b + Vercel (+ A18 #35) (package revision 3, 6 Nov; Gate A-0 EXECUTED and CLOSED, run 5 Nov); S2-U; Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
 | Next task | Track A: the independent review of the Gate A-1 package, decisions D-A1-1…4 and approval; then Gate A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
@@ -866,3 +866,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 10 | 2026-11-05T18:47Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 6: at the operator's request, the attestation may record one pre-existing live position, only with an explicit manual-management acknowledgement. Paper positions and all working orders stay zero; no live trading is authorised. Status 3.0.6. | operator IBKR check, 5 Nov 2026 | M21 | PR #34, Issue #3 | pending operator approval |
 | 11 | 2026-11-06T17:52Z (same in London) | v3.0 (DRAFT), amended | Gate A-0 revision 6 EXECUTED and CLOSED on 6 Nov (`gate_a0_exit=0`; kill switch active; bot unit disabled and guarded; E07 fixed; record in Issue #3). Gate A-1 review package added (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`): re-simulation 23/23, pinned merge script, VPS-0 check. Status 3.0.7. | Claude Code execution report, accepted by ChatGPT | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |
 | 12 | 2026-11-06T18:29Z (same in London) | v3.0 (DRAFT), amended | Claude's engineering review of the Gate A-1 package: BLOCK at `578af1e` on F1 (the ready-for-review call needs GraphQL); corrected in package revision 2 (proxy REST fallback, VPS-0 head check), full suite on the exact final trees 134/0 and 135/0 → PASS for independent review. Records check: 71 tasks intact; A18, E07, the July debt register D-3…D-5 and handoff v3.13 to update after A-1. Status 3.0.8. | engineering review | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |
+| 13 | 2026-11-06T18:46Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 3: VPS-0 also proves the Gate A-0 guard is loaded in the bot unit (drop-in in `DropInPaths`, exact guard line in the loaded unit, `NeedDaemonReload=no`, boot link absent); 19 offline cases. **Correction to entry 11:** Gate A-0 ran on 5 Nov, about 19:31 UTC (attestation time), and was recorded on 6 Nov. Status 3.0.9. | independent review of `86c6c0a`; handoff v3.13 (`74f1f3c`) | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |

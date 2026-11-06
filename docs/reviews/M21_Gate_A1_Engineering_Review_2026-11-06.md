@@ -77,7 +77,7 @@
 | Record | State | Missing or outdated |
 |---|---|---|
 | Full canonical handoff **v3.12** (29 Oct), `docs/handoffs/Algo_Trading_Full_Canonical_Handoff_2026-10-26.md` | preserved on `docs/full-canonical-handoff-2026-10-26` (tip `7d19f39`, 5 Nov). **Not on `main`** (RD-5 pending). | No entries after 29 Oct: Gate A design (30 Oct), Gate B Sessions 1–2, Gate A-0, A18, the E07 fix and roadmap v3 live only in PR #34, Issue #3 and the Session 1 report. **Needs a v3.13 refresh** (docs-only). |
-| **71 tasks** | **intact**: A01–A17, B01–B24, C01–C11, D01–D10, E01–E09 | **A18** is approved (RD-9, PR #35) but not yet in the register. **E07** is still unchecked although Gate A-0 fixed it on 6 Nov. |
+| **71 tasks** | **intact**: A01–A17, B01–B24, C01–C11, D01–D10, E01–E09 | **A18** is approved (RD-9, PR #35) but not yet in the register. **E07** is still unchecked although Gate A-0 fixed it (run 5 Nov; handoff v3.13 has since closed it). |
 | **M1–M23 roadmap** | all present in `ROADMAP.md` (`main` and PR #34); M24/M25 UNDEFINED (RD-3) | `main` still has the pre-v3 roadmap; v3.0 is a draft in PR #34 |
 | Technical debt | handoff §4 E01–E09 + A17; `docs/NEXT_WORK_REGISTER.md` (June) on `main` | **`docs/PREVIOUS_MILESTONE_DEBT.md`** (5 Jul; D-1…D-5) exists only on the unmerged branch `m21-docs-debt-register`, and the handoff and roadmap v3 do not reference it. D-1 = C01 and D-2 ≈ A13, but **D-3** (IBKR paper account/equity reader not wired), **D-4** (backtest integrity audit) and **D-5** (M1–M4 runtime re-verification) have no explicit task. Carry them into the register as notes (no renumbering). |
 | Progress since 26 Oct | Issue #3: 36 comments, continuous from 28 Oct to 6 Nov (including A-0 and A-1); `ROADMAP.md` R16 entries 1–12 and `MILESTONE_STATUS.md` 3.0.8 (PR #34) | The **Finish Line** (last changed 30 Oct) has no Session 2, A-0 or A18 entries, and its §6 checklist is not updated. Session 2's results exist only in PR #34 (report §5). None of PR #34 or the handoff branch is on `main`. |
@@ -95,3 +95,17 @@ None of these is a Gate A-1 blocker; they are documentation. Recommended: after 
    4. VPS-0 again;
    5. the Issue #3 record;
    6. stop for review before Gate A-2.
+
+## Addendum, 2026-11-06T18:46Z UTC: independent review finding (VPS-0 guard)
+
+**Finding:** VPS-0 revision 2 checked that a standalone `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START` evaluates false. It did not check that `gate-a0.conf` is actually loaded into the bot unit. Reproduced offline: revision 2 said OK in seven states where the guard was missing, unloaded, changed, pending a reload or bypassed by a boot link.
+
+**Correction, package revision 3:** read-only, fail-closed checks that:
+- `gate-a0.conf` is in the bot unit's `DropInPaths`;
+- the exact guard line is in `systemctl cat`;
+- `NeedDaemonReload=no`;
+- the boot link is absent (including a dangling link).
+
+19 offline cases pass (package Appendix C). Nothing else changed: `gate_a1.sh`, the merge order, heads and trees are unchanged.
+
+**Date correction:** Gate A-0 ran on 5 Nov, about 19:31 UTC (attestation time), and was recorded on GitHub on 6 Nov. Earlier entries in PR #34 said "6 Nov"; corrected in place, and recorded in `ROADMAP.md` R16 entry 13.
