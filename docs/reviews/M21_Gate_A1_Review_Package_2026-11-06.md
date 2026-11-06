@@ -9,6 +9,7 @@
   - the full suite now also runs on the exact final trees.
 
   The merge order, heads and expected trees are unchanged.
+- **Revision 4:** 2026-11-06T19:48Z UTC, after the independent review of the execution instructions: VPS-0 now exits 0 on OK and 3 on STOP. The 19 offline cases assert the exit code as well as the output. `gate_a1.sh`, the merge order, heads and expected trees are unchanged.
 - **Revision 3:** 2026-11-06T18:46Z UTC, after the independent review: VPS-0 now proves the Gate A-0 guard is loaded in the bot unit (Appendix B; 19 offline cases). `gate_a1.sh`, the merge order, heads and expected trees are unchanged. The Gate A-0 execution date is corrected to 5 Nov, about 19:31 UTC (the attestation time in the accepted run report; recorded on GitHub 6 Nov).
 - **Design reused, not changed:** Finish Line §7e.4 (A0 preconditions, A2 Vercel, A3 merge order, A6 protected files), from `docs/handoffs/M21_Finish_Line_2026-10-28.md` on `docs/full-canonical-handoff-2026-10-26`. Gate A-0 (6 Nov) replaces §7e.4 A1 "pause". Gate A-2 (deployment) is a separate gate.
 
@@ -312,10 +313,11 @@ done
 echo "GATE A-1 DONE: main $(main_sha) tree $(main_tree) (steps 1-$LAST)."
 ```
 
-## Appendix B: VPS-0, revision 3 (sha256 `5f2e66f8295922a94d18eaf71b6970d03c10db838f719ee6a9e4d276b4b052d7`)
+## Appendix B: VPS-0, revision 4 (sha256 `2b90968deb51ccfa09caa4d22a2142a1f59e758b7ea7499c684395b5d9cdc750`)
 
 Run it before step 1 and again after `GATE A-1 DONE`. The `SCAN` code is byte-identical to the approved Gate A-0 revision 6 process scan.
 - Revision 2 also requires the VPS checkout to be `015d2ce`.
+- **Revision 4:** **exit status 0 on `VPS-0 OK`, 3 on `VPS-0 STOP`**. Revision 3 printed STOP but exited 0, so a calling `bash -e` or a script could not detect the failure.
 - **Revision 3** requires the Gate A-0 guard to be part of the bot unit systemd has **loaded**: `gate-a0.conf` is in `DropInPaths`; the exact line `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START` is in `systemctl cat`; `NeedDaemonReload=no`, so the files on disk are the loaded ones; and the boot link is absent (including a dangling link).
 - A standalone `systemd-analyze condition` that evaluates false is not proof that the unit enforces it.
 
@@ -367,8 +369,10 @@ echo "guard_drop_in=$DL guard_line_in_loaded_unit=$GL need_daemon_reload=$NDR bo
 if [ "$rc" = 0 ] && [ "$KS" = True ] && [ "$EN" = disabled ] && [ "$AC" = inactive ] && [ "$G" = FALSE ] && [ "$AL" = absent ] && [ "$HD" = 015d2cea927b9b4db3ee65604e0b4ebb58211e61 ] \
    && [ "$DL" = loaded ] && [ "$GL" -ge 1 ] 2>/dev/null && [ "$NDR" = no ] && [ "$BL" = absent ]; then
   echo "VPS-0 OK: no main.py or sync.sh process, Gate A-0 containment in place (guard loaded in the bot unit), VPS code still 015d2ce; a merge to GitHub main cannot reach the VPS."
+  exit 0
 else
   echo "VPS-0 STOP: do not start Gate A-1. Send this output."
+  exit 3
 fi
 VPS0
 ```
@@ -397,7 +401,7 @@ VPS0
 | T19 retarget refused at step 3 | STOP with a message (not a raw exit); `main` at the step-2 tree |
 | (revision 1 script, proxy without GraphQL) | exit 1 at step 1 with 0 merges: safe, but it could not run from this session. This is F1. |
 
-**VPS-0, 19 cases (revision 3).** The stub `systemctl` is the one from the Gate A-0 offline tests, which models drop-ins, `daemon-reload`, `NeedDaemonReload` and `systemctl cat`; `systemd-analyze` 255 is real. Every case starts from the state that the exact approved Gate A-0 revision 6 block (downloaded and hash-verified, `86f9f752…`) produces, then changes one thing.
+**VPS-0, 19 cases (revision 4; every case asserts both the verdict and the exit code: OK = 0, STOP = 3).** The stub `systemctl` is the one from the Gate A-0 offline tests, which models drop-ins, `daemon-reload`, `NeedDaemonReload` and `systemctl cat`; `systemd-analyze` 255 is real. Every case starts from the state that the exact approved Gate A-0 revision 6 block (downloaded and hash-verified, `86f9f752…`) produces, then changes one thing.
 - **P0, the post-A-0 state:** OK (revision 2 also OK).
 - **N1–N9, each STOP:**
   - N1: `gate-a0.conf` removed and reloaded;
@@ -412,6 +416,7 @@ VPS0
   - N9: `systemctl cat` fails.
 
   **Revision 2 said OK in N1–N7**: that is the gap the reviewer found.
+- **Exit-code defect demonstrated:** in the N1 state, revision 3 prints STOP and exits 0; revision 4 exits 3. Result: **19 passed, 0 failed**.
 - **E1–E8, re-run, each STOP:** the earlier cases (the VPS checkout moved, `sync.sh` running, `python3 -u main.py` running, the kill switch released, the unit re-enabled, the unit active, the allow-file present, the kill-switch file missing).
 - **Read-only:** in P0, VPS-0's only `systemctl` calls are `cat`, `is-active`, `is-enabled` and `show -p DropInPaths|NeedDaemonReload`.
 
