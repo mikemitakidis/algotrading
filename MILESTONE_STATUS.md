@@ -5,7 +5,115 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state (reconciled 2026-10-29, M21 E7)
+> ## Current operating state: status 3.0.10 (roadmap v3.0), 6 Nov 2026
+>
+> **When and what:**
+> - **Written:** 2026-11-06T19:48Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.9; the change is recorded in `ROADMAP.md` R16, entry 14.
+> - **Author:** Claude (Claude Code session).
+> - **Verified GitHub base:** `main` = `80b4343` [GH].
+> - **VPS deployed:** `015d2ce` [VPS-R].
+> - **PR:** docs PR #34 (draft); checkpoint in Issue #3.
+> - **Vocabulary, evidence classes and update rules:** `ROADMAP.md` R10–R12.
+> - **This block's own commit SHA:** recorded after the commit, in the PR and in Issue #3 (`ROADMAP.md` R11).
+>
+> **Operator decisions, 2026-11-05 15:48 UTC** (after an independent review of PR #34 head `7802442`):
+> - **Session 2: APPROVED** (read-only, with S2-P/S2-W; S2-U not yet). The command was sent; **output pending**.
+> - **Watchdog fix: APPROVED** as task **A18** (M21 B-6/OP2): draft **PR #35**, head `da56e12`.
+> - **Gate A-0: NOT approved.** The procedure is corrected and tested offline (report §4); final review after Session 2.
+> - **The dashboard stays running.** Its five bot-start routes and the kill-switch release are not used until OP3; A-0f is withdrawn.
+> - **All PRs stay drafts.**
+>
+> **Session 2: CLOSED** (5 Nov; independently reviewed; sanitised results in report §5):
+> - **Run:** exit 0; 8/8 checksums; three DB copies OK.
+> - **Policy:** **all five broker lanes signal-only**.
+> - **Watchdog:** 27,994 event-loop errors (A18).
+> - **Historical store:** one symbol, last refreshed June 2026.
+> - **WS2/D2 journal:** tables absent (NOT_VERIFIED).
+> - **Secrets:** a world-readable `.env` backup (E07).
+> - **IBKR positions:** not established by Session 2. Operator check in IBKR Mobile, 5 Nov: paper 0 positions, 0 working orders; live **one small pre-existing position** (kept, manually managed), 0 working orders.
+>
+> **Gate A-0 revision 6: EXECUTED and CLOSED** (run 5 Nov, about 19:31 UTC; recorded 6 Nov; approved at PR #34 head `f179029`, script sha256 `86f9f752…eace7`; run by Claude Code on the VPS; result reviewed and accepted by ChatGPT; record in Issue #3):
+> - `gate_a0_exit=0`;
+> - the kill switch is **active**;
+> - the bot unit is **disabled** and **inactive**, with the boot link removed;
+> - the systemd start guard is loaded and evaluates **FALSE**; `ALLOW_BOT_START` is absent;
+> - the `.env` backup is **644 → 600** (E07);
+> - no broker call, order, service action or deployment; the pre-existing live holding is untouched and manually managed.
+> - **Evidence note:** H3/H4 were not run as separate steps; the evidence is the block's final verification and its `STATE AT EXIT` report.
+>
+> **Gate A-1 (23 merges + #35 as step 24, per the operator's decisions of 6 Nov 19:35 UTC): review package revision 4** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
+> - Revision 3 adds the independent review's VPS-0 correction: the Gate A-0 guard must be loaded in the bot unit; 19 offline cases.
+> - Revision 4: VPS-0 exits 0 on OK and 3 on STOP (it exited 0 on STOP before); the 19 cases assert exit codes.
+> - **Claude's engineering review** (`docs/reviews/M21_Gate_A1_Engineering_Review_2026-11-06.md`): **BLOCK at `578af1e`** on one necessary correction (F1: `gh pr ready` needs GraphQL, which this session lacks). **Corrected in revision 2 → PASS** for independent review.
+> - Full suite on the exact final trees: `5b0f40b` 134/0; `f04d1d6` (with #35) 135/0.
+> - Recommended: D-A1-1 approve C5b; D-A1-2 accept the Vercel builds; D-A1-3 include #35 (if it is reviewed at `da56e12`); D-A1-4 merge #33 as reviewed.
+>
+> **Current milestone:** M21 (v2.0 scope: M21.U, M21.1, M21.1extra, M21.2–M21.7). **IBKR paper only;** no IBKR live, no eToro real orders.
+>
+> | M21 dimension | Status | Evidence |
+> |---|---|---|
+> | Completed portions | M21.U, D0, D1, supervised D2: CLOSED (≈ FULLY_ACCEPTED under the process of their time). D3 code: MERGED, RUNTIME_UNVERIFIED (A06). Research lanes #4–#11: MERGED, DATA_UNVERIFIED. | [GH] |
+> | Engineering | ENGINEERING_COMPLETE on 23 draft PRs (#1, #12–#33), except **A16** (a WP14-driven dashboard template-change flow): NOT_STARTED. Exact-head review is still needed for #30 `14daa55` and #31 `d99f127`. | [PR]/[OFF] |
+> | Merge | **not merged**; BLOCKED_BY_APPROVAL (Gate A-1 + C5b + the Vercel choice). Proposed final tree `5b0f40b`. | [GH] |
+> | Deployment | VPS on `015d2ce`, older than `main` by eight research/docs-only merges. No M21 PR code is deployed. **Gate A-0 containment in place (since 5 Nov).** BLOCKED_BY_APPROVAL (Gate A-1, then A-2). | [VPS-R] |
+> | Historical data | **inventory done**: one symbol, last refreshed June 2026; B-1 not met; a real-data backfill is needed | [VPS-R] |
+> | IBKR paper activation | NOT_STARTED. The gateway is **down** (explicit stop, 3 Sep). The `gw-watchdog` defect (task **A18**, fix in draft PR #35) blocks the scanner's IBKR path and makes gateway monitoring misleading. BLOCKED_BY_APPROVAL (OP2/OP3). | [VPS-R]/[OFF] |
+> | 10-day soak (B-3) | NOT_STARTED | — |
+> | 20-day outcomes (C-4) | NOT_STARTED; E4/E5 code [PR]; Flex statements from the operator | — |
+> | Statistics (C-1…C-3, C-5) | NOT_STARTED; synthetic machinery only; v3 canary NOT run | [OFF] |
+> | Full acceptance | **not FULLY_ACCEPTED** | — |
+>
+> **VPS, reported observations** (operator-run, read-only; not re-verified by Claude):
+> - From Gate B Session 1 (2026-11-05T10:00:48Z, as `nobody`).
+> - From H1/P1/P2 (about 15:12Z; H1 as `nobody`, P1/P2 as root).
+>
+> **Git and deployment:**
+> - Checkout `015d2ce`, clean. Its whole history matches GitHub.
+> - `sync.sh` has not run since 2 Jun 21:03. Since then the checkout has been operated by hand, including branch switches while the bot ran.
+> - Root's crontab has **no algo/deploy/@reboot entries**. No system cron, timer, hook or runner.
+> - **No reboot since 5 Mar 2026.** The systemd units have never been through a boot.
+>
+> **Services and broker:**
+> - **Bot:** inactive since an **explicit stop, 6 Jul 14:22:43 UTC** (SIGTERM, `Result=success`; initiator unknown). Still **enabled** at boot.
+> - **Bot's last start:** 30 Jun 06:37:17, HEAD `04bf872`, broker **`signal_only:ibkr_paper`** (no IBKR submissions possible); kill switch off.
+> - **Dashboard:** active since a restart on 29 Oct 06:46 (no SSH login logged; initiator unknown).
+> - **Gateway:** down since an **explicit stop, 3 Sep 06:46:27** (exit status 1). No IBKR API port.
+> - **Kill switch:** **inactive**.
+>
+> **Defects and patterns:**
+> - **`gw-watchdog`** (reproduced offline): fails closed for the scanner's IBKR path; makes gateway monitoring misleading. Present in the proposed tree.
+> - **Restarts:** all observed ones fall between 06:14 and 06:48 UTC (unattended upgrades plus `needrestart`: a hypothesis).
+>
+> Detail: `docs/reviews/M21_Gate_B_Session1_Report_2026-11-05.md` (docs branch @ `7d19f39`). H1/P1/P2 results, the watchdog analysis and the revised A-0 proposal are in `docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md` (this PR, revision 2).
+>
+> **Open PR heads [GH]:**
+> - #1 `0f3f9e6` · #12 `47e9057` · #13 `6a8a690` · #14 `68ca7b4` · #15 `5394882`
+> - #16 `bf92678` · #17 `bf94f71` · #18 `9012711` · #19 `d7b8e66` · #20 `4924844`
+> - #21 `fbfc815` · #22 `b4e9955` · #23 `04bf5ca` · #24 `4b677bc` · #25 `f05ed84`
+> - #26 `89bc874` · #27 `c4a5ef1` · #28 `f366f05` · #29 `4cff094` · #30 `14daa55`
+> - #31 `d99f127` · #32 `a409b37` · #33 `6540e41`
+>
+> **Blockers:**
+> - operator approvals: Gate A-1, Gate A-2, OP2–OP5;
+> - the stopped IB Gateway (OP2);
+> - the `gw-watchdog` defect (A18, PR #35; before OP2);
+> - genuine paper outcomes (C-4);
+> - for M22, C01 (HARD).
+>
+> **Next approved action:** none. Next: the independent review of the Gate A-1 package, then the operator's decisions D-A1-1…D-A1-4 and approval.
+>
+> **Next proposed actions, not approved:**
+> - **Gate A-1** (23 merges, + #35 if D-A1-3; package in `docs/reviews/`);
+> - S2-U;
+> - the review of **PR #35** (A18);
+> - Track B **C01**, offline.
+>
+> **M22–M25:**
+> - M22: NOT_STARTED (C01 design only, #13).
+> - M23: NOT_STARTED (offline foundations D06 partial, D07 merged).
+> - **M24/M25: UNDEFINED**, operator decision RD-3 (`ROADMAP.md` R8).
+>
+> ## Previous operating state (reconciled 2026-10-29, M21 E7), kept for history
 >
 > **Active milestone:** M21 (June 2026 canonical roadmap: M21.U, M21.1, M21.1extra, M21.2–M21.7).
 > **IBKR paper only;** no IBKR live, no eToro real orders. Nothing below changes that.
@@ -64,6 +172,11 @@ project-wide reconciliation narrative lives in
 
 ## Status legend
 
+> **v3.0:** new status updates use the multi-dimensional vocabulary in `ROADMAP.md` R10 (NOT_STARTED,
+> IN_DEVELOPMENT, ENGINEERING_COMPLETE, REVIEWED, MERGED, DEPLOYED, PAPER_VALIDATING, DATA_UNVERIFIED,
+> RUNTIME_UNVERIFIED, BLOCKED_BY_APPROVAL, FULLY_ACCEPTED). MERGED never means FULLY_ACCEPTED. The legend below
+> stays valid for the closed history (mapping in R10).
+
 - **CLOSED** — implemented, tests/evidence captured, VPS-verified where applicable.
 - **ACCEPTED ENOUGH** — implemented and working in production; known limitations
   exist but are tracked under another milestone, not blocking.
@@ -111,7 +224,8 @@ project-wide reconciliation narrative lives in
 | 21 / 21.1 / 21.1extra | Universe + score-optimisation + live paper loop | IN PROGRESS (reconciled 2026-10-29). M21.U CLOSED; D0/D1/supervised D2 CLOSED; D3 code merged (runtime acceptance A06 pending a dashboard restart); A01 truthful scoring, A02 candidate ledger, WS2 paper loop, WP5–WP10 and E2/E4/E5/E6 on **draft PRs, not merged**; unattended paper loop NOT running | `bot/paper_loop_d2/`, `dashboard/paper_metrics_view.py` on `main`; PRs #12, #1, #14, #15–#18, #21, #22, #28, #30–#32; operational gates OP1–OP4 not started |
 | 21.2 | Parameter optimisation | ENGINEERING ON DRAFT PRs, not merged (WP12 #19, WP11 #20, WP13 #24, E1 #27, E3 #29); real-data runs need OP1; v3 canary preregistered, NOT run | Synthetic machinery only; every real-data result is DATA_UNVERIFIED |
 | 21.3–21.7 | Walk-forward + Promotion & Approval (21.3), meta-labelling (21.4), regime thresholds (21.5), market context (21.6), learned regime weights (21.7) | ENGINEERING ON DRAFT PRs, not merged (WP14 #23, WP16–18 #26, WP15 #25, E2 #28); shadow-only; no trading authority | Promotion cycle (OP5) and real-data runs not done |
-| 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later** |
+| 22 / 23 | Controlled live readiness / advanced tier | NOT STARTED | eToro first funded order gated at **M22 or later**. Definitions: `ROADMAP.md` R6 (M22.1–M22.6, C01–C11; the sub-number mapping is a proposal, RD-2) and R7 (M23.1–M23.5, D01–D10) |
+| 24 / 25 | — | **UNDEFINED**: no source defines them | Operator decision RD-3 (`ROADMAP.md` R8); nothing is assigned to them |
 
 ---
 
@@ -878,6 +992,10 @@ parameter sweeps, dashboard backtest UI, legacy backtest retirement.
 ---
 
 ## Future milestones (M17–M23)
+
+> **v3.0: HISTORICAL table, pre-4-June numbering.** Rows 18–23 below use the numbering from before 4 June 2026.
+> Delivered M18–M20 differ (ML foundation; signal scoring; paper orchestration), and M21–M23 follow the June v2.0
+> roadmap. Kept unchanged for scope preservation. The reconciliation is in `ROADMAP.md` R3.
 
 Listed for scope-preservation; see `ROADMAP.md` for the full descriptions. M16 is CLOSED (see detail above). The M1–M16 audit-only pass is CLOSED 2026-06-05 (P0 batch + the first P1 sub-milestone `audit-P1-data-rate-limit-fix`); remaining P1 / P2 / P3 backlog stays open per `docs/NEXT_WORK_REGISTER.md`. **M17 is now FULLY CLOSED 2026-06-07** — both M17.A (engine foundation at HEAD `a05f160`) and M17.B (scanner_replica + multi-TF confluence at HEAD `3f1079e`); detailed sections above.
 
