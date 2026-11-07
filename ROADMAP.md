@@ -17,6 +17,12 @@ narrative snapshot of where the project is right now, see
 > (R1–R16). Live status is in [`MILESTONE_STATUS.md`](MILESTONE_STATUS.md) (status 3.0.1). Nothing below was renumbered
 > or removed.
 >
+> **State on 7 Nov 2026 (Gate A-1 CLOSED).** `main` is `963bb89` (tree `f04d1d6`): the 24 reviewed M21 PRs (#12, #1,
+> #14, #13, #15–#33, #35) are **merged** (CODE_MERGED, RUNTIME_UNVERIFIED). The VPS still runs `015d2ce` under Gate A-0
+> containment (bot disabled and guarded, kill switch on). Next: the Gate A-2 deployment plan and the IBKR PAPER operations
+> plan (`docs/reviews/M21_Gate_A2_Deployment_Plan_2026-11-07.md`, `docs/reviews/M21_IBKR_Paper_Operations_Plan_2026-11-07.md`),
+> both for independent review. Execution record: `docs/reviews/M21_Gate_A1_Execution_Record_2026-11-07.md`.
+>
 > **State on 29 Oct 2026 (reconciled by M21 E7), kept for history.** `main` is `80b4343`. M21 follows the June 2026
 > canonical roadmap (M21.U, M21.1, M21.1extra, M21.2–M21.7); see "M21 — canonical scope and status" below.
 > The remaining M21 engineering exists as **draft PRs, not merged** (#12, #1, #14, #13, #15–#26, E1–E6 #27–#32),
@@ -801,16 +807,16 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-07T18:10Z UTC |
+| Item | Value at 2026-11-07T21:30Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
-| Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.11 (`MILESTONE_STATUS.md` top block) |
-| GitHub `main` | `80b4343` [GH] |
-| VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
-| Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
-| Open approvals | **Gate A-1** + C5b + Vercel (+ A18 #35) (package revision 3, 6 Nov; Gate A-0 EXECUTED and CLOSED, run 5 Nov); S2-U; Gate A-2; OP2/OP3; roadmap v3.0 and RD-1…RD-10. Session 2 is CLOSED. |
-| Next task | Track A: the independent review of the Gate A-1 package, decisions D-A1-1…4 and approval; then Gate A-2 toward OP2/OP3. Engineering: the review of PR #35 (A18); a real-data backfill plan for B-1; C01 (Track B) after approval. |
+| Last approved roadmap commit | `main` `963bb89` (E7 #33 merged at step 23; roadmap v3.0 itself is in PR #34, not merged) |
+| Status version | status 3.0.12 (`MILESTONE_STATUS.md` top block) |
+| GitHub `main` | `963bb89`, tree `f04d1d6` (Gate A-1 CLOSED, 7 Nov) [GH] |
+| VPS deployed | `015d2ce` [VPS-R, post-merge VPS-0 19:49:45Z, 7 Nov]; Gate A-0 containment in place |
+| Active PRs | this docs PR #34 only (the 24 Gate A-1 PRs are merged) |
+| Open approvals | Gate A-2 (deployment plan; A-2.2 code, A-2.3 Alpaca paper keys, A-2.4 dashboard password, each separate); IBKR PAPER plan P0–P6 (P1 code fixes BLK-1…5 and H-1 first); S2-U; roadmap v3.0 and RD-1…RD-10; the PR #34 merge. Gate A-1, Gate A-0 and Session 2 are CLOSED. |
+| Next task | The independent review of the Gate A-2 and IBKR PAPER plans; then A-2.0 (read-only precheck) and the approvals in their decision tables. Engineering: P1 (BLK-1…5, H-1, F4) as draft PRs after approval; a real-data backfill plan for B-1. |
 | If sources disagree | report the discrepancy (R15); do not choose silently |
 
 ### R14. Operator decisions (v3.0)
@@ -869,3 +875,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 13 | 2026-11-06T18:46Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 3: VPS-0 also proves the Gate A-0 guard is loaded in the bot unit (drop-in in `DropInPaths`, exact guard line in the loaded unit, `NeedDaemonReload=no`, boot link absent); 19 offline cases. **Correction to entry 11:** Gate A-0 ran on 5 Nov, about 19:31 UTC (attestation time), and was recorded on 6 Nov. Status 3.0.9. | independent review of `86c6c0a`; handoff v3.13 (`74f1f3c`) | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |
 | 14 | 2026-11-06T19:48Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 4: VPS-0 exits 0 on OK and 3 on STOP (revision 3 exited 0 on STOP); the 19 offline cases assert exit codes (19/19). Merge script, order, heads and trees unchanged. Status 3.0.10. | independent review of the execution instructions | M21 | PR #34, Issue #3 | Gate A-1 pending final execution authorisation |
 | 15 | 2026-11-07T18:10Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 5: VPS-0 also requires the exact non-negated, non-triggering `ConditionPathExists` guard to be effective in systemd's condition list (`Unit.Conditions` via `busctl --json`; `systemctl show` cannot print that type in systemd 255). 30 offline cases (real `busctl` 255). Merge script, order, heads and trees unchanged. Status 3.0.11. | line-by-line review of `edcd713` | M21 | PR #34, Issue #3 | Gate A-1 pending final execution authorisation |
+| 16 | 2026-11-07T21:30Z (same in London) | v3.0 (DRAFT), amended | **Gate A-1 executed and CLOSED**: 24 merges, `main` `963bb89` = the reviewed final tree `f04d1d6`. Step 5 (#15) via the approved Option A (local merge-ort commit `30957ff`, pushed without force) after GitHub reported a three-merge-base conflict; the unchanged script then merged steps 6–24. VPS-0 before and after: exit 0; the VPS stays at `015d2ce`. Added: the execution record, the Gate A-2 deployment plan (scripts in `docs/runbooks/a2/`, tested on a mock VPS) and the IBKR PAPER operations plan (blockers BLK-1…5 found and two proved offline). Status 3.0.12. | operator execution + Issue #3 comments 6711510167…6712228663 | M21 | PR #34, Issue #3 | Gate A-1 CLOSED; A-2 and paper plans pending review |

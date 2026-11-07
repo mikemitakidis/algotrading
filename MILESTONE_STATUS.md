@@ -5,7 +5,45 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.11 (roadmap v3.0), 7 Nov 2026
+> ## Current operating state: status 3.0.12 (roadmap v3.0), 7 Nov 2026
+>
+> - **Written:** 2026-11-07T21:30Z UTC (same in Europe/London). Replaces status 3.0.11 (kept below for history);
+>   recorded in `ROADMAP.md` R16, entry 16. Author: Claude (Claude Code session).
+> - **GitHub `main`:** `963bb893c81c2482a08d78a11b1aafe98f542b51`, tree `f04d1d65dd830894156425f5a870a50591a3a805` [GH].
+>   **Gate A-1 CLOSED / PASS** (Issue #3, comment 6712228663; record:
+>   `docs/reviews/M21_Gate_A1_Execution_Record_2026-11-07.md`).
+> - **Merged** (CODE_MERGED, RUNTIME_UNVERIFIED): #12 A01, #1 WS2/A09, #14 A02, #13, #15 WP5, #16 WP6, #17, #21 WP7,
+>   #22 WP8, #23 WP9, #18 WP10, #19, #20, #24, #26, #25, #27 E1, #28 E2, #29 E3, #30 E4, #31 E5, #32 E6 (read-only),
+>   #33 E7, #35 A18. Nothing about them is running: no M21 feature is deployed or enabled.
+> - **VPS:** `015d2ce` [VPS-R, post-merge VPS-0 at 19:49:45Z]. Gate A-0 containment in place: kill switch on; bot unit
+>   disabled, with the guard loaded and effective; no bot process; gateway down; all broker lanes signal-only.
+> - **Next (plans for independent review; nothing approved):**
+>   - Gate A-2: `docs/reviews/M21_Gate_A2_Deployment_Plan_2026-11-07.md`. The steps are A-2.0 precheck, A-2.2 code,
+>     A-2.3 Alpaca paper keys and A-2.4 dashboard password. A-2.3 and A-2.4 are run by the operator.
+>   - IBKR PAPER: `docs/reviews/M21_IBKR_Paper_Operations_Plan_2026-11-07.md`. It covers P0–P6. **Five code gaps
+>     (BLK-1…5) block automated paper entries on today's `main`**; two of them were proved offline.
+> - **Carried forward (OPEN, nothing dropped):**
+>   - **Tests and code:**
+>     - F4: the cross-lane E2E test goes to `main`.
+>     - F5: the `adjustment=raw` live check (in A-2.3).
+>     - The text-only follow-up for the C5b "PENDING" note in `_protected_baselines.py`.
+>     - The merge-gate lesson: check multi-merge-base steps the way GitHub does.
+>   - **Security:**
+>     - configure the regenerated Alpaca paper keys (A-2.3);
+>     - rotate the dashboard password and keep TOTP (A-2.4);
+>     - archive-branch credentials: the old keys are regenerated and the old password is rotated in A-2.4;
+>     - old in-repository `.env.bak*` files (A-2 H-4);
+>     - paper account id in the public repo (F8 → C02);
+>     - optional branch protection on `main` (F7).
+>   - **Hardening:**
+>     - the dashboard's five bot-start routes (H-1, C03/RD-10a);
+>     - the plaintext `/api/settings/password` route (H-3);
+>     - `needrestart` / unattended upgrades before the soak (S2-U, H-6).
+>   - **Data:** a B-1 real historical backfill (the M16 store holds one symbol).
+>   - **Discrepancies:** the R15 list.
+>   - **Registers:** the 71-task register + A18 (72) and the Legacy D-3/D-4/D-5 notes are unchanged.
+>
+> ## Previous operating state: status 3.0.11 (roadmap v3.0), 7 Nov 2026 (superseded by 3.0.12; kept for history)
 >
 > **When and what:**
 > - **Written:** 2026-11-07T18:10Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.10; the change is recorded in `ROADMAP.md` R16, entry 15.
