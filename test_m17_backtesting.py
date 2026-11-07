@@ -4267,6 +4267,10 @@ class G10_Hygiene(unittest.TestCase):
                             "test_m21_research_")
         allowed_exact = {
             "test_m17_backtesting.py",
+            # M21 A18: gw-watchdog event-loop fix + its tests (protected
+            # content additionally pinned in _protected_baselines.py).
+            "bot/gateway_watchdog.py",
+            "test_m21_a18_gw_watchdog.py",
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
             "docs/NEXT_WORK_REGISTER.md",

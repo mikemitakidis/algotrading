@@ -98,6 +98,16 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
                  "GET-only, auth-required paper-metrics blueprint (reviewed "
                  "patch a4986d2; sha256 97a3d678... pinned in test_m17)",
     ),
+    "bot/gateway_watchdog.py": ApprovedChange(
+        from_blob="6393afb93b1fce8f925fd5d5ff3b13fb4632ff2d",
+        to_blob="3b799e1e68dbd092467c96b6d9d8a8fd85884509",
+        commit="54b6a9b03532281cbe37b2229dc9b4881c905046",
+        approval="M21 A18: gw-watchdog event-loop defect fix (probe runs in "
+                 "its own thread loop, never raises, records truthful failed "
+                 "probes; no state-machine rule changed). Operator approval "
+                 "2026-11-05 15:48 UTC: offline fix on an isolated branch, "
+                 "draft PR, no merge/deploy — PENDING independent review",
+    ),
 }
 
 
