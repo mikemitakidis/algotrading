@@ -36,8 +36,14 @@ Canary acceptance (comprehensive audit, PR #5, P1). A caller-supplied
 ``BatteryResult`` with ``verdict == 'CALIBRATED'`` is not enough. The card
 accepts a battery only if (``canary_verified``): its plan and result are
 recorded in THIS ledger (plan before result; the result entry equals the
-supplied object); the plan's ``pipeline_id`` is
-``controls.pipeline_identity(family_id, <candidate trial code_digest>)``; it
+supplied object; the recorded plan hashes to the battery's plan digest); the
+plan's ``pipeline_id`` is
+``controls.pipeline_identity(family_id, <candidate trial code_digest>)`` — or,
+for a battery that carries an experiment identity and for every
+experiment-bound family (``wf:``), the recorded experiment hashes to its
+digest, equals the ``canary_experiment`` the evaluation requires, names this
+family and the candidate trial's code, binds the ``pipeline_id`` and agrees
+with the plan's design; it
 required at least one positive effect with ``min_power >= cfg.min_canary_power``;
 and re-deriving the Clopper-Pearson bounds from the recorded COUNTS gives
 null upper bound <= target and power lower bound >= min_power at every
@@ -136,7 +142,7 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
              canary: Optional[BatteryResult] = None,
              cfg: GauntletConfig = GauntletConfig(), ledger: Optional[Ledger] = None,
              trial_ids: Sequence[str] = (), candidate_trial_id: Optional[str] = None,
-             expected_tip: Optional[str] = None) -> ReportCard:
+             expected_tip: Optional[str] = None, canary_experiment: Optional[str] = None) -> ReportCard:
     x = np.asarray(gross, dtype=float).ravel()
     reasons_fail, reasons_inc = [], []
     if isinstance(n_trials, bool) or not isinstance(n_trials, (int, np.integer)) or n_trials < 1:
@@ -191,7 +197,7 @@ def evaluate(*, candidate_id: str, family_id: str, gross, cost_per_obs: float, n
         rc = white_reality_check(fm, rng, n_boot=cfg.n_boot, mean_block=block)
         nums["spa_p"] = spa.p_value
         nums["reality_check_p"] = rc.p_value
-    can_ok, can_why = _canary_status(canary, ledger, family_id, candidate_trial_id, cfg)
+    can_ok, can_why = _canary_status(canary, ledger, family_id, candidate_trial_id, cfg, canary_experiment)
     nums["canary_verified"] = 1.0 if can_ok else 0.0
     if canary is not None:
         nums["canary_false_pass_upper"] = canary.false_pass_upper
@@ -275,8 +281,49 @@ def _family_complete(ledger: Ledger, family_id: str, trial_ids: Sequence[str], f
     return True, "complete"
 
 
+# Families whose batteries must carry a full experiment identity (the WP13
+# walk-forward driver): a battery for them is accepted only when its recorded
+# experiment equals the one the evaluation requires.
+EXPERIMENT_BOUND_FAMILY_PREFIXES = ("wf:",)
+_DESIGN_KEYS = ("name", "n_nulls", "n_per_effect", "false_pass_target", "alpha", "min_power", "base_seed")
+
+
+def _experiment_status(plan: Dict[str, Any], expected: Optional[str], family_id: str,
+                       trial_code: str) -> Tuple[bool, str]:
+    exp = plan.get("experiment")
+    if not isinstance(exp, dict):
+        return False, "battery has no experiment identity (required for family %r)" % family_id
+    if not expected:
+        return False, "the evaluation stated no required experiment identity"
+    got = digest(exp)
+    if plan.get("experiment_digest") != got:
+        return False, "battery experiment record does not hash to its recorded digest"
+    if got != expected:
+        return False, "battery experiment %s differs from the required experiment %s" % (got[:12], str(expected)[:12])
+    pipe = exp.get("pipeline") or {}
+    if pipe.get("family_id") != family_id:
+        return False, "battery experiment is for family %r, not %r" % (pipe.get("family_id"), family_id)
+    if pipe.get("trial_code_digest") != trial_code:
+        return False, "the candidate trial was produced by other code than the calibrated pipeline"
+    if plan.get("pipeline_id") != pipeline_identity(family_id, digest(pipe)):
+        return False, "battery pipeline id is not bound to its experiment's pipeline"
+    des = exp.get("design") or {}
+    for k in _DESIGN_KEYS:
+        if des.get(k) != plan.get(k):
+            return False, "battery plan %s differs from its declared experiment design" % k
+    effects = [float(x) for x in plan.get("effect_sizes") or ()]
+    resolved = {"effect_sizes": effects,
+                "required_effects": [float(x) for x in plan.get("required_effects") or ()]
+                or ([max(effects)] if effects else [])}
+    for k, v in resolved.items():
+        if [float(x) for x in des.get(k) or ()] != v:
+            return False, "battery plan %s differs from its declared experiment design" % k
+    return True, "experiment identity matches"
+
+
 def _canary_status(canary: Optional[BatteryResult], ledger: Optional[Ledger], family_id: str,
-                   candidate_trial_id: Optional[str], cfg: GauntletConfig) -> Tuple[bool, str]:
+                   candidate_trial_id: Optional[str], cfg: GauntletConfig,
+                   expected_experiment: Optional[str] = None) -> Tuple[bool, str]:
     """Verify a control battery for THIS pipeline from the ledger; never trust the supplied verdict."""
     from research.integrity.stats import clopper_pearson
     if canary is None:
@@ -295,9 +342,18 @@ def _canary_status(canary: Optional[BatteryResult], ledger: Optional[Ledger], fa
     if digest(results[0].payload) != digest(asdict(canary)):
         return False, "supplied battery result differs from the ledgered result"
     plan = plans[0].payload
-    want = pipeline_identity(family_id, trials[candidate_trial_id].payload["code_digest"])
-    if plan.get("pipeline_id") != want:
-        return False, "battery calibrates %r, not this pipeline %r" % (plan.get("pipeline_id"), want)
+    if digest({k: v for k, v in plan.items() if k not in ("plan_digest", "experiment_digest")}) != canary.plan_digest:
+        return False, "ledgered battery plan does not hash to the battery's plan digest"
+    trial_code = trials[candidate_trial_id].payload["code_digest"]
+    if (plan.get("experiment") is not None or expected_experiment is not None
+            or family_id.startswith(EXPERIMENT_BOUND_FAMILY_PREFIXES)):
+        ok, why = _experiment_status(plan, expected_experiment, family_id, trial_code)
+        if not ok:
+            return False, why
+    else:
+        want = pipeline_identity(family_id, trial_code)
+        if plan.get("pipeline_id") != want:
+            return False, "battery calibrates %r, not this pipeline %r" % (plan.get("pipeline_id"), want)
     effects = [float(e) for e in plan.get("effect_sizes") or ()]
     required = [float(e) for e in plan.get("required_effects") or ()] or ([max(effects)] if effects else [])
     if not required:

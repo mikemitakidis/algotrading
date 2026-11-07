@@ -39,6 +39,8 @@ ENTRY_KINDS = (
     # lane E: agent permission decisions and the knowledge library (research.agents)
     "agent_decision", "kb_source", "kb_source_verification", "kb_hypothesis", "kb_status", "kb_refusal",
     "kb_rejection", "kb_lineage", "kb_review", "kb_report",
+    # M21 WP13: walk-forward optimiser runs and the one-shot HISTORICAL holdout (research.optimiser)
+    "wf_run", "historical_holdout_seal", "historical_holdout_release",
 )
 TRIAL_KINDS = ("research", "baseline", "control_null", "control_positive")
 TRIAL_STATUSES = ("completed", "failed", "abandoned")
