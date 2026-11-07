@@ -479,6 +479,10 @@ class MultiTfBars:
     per_tf_coverage:      Dict[str, Optional[Dict[str, Any]]]
     warnings:             List[BacktestWarning]
     allow_partial_tfs:    bool
+    # M21 E3: evidence of the authorised conversion of start-stamped M16
+    # bars to close stamps (research.dataqa.converted). None on the default
+    # path; runner.run accepts INJECTED bars only when it is present.
+    conversion:           Optional[Dict[str, Any]] = None
 
     @property
     def loaded_timeframes(self) -> Tuple[str, ...]:
