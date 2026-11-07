@@ -1,0 +1,164 @@
+From 13bc47ca733ad843fd35f6c1b05c9c0122aa4eef Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 06:56:18 +0000
+Subject: [PATCH 1/2] M21 E6: register the read-only template-configuration
+ view in dashboard/app.py (protected file)
+
+---
+ dashboard/app.py | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/dashboard/app.py b/dashboard/app.py
+index 564fc81..63d3420 100644
+--- a/dashboard/app.py
++++ b/dashboard/app.py
+@@ -362,6 +362,7 @@ input[type=password],input[type=text],input[type=number],select{outline:none}
+     <a onclick="go('riskauth');loadRiskAuthority()" id="n-riskauth">Risk Authority</a>
+     <a onclick="go('recovery');loadRecovery()" id="n-recovery" style="color:#f0883e">Recovery</a>
+     <a href="/paper-loop/metrics" id="n-paperloop">Paper Loop</a>
++    <a href="/template-controls" id="n-templates">Templates</a>
+     <a onclick="doLogout()" class="out">Logout</a>
+   </div>
+ </nav>
+@@ -6115,6 +6116,11 @@ def m16_historical_quality_events():
+ from dashboard.paper_metrics_view import bp as _d3_paper_metrics_bp  # noqa: E402
+ app.register_blueprint(_d3_paper_metrics_bp)
+ 
++# M21 E6 — read-only view of the paper-lane template configuration (GET only, auth-required;
++# 503 unless TEMPLATE_CONTROLS_DB_PATH is set). Changes go through WP14 promotion, never this page.
++from dashboard.template_controls_view import bp as _e6_template_controls_bp  # noqa: E402
++app.register_blueprint(_e6_template_controls_bp)
++
+ 
+ if __name__ == '__main__':
+     port = int(os.getenv('DASHBOARD_PORT', '8080'))
+-- 
+2.43.0
+
+
+From e741ec2c19a06f786ee290e7b3318172f42a99f2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 06:56:20 +0000
+Subject: [PATCH 2/2] M21 E6: record the approved dashboard/app.py transition
+ (approved-change record, sha256 pin, wiring tests)
+
+---
+ _protected_baselines.py                 |  9 ++++--
+ test_m17_backtesting.py                 |  2 +-
+ test_m21_1_e6_template_controls_view.py | 39 +++++++++++++++++++++++--
+ test_m21_c5b_protected_baselines.py     |  6 ++++
+ 4 files changed, 49 insertions(+), 7 deletions(-)
+
+diff --git a/_protected_baselines.py b/_protected_baselines.py
+index 5481fed..330be78 100644
+--- a/_protected_baselines.py
++++ b/_protected_baselines.py
+@@ -92,11 +92,14 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
+     ),
+     "dashboard/app.py": ApprovedChange(
+         from_blob="1bd8712c660348d0471ac8a56759c5880e868908",
+-        to_blob="564fc812ef15e2cc088ab84f1e377021a18b8e99",
+-        commit="7f65141329bb1a3af4e5a84203b3a1cf06037ca5",
++        to_blob="63d3420169ea8487d03b4a16f5d26b0ccca46bef",
++        commit="13bc47ca733ad843fd35f6c1b05c9c0122aa4eef",
+         approval="M21.1extra-D3b: one nav link + registration of the read-only, "
+                  "GET-only, auth-required paper-metrics blueprint (reviewed "
+-                 "patch a4986d2; sha256 97a3d678... pinned in test_m17)",
++                 "patch a4986d2) [7f65141, blob 564fc81]; then M21 E6: one nav "
++                 "link + registration of the read-only (GET-only, auth-required) "
++                 "template-configuration view (503 unless configured; sha256 64f31599... "
++                 "pinned in test_m17) — PENDING operator approval",
+     ),
+ }
+ 
+diff --git a/test_m17_backtesting.py b/test_m17_backtesting.py
+index a08a9cf..312c4ed 100644
+--- a/test_m17_backtesting.py
++++ b/test_m17_backtesting.py
+@@ -3723,7 +3723,7 @@ _PROTECTED_APPROVED_SHA256 = {
+     # keeps the warned fallback). No route/auth/CSRF logic changed.
+     # M21.1extra-D3 integration: registers the read-only paper-metrics blueprint
+     # (GET-only, auth-required) and adds one nav link. No other change.
+-    "dashboard/app.py": "97a3d678418add7be62ec14564a8bce1446ee6b261a7bc8c38250687c30180cd",
++    "dashboard/app.py": "64f31599c265ec0f8666016962fa0392ee4bd277d16c155b3769ad2a82ecb66d",
+ }
+ 
+ # Forbidden imports for any module in bot/backtesting/ (except
+diff --git a/test_m21_1_e6_template_controls_view.py b/test_m21_1_e6_template_controls_view.py
+index d4f1b23..2795627 100644
+--- a/test_m21_1_e6_template_controls_view.py
++++ b/test_m21_1_e6_template_controls_view.py
+@@ -1,4 +1,4 @@
+-"""M21 E6 — read-only dashboard view of the template configuration (isolated; dashboard/app.py is NOT changed).
++"""M21 E6 — read-only dashboard view of the template configuration (registered in dashboard/app.py by the approved wiring).
+ 
+ The blueprint is mounted on a bare Flask app, exactly as the D3 view tests do. The store is the real WP9
+ ``bot.templates.controls`` store in a temporary file; changes in these tests are made the way WP14 applies
+@@ -190,9 +190,42 @@ class Isolation(unittest.TestCase):
+         for stmt in ("INSERT", "UPDATE", "DELETE", "CREATE"):
+             self.assertNotIn(stmt + " ", self.SRC)
+ 
+-    def test_dashboard_app_does_not_register_it(self):
++    def test_dashboard_app_registers_it_exactly_once(self):
+         src = (REPO / "dashboard" / "app.py").read_text()
+-        self.assertNotIn("template_controls_view", src)
++        self.assertEqual(src.count("from dashboard.template_controls_view import bp as _e6_template_controls_bp"), 1)
++        self.assertEqual(src.count("app.register_blueprint(_e6_template_controls_bp)"), 1)
++        self.assertEqual(src.count('<a href="/template-controls" id="n-templates">Templates</a>'), 1)
++
++
++class RealAppWiring(unittest.TestCase):
++    """The real dashboard app serves the read-only view, OFF by default (approved E6 wiring)."""
++
++    def setUp(self):
++        import sys
++        for mod in ("dashboard.app", "dashboard"):
++            sys.modules.pop(mod, None)
++        self.env = mock.patch.dict(os.environ, {}, clear=False)
++        self.env.start()
++        os.environ.pop(V.DB_KEY, None)
++        from dashboard import app as app_mod
++        self.app = app_mod.app
++        self.app.config["TESTING"] = True
++        self.app.config.pop(V.DB_KEY, None)
++        self.client = self.app.test_client()
++
++    def tearDown(self):
++        self.env.stop()
++
++    def test_auth_then_off_by_default_and_no_write_route(self):
++        self.assertEqual(self.client.get("/api/template-controls").status_code, 401)
++        self.assertEqual(self.client.get("/template-controls").status_code, 401)
++        with self.client.session_transaction() as s:
++            s["authed"] = True
++            s["csrf_token"] = "tok"
++        self.assertEqual(self.client.get("/api/template-controls").status_code, 503)
++        for a in OLD_WRITE_ROUTES:
++            r = self.client.post("/api/template-controls/" + a, json={}, headers={"X-CSRF-Token": "tok"})
++            self.assertIn(r.status_code, (404, 405), a)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/test_m21_c5b_protected_baselines.py b/test_m21_c5b_protected_baselines.py
+index 5765c02..473b338 100644
+--- a/test_m21_c5b_protected_baselines.py
++++ b/test_m21_c5b_protected_baselines.py
+@@ -114,9 +114,15 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
+         self.assertEqual(removed, [])
+         self.assertEqual(code, [
+             '<a href="/paper-loop/metrics" id="n-paperloop">Paper Loop</a>',
++            # M21 E6: template-controls nav link
++            '<a href="/template-controls" id="n-templates">Templates</a>',
+             "from dashboard.paper_metrics_view import bp as "
+             "_d3_paper_metrics_bp  # noqa: E402",
+             "app.register_blueprint(_d3_paper_metrics_bp)",
++            # M21 E6: template-controls blueprint (auth + CSRF, OFF unless configured)
++            "from dashboard.template_controls_view import bp as "
++            "_e6_template_controls_bp  # noqa: E402",
++            "app.register_blueprint(_e6_template_controls_bp)",
+         ])
+ 
+     def test_approving_commit_is_ancestor_and_produced_to_blob(self):
+-- 
+2.43.0
+
