@@ -60,6 +60,15 @@ def score_timeframe(ind: dict, direction: str, strategy: dict) -> int:
     return 1 if (momentum + trend + volume == 3) else 0
 
 
+def _bar_start_iso(df):
+    """A01: ISO start time of the last bar (the row compute_features scored).
+    Metadata only; never raises."""
+    try:
+        return df.index[-1].isoformat()
+    except Exception:
+        return None
+
+
 def _build_timeframes(strategy: dict) -> list:
     """
     Build the ordered list of timeframes to scan based on strategy config.
@@ -117,6 +126,7 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
     cached_inds   = {}   # sym -> {tf_label -> ind}
     cached_ml_features = {}   # sym -> ml feature dict (from first valid TF)
     cached_scores = {}   # sym -> {direction -> {tf_label -> 1}}
+    bar_asof      = {}   # A01: sym -> {tf_label -> UTC start of the bar used}
     tfs_with_data = []
 
     for tf_label, period, interval, do_resample in timeframes:
@@ -139,6 +149,7 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
             ind = fs.decision
 
             cached_inds.setdefault(sym, {})[tf_label] = ind
+            bar_asof.setdefault(sym, {})[tf_label] = _bar_start_iso(df)
             # Store ML features from best TF (first valid TF wins)
             if sym not in cached_ml_features:
                 cached_ml_features[sym] = fs.ml
@@ -315,5 +326,6 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
         'tfs_available':  available_tfs,
         'tfs_list':       tfs_with_data,
         'symbols_scanned': len(focus),
+        'bar_asof':       bar_asof,   # A01: read-only as-of metadata
     }
     return signals, meta

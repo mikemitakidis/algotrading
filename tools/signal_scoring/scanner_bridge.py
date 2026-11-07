@@ -1,27 +1,46 @@
 #!/usr/bin/env python3
-"""M21.1 — Scoring bridge (read-only): scanner signal -> enriched M19 input.
+"""M21.1 — Scoring bridge (read-only): scanner signal -> truthful M19 input.
 
-Turns a raw scanner signal into a fully-populated M19 SignalCandidateInput so the
-existing M19 engine can score and rank it. Every enriched field is either:
-  (a) GENUINELY DERIVED from data the scanner / bars / risk already produce, or
-  (b) EXPLICITLY NEUTRAL/RESEARCH because the real value does not exist yet
-      (calibrated ML / trained model).
-Nothing is faked to force a gate pass. In particular:
-  - prediction_calibrated stays None (no calibrated probability exists)
-  - calibration_applied stays False (honest)
-  - model_readiness_passed reflects the real registry state (default False until
-    M21.1extra produces outcome data)
-Scoring runs under the RESEARCH profile, where 'model not ready' and 'calibration
-unavailable' are MANUAL_REVIEW, not BLOCK. This yields research-grade rankings,
-NOT calibrated live probabilities and NOT execution approval. execution_eligible
-is produced by M19 and is always False; STRICT/live scoring stays hard-blocked
-until a real trained model exists.
+A01 contract (bot/scoring_truth): every M19 gate field is either MEASURED from
+evidence the caller actually has, DECLARED (a true fact about this pipeline,
+e.g. "no calibration exists"), or UNKNOWN — and UNKNOWN keys are REMOVED from
+the M19 input, so M19 fails closed with ``missing_context_key``. Nothing is
+defaulted to a passing value. In particular (replacing the pre-A01 defaults):
+
+  - data freshness / stale flag: measured from the scanner's per-timeframe
+    bar as-of record (``scan_cycle`` meta ``bar_asof``) against an injected
+    exchange session calendar at an explicit evaluation time; else UNKNOWN
+  - schema_match: measured (signal fields + bar records); else UNKNOWN
+  - available_timeframes: per-symbol count of VALID observations (not the
+    scanner's cycle-global count); else UNKNOWN
+  - risk_authority_status: 'ok' / 'blocked' ONLY from the decision M14
+    persisted in ``risk_decisions``, read back here through the trusted
+    read-only ``ReadOnlyM14DecisionStore`` and matched to this candidate
+    (trade_open, scope, symbol, side, leverage, approved notional >= intended,
+    decided after the signal, before evaluation, unexpired). A
+    ``RiskDecisionRef`` is only a pointer: without that store, for an id M14
+    never recorded, or on any mismatch the status is UNKNOWN (UNVERIFIED).
+    Callers cannot hand the bridge a decision record. Never 'ok' by default.
+  - risk_preview_available: as computed by the M19 adapter (reward/risk
+    derivable from the signal's levels); never forced True
+  - price basis / corporate actions: from the provider's price basis plus
+    verified corporate-action evidence; a split detector that finds nothing
+    is NOT proof of safety (UNVERIFIED -> UNKNOWN)
+  - production_thinness_status: only from a supplied registry check
+  - calibration: none exists (DECLARED False / None)
+
+Consequence: without a risk decision, a calendar, a bar as-of record and
+corporate-action evidence, every candidate is M19 BLOCKED (final score 0).
+For research ranking the transparent composite M19 computes even when
+blocked is exposed as ``TruthfulScore.research_rank_score`` together with the
+truth report that says exactly why the candidate is blocked. That ranking is
+never an execution signal: ``execution_eligible`` is False on every result.
 
 This module is a tool: nothing in bot/ imports it. It constructs no orders and
 touches no broker / live / paper / DB / Telegram code.
 """
-import dataclasses
-from typing import Mapping, Optional
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional
 
 from bot.signal_scoring import (
     adapter_from_scanner_signal,
@@ -29,7 +48,8 @@ from bot.signal_scoring import (
     score_candidate,
     ScoringProfile,
 )
-from bot.signal_scoring import keys as K
+from bot.scoring_truth import RiskDecisionRef, TruthReport, apply_truth, build_truth
+from tools.signal_scoring.risk_decision_store import ReadOnlyM14DecisionStore
 
 
 def _derive_avg_dollar_volume(signal: Mapping) -> Optional[float]:
@@ -46,77 +66,100 @@ def _derive_avg_dollar_volume(signal: Mapping) -> Optional[float]:
         return None
 
 
-def enrich_signal(
+def _verify_risk_decision(ref, store):
+    """Read the referenced decision back from M14's audit table. Only the
+    exact trusted store type is used (no duck-typed or subclassed store)."""
+    if ref is None:
+        return None, None
+    if not isinstance(ref, RiskDecisionRef):
+        return None, "not_a_risk_decision_reference"
+    if store is None:
+        return None, "no_trusted_decision_store:caller_attestation_only"
+    if type(store) is not ReadOnlyM14DecisionStore:
+        return None, "untrusted_decision_store"
+    try:
+        record = store.fetch(ref.decision_id)
+    except Exception as exc:
+        return None, "decision_store_error:%s" % type(exc).__name__
+    if record is None:
+        return None, "decision_not_found_in_m14_audit"
+    return record, None
+
+
+def enrich_signal_with_truth(
     signal: Mapping,
     *,
+    evaluated_at_utc: Any = None,
+    bar_asof: Optional[Mapping[str, Any]] = None,
+    calendar=None,
+    risk_decision=None,
+    risk_decision_store=None,
+    price_basis=None,
+    detector_suspected: Optional[bool] = None,
+    corporate_action_record=None,
+    lookback_start_utc: Any = None,
     avg_dollar_volume: Optional[float] = None,
-    data_freshness_minutes: float = 5.0,
-    stale: bool = False,
-    schema_match: bool = True,
     model_readiness_passed: bool = False,
+    production_thinness_status: Optional[str] = None,
+    policy=None,
 ):
-    """Build a fully-populated SignalCandidateInput from a scanner signal.
-
-    Honest-field policy:
-      DERIVED (real): risk_preview (entry/stop/target/RR from the signal),
-        liquidity price, liquidity avg dollar volume (if derivable),
-        data_quality (freshness/staleness/schema as actually observed),
-        timeframe_context.available_timeframes (what the scanner reported).
-      NEUTRAL/RESEARCH (honestly marked):
-        ml_context.calibration_applied = False        (no calibration exists)
-        ml_context.prediction_calibrated = None        (no calibrated prob)
-        ml_context.price_adjustment_mode = 'raw'        (we use raw prices)
-        ml_context.allow_adjusted_prices_for_ml = False (true: not allowed)
-        ml_context.model_readiness_passed = <real state, default False>
-        ml_context.production_thinness_status = 'ok'    (structural, not an ML
-                                                         quality claim)
-        advisory_context.adjusted_price_pit_risk = False (true: raw prices)
-        risk_preview.risk_authority_status = 'ok'        (read-only preview, not
-                                                          a live authority block)
-    """
+    """Build the truthful M19 input and its TruthReport. Pure: no I/O."""
     adv_dollar = (avg_dollar_volume if avg_dollar_volume is not None
                   else _derive_avg_dollar_volume(signal))
     price = signal.get("entry_price") or signal.get("price")
-
     liquidity = {"price": price}
     if adv_dollar is not None:
         liquidity["avg_dollar_volume_20d"] = adv_dollar
 
-    ci = adapter_from_scanner_signal(
-        signal,
-        liquidity=liquidity,
-        data_quality={
-            "schema_match": bool(schema_match),
-            "stale_data_flag": bool(stale),
-            "data_freshness_minutes": float(data_freshness_minutes),
-        },
-    )
-
-    ml = dict(ci.ml_context or {})
-    ml[K.ML_CALIBRATION_APPLIED] = False          # honest: no calibration
-    ml[K.ML_PRED_CALIBRATED] = None               # honest: no calibrated prob
-    ml[K.ML_PRICE_ADJUSTMENT_MODE] = "raw"        # honest: raw prices used
-    ml["allow_adjusted_prices_for_ml"] = False    # honest: not allowed
-    ml[K.ML_MODEL_READINESS_PASSED] = bool(model_readiness_passed)
-    ml[K.ML_PRODUCTION_THINNESS_STATUS] = "ok"    # structural, not ML quality
-
-    adv = dict(ci.advisory_context or {})
-    adv["adjusted_price_pit_risk"] = False        # honest: raw prices, no PIT
-
-    tfc = dict(ci.timeframe_context or {})
-    tfc["available_timeframes"] = signal.get("available_tfs", 4)
-
-    rp = dict(ci.risk_preview or {})
-    rp["risk_preview_available"] = True           # we genuinely previewed risk
-    rp["risk_authority_status"] = "ok"            # read-only preview only
-
-    return dataclasses.replace(
-        ci, ml_context=ml, advisory_context=adv,
-        timeframe_context=tfc, risk_preview=rp)
+    ci = adapter_from_scanner_signal(signal, liquidity=liquidity)
+    record, note = _verify_risk_decision(risk_decision, risk_decision_store)
+    truth = build_truth(
+        signal, evaluated_at=evaluated_at_utc, bar_asof=bar_asof,
+        calendar=calendar, risk_decision=risk_decision,
+        risk_decision_record=record, risk_lookup_note=note,
+        price_basis=price_basis,
+        detector_suspected=detector_suspected,
+        corporate_action_record=corporate_action_record,
+        lookback_start=lookback_start_utc,
+        model_readiness_passed=model_readiness_passed,
+        production_thinness_status=production_thinness_status, policy=policy)
+    return apply_truth(ci, truth), truth
 
 
-def score_signal(signal, *, profile=ScoringProfile.RESEARCH, **enrich_kwargs):
-    """Enrich a scanner signal and score it under the given profile (RESEARCH by
-    default). Returns the M19 ScoredSignalCandidate. Pure: no I/O."""
-    ci = enrich_signal(signal, **enrich_kwargs)
-    return score_candidate(ci, default_config(profile=profile))
+def enrich_signal(signal: Mapping, **truth_kwargs):
+    """Truthful M19 SignalCandidateInput (see ``enrich_signal_with_truth``)."""
+    return enrich_signal_with_truth(signal, **truth_kwargs)[0]
+
+
+@dataclass(frozen=True)
+class TruthfulScore:
+    """An M19 score plus the evidence behind its inputs."""
+
+    scored: Any               # bot.signal_scoring ScoredSignalCandidate
+    truth: TruthReport
+
+    @property
+    def research_rank_score(self) -> float:
+        """M19's transparent composite (computed even when gate-blocked),
+        clamped to 0..100. A research ordering only — never execution."""
+        raw = float((self.scored.provenance or {}).get("pre_clamp_final_raw", 0.0))
+        return max(0.0, min(100.0, raw))
+
+    @property
+    def execution_eligible(self) -> bool:
+        if self.scored.execution_eligible is not False:
+            raise AssertionError("M19 execution_eligible must be False")
+        return False
+
+
+def score_signal_with_truth(signal, *, profile=ScoringProfile.RESEARCH,
+                            **truth_kwargs) -> TruthfulScore:
+    ci, truth = enrich_signal_with_truth(signal, **truth_kwargs)
+    scored = score_candidate(ci, default_config(profile=profile))
+    return TruthfulScore(scored=scored, truth=truth)
+
+
+def score_signal(signal, *, profile=ScoringProfile.RESEARCH, **truth_kwargs):
+    """Truthful M19 score (RESEARCH by default). Returns the M19
+    ScoredSignalCandidate. Pure: no I/O."""
+    return score_signal_with_truth(signal, profile=profile, **truth_kwargs).scored

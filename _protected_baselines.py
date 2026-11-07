@@ -28,13 +28,20 @@ transitions below:
 Any other edit to these files, or any change to any other protected file,
 still fails the guard. A future approved change to one of these files must
 update ``to_blob`` (and the approving commit) here, in review.
+
+Chained transitions (M21.1 A01): when a file is approved a second time, guards
+whose baseline predates the first approval hold ``from_blob`` while guards
+whose baseline sits between the two approvals hold the first approval's
+``to_blob``. ``also_from`` lists those recorded, previously approved
+intermediate blobs explicitly. A baseline must still hold exactly one listed
+blob and the file must still be exactly ``to_blob``; nothing else is excused.
 """
 from __future__ import annotations
 
 import hashlib
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, NamedTuple, Optional
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 REPO = Path(__file__).resolve().parent
 
@@ -44,15 +51,20 @@ class ApprovedChange(NamedTuple):
     to_blob: str        # git blob id of the approved current content
     commit: str         # last approved commit that produced ``to_blob``
     approval: str       # what approved it
+    also_from: Tuple[str, ...] = ()   # earlier approved blobs (chained approvals)
 
 
 APPROVED_CHANGES: Dict[str, ApprovedChange] = {
     "bot/scanner.py": ApprovedChange(
         from_blob="63a71b91ac88a34905fe29135b5d857f318ba129",
-        to_blob="4317e57e72f9d8d862607a8e3f155cc53f4ecd3d",
-        commit="85c5092037c2e74a4f6ba8cf3e5d364a0dabc057",
+        to_blob="08dc7512f019ae9fa1706dcf7776c2b2036e1ee3",
+        commit="6242bde81e5bf9fd194be5fbba41c8cb1c558e08",
         approval="pre-M19 Group D: scanner partial-data hard-block "
-                 "(ISSUE-009) + WATCH drop (ISSUE-010)",
+                 "(ISSUE-009) + WATCH drop (ISSUE-010) [85c5092, blob 4317e57]; "
+                 "then M21.1 A01: metadata-only bar as-of record in scan_cycle "
+                 "meta (no signal/decision change) — PENDING independent review",
+        # Group D's approved content: what the M19/M20 guard baseline holds.
+        also_from=("4317e57e72f9d8d862607a8e3f155cc53f4ecd3d",),
     ),
     "bot/signal_scoring/gates.py": ApprovedChange(
         from_blob="35675d747b9e81bfd3e03ef85a1e268a95ab4dfa",
@@ -101,7 +113,8 @@ def is_approved_change(baseline: str, rel: str, repo: Path = REPO,
                        table: Optional[Dict[str, ApprovedChange]] = None,
                        target: Optional[str] = None) -> bool:
     """True only if ``rel`` differs from ``baseline`` by exactly one approved
-    transition: baseline content == from_blob AND target content == to_blob.
+    transition: baseline content == from_blob (or one of the recorded
+    ``also_from`` blobs) AND target content == to_blob.
 
     ``target`` must match what the calling guard diffs against: None for the
     working tree (``git diff <baseline> -- f``), or a revision such as
@@ -111,7 +124,7 @@ def is_approved_change(baseline: str, rel: str, repo: Path = REPO,
         return False
     current = (worktree_blob(rel, repo) if target is None
                else rev_blob(target, rel, repo))
-    return (rev_blob(baseline, rel, repo) == entry.from_blob
+    return (rev_blob(baseline, rel, repo) in (entry.from_blob,) + tuple(entry.also_from)
             and current == entry.to_blob)
 
 

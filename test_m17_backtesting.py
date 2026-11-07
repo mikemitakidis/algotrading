@@ -3649,7 +3649,9 @@ _PROTECTED_APPROVED_SHA256 = {
     # pre-M19 Group D (ISSUE-009/010): hard-block partial-data relaxation
     # (no auto-lowering; explicit allow_partial_data) + WATCH route is
     # logged-only and never appended to actionable signals.
-    "bot/scanner.py": "5d1da9587f7bffbdcf978c53d56fe77a33c306c8d1eb811a0e92f0691907a04b",
+    # M21.1 A01: metadata-only bar as-of record added to scan_cycle meta
+    # (exact additions proven in test_m21_1_a01_scoring_truth.T9).
+    "bot/scanner.py": "eb660e624a0bc2faa3be471bb592e1e3f6426b308edd2b4c04e696db5ec56dc3",
     # pre-M19 Group E (ISSUE-013): dashboard refuses to start without an
     # explicit DASHBOARD_SECRET_KEY when DASHBOARD_ENV=production (dev/local
     # keeps the warned fallback). No route/auth/CSRF logic changed.
@@ -4181,6 +4183,10 @@ class G10_Hygiene(unittest.TestCase):
                             "tools/paper_loop/",
                             "bot/market_clock/",
                             "bot/paper_loop_d2/",
+                            # M21.1 A01 truthful scoring contract (pure;
+                            # imported only by tools/signal_scoring; guarded
+                            # in test_m21_1_a01_scoring_truth.T8).
+                            "bot/scoring_truth/",
                             # M21 research lanes (Issues #2/#3): offline-only
                             # package, its docs and root test modules. Never
                             # imported by production (guarded in
@@ -4328,6 +4334,8 @@ class G10_Hygiene(unittest.TestCase):
             # M21.1 scoring bridge (read-only, research-grade ranking).
             "reports/m21_1_scoring_bridge_readonly.md",
             "test_m21_1_scoring_bridge.py",
+            # M21.1 A01 truthful scanner -> M19 scoring contract tests.
+            "test_m21_1_a01_scoring_truth.py",
             # M21.1extra-A simulation-only paper loop (read-only proof).
             "reports/m21_1extra_a_paper_order_contract.md",
             "test_m21_1extra_a_paper_order_contract.py",

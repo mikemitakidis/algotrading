@@ -18,6 +18,12 @@ scorer where a specific bucket is needed). Proves:
     only TELEGRAM_* keys;
   * SIGNALS ONLY: static import ban, no broker parameter or order flag,
     subprocess sys.modules check after a full cycle, broker submit sentinels.
+
+A01 (truthful scoring contract): the default scorer has no evidence source
+(calendar, bar as-of record, risk decision, corporate-action record), so every
+candidate is M19-BLOCKED and NO alert is produced (TestA01FailClosed). Tests of
+the alert mechanics score through ``evidenced_score_signal`` (real M19 scoring
+with complete A01 fixture evidence) instead.
 """
 from __future__ import annotations
 
@@ -47,6 +53,8 @@ from tools.signal_scoring import run_signal_alerts as cli  # noqa: E402
 from tools.signal_scoring import telegram_transport as tt  # noqa: E402
 from tools.signal_scoring.score_rank_harness import fixture_signals  # noqa: E402
 from tools.signal_scoring.scanner_bridge import score_signal  # noqa: E402
+from tools.signal_scoring import scanner_bridge  # noqa: E402
+from test_m21_1_a01_scoring_truth import evidenced_score_signal  # noqa: E402  (A01 helper)
 from tools.signal_scoring.signal_alerts import (  # noqa: E402
     SIGNALS_ONLY_BANNER, AlertOutbox, AlertPolicy, InvalidSignal, SignalAlert,
     SignalAlertService, action_for_direction, build_alert, format_alert_message,
@@ -154,7 +162,8 @@ class AlertModel(unittest.TestCase):
     def test_build_from_real_m19_score(self):
         s = fixture_signals()[0]
         s["timestamp"] = T0.isoformat()
-        a = build_alert(s, score_signal(s))
+        self.assertEqual(score_signal(s).decision_bucket.value, "BLOCKED")   # A01 default
+        a = build_alert(s, evidenced_score_signal(s))
         self.assertEqual((a.symbol, a.action, a.direction), ("AAA", "BUY", "long"))
         self.assertEqual(a.decision_bucket, "REJECT")           # enum normalised to value
         self.assertIn(a.confidence_bucket, ("LOW", "MEDIUM", "MEDIUM_HIGH", "HIGH"))
@@ -164,7 +173,7 @@ class AlertModel(unittest.TestCase):
 
     def test_short_from_real_m19_score(self):
         s = short_sig()
-        a = build_alert(s, score_signal(s))
+        a = build_alert(s, evidenced_score_signal(s))
         self.assertEqual(a.action, "SHORT")
         self.assertNotIn(a.decision_bucket, ("ELIGIBLE", "HIGH_CONVICTION"))  # M19 short cap
 
@@ -248,7 +257,8 @@ class AlertPolicyTests(unittest.TestCase):
 
     def test_real_fixture_signals_do_not_alert_at_default_floor(self):
         sigs = [dict(s, timestamp=T0.isoformat()) for s in fixture_signals()]
-        svc = SignalAlertService(outbox=None, transport=None, clock=Clock())
+        svc = SignalAlertService(outbox=None, transport=None, clock=Clock(),
+                                 scorer=evidenced_score_signal)
         alerts, skipped = svc.evaluate(sigs)
         self.assertEqual(alerts, [])
         self.assertEqual({r["reason"] for r in skipped}, {"below_min_bucket"})
@@ -256,7 +266,8 @@ class AlertPolicyTests(unittest.TestCase):
     def test_real_scores_rank_when_floor_lowered(self):
         sigs = [dict(s, timestamp=T0.isoformat()) for s in fixture_signals()]
         svc = SignalAlertService(outbox=None, transport=None, clock=Clock(),
-                                 policy=AlertPolicy(min_decision_bucket="REJECT"))
+                                 policy=AlertPolicy(min_decision_bucket="REJECT"),
+                                 scorer=evidenced_score_signal)
         alerts, _ = svc.evaluate(sigs)
         scores = [a.score_100 for a in alerts]
         self.assertEqual(len(alerts), 4)
@@ -275,6 +286,16 @@ class AlertPolicyTests(unittest.TestCase):
         reasons = sorted(r["reason"].split(":")[0] for r in skipped)
         self.assertEqual(reasons, ["invalid_signal", "invalid_signal", "per_cycle_cap",
                                    "scoring_error"])
+
+
+class TestA01FailClosed(unittest.TestCase):
+    def test_default_scorer_never_alerts_without_evidence(self):
+        sigs = [dict(s, timestamp=T0.isoformat()) for s in fixture_signals()] + [short_sig()]
+        svc = SignalAlertService(outbox=None, transport=None, clock=Clock(),
+                                 policy=AlertPolicy(min_decision_bucket="REJECT"))
+        alerts, skipped = svc.evaluate(sigs)
+        self.assertEqual(alerts, [])
+        self.assertEqual({r["reason"] for r in skipped}, {"blocked_by_hard_gate"})
 
 
 # ───────────────────────────── outbox & delivery ─────────────────────────────
@@ -543,9 +564,18 @@ class Cli(TmpDir):
         now = datetime.now(timezone.utc).replace(microsecond=0)
         return [dict(s, timestamp=now.isoformat()) for s in fixture_signals()]
 
+    def test_dry_run_without_evidence_would_alert_nothing(self):
+        p = self.write_signals(self.fresh())
+        rc, out, _ = self.run_main("--from-json", p, "--min-bucket", "REJECT")
+        self.assertEqual(rc, 0)
+        report = json.loads(out)
+        self.assertEqual(report["would_alert"], [])
+        self.assertEqual({r["reason"] for r in report["skipped"]}, {"blocked_by_hard_gate"})
+
     def test_dry_run_writes_and_sends_nothing(self):
         p = self.write_signals(self.fresh())
-        with mock.patch.object(tt, "urllib_post", side_effect=AssertionError("network")):
+        with mock.patch.object(tt, "urllib_post", side_effect=AssertionError("network")), \
+                mock.patch.object(scanner_bridge, "score_signal", evidenced_score_signal):
             rc, out, _ = self.run_main("--from-json", p, "--db", self.db, "--min-bucket", "REJECT",
                                        env={"TELEGRAM_ENABLED": "true",
                                             "TELEGRAM_BOT_TOKEN": TOKEN, "TELEGRAM_CHAT_ID": "1"})
@@ -586,7 +616,8 @@ class Cli(TmpDir):
             def __init__(self, **kw):
                 super().__init__(http_post=lambda u, d, t: (posts.append(d) or
                                  (200, '{"ok":true,"result":{"message_id":9}}')), **kw)
-        with mock.patch.object(tt, "TelegramTransport", Patched):
+        with mock.patch.object(tt, "TelegramTransport", Patched), \
+                mock.patch.object(scanner_bridge, "score_signal", evidenced_score_signal):
             rc, out, _ = self.run_main("--from-json", p, "--send", "--db", self.db,
                                        "--credentials-file", creds, "--min-bucket", "REJECT",
                                        "--max-alerts", "2")
@@ -655,18 +686,24 @@ from tools.signal_scoring.telegram_transport import TelegramTransport
 from tools.signal_scoring.score_rank_harness import fixture_signals
 from tools.signal_scoring import run_signal_alerts
 import bot.scanner, bot.focus, bot.universe.active_selection   # the --scan import path
+from test_m21_1_a01_scoring_truth import evidenced_score_signal  # A01 fixture evidence
 now = datetime.now(timezone.utc)
 sigs = [dict(s, timestamp=now.isoformat()) for s in fixture_signals()]
 t = TelegramTransport(token="1:x", chat_id="1",
                       http_post=lambda u, d, to: (200, '{"ok":true,"result":{"message_id":1}}'))
 d = tempfile.mkdtemp()
 svc = SignalAlertService(outbox=AlertOutbox(os.path.join(d, "a.db")), transport=t,
-                         policy=AlertPolicy(min_decision_bucket="REJECT"))
+                         policy=AlertPolicy(min_decision_bucket="REJECT"),
+                         scorer=evidenced_score_signal)
 r = svc.run_cycle(sigs)
 print(json.dumps({"sent": len(r["delivery"]["sent"]), "modules": sorted(sys.modules)}))
 """ % str(REPO)
-        p = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), capture_output=True,
-                           text=True, timeout=120)
+        # A01: the fixture M14 audit DB is created here, so the child process
+        # only reads it (and never imports bot.flywheel itself).
+        from test_m21_1_a01_scoring_truth import m14_db
+        with mock.patch.dict(os.environ, {"A01_FIXTURE_M14_DB": m14_db()}):
+            p = subprocess.run([sys.executable, "-c", code], cwd=str(REPO),
+                               capture_output=True, text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr[-3000:])
         res = json.loads(p.stdout.strip().splitlines()[-1])
         self.assertEqual(res["sent"], 4)
@@ -704,7 +741,8 @@ print(json.dumps({"sent": len(r["delivery"]["sent"]), "modules": sorted(sys.modu
                 short_sig(ts=now)]
             svc = SignalAlertService(outbox=AlertOutbox(os.path.join(d, "a.db")),
                                      transport=FakeTransport(),
-                                     policy=AlertPolicy(min_decision_bucket="REJECT"))
+                                     policy=AlertPolicy(min_decision_bucket="REJECT"),
+                                     scorer=evidenced_score_signal)
             r = svc.run_cycle(sigs)
             r2 = svc.deliver_pending()
         self.assertEqual(fired, [])
