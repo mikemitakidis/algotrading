@@ -10437,6 +10437,8 @@ class G10_Hygiene(unittest.TestCase):
             "test_m18_ml.py",
             "MILESTONE_STATUS.md",
             "ROADMAP.md",
+            # C01 (M22 blocker): Risk Authority parity design (documentation only).
+            "docs/M22_C01_risk_authority_parity_design.md",
             "docs/NEXT_WORK_REGISTER.md",
             # M18 recovery-scope artifacts (this branch reconstructs
             # M18 from transcripts; these document/support that effort).
