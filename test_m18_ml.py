@@ -10630,6 +10630,11 @@ class G10_Hygiene(unittest.TestCase):
             "reports/m21_1extra_c_outcome_persistence.md",
             "test_m21_1extra_c_outcome_persistence.py",
             "test_m21_1extra_d0_auth_gate.py",
+            "bot/monitoring/__init__.py",
+            "bot/monitoring/alarms.py",
+            "bot/monitoring/checks.py",
+            "bot/monitoring/probe.py",
+            "test_m21_1_wp10_monitoring.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
