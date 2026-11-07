@@ -50,13 +50,54 @@ __all__ = [
     "MultiTimeframeContext",
     "SnapshotBar",
     "MtfContextError",
+    "StartStampedBarsError",
+    "start_stamp_evidence",
+    "refuse_start_stamped",
 ]
+
+# No regular-session US equity bar can CLOSE at or before the 09:30
+# New York open. A bar stamped there is stamped at its START (the M16
+# provider convention: yfinance daily = local midnight, intraday = bar
+# start) or is a pre-market bar. MultiTimeframeContext treats ts_utc as
+# the bar CLOSE, so aligning such bars returns a bar whose close is not
+# yet known at the anchor (lookahead; M21 WP6 N3 / review of PR #20).
+_NY = "America/New_York"
+_OPEN_MINUTE_NY = 9 * 60 + 30
+
+
+def start_stamp_evidence(ts) -> int:
+    """How many stamps sit at or before 09:30 New York time on their own
+    date. Zero for close-stamped regular-session bars."""
+    t = pd.DatetimeIndex(pd.to_datetime(pd.Series(ts), utc=True)).tz_convert(_NY)
+    return int(((t.hour * 60 + t.minute) <= _OPEN_MINUTE_NY).sum())
+
+
+def refuse_start_stamped(per_tf_bars, source: str) -> None:
+    """Real-data entrances call this before multi-timeframe alignment:
+    raise StartStampedBarsError when two or more timeframes are present
+    and any of them carries start-stamp evidence."""
+    frames = {tf: df for tf, df in per_tf_bars.items() if df is not None and len(df)}
+    if len(frames) < 2:
+        return
+    bad = {tf: start_stamp_evidence(df["ts_utc"]) for tf, df in frames.items()}
+    bad = {tf: n for tf, n in sorted(bad.items()) if n}
+    if bad:
+        raise StartStampedBarsError(
+            "%s: bars stamped at or before the 09:30 New York open %s. Multi-timeframe "
+            "alignment treats ts_utc as the bar CLOSE; M16 provider bars are stamped at their "
+            "START. Convert them to close stamps first (research.dataqa.stamps.to_close_stamped)."
+            % (source, bad))
 
 
 class MtfContextError(BacktestError):
     """Raised when the multi-TF context cannot be constructed (e.g.,
     anchor TF missing from the provided bars dict, or anchor TF has
     no bars)."""
+
+
+class StartStampedBarsError(MtfContextError):
+    """Start-stamped (or pre-market) bars were offered for
+    multi-timeframe alignment, which needs close stamps."""
 
 
 @dataclass(frozen=True)

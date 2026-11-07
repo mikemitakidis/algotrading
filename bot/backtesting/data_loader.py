@@ -583,6 +583,12 @@ def load_multi_tf_bars(
                 extras=extras,
             ))
 
+    # M16 rows are stamped at the bar START; MultiTimeframeContext needs
+    # CLOSE stamps. Refuse instead of silently leaking the current
+    # session's close (review of PR #20, fail closed).
+    from bot.backtesting.mtf_context import refuse_start_stamped
+    refuse_start_stamped(per_tf_bars, "load_multi_tf_bars(%s)" % cfg.request.symbol)
+
     return MultiTfBars(
         symbol=cfg.request.symbol,
         requested_timeframes=tuple(timeframes),

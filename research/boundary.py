@@ -46,6 +46,9 @@ ALLOWED_BOT_MODULES: Tuple[str, ...] = (
     "bot.historical.schema",
     "bot.historical.timeframes",
     "bot.historical.quality",
+    # M21 WP11: the real exchange calendar (pure: stdlib + zoneinfo only). Real
+    # bars must be judged and re-stamped against holidays, early closes and DST.
+    "bot.scoring_truth.sessions",
 )
 
 # Never importable from research code, at any depth.
