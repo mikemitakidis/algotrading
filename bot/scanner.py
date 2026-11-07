@@ -11,6 +11,8 @@ Entry/stop/target are computed and logged for every signal (ML/backtesting use).
 import logging
 from datetime import datetime, timezone
 
+from bot.bar_completion import (BASIS_COMPLETED, BASIS_IN_PROGRESS,
+                                regular_session_only, select_completed)
 from bot.data       import fetch_bars, resample_to_4h
 from bot.feature_engine import compute, compute_features
 from bot.sentiment import get_sentiment_mode, get_sentiment_provider, apply_sentiment
@@ -120,6 +122,20 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
     ibkr_min   = int(routing.get('ibkr_min_tfs',   2))
     strat_ver  = int(strategy.get('version', 1))
 
+    # WP6 (C01 §11): bar basis. Default 'in_progress' keeps today's behaviour.
+    # 'completed' scores only bars proven complete at the decision time by an
+    # injected completion policy; without one the cycle emits no signals.
+    bar_basis  = (config.get('bar_basis', BASIS_IN_PROGRESS)
+                  if isinstance(config, dict) else BASIS_IN_PROGRESS)
+    completion = config.get('bar_completion') if bar_basis == BASIS_COMPLETED else None
+    if bar_basis not in (BASIS_IN_PROGRESS, BASIS_COMPLETED) or \
+            (bar_basis == BASIS_COMPLETED and completion is None):
+        log.warning('[CYCLE] bar basis %r without a completion policy - no signals',
+                    bar_basis)
+        return [], {'tfs_available': 0, 'tfs_list': [], 'symbols_scanned': len(focus),
+                    'bar_basis': bar_basis, 'blocked_bar_basis': True}
+    bar_selection = {}   # WP6: sym -> {tf_label -> selection} (completed basis)
+
     log.info('[CYCLE] Scanning %d symbols | strategy v%d | %d TFs enabled',
              len(focus), strat_ver, len(timeframes))
 
@@ -141,8 +157,18 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
         log.info('[CYCLE] %s: %d/%d symbols', tf_label, len(bars), len(focus))
 
         for sym, df in bars.items():
+            if completion is not None:     # WP6: regular-session rows only
+                df = regular_session_only(df, '1H' if do_resample else tf_label,
+                                          completion.classify)
+                if df is None or len(df) == 0:
+                    continue
             if do_resample:
                 df = resample_to_4h(df)
+            if completion is not None:
+                df, sel = select_completed(df, tf_label, completion.classify)
+                bar_selection.setdefault(sym, {})[tf_label] = vars(sel)
+                if df is None:
+                    continue
             fs = compute_features(df)
             if fs is None:
                 continue
@@ -200,7 +226,8 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
              min_valid, cfg_min, available_tfs, allow_partial)
 
     signals  = []
-    now_utc  = datetime.now(timezone.utc).isoformat()
+    now_utc  = (completion.decision_time_utc.isoformat() if completion is not None
+                else datetime.now(timezone.utc).isoformat())
 
     # Emit partial_confluence candidates for symbols that had scores but didn't reach threshold
     if conn is not None:
@@ -328,4 +355,7 @@ def scan_cycle(focus: list, config: dict, conn=None, cycle_id: int = 0):
         'symbols_scanned': len(focus),
         'bar_asof':       bar_asof,   # A01: read-only as-of metadata
     }
+    if completion is not None:          # WP6: completed-bar selection record
+        meta['bar_basis'] = bar_basis
+        meta['bar_selection'] = bar_selection
     return signals, meta

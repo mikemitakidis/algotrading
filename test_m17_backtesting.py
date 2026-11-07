@@ -3651,7 +3651,9 @@ _PROTECTED_APPROVED_SHA256 = {
     # logged-only and never appended to actionable signals.
     # M21.1 A01: metadata-only bar as-of record added to scan_cycle meta
     # (exact additions proven in test_m21_1_a01_scoring_truth.T9).
-    "bot/scanner.py": "eb660e624a0bc2faa3be471bb592e1e3f6426b308edd2b4c04e696db5ec56dc3",
+    # M21 WP6 (C01 §11): opt-in completed-bar basis seam, default unchanged
+    # (exact transition proven in test_m21_1_wp6_completed_candles.N6).
+    "bot/scanner.py": "8a14812ac13752acd43df2f4add9554de16c31e655dec8a29272e15f1a1b7166",
     # pre-M19 Group E (ISSUE-013): dashboard refuses to start without an
     # explicit DASHBOARD_SECRET_KEY when DASHBOARD_ENV=production (dev/local
     # keeps the warned fallback). No route/auth/CSRF logic changed.
@@ -4347,6 +4349,9 @@ class G10_Hygiene(unittest.TestCase):
             "test_m21_1_a01_scoring_truth.py",
             # M21.1 A02 candidate-decision ledger tests + implementation plan.
             "test_m21_1_a02_candidate_ledger.py",
+            "bot/providers/alpaca_provider.py",
+            "bot/bar_completion.py",
+            "test_m21_1_wp6_completed_candles.py",
             "bot/providers/alpaca_corporate_actions.py",
             "test_m21_1_wp5_evidence.py",
             "docs/M21_1_A02_candidate_ledger_plan.md",

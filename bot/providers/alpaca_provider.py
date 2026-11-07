@@ -30,6 +30,12 @@ from bot.providers.base import DataProvider
 
 log = logging.getLogger(__name__)
 
+# M21 WP6: every bar request states its price basis explicitly. Alpaca's
+# documented default is also "raw" (unadjusted), so the returned prices are
+# the same; sending it makes the basis provable from this code instead of an
+# unverifiable API default. Downstream evidence (WP5) reads this constant.
+BAR_PRICE_ADJUSTMENT = "raw"
+
 
 def _get_keys() -> tuple[str, str]:
     key    = os.getenv('ALPACA_KEY', '').strip()
@@ -127,6 +133,7 @@ class AlpacaProvider(DataProvider):
                 timeframe=timeframe,
                 start=start.isoformat(),
                 end=end.isoformat(),
+                adjustment=BAR_PRICE_ADJUSTMENT,
             )
             bars = client.get_stock_bars(req).df
             if bars.empty:
@@ -167,6 +174,7 @@ class AlpacaProvider(DataProvider):
                 timeframe=timeframe,
                 start=start.isoformat(),
                 end=(end + timedelta(days=1)).isoformat(),
+                adjustment=BAR_PRICE_ADJUSTMENT,
             )
             bars = client.get_stock_bars(req).df
             if bars.empty:

@@ -57,12 +57,15 @@ class ApprovedChange(NamedTuple):
 APPROVED_CHANGES: Dict[str, ApprovedChange] = {
     "bot/scanner.py": ApprovedChange(
         from_blob="63a71b91ac88a34905fe29135b5d857f318ba129",
-        to_blob="08dc7512f019ae9fa1706dcf7776c2b2036e1ee3",
-        commit="6242bde81e5bf9fd194be5fbba41c8cb1c558e08",
+        to_blob="581f2a7cb40b1b372b443cd416826d16b85a58b7",
+        commit="a49375a0aa17ca0350ac00bdacf107517b3a583d",
         approval="pre-M19 Group D: scanner partial-data hard-block "
                  "(ISSUE-009) + WATCH drop (ISSUE-010) [85c5092, blob 4317e57]; "
                  "then M21.1 A01: metadata-only bar as-of record in scan_cycle "
-                 "meta (no signal/decision change) — PENDING independent review",
+                 "meta (no signal/decision change) [6242bde, blob 08dc751]; "
+                 "then M21 WP6 (C01 §11 / D-4): opt-in completed-bar basis seam "
+                 "(default unchanged; operator instruction 28 Oct 2026 09:15) "
+                 "— PENDING independent review",
         # Group D's approved content: what the M19/M20 guard baseline holds.
         also_from=("4317e57e72f9d8d862607a8e3f155cc53f4ecd3d",),
     ),
@@ -78,6 +81,14 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
         commit="5d6a2300fa3cc9aa4847bb7a58fbf97ce49de4a5",
         approval="M21.1extra-B2flat flatten primitive (3a5d74f..802491b) + "
                  "D2/R2-3 paper-mode submit() port==4002 guard (5d6a230)",
+    ),
+    "bot/providers/alpaca_provider.py": ApprovedChange(
+        from_blob="944f3918c0b10a60edca5e68dc3c4d153a1e9a93",
+        to_blob="0d756dd3dbe899bc7aa42a2a317c4385fc562a4e",
+        commit="a49375a0aa17ca0350ac00bdacf107517b3a583d",
+        approval="M21 WP6: explicit adjustment=raw on both Alpaca bar requests "
+                 "(the documented API default; makes the price basis provable) "
+                 "— PENDING independent review",
     ),
     "dashboard/app.py": ApprovedChange(
         from_blob="1bd8712c660348d0471ac8a56759c5880e868908",

@@ -76,37 +76,70 @@ def _simulated_parts(args):
 
 
 def _scanner_provider(focus_size: int, allow_short: bool = False):
-    """Real candidates (WP5): scanner signals -> observed evidence (Alpaca
-    trading calendar, completed daily bars, corporate-action record, the
-    provider's own price basis) -> truthful M19 research rank -> fail-closed
-    selection. Only candidates with no data-quality block are offered, ranked
-    by research rank; M14 (the loop's risk gate) still decides every entry.
-    Read-only: fetches market data and reference data, writes nothing."""
+    """Real candidates (WP5 + WP6): a verified Alpaca trading calendar ->
+    completed-bar scan (C01 §11: only bars proven complete at the decision
+    time; no calendar -> no signals) -> observed evidence (completed daily
+    bars, corporate-action record, the provider's own price basis) ->
+    truthful M19 research rank -> fail-closed selection. Only candidates with
+    no data-quality block are offered, ranked by research rank; M14 (the
+    loop's risk gate) still decides every entry. Read-only: fetches market and
+    reference data, writes nothing. The production scanner (main.py) is not
+    affected: it keeps the default in-progress basis."""
     def provider(now):
         import logging
         import os
+        from datetime import timedelta
         from bot.data import fetch_bars
         from bot.market_clock.calendar_feed import fetch_calendar
         from bot.providers.alpaca_corporate_actions import fetch_price_scale_actions
         from bot.scanner import scan_cycle
+        from bot.scoring_truth import TruthPolicy
+        from bot.scoring_truth.evidence_records import (
+            calendar_fit_for_decision, session_calendar_from_rows,
+        )
         from bot.universe.active_selection import get_scan_ready_symbols
+        from tools.signal_scoring.completed_bars import CompletedBarPolicy, infer_hour_grid
         from tools.signal_scoring.evidence import (
             build_cycle_evidence, loop_candidates, rank_candidates, research_report,
         )
+        log = logging.getLogger(__name__)
         focus = get_scan_ready_symbols()[:focus_size]
+        today = now.date()
+        cf = fetch_calendar(today - timedelta(days=150), today + timedelta(days=10),
+                            now_utc=now)
+        completion = None
+        policy = TruthPolicy(bar_basis="completed")
+        if cf.ok:
+            try:
+                cal = session_calendar_from_rows(cf.rows, coverage_start=cf.start,
+                                                 coverage_end=cf.end, source=cf.source,
+                                                 fetched_at_utc=cf.fetched_at_utc)
+                fit = calendar_fit_for_decision(cal, fetched_at_utc=cf.fetched_at_utc,
+                                                evaluated_at=now, live=True)
+                if fit.usable:
+                    probe = fetch_bars(focus[:3], "5d", "1h") or {}
+                    starts = [ts for df in probe.values() for ts in df.index]
+                    completion = CompletedBarPolicy(cal, now,
+                                                    hour_grid=infer_hour_grid(starts, cal))
+                    policy = TruthPolicy(bar_basis="completed", specs=completion.specs)
+            except Exception as exc:
+                log.warning("[WP6] calendar unusable (%s): no completed-bar scan",
+                            type(exc).__name__)
+                completion = None
         config = {"strategy": "default",
-                  "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2, "min_valid_tfs": 1}}
+                  "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2, "min_valid_tfs": 1},
+                  "bar_basis": "completed", "bar_completion": completion}
         signals, meta = scan_cycle(focus, config, conn=None, cycle_id=0)
         ce = build_cycle_evidence(
             signals=signals, meta=meta, now_utc=now,
             fetch_daily=lambda syms: fetch_bars(syms, "6mo", "1d"),
             fetch_calendar=fetch_calendar, fetch_actions=fetch_price_scale_actions,
-            provider_name=os.getenv("DATA_PROVIDER", "yfinance"))
+            provider_name=os.getenv("DATA_PROVIDER", "yfinance"), policy=policy,
+            calendar_fetch=cf)
         ranked = rank_candidates(signals, ce, allow_short=allow_short)
         rep = research_report(ranked)
-        logging.getLogger(__name__).info(
-            "[WP5] research ranking: %d selectable, %d blocked, reasons=%s",
-            rep["selectable"], rep["blocked"], rep["block_reason_counts"])
+        log.info("[WP5] research ranking: %d selectable, %d blocked, reasons=%s",
+                 rep["selectable"], rep["blocked"], rep["block_reason_counts"])
         cands, _notes = loop_candidates(ranked)
         return cands
     return provider
