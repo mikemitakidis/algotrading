@@ -75,7 +75,7 @@ def _simulated_parts(args):
                 candidate_provider=provider)
 
 
-def _scanner_provider(focus_size: int, allow_short: bool = False):
+def _scanner_provider(focus_size: int, allow_short: bool = False, ledger_writer=None):
     """Real candidates (WP5 + WP6): a verified Alpaca trading calendar ->
     completed-bar scan (C01 §11: only bars proven complete at the decision
     time; no calendar -> no signals) -> observed evidence (completed daily
@@ -129,7 +129,25 @@ def _scanner_provider(focus_size: int, allow_short: bool = False):
         config = {"strategy": "default",
                   "routing": {"etoro_min_tfs": 4, "ibkr_min_tfs": 2, "min_valid_tfs": 1},
                   "bar_basis": "completed", "bar_completion": completion}
-        signals, meta = scan_cycle(focus, config, conn=None, cycle_id=0)
+        ledger_on = getattr(ledger_writer, "enabled", False) is True
+        scan_conn = None
+        if ledger_on:
+            # M21 WP7: capture the scanner's own rejects (partial confluence,
+            # watch only) through its flywheel hook into a throwaway in-memory
+            # table; nothing is written to any production database here.
+            import sqlite3
+            from bot.flywheel import init_flywheel_tables
+            scan_conn = sqlite3.connect(":memory:")
+            init_flywheel_tables(scan_conn)
+        signals, meta = scan_cycle(focus, config, conn=scan_conn, cycle_id=0)
+        cycle_key = "scan:%s" % now.isoformat()
+        if ledger_on:
+            from tools.signal_scoring.evidence import record_scanner_rejects
+            scan_conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in scan_conn.execute(
+                "SELECT * FROM candidate_snapshots WHERE stage != 'final_signal'")]
+            record_scanner_rejects(ledger_writer, rows, cycle_key=cycle_key, now=now)
+            scan_conn.close()
         ce = build_cycle_evidence(
             signals=signals, meta=meta, now_utc=now,
             fetch_daily=lambda syms: fetch_bars(syms, "6mo", "1d"),
@@ -137,6 +155,9 @@ def _scanner_provider(focus_size: int, allow_short: bool = False):
             provider_name=os.getenv("DATA_PROVIDER", "yfinance"), policy=policy,
             calendar_fetch=cf)
         ranked = rank_candidates(signals, ce, allow_short=allow_short)
+        if ledger_on:
+            from tools.signal_scoring.evidence import record_scored
+            record_scored(ledger_writer, ranked, cycle_key=cycle_key, now=now)
         rep = research_report(ranked)
         log.info("[WP5] research ranking: %d selectable, %d blocked, reasons=%s",
                  rep["selectable"], rep["blocked"], rep["block_reason_counts"])
@@ -167,11 +188,19 @@ def _ibkr_parts(args):
 
     broker = IbkrLoopBroker(ib_factory=ib_factory)
     signals_db = str(REPO / "data" / "signals.db")
+    # M21 WP7: candidate ledger — ON only with CANDIDATE_LEDGER_ENABLED=1 AND
+    # a schema the operator has migrated (OP3); otherwise a no-op.
+    from bot.candidate_ledger import CandidateLedgerWriter, ledger_enabled_from_env
+    from bot.candidate_ledger.loop_sink import LoopLedger
+    writer = CandidateLedgerWriter(lambda: sqlite3.connect(signals_db, timeout=10),
+                                   enabled=ledger_enabled_from_env(), writer="paper_loop")
     return dict(broker=broker, d0_gate=make_d0_gate(), d1_gate=make_d1_gate(),
                 kill_switch_active=is_kill_switch_active,
                 risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
                                                    market_state=make_market_state_provider()),
-                candidate_provider=_scanner_provider(args.focus_size))
+                candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer),
+                # reconcile verifies backfilled risk against M14 risk_decisions (read-only)
+                ledger=LoopLedger(writer, m14_db=signals_db))
 
 
 def main(argv: List[str] = None) -> int:

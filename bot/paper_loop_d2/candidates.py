@@ -40,6 +40,7 @@ class LoopCandidate:
     stop_loss: float
     take_profit: float
     signal_ts_utc: Optional[str] = None
+    candidate_id: Optional[str] = None     # M21 WP7: ledger id from the scanner
 
     @staticmethod
     def build(**kw: Any) -> "LoopCandidate":
@@ -62,9 +63,13 @@ class LoopCandidate:
             raise InvalidCandidate("long requires stop_loss < entry < take_profit")
         if direction == "short" and not (tp < e < sl):
             raise InvalidCandidate("short requires take_profit < entry < stop_loss")
+        cid = kw.get("candidate_id")
+        if cid is not None and not (isinstance(cid, str) and cid.startswith("C-")):
+            raise InvalidCandidate("candidate_id must be a ledger id ('C-...')")
         return LoopCandidate(symbol=sym, direction=direction, score=float(score),
                              strategy_id=strategy.strip(), entry_ref_price=e, stop_loss=sl,
-                             take_profit=tp, signal_ts_utc=kw.get("signal_ts_utc"))
+                             take_profit=tp, signal_ts_utc=kw.get("signal_ts_utc"),
+                             candidate_id=cid)
 
 
 def _signal_age_minutes(c: "LoopCandidate", now: datetime) -> Optional[float]:
