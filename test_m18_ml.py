@@ -10491,6 +10491,7 @@ class G10_Hygiene(unittest.TestCase):
             "test_m19_signal_scoring.py",
             # M20.A: paper-trading firewall contracts proof tests.
             "test_m20_paper.py",
+            "test_m21_1_e2_context_audit.py",
             # M20.UA: universe registry proof tests.
             "test_m20_universe.py",
             # M20.B: paper routing decision proof tests.
