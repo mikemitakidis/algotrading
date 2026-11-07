@@ -13,6 +13,7 @@ Offline research code for the M21 research lanes (Issues #2 and #3). Nothing her
 | `research.dataqa` | F | B01, B02, E05, E09 | Data inventory, OHLCV quality audit, snapshot manifests, vendor memo; WP11 real-data readiness: exchange calendar, start→close re-stamping (M16→M17 lookahead fix), calendar coverage, adjusted-bar policy, liquidity completeness, point-in-time membership and survivorship, scanner parity on converted bars |
 | `research.economics` | R (WP12) | B10 | Execution economics: dated IBKR and regulatory fees, point-in-time liquidity, spread / impact / slippage, participation caps, halts, borrow, splits and dividends; edge-after-cost, size sensitivity, realised-vs-modelled calibration |
 | `research.optimiser` | R (WP13) | B11, B12, B08 | Walk-forward optimiser driver: one-shot sealed history, expanding folds with embargo, ledgered grid search with plateau picks, WP12 economics on every OOS trade, DSR / PBO / 2x-cost / size sensitivity verdicts, integrated canary battery |
+| `research.shadowml` | R (WP16-18) | B16, B17, B19 | Shadow-only: meta-labelling of a template's own entries (take / size down / skip, never size up), regime-aware thresholds with modelled detection lag, learned bounded regime weights; past-resolved-fold tuning only; IMPROVES / NO_EVIDENCE / WORSE / INCONCLUSIVE on daily paired tests |
 
 ## Rules
 
