@@ -9,6 +9,7 @@
   - the full suite now also runs on the exact final trees.
 
   The merge order, heads and expected trees are unchanged.
+- **Revision 5:** 2026-11-07T18:10Z UTC, after the line-by-line review: VPS-0 also proves the guard is *effective* in systemd's condition list, read with `busctl` (Appendix B); 30 offline cases. `gate_a1.sh`, the merge order, heads and expected trees are unchanged.
 - **Revision 4:** 2026-11-06T19:48Z UTC, after the independent review of the execution instructions: VPS-0 now exits 0 on OK and 3 on STOP. The 19 offline cases assert the exit code as well as the output. `gate_a1.sh`, the merge order, heads and expected trees are unchanged.
 - **Revision 3:** 2026-11-06T18:46Z UTC, after the independent review: VPS-0 now proves the Gate A-0 guard is loaded in the bot unit (Appendix B; 19 offline cases). `gate_a1.sh`, the merge order, heads and expected trees are unchanged. The Gate A-0 execution date is corrected to 5 Nov, about 19:31 UTC (the attestation time in the accepted run report; recorded on GitHub 6 Nov).
 - **Design reused, not changed:** Finish Line §7e.4 (A0 preconditions, A2 Vercel, A3 merge order, A6 protected files), from `docs/handoffs/M21_Finish_Line_2026-10-28.md` on `docs/full-canonical-handoff-2026-10-26`. Gate A-0 (6 Nov) replaces §7e.4 A1 "pause". Gate A-2 (deployment) is a separate gate.
@@ -313,10 +314,13 @@ done
 echo "GATE A-1 DONE: main $(main_sha) tree $(main_tree) (steps 1-$LAST)."
 ```
 
-## Appendix B: VPS-0, revision 4 (sha256 `2b90968deb51ccfa09caa4d22a2142a1f59e758b7ea7499c684395b5d9cdc750`)
+## Appendix B: VPS-0, revision 5 (sha256 `bb5359b8616bc0faecef102e5645b7ce8d6475a8311ed2eeb099f2355a58478d`)
 
 Run it before step 1 and again after `GATE A-1 DONE`. The `SCAN` code is byte-identical to the approved Gate A-0 revision 6 process scan.
 - Revision 2 also requires the VPS checkout to be `015d2ce`.
+- **Revision 5:** the guard must also be **effective**, not just present in the files. A later empty `ConditionPathExists=` (or any empty `Condition…=`) resets every earlier condition. VPS-0 reads the condition list systemd actually holds, the D-Bus property `org.freedesktop.systemd1.Unit.Conditions` (`a(sbbsi)` = type, trigger, negate, parameter, state), and requires the exact non-negated, non-triggering `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START`. Any unexpected output is UNREADABLE, which means STOP.
+  - **Why `busctl`, not `systemctl show -p Conditions`:** in systemd 255 (and 256/257), `systemctl show` cannot print this array type. Its `print_property` has no `Conditions` case, and the generic printer handles only `as`/`ay`/`au` arrays, so the property is skipped (or printed as `Conditions=[unprintable]` with `--all`). Source: `src/systemctl/systemctl-show.c` and `src/shared/bus-print-properties.c` at tag v255.
+  - `busctl --json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/algo_2dtrader_2eservice org.freedesktop.systemd1.Unit Conditions` prints `{"type":"a(sbbsi)","data":[["ConditionPathExists",false,false,"/var/lib/algo-trader/ALLOW_BOT_START",0]]}`. This was verified with the real `busctl` 255.4-1ubuntu8.18 (the Ubuntu 24.04 build).
 - **Revision 4:** **exit status 0 on `VPS-0 OK`, 3 on `VPS-0 STOP`**. Revision 3 printed STOP but exited 0, so a calling `bash -e` or a script could not detect the failure.
 - **Revision 3** requires the Gate A-0 guard to be part of the bot unit systemd has **loaded**: `gate-a0.conf` is in `DropInPaths`; the exact line `ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START` is in `systemctl cat`; `NeedDaemonReload=no`, so the files on disk are the loaded ones; and the boot link is absent (including a dangling link).
 - A standalone `systemd-analyze condition` that evaluates false is not proof that the unit enforces it.
@@ -364,11 +368,30 @@ case " $DIP " in *" /etc/systemd/system/algo-trader.service.d/gate-a0.conf "*) D
 GL=$(systemctl cat algo-trader.service 2>/dev/null | grep -cxF 'ConditionPathExists=/var/lib/algo-trader/ALLOW_BOT_START')
 NDR=$(systemctl show -p NeedDaemonReload --value algo-trader.service 2>&1)
 if [ -e /etc/systemd/system/multi-user.target.wants/algo-trader.service ] || [ -L /etc/systemd/system/multi-user.target.wants/algo-trader.service ]; then BL=PRESENT; else BL=absent; fi
+# The guard must also be EFFECTIVE: a later empty "ConditionPathExists=" (or any empty Condition*=) resets every earlier
+# condition. Read the condition list systemd actually holds: D-Bus property org.freedesktop.systemd1.Unit.Conditions,
+# a(sbbsi) = (type, trigger, negate, parameter, state). `systemctl show -p Conditions` cannot print this array type
+# (systemd 255: it is "[unprintable]"), so it is read with busctl in JSON. Anything unexpected -> UNREADABLE -> STOP.
+CJ=$(busctl --json=short get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/algo_2dtrader_2eservice org.freedesktop.systemd1.Unit Conditions 2>&1)
+CE=$(python3 -I -c 'import json, sys
+try:
+    j = json.loads(sys.argv[1])
+    assert isinstance(j, dict) and j.get("type") == "a(sbbsi)" and isinstance(j.get("data"), list)
+    found = False
+    for c in j["data"]:
+        assert isinstance(c, list) and len(c) == 5
+        t, trig, neg, par, st = c
+        assert isinstance(t, str) and type(trig) is bool and type(neg) is bool and isinstance(par, str) and type(st) is int
+        if t == "ConditionPathExists" and trig is False and neg is False and par == "/var/lib/algo-trader/ALLOW_BOT_START":
+            found = True
+    print("effective" if found else "NOT_EFFECTIVE")
+except Exception:
+    print("UNREADABLE")' "$CJ" 2>/dev/null)
 echo "kill_switch_active=$KS bot_unit=$EN/$AC guard_condition=$G allow_file=$AL vps_head=${HD:0:12}"
-echo "guard_drop_in=$DL guard_line_in_loaded_unit=$GL need_daemon_reload=$NDR boot_link=$BL"
+echo "guard_drop_in=$DL guard_line_in_loaded_unit=$GL need_daemon_reload=$NDR boot_link=$BL guard_condition_effective=${CE:-UNREADABLE}"
 if [ "$rc" = 0 ] && [ "$KS" = True ] && [ "$EN" = disabled ] && [ "$AC" = inactive ] && [ "$G" = FALSE ] && [ "$AL" = absent ] && [ "$HD" = 015d2cea927b9b4db3ee65604e0b4ebb58211e61 ] \
-   && [ "$DL" = loaded ] && [ "$GL" -ge 1 ] 2>/dev/null && [ "$NDR" = no ] && [ "$BL" = absent ]; then
-  echo "VPS-0 OK: no main.py or sync.sh process, Gate A-0 containment in place (guard loaded in the bot unit), VPS code still 015d2ce; a merge to GitHub main cannot reach the VPS."
+   && [ "$DL" = loaded ] && [ "$GL" -ge 1 ] 2>/dev/null && [ "$NDR" = no ] && [ "$BL" = absent ] && [ "$CE" = effective ]; then
+  echo "VPS-0 OK: no main.py or sync.sh process, Gate A-0 containment in place (guard loaded and effective in the bot unit), VPS code still 015d2ce; a merge to GitHub main cannot reach the VPS."
   exit 0
 else
   echo "VPS-0 STOP: do not start Gate A-1. Send this output."
@@ -401,7 +424,23 @@ VPS0
 | T19 retarget refused at step 3 | STOP with a message (not a raw exit); `main` at the step-2 tree |
 | (revision 1 script, proxy without GraphQL) | exit 1 at step 1 with 0 merges: safe, but it could not run from this session. This is F1. |
 
-**VPS-0, 19 cases (revision 4; every case asserts both the verdict and the exit code: OK = 0, STOP = 3).** The stub `systemctl` is the one from the Gate A-0 offline tests, which models drop-ins, `daemon-reload`, `NeedDaemonReload` and `systemctl cat`; `systemd-analyze` 255 is real. Every case starts from the state that the exact approved Gate A-0 revision 6 block (downloaded and hash-verified, `86f9f752…`) produces, then changes one thing.
+**VPS-0, 30 cases (revision 5; every case asserts both the verdict and the exit code: OK = 0, STOP = 3).**
+
+Revision 5 adds 11 cases read with the **real `busctl` 255** over a private D-Bus bus. A stand-in for systemd's `Unit` object exports `Conditions`, computed from the unit file plus the drop-ins the mock has loaded, using systemd's documented rules: an empty `Condition…=` resets the whole list, `|` makes a condition triggering, `!` negates it.
+- **P1**, a later drop-in resets and then re-adds the exact guard: OK.
+- **N10–N19, each STOP:**
+  - N10: a later loaded drop-in resets `ConditionPathExists=` (**revision 4 said OK, exit 0, here**);
+  - N11: reset, then re-added as triggering (`|`);
+  - N12: reset, then re-added negated (`!`);
+  - N13: reset by another condition type (`ConditionHost=`);
+  - N14: `busctl` cannot reach systemd;
+  - N15: the property read fails;
+  - N16: `busctl` prints text, not JSON;
+  - N17: JSON with the wrong type signature;
+  - N18: JSON with numbers where booleans belong;
+  - N19: `busctl` not available.
+
+**Result: 30 passed, 0 failed.** The 19 earlier cases follow. The stub `systemctl` is the one from the Gate A-0 offline tests, which models drop-ins, `daemon-reload`, `NeedDaemonReload` and `systemctl cat`; `systemd-analyze` 255 is real. Every case starts from the state that the exact approved Gate A-0 revision 6 block (downloaded and hash-verified, `86f9f752…`) produces, then changes one thing.
 - **P0, the post-A-0 state:** OK (revision 2 also OK).
 - **N1–N9, each STOP:**
   - N1: `gate-a0.conf` removed and reloaded;
@@ -416,9 +455,9 @@ VPS0
   - N9: `systemctl cat` fails.
 
   **Revision 2 said OK in N1–N7**: that is the gap the reviewer found.
-- **Exit-code defect demonstrated:** in the N1 state, revision 3 prints STOP and exits 0; revision 4 exits 3. Result: **19 passed, 0 failed**.
+- **Exit-code defect demonstrated:** in the N1 state, revision 3 prints STOP and exits 0; revision 4 exits 3.
 - **E1–E8, re-run, each STOP:** the earlier cases (the VPS checkout moved, `sync.sh` running, `python3 -u main.py` running, the kill switch released, the unit re-enabled, the unit active, the allow-file present, the kill-switch file missing).
-- **Read-only:** in P0, VPS-0's only `systemctl` calls are `cat`, `is-active`, `is-enabled` and `show -p DropInPaths|NeedDaemonReload`.
+- **Read-only:** in P0, VPS-0's only `systemctl` calls are `cat`, `is-active`, `is-enabled` and `show -p DropInPaths|NeedDaemonReload`, plus one `busctl get-property` (a D-Bus property read).
 
 The earlier revision-2 list (STOP on its own for each of: the VPS checkout moved; `sync.sh` running; `python3 -u main.py` running; the kill switch released; the unit re-enabled; the unit active; the allow-file present; the kill-switch file missing) is covered by E1–E8.
 

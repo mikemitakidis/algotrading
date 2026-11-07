@@ -5,10 +5,10 @@ milestone. The narrative roadmap lives in [`ROADMAP.md`](ROADMAP.md); the
 project-wide reconciliation narrative lives in
 [`docs/PROJECT_STATUS_RECONCILIATION.md`](docs/PROJECT_STATUS_RECONCILIATION.md).
 
-> ## Current operating state: status 3.0.10 (roadmap v3.0), 6 Nov 2026
+> ## Current operating state: status 3.0.11 (roadmap v3.0), 7 Nov 2026
 >
 > **When and what:**
-> - **Written:** 2026-11-06T19:48Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.9; the change is recorded in `ROADMAP.md` R16, entry 14.
+> - **Written:** 2026-11-07T18:10Z UTC (same in Europe/London, GMT). This replaces draft status 3.0.10; the change is recorded in `ROADMAP.md` R16, entry 15.
 > - **Author:** Claude (Claude Code session).
 > - **Verified GitHub base:** `main` = `80b4343` [GH].
 > - **VPS deployed:** `015d2ce` [VPS-R].
@@ -41,9 +41,10 @@ project-wide reconciliation narrative lives in
 > - no broker call, order, service action or deployment; the pre-existing live holding is untouched and manually managed.
 > - **Evidence note:** H3/H4 were not run as separate steps; the evidence is the block's final verification and its `STATE AT EXIT` report.
 >
-> **Gate A-1 (23 merges + #35 as step 24, per the operator's decisions of 6 Nov 19:35 UTC): review package revision 4** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
+> **Gate A-1 (23 merges + #35 as step 24, per the operator's decisions of 6 Nov 19:35 UTC): review package revision 5** (`docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md`). NOT approved, NOT executed.
 > - Revision 3 adds the independent review's VPS-0 correction: the Gate A-0 guard must be loaded in the bot unit; 19 offline cases.
 > - Revision 4: VPS-0 exits 0 on OK and 3 on STOP (it exited 0 on STOP before); the 19 cases assert exit codes.
+> - Revision 5: VPS-0 also proves the guard is effective in systemd's condition list (a later empty `ConditionPathExists=` resets it), read with `busctl`; 30 offline cases.
 > - **Claude's engineering review** (`docs/reviews/M21_Gate_A1_Engineering_Review_2026-11-06.md`): **BLOCK at `578af1e`** on one necessary correction (F1: `gh pr ready` needs GraphQL, which this session lacks). **Corrected in revision 2 → PASS** for independent review.
 > - Full suite on the exact final trees: `5b0f40b` 134/0; `f04d1d6` (with #35) 135/0.
 > - Recommended: D-A1-1 approve C5b; D-A1-2 accept the Vercel builds; D-A1-3 include #35 (if it is reviewed at `da56e12`); D-A1-4 merge #33 as reviewed.

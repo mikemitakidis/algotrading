@@ -801,11 +801,11 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 
 ### R13. Handoff block (read this first in a new session)
 
-| Item | Value at 2026-11-06T19:48Z UTC |
+| Item | Value at 2026-11-07T18:10Z UTC |
 |---|---|
 | Roadmap version | v3.0 (DRAFT, PR #34, not approved) |
 | Last approved roadmap commit | `main` `80b4343` (pre-v3.0 roadmap; E7 #33 not merged) |
-| Status version | status 3.0.10 (`MILESTONE_STATUS.md` top block) |
+| Status version | status 3.0.11 (`MILESTONE_STATUS.md` top block) |
 | GitHub `main` | `80b4343` [GH] |
 | VPS deployed | `015d2ce` [VPS-R, Session 1 10:00 UTC; H1/P1/P2 about 15:12 UTC, 5 Nov] |
 | Active PRs | 23 draft PRs #1, #12–#33 (heads in STATUS) + this docs PR #34 |
@@ -868,3 +868,4 @@ Each milestone or work package takes one value **per dimension**: engineering, r
 | 12 | 2026-11-06T18:29Z (same in London) | v3.0 (DRAFT), amended | Claude's engineering review of the Gate A-1 package: BLOCK at `578af1e` on F1 (the ready-for-review call needs GraphQL); corrected in package revision 2 (proxy REST fallback, VPS-0 head check), full suite on the exact final trees 134/0 and 135/0 → PASS for independent review. Records check: 71 tasks intact; A18, E07, the July debt register D-3…D-5 and handoff v3.13 to update after A-1. Status 3.0.8. | engineering review | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |
 | 13 | 2026-11-06T18:46Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 3: VPS-0 also proves the Gate A-0 guard is loaded in the bot unit (drop-in in `DropInPaths`, exact guard line in the loaded unit, `NeedDaemonReload=no`, boot link absent); 19 offline cases. **Correction to entry 11:** Gate A-0 ran on 5 Nov, about 19:31 UTC (attestation time), and was recorded on 6 Nov. Status 3.0.9. | independent review of `86c6c0a`; handoff v3.13 (`74f1f3c`) | M21 | PR #34, Issue #3 | Gate A-1 pending review and approval |
 | 14 | 2026-11-06T19:48Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 4: VPS-0 exits 0 on OK and 3 on STOP (revision 3 exited 0 on STOP); the 19 offline cases assert exit codes (19/19). Merge script, order, heads and trees unchanged. Status 3.0.10. | independent review of the execution instructions | M21 | PR #34, Issue #3 | Gate A-1 pending final execution authorisation |
+| 15 | 2026-11-07T18:10Z (same in London) | v3.0 (DRAFT), amended | Gate A-1 package revision 5: VPS-0 also requires the exact non-negated, non-triggering `ConditionPathExists` guard to be effective in systemd's condition list (`Unit.Conditions` via `busctl --json`; `systemctl show` cannot print that type in systemd 255). 30 offline cases (real `busctl` 255). Merge script, order, heads and trees unchanged. Status 3.0.11. | line-by-line review of `edcd713` | M21 | PR #34, Issue #3 | Gate A-1 pending final execution authorisation |
