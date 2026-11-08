@@ -10645,6 +10645,11 @@ class G10_Hygiene(unittest.TestCase):
             "bot/monitoring/checks.py",
             "bot/monitoring/probe.py",
             "test_m21_1_wp10_monitoring.py",
+            # M21 PR-a: M14 paper/live domain split + lane-based IBKR authority (tests).
+            "test_m21_paper_a_m14_domain_split.py",
+            # M21 PR-a: paper/live domain split + D0 lane authority in the M14
+            # engine (protected transition: _protected_baselines + sha256 pin).
+            "bot/risk_authority/engine.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

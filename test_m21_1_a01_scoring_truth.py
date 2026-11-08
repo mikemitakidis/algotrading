@@ -705,11 +705,14 @@ class T4_RiskAuthority(unittest.TestCase):
         from bot.risk_authority import Authority, run_risk_preflight
         from bot.risk_authority.engine import TradeRequest
         out = {}
+        # M21 PR-a: ibkr_paper is authorised by its own D0 lane, not the IBKR family flag.
+        lane = {"ibkr_paper.auto_trading_enabled": True,
+                "ibkr_paper.auto_trading_enabled_until_utc": F._future_utc_iso()}
         for name, overrides in (("allow", {}), ("kill", {"global.kill_switch": True})):
             fx = F._DB()
             self.addCleanup(fx.cleanup)
             with fx.conn() as c:
-                save_policy(c, F._valid_policy(**overrides))
+                save_policy(c, F._valid_policy(**lane, **overrides))
                 F._seed_fresh_all_scopes(c)
             with fx.conn() as c:
                 res = run_risk_preflight(

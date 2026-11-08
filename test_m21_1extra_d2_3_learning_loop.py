@@ -611,8 +611,12 @@ class D23RiskAuthorityReal(_AlpacaCreds):
         from bot.broker_allocation import save_policy
         fx = F._DB()
         self.addCleanup(fx.cleanup)
+        # M21 PR-a: M14 takes ibkr_paper authority from the D0 paper lane (time-boxed),
+        # never from the shared `ibkr` family flag, so the real configuration needs it.
+        lane = {"ibkr_paper.auto_trading_enabled": True,
+                "ibkr_paper.auto_trading_enabled_until_utc": F._future_utc_iso()}
         with fx.conn() as c:
-            save_policy(c, F._valid_policy(**policy_overrides))
+            save_policy(c, F._valid_policy(**{**lane, **policy_overrides}))
             F._seed_fresh_all_scopes(c)
         return fx.path
 

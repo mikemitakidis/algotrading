@@ -3724,6 +3724,11 @@ _PROTECTED_APPROVED_SHA256 = {
     # M21.1extra-D3 integration: registers the read-only paper-metrics blueprint
     # (GET-only, auth-required) and adds one nav link. No other change.
     "dashboard/app.py": "97a3d678418add7be62ec14564a8bce1446ee6b261a7bc8c38250687c30180cd",
+    # M21 PR-a (BLK-1/BLK-4): paper entries aggregate the cross-scope gates over
+    # their own paper account; ibkr_paper authorised by its own time-boxed D0
+    # lane, ibkr_live by family AND lane. Exact transition proven in
+    # test_m21_c5b_protected_baselines; no threshold changed.
+    "bot/risk_authority/engine.py": "f51ceb6e15d8d3b59d57550be8145ece782ea05d37680baf00297d92e8c429fb",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except
@@ -4468,6 +4473,11 @@ class G10_Hygiene(unittest.TestCase):
             "bot/monitoring/checks.py",
             "bot/monitoring/probe.py",
             "test_m21_1_wp10_monitoring.py",
+            # M21 PR-a: M14 paper/live domain split + lane-based IBKR authority (tests).
+            "test_m21_paper_a_m14_domain_split.py",
+            # M21 PR-a: paper/live domain split + D0 lane authority in the M14
+            # engine (protected transition: _protected_baselines + sha256 pin).
+            "bot/risk_authority/engine.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
