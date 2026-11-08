@@ -56,6 +56,9 @@ _GUARD_BASELINES = {
     # M21 A18: the M15.3.A/.A.2/.B/.C, M15.5 and M16 guards freeze the watchdog.
     "bot/gateway_watchdog.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
                                 "d73a04a", "ceb8cd5"),
+    # M21 PR-a: the same six guards freeze the M14 engine.
+    "bot/risk_authority/engine.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
+                                     "d73a04a", "ceb8cd5"),
 }
 # M21.1 A01's approved scanner content (produced by 6242bde); WP6 builds on it.
 _A01_SCANNER_BLOB = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"
@@ -121,6 +124,35 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
         for tok in ("STATE_", "def derive_state", "failures_to_down",
                     "def is_healthy_for_submission", "_declared_state ="):
             self.assertFalse([l for l in removed if tok in l], tok)
+
+    def test_risk_engine_transition_is_only_the_pr_a_split(self):
+        # PR-a replaces exactly five four-scope reads with the domain-aware
+        # view, time-boxes global auto, and adds the D0 lane rule. It removes
+        # no gate and no threshold and adds no I/O or order call.
+        e = PB.APPROVED_CHANGES["bot/risk_authority/engine.py"]
+        rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l[1:].strip() for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:].strip() for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        self.assertEqual(sorted(removed), sorted([
+            "from datetime import datetime, timezone",
+            'global_auto_enabled=bool(g.get("auto_trading_enabled", False)),',
+            "g = snap.global_view.combined_capital_deployed",
+            "# Correction #4: combined-exposure cap covers ALL four scopes.",
+            "g = snap.global_view.combined_capital_deployed",
+            "g = snap.global_view.combined_open_positions",
+            "g = snap.global_view.combined_realised_daily_loss",
+            "cur = snap.global_view.per_symbol_exposure.get(req.symbol, 0.0)",
+        ]))
+        code = [l for l in added if l and not l.startswith("#")]
+        for tok in ("subprocess", "systemctl", "placeOrder", "cancelOrder",
+                    "os.system", "Popen", "sqlite3", "open(", "environ",
+                    "_cap_usd =", "_cap =", "_limit ="):
+            self.assertFalse([l for l in code if tok in l], tok)
+        self.assertEqual(sum("_aggregate_view(snap, ctx.broker_scope)" in l
+                             for l in code), 5)
 
     def test_dashboard_app_transition_is_exactly_the_d3_wiring(self):
         # The fourth transition is narrow: from the frozen app.py it adds the

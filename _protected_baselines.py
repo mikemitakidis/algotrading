@@ -108,6 +108,17 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
                  "2026-11-05 15:48 UTC: offline fix on an isolated branch, "
                  "draft PR, no merge/deploy — PENDING independent review",
     ),
+    "bot/risk_authority/engine.py": ApprovedChange(
+        from_blob="e9251bc4e0e850b6c61af0b46346aebbfb9a8466",
+        to_blob="6ea78610c470bcb5240b2062e37e24ceccfb9616",
+        commit="6feb45dcd5df55163973b048b60bf587924b8b97",
+        approval="M21 PR-a (BLK-1/BLK-4): paper entries aggregate the cross-scope "
+                 "gates over their own paper account (real entries unchanged); "
+                 "ibkr_paper authorised by its own time-boxed D0 lane, ibkr_live by "
+                 "family flag AND lane; global auto time-boxed; no threshold changed. "
+                 "Operator GO 2026-11-08 for offline development and draft PRs "
+                 "only — PENDING independent review and protected-transition approval",
+    ),
 }
 
 
