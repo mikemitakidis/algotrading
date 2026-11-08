@@ -1,0 +1,33 @@
+[Unit]
+# M21 PR-d (BLK-5): one tick of the unattended IBKR PAPER learning loop.
+# Installed DISABLED by install_paper_units.sh. Started only by
+# algo-paper-loop.timer, and only while the operator's allow-file exists
+# (separate from the bot's ALLOW_BOT_START). Inside the tick the loop still
+# requires the D0 paper lane, an open market (D1), the kill switch off, a
+# fresh-data M14 allow per entry, and its own lock (no overlap).
+Description=Algo Trader - M21 IBKR PAPER learning loop (one tick)
+Documentation=https://github.com/mikemitakidis/algotrading
+After=network-online.target ibgateway.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/algo-trader/ALLOW_PAPER_LOOP
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=-/opt/algo-trader/.env
+ExecStart=/opt/algo-trader/venv/bin/python3 -B -m tools.paper_loop.m21_1extra_d2_3_scheduler --broker ibkr-paper --i-understand-this-runs-unattended-ibkr-paper-orders --once
+# A tick must finish before the next 15-minute slot.
+TimeoutStartSec=840
+StandardOutput=append:/opt/algo-trader/logs/paper_loop.systemd.log
+StandardError=append:/opt/algo-trader/logs/paper_loop.systemd.err
+SyslogIdentifier=algo-paper-loop
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# No [Install] section: never wanted by a target; only the timer starts it.

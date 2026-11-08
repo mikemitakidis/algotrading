@@ -24,7 +24,7 @@ def read_journal(journal_db: str) -> Dict[str, List[Dict[str, Any]]]:
     c.row_factory = sqlite3.Row
     try:
         cycles = [dict(r) for r in c.execute(
-            "SELECT cycle_key, started_at_utc, finished_at_utc, state FROM loop_cycles "
+            "SELECT cycle_key, started_at_utc, finished_at_utc, state, reason FROM loop_cycles "
             "ORDER BY started_at_utc")]
         orders = [dict(r) for r in c.execute("SELECT * FROM loop_orders")]
     finally:

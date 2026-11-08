@@ -1,0 +1,30 @@
+[Unit]
+# M21 PR-d (BLK-5): one read-only monitoring run (WP10 checks + risk-data
+# blocks) applied to the persistent alarm state. Writes only
+# data/monitor_alarms.db and logs/monitoring.log; LogSink only; never
+# connects to a broker. Installed DISABLED; runs only while the operator's
+# allow-file exists.
+Description=Algo Trader - M21 paper-loop monitoring run (read-only)
+Documentation=https://github.com/mikemitakidis/algotrading
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/algo-trader/ALLOW_PAPER_MONITOR
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=-/opt/algo-trader/.env
+ExecStart=/opt/algo-trader/venv/bin/python3 -I -B /opt/algo-trader/tools/monitoring/run_checks.py
+# Exit 1 = the run worked and alarms are open (a normal outcome); 2 = the run failed.
+SuccessExitStatus=1
+TimeoutStartSec=120
+StandardOutput=append:/opt/algo-trader/logs/paper_monitor.systemd.log
+StandardError=append:/opt/algo-trader/logs/paper_monitor.systemd.err
+SyslogIdentifier=algo-paper-monitor
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+# No [Install] section: only the timer starts it.
