@@ -4294,24 +4294,59 @@ def logs():
 
 
 # ── Bot control ──────────────────────────────────────────────────────────────
+# M21 PR-e (H-1 / F-7): the dashboard never launches main.py itself. The five
+# routes that (re)start the bot go through systemd (algo-trader.service) and
+# only while the Gate A-0 allow-file exists; otherwise they refuse and leave
+# any running bot untouched. Stopping (/api/stop) is unchanged.
+_BOT_UNIT = 'algo-trader.service'
+_BOT_START_ALLOW_FILE = Path('/var/lib/algo-trader/ALLOW_BOT_START')
+_BOT_START_REFUSED = 'bot start refused: ALLOW_BOT_START absent (Gate A-0 containment)'
+_bot_log = logging.getLogger('dashboard.bot_control')
 
-def _run_bot():
-    venv_python = BASE_DIR / 'venv' / 'bin' / 'python3'
-    main_py     = BASE_DIR / 'main.py'
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(
-        [str(venv_python), str(main_py)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+
+def _bot_start_allowed() -> bool:
+    return _BOT_START_ALLOW_FILE.exists()
+
+
+def _run_bot() -> bool:
+    """Start the bot through systemd, never as a dashboard child process.
+    False (nothing done) unless the Gate A-0 allow-file exists."""
+    if not _bot_start_allowed():
+        _bot_log.warning('[bot_control] %s', _BOT_START_REFUSED)
+        return False
+    try:
+        r = subprocess.run(['systemctl', 'start', _BOT_UNIT], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        _bot_log.error('[bot_control] systemctl start failed: %s', type(e).__name__)
+        return False
+    return r.returncode == 0
+
+
+def _restart_bot_async() -> dict:
+    """Shared by /api/restart and the settings routes that used to pkill and
+    re-launch main.py. Refused without the allow-file (the running bot, if
+    any, is left alone); otherwise stop any copy, then start the unit."""
+    if not _bot_start_allowed():
+        _bot_log.warning('[bot_control] restart: %s', _BOT_START_REFUSED)
+        return {'ok': False, 'error': _BOT_START_REFUSED}
+
+    def _do():
+        time.sleep(1)
+        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
+        time.sleep(1)
+        _run_bot()
+    threading.Thread(target=_do, daemon=True).start()
+    return {'ok': True}
 
 
 @app.route('/api/start', methods=['POST'])
 @require_auth
 @csrf_required
 def start():
-    _run_bot()
+    if not _bot_start_allowed():
+        return jsonify({'ok': False, 'error': _BOT_START_REFUSED}), 409
+    if not _run_bot():
+        return jsonify({'ok': False, 'error': 'systemctl start %s failed' % _BOT_UNIT}), 500
     return jsonify({'ok': True})
 
 
@@ -4327,13 +4362,8 @@ def stop():
 @require_auth
 @csrf_required
 def restart():
-    def _do():
-        time.sleep(1)
-        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-        time.sleep(1)
-        _run_bot()
-    threading.Thread(target=_do, daemon=True).start()
-    return jsonify({'ok': True})
+    res = _restart_bot_async()
+    return jsonify(res), (200 if res['ok'] else 409)
 
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
@@ -4373,15 +4403,8 @@ def telegram_save():
             updates['TELEGRAM_CHAT_ID'] = data['chat_id'].strip()
         _write_env(updates)
         load_dotenv(BASE_DIR / '.env', override=True)
-
-        def _restart():
-            time.sleep(1)
-            subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-            time.sleep(1)
-            _run_bot()
-        threading.Thread(target=_restart, daemon=True).start()
-
-        return jsonify({'ok': True})
+        res = _restart_bot_async()
+        return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
@@ -5882,15 +5905,9 @@ def strategy_save():
     errors = _save(data, updated_by='dashboard')
     if errors:
         return jsonify({'ok': False, 'errors': errors}), 400
-    # Restart bot so it picks up new thresholds
-    def _restart():
-        import time
-        time.sleep(1)
-        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-        time.sleep(1)
-        _run_bot()
-    threading.Thread(target=_restart, daemon=True).start()
-    return jsonify({'ok': True})
+    # Restart bot so it picks up new thresholds (M21 PR-e: via systemd, gated)
+    res = _restart_bot_async()
+    return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
 
 
 @app.route('/api/strategy/reset', methods=['POST'])
@@ -5901,14 +5918,8 @@ def strategy_reset():
     sys.path.insert(0, str(BASE_DIR))
     from bot.strategy import reset as _reset
     _reset()
-    def _restart():
-        import time
-        time.sleep(1)
-        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-        time.sleep(1)
-        _run_bot()
-    threading.Thread(target=_restart, daemon=True).start()
-    return jsonify({'ok': True})
+    res = _restart_bot_async()
+    return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
 
 
 # ── .env helpers ─────────────────────────────────────────────────────────────
