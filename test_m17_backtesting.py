@@ -4478,6 +4478,11 @@ class G10_Hygiene(unittest.TestCase):
             # M21 PR-a: paper/live domain split + D0 lane authority in the M14
             # engine (protected transition: _protected_baselines + sha256 pin).
             "bot/risk_authority/engine.py",
+            # M21 PR-b: read-only IBKR PAPER daily P&L source, wired for ibkr_paper
+            # only in the M14.C ingest CLI (ibkr_live stays UNKNOWN).
+            "bot/risk_authority/ibkr_paper_pnl_reader.py",
+            "tools/ingest_risk_state.py",
+            "test_m21_paper_b_pnl_source.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

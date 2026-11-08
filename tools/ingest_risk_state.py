@@ -99,17 +99,50 @@ def _build_etoro_adapter(scope: str):
     return EtoroPnLAdapter(broker_scope=scope, history_reader=_reader)
 
 
+def _build_ibkr_paper_reader():
+    """M21 PR-b: the read-only IBKR PAPER executions reader (scope ibkr_paper
+    only). The expected paper account is the paper loop's pinned constant; an
+    IBKR_ACCOUNT in the environment that names a different account refuses (the
+    reader raises, so the day is UNKNOWN). Any construction failure also yields
+    a reader that raises: unknown is never replaced with zero."""
+    try:
+        from bot.paper_loop_d2.ibkr_adapter import EXPECTED_PAPER_ACCOUNT
+        from bot.paper_loop_d2.journal import default_db_path
+        from bot.risk_authority.ibkr_paper_pnl_reader import (
+            make_journal_exec_ids,
+            make_paper_pnl_reader,
+        )
+        env_account = (os.environ.get("IBKR_ACCOUNT") or "").strip()
+        if env_account and env_account != EXPECTED_PAPER_ACCOUNT:
+            raise RuntimeError("IBKR_ACCOUNT does not name the expected paper account")
+        return make_paper_pnl_reader(
+            expected_account=EXPECTED_PAPER_ACCOUNT,
+            journal_exec_ids=make_journal_exec_ids(default_db_path()),
+        )
+    except Exception as e:
+        reason = "%s:%s" % (type(e).__name__, e)
+
+        def _refuse(today: str):
+            raise RuntimeError("ibkr_paper reader unavailable: " + reason)
+        return _refuse
+
+
 def _build_ibkr_adapter(scope: str):
     """Wire an IBKRPnLAdapter.
 
-    M14.C ships the adapter shape, but the production executions-reader
-    that bridges to the existing M11/M12 Gateway connection is NOT wired
-    here — that bridging belongs to a follow-up (the operator can supply
-    one via dependency injection in code). For CLI runs against the
-    bare scope, the adapter returns UNKNOWN(executions_reader_failed:
+    ibkr_paper (M21 PR-b): the read-only paper executions reader in
+    bot/risk_authority/ibkr_paper_pnl_reader.py, which returns a list only when
+    the day is proven complete and consistent and raises (UNKNOWN) otherwise.
+
+    ibkr_live: deliberately NOT wired. Paper trading must not poll the LIVE
+    account, so the adapter returns UNKNOWN(executions_reader_failed:
     NotImplementedError) honestly, rather than fabricating zeros.
     """
     from bot.risk_authority.ingest_ibkr import IBKRPnLAdapter
+
+    if scope == "ibkr_paper":
+        return IBKRPnLAdapter(broker_scope=scope,
+                              executions_reader=_build_ibkr_paper_reader())
 
     def _reader(today: str):
         raise NotImplementedError(
