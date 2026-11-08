@@ -227,8 +227,10 @@ class PreflightPaperNeedsNoLiveData(unittest.TestCase):
                         r.reason_codes)
 
     def test_live_still_needs_all_four(self):
+        from unittest import mock
         lane = {"ibkr_live.auto_trading_enabled": True, "ibkr_live.auto_trading_enabled_until_utc": _future()}
-        r = self._run("ibkr_live", ["ibkr_live"], **lane)
+        with mock.patch.dict("os.environ", {"IBKR_LIVE_CONFIRMED": "yes"}):    # reach the data gates
+            r = self._run("ibkr_live", ["ibkr_live"], **lane)
         self.assertFalse(r.allowed)
         self.assertTrue(set(r.reason_codes) & {"combined_exposure_unknown", "global_open_positions_unknown",
                                                "global_daily_loss_unknown", "exposure_unknown"}, r.reason_codes)
@@ -253,11 +255,37 @@ class LaneAuthority(unittest.TestCase):
             self.assertTrue(v.broker_auto_enabled["ibkr_paper"], family)
             self.assertFalse(v.broker_auto_enabled["ibkr_live"], family)
 
-    def test_live_needs_family_and_its_own_lane(self):
+    def _view_env(self, env, **overrides):
+        from unittest import mock
+        with mock.patch.dict("os.environ", env):
+            if "IBKR_LIVE_CONFIRMED" not in env:
+                import os
+                os.environ.pop("IBKR_LIVE_CONFIRMED", None)
+            return policy_view_from_allocation_policy(F._valid_policy(**overrides),
+                                                      env_overrides=True)
+
+    def test_live_needs_family_lane_and_confirmation(self):
         live_lane = {"ibkr_live.auto_trading_enabled": True, "ibkr_live.auto_trading_enabled_until_utc": _future()}
-        self.assertFalse(self._view(**{"ibkr.auto_trading_enabled": False, **live_lane}).broker_auto_enabled["ibkr_live"])
-        self.assertFalse(self._view(**{"ibkr.auto_trading_enabled": True}).broker_auto_enabled["ibkr_live"])
-        self.assertTrue(self._view(**{"ibkr.auto_trading_enabled": True, **live_lane}).broker_auto_enabled["ibkr_live"])
+        yes = {"IBKR_LIVE_CONFIRMED": "yes"}
+        fam = {"ibkr.auto_trading_enabled": True}
+        live = lambda env, **o: self._view_env(env, **o).broker_auto_enabled["ibkr_live"]  # noqa: E731
+        self.assertFalse(live(yes, **{"ibkr.auto_trading_enabled": False, **live_lane}))
+        self.assertFalse(live(yes, **fam))
+        self.assertFalse(live({}, **fam, **live_lane))                         # not confirmed
+        for bad in ("", "no", "true", "1", "y"):
+            self.assertFalse(live({"IBKR_LIVE_CONFIRMED": bad}, **fam, **live_lane), bad)
+        self.assertTrue(live(yes, **fam, **live_lane))
+        self.assertTrue(live({"IBKR_LIVE_CONFIRMED": " YES "}, **fam, **live_lane))
+        # without env_overrides the confirmation is never read: unconfirmed
+        from unittest import mock
+        with mock.patch.dict("os.environ", yes):
+            self.assertFalse(self._view(**fam, **live_lane).broker_auto_enabled["ibkr_live"])
+
+    def test_paper_never_needs_live_confirmation(self):
+        v = self._view_env({}, **{"ibkr_paper.auto_trading_enabled": True,
+                                  "ibkr_paper.auto_trading_enabled_until_utc": _future()})
+        self.assertTrue(v.broker_auto_enabled["ibkr_paper"])
+        self.assertFalse(v.broker_auto_enabled["ibkr_live"])
 
     def test_bad_time_boxes_block(self):
         for until in (None, "", "garbage", _past(), "2099-01-01T00:00:00",            # naive

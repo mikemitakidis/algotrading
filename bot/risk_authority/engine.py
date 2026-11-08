@@ -30,8 +30,9 @@ PURE decision core. Per ChatGPT M14.E corrections:
        (policy['ibkr_paper'] / policy['ibkr_live'], time-boxed), the
        same semantics as bot.broker_allocation.is_auto_trading_allowed.
        The shared `ibkr` family flag alone never enables either scope;
-       ibkr_live needs the family flag AND its own lane, so paper
-       authorisation can never imply live.
+       ibkr_live needs the family flag AND its own lane AND the explicit
+       IBKR_LIVE_CONFIRMED=yes the IBKR live broker itself requires, so
+       paper authorisation can never imply live.
 
   #5 — Daily-loss latch uses UTC trading day.
 
@@ -332,7 +333,11 @@ def policy_view_from_allocation_policy(
     # M21 PR-a (BLK-4): IBKR authority from the D0 lanes. A lane kill switch
     # kills its scope; the family kill still kills both. ibkr_paper is
     # authorised by its own lane only; ibkr_live needs the family flag (as
-    # before) AND its own lane. The shared family flag alone enables neither.
+    # before) AND its own lane AND IBKR_LIVE_CONFIRMED=yes (read only with
+    # env_overrides, else unconfirmed, like ETORO_LIVE_ENABLED). The shared
+    # family flag alone enables neither.
+    ibkr_live_confirmed = (env_overrides and (os.environ.get("IBKR_LIVE_CONFIRMED") or "")
+                           .strip().lower() == "yes")
     for s in _D0_LANE_SCOPES:
         lane = policy.get(s) if isinstance(policy.get(s), dict) else {}
         if lane.get("kill_switch") is True:
@@ -341,7 +346,8 @@ def policy_view_from_allocation_policy(
         if s == "ibkr_paper":
             broker_auto[s] = lane_ok
         else:
-            broker_auto[s] = bool(broker_auto.get(s, False)) and lane_ok
+            broker_auto[s] = (bool(broker_auto.get(s, False)) and lane_ok
+                              and ibkr_live_confirmed)
 
     # Allowed brokers (intersected with ALL_BROKER_SCOPES — engine only
     # knows the four canonical scopes, not 'paper').
