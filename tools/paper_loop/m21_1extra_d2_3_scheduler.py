@@ -219,6 +219,7 @@ def _ibkr_parts(args):
     from bot.paper_loop_d2 import make_d0_gate, make_d1_gate
     from bot.paper_loop_d2.risk_gate import (make_market_state_provider,
                                              make_risk_authority_gate)
+    from bot.paper_loop_d2.risk_refresh import make_paper_risk_refresher
     from bot.kill_switch import is_kill_switch_active
 
     host, port, _account, cid = _get_connection_params()
@@ -241,8 +242,14 @@ def _ibkr_parts(args):
                                    enabled=ledger_enabled_from_env(), writer="paper_loop")
     return dict(broker=broker, d0_gate=make_d0_gate(), d1_gate=make_d1_gate(),
                 kill_switch_active=is_kill_switch_active,
-                risk_gate=make_risk_authority_gate(conn_factory=lambda: sqlite3.connect(signals_db),
-                                                   market_state=make_market_state_provider()),
+                # M21 PR-c: fail-closed refresh of the paper account's exposure and
+                # P&L before every M14 call; M14 also enforces the reading ages.
+                risk_gate=make_risk_authority_gate(
+                    conn_factory=lambda: sqlite3.connect(signals_db),
+                    market_state=make_market_state_provider(),
+                    refresher=make_paper_risk_refresher(
+                        repo=REPO, db_path=signals_db,
+                        lock_path=str(REPO / "data" / "risk_refresh.lock"))),
                 candidate_provider=_scanner_provider(args.focus_size, ledger_writer=writer,
                                                      shadow_store=_template_shadow_store(),
                                                      context_audit=_context_audit()),

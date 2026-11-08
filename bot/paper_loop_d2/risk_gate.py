@@ -171,8 +171,13 @@ def make_risk_authority_gate(*, conn_factory: Callable[[], sqlite3.Connection],
                              authority_name: str = "AUTO_ALLOWED",
                              broker_scope: str = PAPER_SCOPE,
                              clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                             max_market_state_age_sec: float = MAX_MARKET_STATE_AGE_SEC
+                             max_market_state_age_sec: float = MAX_MARKET_STATE_AGE_SEC,
+                             refresher: Optional[Callable[[], Tuple[bool, str]]] = None
                              ) -> RiskGate:
+    """M21 PR-c: ``refresher`` (bot.paper_loop_d2.risk_refresh) re-ingests the
+    paper account's exposure and P&L before every M14 call. Anything but
+    ``(True, ...)``, or an exception, blocks without calling M14. M14 then also
+    enforces the readings' ages, so a refresh that wrote nothing cannot pass."""
     if broker_scope != PAPER_SCOPE:
         raise ValueError("the paper learning loop only ever uses the ibkr_paper scope")
     if type(market_state) is not TrustedMarketStateProvider:
@@ -182,6 +187,8 @@ def make_risk_authority_gate(*, conn_factory: Callable[[], sqlite3.Connection],
                          % MAX_MARKET_STATE_AGE_SEC)
     if not callable(clock):
         raise ValueError("clock must be callable")
+    if refresher is not None and not callable(refresher):
+        raise ValueError("refresher must be callable")
 
     def gate(*, symbol: str, side: str, notional_usd: float, stop_loss: float,
              take_profit: float) -> GateResult:
@@ -192,6 +199,16 @@ def make_risk_authority_gate(*, conn_factory: Callable[[], sqlite3.Connection],
             return False, "market_state_error:%s" % type(exc).__name__, None
         if market_open_verified is not True:
             return False, "market_state_block:%s" % market_why, None
+        if refresher is not None:
+            try:
+                refreshed = refresher()
+            except Exception as exc:
+                return False, "risk_refresh_error:%s" % type(exc).__name__, None
+            if (not isinstance(refreshed, tuple) or len(refreshed) != 2
+                    or refreshed[0] is not True):
+                why = refreshed[1] if isinstance(refreshed, tuple) and len(refreshed) == 2 \
+                    else "invalid_result"
+                return False, "risk_refresh_block:%s" % why, None
         from bot.risk_authority import Authority, run_risk_preflight
         from bot.risk_authority.engine import TradeRequest
         conn = None
