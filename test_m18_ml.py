@@ -10658,6 +10658,11 @@ class G10_Hygiene(unittest.TestCase):
             # only in the M14.C ingest CLI (ibkr_live stays UNKNOWN).
             "bot/risk_authority/ibkr_paper_pnl_reader.py",
             "test_m21_paper_b_pnl_source.py",
+            # M21 PR-c: M14 reading ages + fail-closed paper risk refresh.
+            "bot/risk_authority/snapshot.py",
+            "bot/paper_loop_d2/risk_refresh.py",
+            "bot/paper_loop_d2/risk_gate.py",
+            "test_m21_paper_c_fresh_risk_data.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

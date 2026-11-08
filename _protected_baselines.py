@@ -110,15 +110,27 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
     ),
     "bot/risk_authority/engine.py": ApprovedChange(
         from_blob="e9251bc4e0e850b6c61af0b46346aebbfb9a8466",
-        to_blob="4115c57e5e66b70e759ce68e535cdbac5a5c6738",
-        commit="cb69449c027a05ad15c41a9e22270d1a5730d874",
-        approval="M21 PR-a (BLK-1/BLK-4) [6feb45d + cb69449]: paper entries aggregate "
-                 "the cross-scope gates over their own paper account (real entries "
-                 "unchanged); ibkr_paper authorised by its own time-boxed D0 lane, "
-                 "ibkr_live by family flag AND lane AND IBKR_LIVE_CONFIRMED=yes; "
-                 "global auto time-boxed; no threshold changed. "
-                 "Operator GO 2026-11-08 for offline development and draft PRs "
-                 "only — PENDING independent review and protected-transition approval",
+        to_blob="1d83de11d7c83ebd20d7212e634b8269ace05ada",
+        commit="da810df1a7ef95b97a94107612077ff54a327fed",
+        approval="M21 PR-a (BLK-1/BLK-4) [6feb45d + cb69449]: paper entries "
+                 "aggregate the cross-scope gates over their own paper account (real "
+                 "entries unchanged); ibkr_paper authorised by its own time-boxed D0 "
+                 "lane, ibkr_live by family flag AND lane AND IBKR_LIVE_CONFIRMED=yes; "
+                 "global auto time-boxed. "
+                 "Then M21 PR-c (BLK-3) [da810df]: reading ages enforced over the "
+                 "aggregation domain. No threshold changed. Operator GO 2026-11-08 for "
+                 "offline development and draft PRs only — PENDING independent review "
+                 "and protected-transition approval",
+    ),
+    "bot/risk_authority/snapshot.py": ApprovedChange(
+        from_blob="8a882cbf1f478bfdf2bb30d4bf05f3c32d690cac",
+        to_blob="f5e0b1eed05e83927fa67f5a8f30fec3a83d0038",
+        commit="da810df1a7ef95b97a94107612077ff54a327fed",
+        approval="M21 PR-c (BLK-3): ScopeView carries the P&L and exposure fetch "
+                 "times recorded by the M14.C/M14.D writers (two defaulted fields, "
+                 "read-only). Operator GO 2026-11-08 for offline development and "
+                 "draft PRs only — PENDING independent review and protected-transition "
+                 "approval",
     ),
 }
 
