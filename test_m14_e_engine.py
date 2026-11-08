@@ -396,19 +396,25 @@ class TestGateOrdering(unittest.TestCase):
         self.assertIn("broker_capital_cap_exceeded", d.reason_codes)
 
     def test_gate_14_global_capital_exceeded(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s, capital_deployed=240.0)
                   for s in ALL_BROKER_SCOPES}  # 4 * 240 = 960
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(), snap, _req(amount=50.0),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(amount=50.0),
                    policy=_baseline_policy(global_capital_cap_usd=1000.0))
         self.assertIn("global_capital_cap_exceeded", d.reason_codes)
 
     def test_gate_15_combined_exposure_cap_distinct_code(self):
         """Correction-driven: combined cap emits its own code, not global_capital."""
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s, capital_deployed=240.0)
                   for s in ALL_BROKER_SCOPES}
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(), snap, _req(amount=50.0),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(amount=50.0),
                    policy=_baseline_policy(
                        global_capital_cap_usd=10_000.0,        # not binding
                        combined_exposure_cap_usd=500.0))       # binding
@@ -425,10 +431,13 @@ class TestGateOrdering(unittest.TestCase):
         self.assertIn("broker_open_positions_exceeded", d.reason_codes)
 
     def test_gate_17_global_open_positions_cap(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s, open_positions=3)
                   for s in ALL_BROKER_SCOPES}  # 4*3 = 12
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(), snap, _req(),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(),
                    policy=_baseline_policy(global_open_positions_cap=10))
         self.assertIn("global_open_positions_exceeded", d.reason_codes)
 
@@ -442,10 +451,13 @@ class TestGateOrdering(unittest.TestCase):
         self.assertIn("broker_daily_loss_exceeded", d.reason_codes)
 
     def test_gate_19_global_daily_loss(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s, realised_daily_loss=300.0)
                   for s in ALL_BROKER_SCOPES}  # 1200
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(), snap, _req(),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(),
                    policy=_baseline_policy(global_daily_loss_cap_usd=1000.0))
         self.assertIn("global_daily_loss_exceeded", d.reason_codes)
 
@@ -458,6 +470,9 @@ class TestGateOrdering(unittest.TestCase):
         self.assertIn("drawdown_throttle_hit", d.reason_codes)
 
     def test_gate_21_concentration_per_symbol(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {
             "ibkr_paper": _scope(scope="ibkr_paper",
                 positions=[{"symbol": "AAPL", "side": "long",
@@ -473,7 +488,7 @@ class TestGateOrdering(unittest.TestCase):
         snap = _snapshot(scopes_override=scopes)
         # AAPL cross-broker exposure = 9000 already. Request +200 with
         # cap=9000 → blocked.
-        d = decide(_ctx(scope="ibkr_paper"), snap, _req(symbol="AAPL", amount=200.0),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(symbol="AAPL", amount=200.0),
                    policy=_baseline_policy(per_symbol_exposure_cap_usd=9000.0))
         self.assertIn("concentration_cap_exceeded", d.reason_codes)
 
@@ -815,10 +830,13 @@ class TestFailClosed(unittest.TestCase):
 
     def test_combined_exposure_unknown_when_one_scope_unknown(self):
         """Correction #4: ANY unknown scope ⇒ combined value is None ⇒ block."""
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s) for s in ALL_BROKER_SCOPES}
         scopes["etoro_real"] = _scope(scope="etoro_real", exposure_known=False)
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(scope="ibkr_paper"), snap, _req(),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(),
                    policy=_baseline_policy(
                        combined_exposure_cap_usd=100_000.0))
         # Either combined_exposure_unknown or exposure_unknown reaches first;
@@ -831,12 +849,15 @@ class TestFailClosed(unittest.TestCase):
                         "global_daily_loss_unknown"))
 
     def test_global_daily_loss_unknown_when_one_scope_pnl_unknown(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {s: _scope(scope=s) for s in ALL_BROKER_SCOPES}
         scopes["etoro_real"] = _scope(scope="etoro_real", pnl_known=False)
         snap = _snapshot(scopes_override=scopes)
         # ibkr_paper has known PnL so the broker-level gate passes;
         # combined PnL is unknown so the global gate must fail-closed.
-        d = decide(_ctx(scope="ibkr_paper"), snap, _req(),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(),
                    policy=_baseline_policy(global_daily_loss_cap_usd=1000.0))
         self.assertEqual(d.result, "block")
         self.assertTrue(
@@ -1258,6 +1279,9 @@ class TestCombinedExposureAllScopes(unittest.TestCase):
 
     def test_disallowed_broker_exposure_counts_toward_combined(self):
         """Correction #4: even disallowed brokers count toward combined exposure."""
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         # etoro_real is disallowed but has 5000 USD exposure.
         scopes = {
             "ibkr_paper": _scope(scope="ibkr_paper", capital_deployed=2000.0),
@@ -1266,7 +1290,7 @@ class TestCombinedExposureAllScopes(unittest.TestCase):
             "etoro_real":  _scope(scope="etoro_real", capital_deployed=5000.0),
         }
         snap = _snapshot(scopes_override=scopes)
-        d = decide(_ctx(scope="ibkr_paper"), snap, _req(amount=100.0),
+        d = decide(_ctx(scope="ibkr_live"), snap, _req(amount=100.0),
                    policy=_baseline_policy(
                        allowed_brokers=("ibkr_paper", "ibkr_live",
                                           "etoro_paper"),
@@ -1291,6 +1315,9 @@ class TestCombinedExposureAllScopes(unittest.TestCase):
 class TestConcentrationPerSymbol(unittest.TestCase):
 
     def test_cross_scope_aggregate(self):
+        # M21 PR-a: cross-scope aggregation over all four scopes is the REAL-money
+        # (ibkr_live) behaviour, unchanged; paper entries are covered in
+        # test_m21_paper_a_m14_domain_split.py.
         scopes = {
             "ibkr_paper": _scope(scope="ibkr_paper",
                 positions=[{"symbol": "TSLA", "side": "long",
@@ -1305,7 +1332,7 @@ class TestConcentrationPerSymbol(unittest.TestCase):
         }
         snap = _snapshot(scopes_override=scopes)
         # TSLA cross-scope = 5000. Add 1000 → 6000. Cap=5500 → block.
-        d = decide(_ctx(scope="ibkr_paper"),
+        d = decide(_ctx(scope="ibkr_live"),
                    snap, _req(symbol="TSLA", amount=1000.0),
                    policy=_baseline_policy(per_symbol_exposure_cap_usd=5500.0))
         self.assertIn("concentration_cap_exceeded", d.reason_codes)
@@ -1375,6 +1402,11 @@ class TestM13_4A_PolicySource(unittest.TestCase):
 
     def tearDown(self):
         self.fx.cleanup()
+
+    @staticmethod
+    def _future_utc():
+        import datetime as _dt
+        return (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)).isoformat()
 
     def _make_policy(self, **overrides):
         """Build a valid M13.4A policy dict for testing."""
@@ -1495,7 +1527,11 @@ class TestM13_4A_PolicySource(unittest.TestCase):
         self.assertEqual(pol.broker_capital_cap_usd.get("ibkr_live"), 1000.0)
 
     def test_family_open_positions_cap_propagates(self):
-        m13_pol = self._make_policy(**{"ibkr.max_open_positions": 2})
+        # M21 PR-a: ibkr_paper is authorised by its own D0 lane, not the family flag.
+        m13_pol = self._make_policy(**{"ibkr.max_open_positions": 2,
+                "ibkr_paper.auto_trading_enabled": True,
+                "ibkr_paper.auto_trading_enabled_until_utc": self._future_utc(),
+                })
         pol = policy_view_from_allocation_policy(m13_pol)
         scopes = {s: _scope(scope=s, open_positions=2)
                   for s in ALL_BROKER_SCOPES}
@@ -1504,7 +1540,11 @@ class TestM13_4A_PolicySource(unittest.TestCase):
         self.assertIn("broker_open_positions_exceeded", d.reason_codes)
 
     def test_family_daily_loss_cap_propagates(self):
-        m13_pol = self._make_policy(**{"ibkr.max_daily_loss": 200.0})
+        # M21 PR-a: ibkr_paper is authorised by its own D0 lane, not the family flag.
+        m13_pol = self._make_policy(**{"ibkr.max_daily_loss": 200.0,
+                "ibkr_paper.auto_trading_enabled": True,
+                "ibkr_paper.auto_trading_enabled_until_utc": self._future_utc(),
+                })
         pol = policy_view_from_allocation_policy(m13_pol)
         scopes = {s: _scope(scope=s, realised_daily_loss=300.0)
                   for s in ALL_BROKER_SCOPES}

@@ -20,6 +20,18 @@ PURE decision core. Per ChatGPT M14.E corrections:
 
   #4 — Combined-exposure cap covers all four scopes (ibkr_paper,
        ibkr_live, etoro_paper, etoro_real). Unknown scope ⇒ block.
+       M21 PR-a (paper/live separation): this applies to REAL-money
+       entries (ibkr_live, etoro_real), unchanged. A PAPER entry
+       (ibkr_paper, etoro_paper) aggregates the cross-scope gates over
+       its own paper account only, so paper never reads, needs or
+       counts a real account; see _aggregate_view().
+
+  #6 — M21 PR-a: IBKR auto-trading authority comes from the D0 lanes
+       (policy['ibkr_paper'] / policy['ibkr_live'], time-boxed), the
+       same semantics as bot.broker_allocation.is_auto_trading_allowed.
+       The shared `ibkr` family flag alone never enables either scope;
+       ibkr_live needs the family flag AND its own lane, so paper
+       authorisation can never imply live.
 
   #5 — Daily-loss latch uses UTC trading day.
 
@@ -37,7 +49,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from bot.risk_authority.authority import (
@@ -50,7 +62,14 @@ from bot.risk_authority.snapshot import (
     GlobalView,
     RiskSnapshot,
     ScopeView,
+    _build_global_view,
 )
+
+# M21 PR-a: money domains. Paper scopes trade simulated money in their own
+# account; real scopes trade real money. The engine never lets one domain's
+# data gate, or be consumed by, the other domain's PAPER entries.
+PAPER_SCOPES = ("ibkr_paper", "etoro_paper")
+REAL_SCOPES = ("ibkr_live", "etoro_real")
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +237,41 @@ _M13_4A_FAMILY_MAP = {
     "etoro": ("etoro_real", "etoro_paper"),
 }
 
+# M21 PR-a: the IBKR scopes whose authority comes from their own D0 lane block.
+_D0_LANE_SCOPES = ("ibkr_paper", "ibkr_live")
+
+
+def _d0_until_active(block: dict, now: Optional[datetime] = None) -> bool:
+    """Same rule as bot.broker_allocation._until_utc_active (a parity test pins
+    the two together): True only if block['auto_trading_enabled_until_utc'] is
+    a genuine UTC ISO string (+00:00 / Z; not naive, not another offset) strictly
+    in the future. Anything missing, malformed or expired is False."""
+    raw = block.get("auto_trading_enabled_until_utc") if isinstance(block, dict) else None
+    if not isinstance(raw, str):
+        return False
+    parse_str = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        until = datetime.fromisoformat(parse_str)
+    except ValueError:
+        return False
+    if until.tzinfo is None or until.utcoffset() != timedelta(0):
+        return False
+    return until.astimezone(timezone.utc) > (now or datetime.now(timezone.utc))
+
+
+def _d0_lane_authorised(policy: dict, scope: str) -> bool:
+    """The D0 lane test of bot.broker_allocation.is_auto_trading_allowed for an
+    IBKR scope: the lane block exists, is not killed, is enabled (True identity)
+    and its time box is active."""
+    lane = policy.get(scope)
+    if not isinstance(lane, dict):
+        return False
+    if lane.get("kill_switch") is True:
+        return False
+    if lane.get("auto_trading_enabled") is not True:
+        return False
+    return _d0_until_active(lane)
+
 
 def policy_view_from_allocation_policy(
     policy: dict,
@@ -274,6 +328,20 @@ def policy_view_from_allocation_policy(
                 broker_open_positions_cap[s] = family_cap_positions
             if isinstance(family_cap_daily_loss, (int, float)) and family_cap_daily_loss > 0:
                 broker_daily_loss_cap[s] = float(family_cap_daily_loss)
+
+    # M21 PR-a (BLK-4): IBKR authority from the D0 lanes. A lane kill switch
+    # kills its scope; the family kill still kills both. ibkr_paper is
+    # authorised by its own lane only; ibkr_live needs the family flag (as
+    # before) AND its own lane. The shared family flag alone enables neither.
+    for s in _D0_LANE_SCOPES:
+        lane = policy.get(s) if isinstance(policy.get(s), dict) else {}
+        if lane.get("kill_switch") is True:
+            broker_kill[s] = True
+        lane_ok = _d0_lane_authorised(policy, s)
+        if s == "ibkr_paper":
+            broker_auto[s] = lane_ok
+        else:
+            broker_auto[s] = bool(broker_auto.get(s, False)) and lane_ok
 
     # Allowed brokers (intersected with ALL_BROKER_SCOPES — engine only
     # knows the four canonical scopes, not 'paper').
@@ -332,7 +400,9 @@ def policy_view_from_allocation_policy(
     return RiskPolicyView(
         global_kill_switch=bool(g.get("kill_switch", False)),
         broker_kill_switch=broker_kill,
-        global_auto_enabled=bool(g.get("auto_trading_enabled", False)),
+        # M21 PR-a: global auto is time-boxed exactly as in D0
+        # (is_auto_trading_allowed): enabled AND an active UTC time box.
+        global_auto_enabled=(g.get("auto_trading_enabled") is True and _d0_until_active(g)),
         broker_auto_enabled=broker_auto,
         allowed_brokers=allowed if allowed else tuple(ALL_BROKER_SCOPES),
         etoro_live_flag_enabled=etoro_live_flag,
@@ -445,6 +515,36 @@ def _scope_view(snapshot: RiskSnapshot, scope: str) -> ScopeView:
     return sv
 
 
+_UNKNOWN_VIEW = GlobalView(
+    combined_capital_deployed=None,
+    combined_open_positions=None,
+    combined_realised_daily_loss=None,
+    per_symbol_exposure={},
+    any_pnl_unknown=True,
+    any_exposure_unknown=True,
+)
+
+
+def _aggregate_view(snapshot: RiskSnapshot, scope: str) -> GlobalView:
+    """M21 PR-a: the aggregation domain for every cross-scope gate (global
+    capital, combined exposure, global open positions, global daily loss,
+    per-symbol concentration).
+
+    * REAL entries (ibkr_live, etoro_real) and anything not listed as paper:
+      the snapshot's four-scope global view, exactly as before (unknown in ANY
+      scope ⇒ None ⇒ fail-closed). Unchanged.
+    * PAPER entries (ibkr_paper, etoro_paper): the same computation over that
+      paper account alone. Its own unknown exposure/P&L is still None ⇒
+      fail-closed; a real account is never read, needed or counted.
+    """
+    if scope in PAPER_SCOPES:
+        sv = snapshot.scopes.get(scope)
+        if sv is None:
+            return _UNKNOWN_VIEW
+        return _build_global_view({scope: sv})
+    return snapshot.global_view
+
+
 # ── Gate functions (each pure: (ctx, snapshot, request, policy) -> reason|None) ──
 
 
@@ -546,7 +646,7 @@ def _gate_global_capital(ctx, snap, req, pol):
         return None
     if pol.global_capital_cap_usd is None:
         return None
-    g = snap.global_view.combined_capital_deployed
+    g = _aggregate_view(snap, ctx.broker_scope).combined_capital_deployed
     if g is None:
         return "combined_exposure_unknown"
     projected = g + req.amount_usd
@@ -554,13 +654,14 @@ def _gate_global_capital(ctx, snap, req, pol):
 
 
 def _gate_combined_exposure(ctx, snap, req, pol):
-    # Correction #4: combined-exposure cap covers ALL four scopes.
+    # Correction #4: combined-exposure cap covers ALL four scopes for real
+    # entries; a paper entry uses its own paper account (M21 PR-a).
     # Unknown ⇒ fail-closed.
     if ctx.requested_action == "query_authority" or req is None:
         return None
     if pol.combined_exposure_cap_usd is None:
         return None
-    g = snap.global_view.combined_capital_deployed
+    g = _aggregate_view(snap, ctx.broker_scope).combined_capital_deployed
     if g is None:
         return "combined_exposure_unknown"
     projected = g + req.amount_usd
@@ -584,7 +685,7 @@ def _gate_global_open_positions(ctx, snap, req, pol):
         return None
     if pol.global_open_positions_cap is None:
         return None
-    g = snap.global_view.combined_open_positions
+    g = _aggregate_view(snap, ctx.broker_scope).combined_open_positions
     if g is None:
         return "global_open_positions_unknown"
     return None if g < pol.global_open_positions_cap else "global_open_positions_exceeded"
@@ -612,7 +713,7 @@ def _gate_global_daily_loss(ctx, snap, req, pol):
         return None
     if pol.global_daily_loss_cap_usd is None:
         return None
-    g = snap.global_view.combined_realised_daily_loss
+    g = _aggregate_view(snap, ctx.broker_scope).combined_realised_daily_loss
     if g is None:
         return "global_daily_loss_unknown"
     return None if g <= pol.global_daily_loss_cap_usd else "global_daily_loss_exceeded"
@@ -636,7 +737,7 @@ def _gate_concentration(ctx, snap, req, pol):
         return None
     if pol.per_symbol_exposure_cap_usd is None:
         return None
-    cur = snap.global_view.per_symbol_exposure.get(req.symbol, 0.0)
+    cur = _aggregate_view(snap, ctx.broker_scope).per_symbol_exposure.get(req.symbol, 0.0)
     projected = cur + req.amount_usd
     return None if projected <= pol.per_symbol_exposure_cap_usd else "concentration_cap_exceeded"
 
