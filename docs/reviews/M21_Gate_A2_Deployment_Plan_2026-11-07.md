@@ -3,6 +3,16 @@
 - **Prepared by:** Claude (Claude Code session), 2026-11-07, after Gate A-1 was formally closed
   ([Issue #3, comment 6712228663](https://github.com/mikemitakidis/algotrading/issues/3#issuecomment-6712228663)).
 - **Status:** PLAN ONLY. Nothing here has been run on the VPS. Every step needs the operator's separate approval.
+- **Revision 2 (8 Nov), after ChatGPT's focused review**
+  ([Issue #3, comment 6726669904](https://github.com/mikemitakidis/algotrading/issues/3#issuecomment-6726669904)):
+  1. `a2_deploy.sh` repeats the **complete** VPS-C immediately before the code switch (stage 4a). This closes the
+     window during the up-to-30-minute test stage.
+  2. The precheck and P0 turn every required read or integrity failure into an **attention item** (exit 3):
+     a missing, unreadable or corrupt `signals.db`; a missing core table; a failed query; an unparseable `.env`;
+     a check that crashed. Absent optional databases are listed as optional, not flagged.
+  3. The read-only bundle launcher **stops after a VPS-C STOP**, never calls a non-zero result a pass, propagates
+     its exit code, and checks checksums with `--strict`.
+  Each fix has negative and failure-injection tests (§8).
 - **Scripts:** `docs/runbooks/a2/` (this PR). Their sha256 values are in §9. Each one was run on an offline mock of the
   VPS (§8); none has run on the real server.
 - **Evidence classes:** [GH] GitHub state; [VPS-R] reported by the operator from the VPS; [OFF] tested offline only;
@@ -106,7 +116,7 @@ C=<commit posted in Issue #3>; D=$(mktemp -d /root/gate_a2.XXXXXX); trap 'rm -rf
 for f in a2_containment.sh a2_precheck.sh a2_deploy.sh a2_rollback_code.sh a2_alpaca_keys.sh a2_dashboard_password.sh; do
   curl -fsSL -o "$f" "https://raw.githubusercontent.com/mikemitakidis/algotrading/$C/docs/runbooks/a2/$f"
 done
-sha256sum -c - <<'SUMS'
+sha256sum --strict -c - <<'SUMS' || { echo "STOP: CHECKSUM MISMATCH. Run nothing."; exit 1; }
 <the six lines from section 9>
 SUMS
 bash a2_precheck.sh < /dev/null   # <- the ONE command of the approved step (see each step below); stdin closed
@@ -120,7 +130,37 @@ Download and verify the files with the same lines, then run the script directly:
 
 ### A-2.0 Precheck (read-only; any time)
 
-Command: `bash a2_precheck.sh`, then `bash a2_containment.sh 015d2cea927b9b4db3ee65604e0b4ebb58211e61`.
+Run the three read-only checks with the **read-only bundle launcher** below. It runs them in this order:
+1. **VPS-C (`a2_containment.sh 015d2ce…`).** If it does not return 0, the bundle **stops** with
+   `READ-ONLY CHECKS: STOP`, exit 3, and the precheck and P0 are not run.
+2. **The precheck (`a2_precheck.sh`).**
+3. **The IBKR P0 inventory (`paper_p0_readonly.sh`).**
+
+The bundle prints `READ-ONLY CHECKS: OK` (exit 0) **only** when all three return 0. Any other result prints
+`READ-ONLY CHECKS: ATTENTION`, which is not a pass, with exit 3. A download or checksum failure gives exit 1 and runs
+nothing. Checksums are checked with `--strict`, so a malformed line fails too. The outer subshell returns the same
+exit code (`readonly_launcher_exit=`). The exact launcher, with `C` and the three checksums filled in, is posted in
+Issue #3 with this revision:
+
+```bash
+( bash -euo pipefail <<'A2RO'
+[ "$(id -u)" = 0 ] || { echo "STOP: not root"; exit 1; }
+C=<commit posted in Issue #3>; D=$(mktemp -d /root/gate_a2_ro.XXXXXX); trap 'rm -rf "$D"' EXIT; cd "$D"
+B=https://raw.githubusercontent.com/mikemitakidis/algotrading/$C/docs/runbooks
+for f in a2/a2_containment.sh a2/a2_precheck.sh paper/paper_p0_readonly.sh; do curl -fsSL -o "${f##*/}" "$B/$f" || { echo "STOP: download of $f failed"; exit 1; }; done
+sha256sum --strict -c - <<'SUMS' || { echo "STOP: CHECKSUM MISMATCH. Run nothing."; exit 1; }
+<the a2_containment.sh, a2_precheck.sh and paper_p0_readonly.sh lines from section 9>
+SUMS
+v=0; bash a2_containment.sh 015d2cea927b9b4db3ee65604e0b4ebb58211e61 < /dev/null || v=$?
+echo "vpsc_exit=$v"
+[ "$v" = 0 ] || { echo "READ-ONLY CHECKS: STOP. Containment (VPS-C) did not pass; the precheck and P0 were NOT run."; exit 3; }
+p=0; bash a2_precheck.sh < /dev/null || p=$?; echo "precheck_exit=$p"
+q=0; bash paper_p0_readonly.sh < /dev/null || q=$?; echo "p0_exit=$q"
+if [ "$p" = 0 ] && [ "$q" = 0 ]; then echo "READ-ONLY CHECKS: OK (nothing was changed)"; exit 0; fi
+echo "READ-ONLY CHECKS: ATTENTION (precheck exit $p, P0 exit $q). Not a pass: review every item above. Nothing was changed."; exit 3
+A2RO
+rc=$?; echo "readonly_launcher_exit=$rc"; exit "$rc" )
+```
 
 It prints:
 - **Checkout:** HEAD, branch, modified and untracked files (names only), and the origin URL with credentials masked.
@@ -133,7 +173,12 @@ It prints:
   401; `/api/health` is 503 while the bot is stopped, which is expected); a Caddy summary.
 - **IBKR ports:** listeners only; a listener on 4001 or 7496 is an attention item.
 - **Schedulers:** timers, root's crontab, `needrestart` and unattended upgrades.
-- **Databases:** read-only `quick_check`, and whether the tables A-2 and OP3 depend on are present.
+- **Databases:**
+  - `signals.db` is **required**: it must exist, be readable and return `quick_check=ok`, and it must have
+    `portfolio_risk_state`, `execution_intents`, `risk_decisions`, `daily_state_per_broker` and `broker_positions`.
+  - Any other database that exists must be readable with `quick_check=ok`.
+  - An absent optional database (for example `paper_lifecycles.db`) is not flagged.
+  - A check that crashes is itself an attention item.
 
 **Proceed to A-2.2 only if:**
 - the precheck is OK, or each attention item has been reviewed;
@@ -157,8 +202,8 @@ Expected attention item: the plaintext `DASHBOARD_PASSWORD` (A-2.4 removes it).
 Command: `A2_APPROVAL_REF='<Issue #3 approval comment URL>' bash a2_deploy.sh`
 
 Stages:
-- Any failure in stages 0–3 stops with **exit 2**, before the code changes.
-- Any failure from stage 4 on stops with **exit 3**.
+- Any failure in stages 0–4a stops with **exit 2**, before the code changes.
+- Any failure from stage 4b on stops with **exit 3**.
 - Every exit prints a read-only state report.
 - Nothing is rolled back or retried automatically.
 
@@ -168,7 +213,8 @@ Stages:
 | 1 | preserve | snapshot dir (mode 700): plan, HEAD, unit states, `pip freeze`, kill-switch file, `.env` size/mtime only. Online backup of every `data/*.db` with `quick_check=ok` and sha256 |
 | 2 | fetch + verify | `git fetch` of `main` only. `963bb89` exists, is on GitHub `main`, has tree `f04d1d6` and descends from `015d2ce`. The protected list (§2) is byte-identical. No untracked file at a path the commit adds. If `main` has moved past `963bb89` (for example a docs merge), only `963bb89` is deployed; that is printed |
 | 3 | tests | full suite of the exact commit: a `--no-hardlinks` clone in `/var/tmp`, as `nobody`, production venv, C5a isolation, private `/tmp`. Requires `ISOLATED_RUN modules=135 failed=0` |
-| 4 | deploy | re-check: kill switch on, bot inactive, checkout unchanged. Then `git merge --ff-only 963bb89` (or `checkout --detach`). Then HEAD = `963bb89`, tree = `f04d1d6`, no tracked difference |
+| 4a | pre-switch | **the complete VPS-C again** (`a2_containment.sh 015d2ce`): guard loaded and effective, allow-file absent, boot link absent, unit disabled and inactive, no `main.py`/`sync.sh` process, kill switch on, HEAD. Also: checkout clean, dashboard still active. The test stage can take 30 minutes; any change in that window stops the run **before** the switch |
+| 4b | deploy | `git merge --ff-only 963bb89` (or `checkout --detach`). Then HEAD = `963bb89`, tree = `f04d1d6`, no tracked difference |
 | 5 | import check | 17 modules in the production venv, `python -I -B` (no bytecode written, no side effects) |
 | 6 | dashboard restart | `systemctl restart algo-trader-dashboard.service`. Active within 60 s, `GET /` = 200, PID changed, no new `Traceback` in `logs/dashboard.systemd.err`, an authenticated route answers 401 without a session |
 | 7 | final verify | **VPS-C OK at `963bb89`**; `.env` size/mtime unchanged; unit states recorded |
@@ -327,17 +373,75 @@ The mock:
 
 Credentials were typed into a pseudo-terminal only after each hidden prompt appeared, as a person would type them.
 
-## 9. Script checksums (sha256)
+**Revision 2: failure-injection tests (34/34)**
 
-The launcher in §4 checks these six lines (paste them between `<<'SUMS'` and `SUMS`):
+*Deploy.* A change made **during** the test stage stops the run at the pre-switch VPS-C. Each case exits 2, the code
+is unchanged and the report says `A-2 STOPPED BEFORE THE CODE CHANGED`. The injected changes were:
+- the guard drop-in no longer loaded;
+- the allow-file created;
+- the unit re-enabled;
+- the boot link restored;
+- the kill switch released;
+- `sync.sh` started;
+- `python3 -u main.py` started;
+- HEAD moved;
+- the dashboard stopped.
+
+A failing suite also stops with exit 2. Without injection, the run completes, with three VPS-C passes: start,
+pre-switch and final. The **full suite again passed (135/0) as `nobody`** with the revision-2 script, and the
+deployment completed.
+
+*Precheck.* Each of these is a specific attention item, with exit 3:
+- `signals.db` missing;
+- `signals.db` corrupt;
+- another existing database corrupt;
+- a missing core table;
+- `.env` unreadable;
+- a broken venv (the database check cannot run).
+
+Absent optional databases add no item. 0 leaks.
+
+*P0.* Each of these gives exit 3:
+- `signals.db` missing or corrupt;
+- `risk_decisions` or `daily_state_per_broker` missing;
+- an unparseable policy row;
+- a listener on LIVE port 4001;
+- the gateway's IBC config at `TradingMode=live`;
+- `IBKR_LIVE_ACCOUNT` set (the value masked);
+- `.env` unreadable.
+
+A clean baseline gives exit 0, and an absent D0 audit table is reported as optional. 0 leaks.
+
+*Bundle launcher.*
+
+| Case | Result |
+|---|---|
+| VPS-C STOP | `READ-ONLY CHECKS: STOP`, exit 3; the precheck and P0 **not run** |
+| Precheck attention | `ATTENTION`, exit 3, never "OK" |
+| Required database missing | `ATTENTION`, exit 3 |
+| All clean | `OK`, exit 0 |
+| One checksum altered | `CHECKSUM MISMATCH`, exit 1, nothing run |
+
+No temporary directory was left behind. The earlier batteries were re-run on the revision-2 scripts: deploy/rollback
+15/15, credentials 12/12.
+
+## 9. Script checksums (sha256, revision 2)
+
+The launcher in §4 checks these six lines with `--strict` (paste them between `<<'SUMS'` and `SUMS`):
 
 ```
 0691641a3354d768bba6d42f01c0bef03f4cd823230a103d723fb163bb0c8263  a2_containment.sh
-26d9532a4a15f4a52ad3ec5e45ff57a5fa7a97ccd5af81dacf40fc44693da05b  a2_precheck.sh
-07d9d3c19eb37a6d657a4503be56384123e33ee38c5742f99118bf04ab333fbc  a2_deploy.sh
+bde3dbf3a28fcfe577bc8d92e0fd0dfd6c8f0ed084a4ad8f08e78a318eed4fbf  a2_precheck.sh
+4d0b20dd76b52459761a2f8e38dd0facba69f6bb7e04b4ac5d3afcca01569645  a2_deploy.sh
 4bd4f7e2fb6432004922b73d73763b340d4bb1a0b6e7569156d762b302ea9121  a2_rollback_code.sh
 6d9237b7860f336efbb512cff333c379548f87a4feacb1880bcf092ec8173362  a2_alpaca_keys.sh
 ab78a574209ad64d5e6da338410f40f7a752a74a12ad2574be16e0831ee22b62  a2_dashboard_password.sh
+```
+
+The read-only bundle also uses `paper_p0_readonly.sh`:
+
+```
+16d44c737283d457181c5ad057c133d495910fee4fae5a104ef0f196bb176127  paper_p0_readonly.sh
 ```
 
 ## 10. Decisions for the operator

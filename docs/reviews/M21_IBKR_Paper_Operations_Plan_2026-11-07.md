@@ -22,7 +22,7 @@ and a deployment before the loop can trade.
 |---|---|---|---|
 | **BLK-1** | M14 refuses an `ibkr_paper` entry unless exposure **and** P&L are fresh for **all four** scopes, including `ibkr_live` and both eToro scopes (combined caps) | every loop entry is blocked with `combined_exposure_unknown`; satisfying it as designed means reading the LIVE IBKR account every 2 minutes | [OFF] probe |
 | **BLK-2** | No production IBKR **paper P&L** reader: `tools/ingest_risk_state.py` returns UNKNOWN by design (`NotImplementedError` stub) | `daily_pnl_unknown` blocks every entry (register Legacy D-3 / R2-3) | [GH] code |
-| **BLK-3** | Nothing keeps M14 state fresh: exposure must be ≤ 120 s old and P&L ≤ 300 s, but the ingest CLIs are operator-run ("no scheduler") | entries are blocked even after a manual ingest, once the data is a few minutes old | [GH] code |
+| **BLK-3** | Nothing keeps M14 state fresh, **and M14 does not enforce its own age limits**. `RISK_EXPOSURE_MAX_AGE_SEC` (120 s) and `RISK_PNL_MAX_AGE_SEC` (300 s) are defined in the policy view but read nowhere. A `fresh` status from earlier the same UTC day passes. The ingest CLIs are operator-run ("no scheduler") | after a manual ingest, the data is accepted all day however old it is (**fail-open on age**). Corrected 8 Nov: the first version of this plan said the engine enforced the limits | [GH] code |
 | **BLK-4** | M14 takes the auto-trading flag from the shared **`ibkr` family** block, not from the D0 `ibkr_paper` lane | enabling paper entries means setting `ibkr.auto_trading_enabled=true`, which M14 also applies to `ibkr_live`. Live stays blocked by other layers, but M14 should never imply live | [OFF] probe |
 | **BLK-5** | No process manager for the loop and no runner for the WP10 monitoring checks: the scheduler "installs no service", and nothing imports `bot.monitoring` | the loop cannot run unattended; monitoring cannot fire | [GH] code |
 
@@ -114,9 +114,15 @@ recommended** (live isolation; extra credentials; more failure modes).
 - **Tests:** AST-proven no order methods; incomplete data → UNKNOWN; the live scope refused.
 - **Register:** Legacy D-3 (account/equity reader) and R2-3.
 
-### BLK-3: freshness is never maintained
+### BLK-3: freshness is never maintained, and M14 never checks the age
 
-- The engine requires exposure ≤ `RISK_EXPOSURE_MAX_AGE_SEC` (120 s) and P&L ≤ `RISK_PNL_MAX_AGE_SEC` (300 s).
+- **Correction (8 Nov).** The first version said the engine requires exposure ≤ `RISK_EXPOSURE_MAX_AGE_SEC` (120 s)
+  and P&L ≤ `RISK_PNL_MAX_AGE_SEC` (300 s). It does not.
+  - Both values are set in `RiskPolicyView` (`engine.py` lines 144–145, 207–208, 329–352), but no gate reads them.
+  - The snapshot only checks the status (`fresh`/`partial`) of **today's** row.
+  - So a reading taken at 09:00 UTC still counts as fresh at 20:00 UTC. That is fail-open on age.
+  - **The fix must enforce both limits in M14** for every scope, from the reading's own `fetched_at_utc`. A
+    missing, unparseable or future timestamp counts as unknown. This tightens live as well; it does not weaken it.
 - Only `tools/ingest_exposure_state.py` and `tools/ingest_risk_state.py` write `daily_state_per_broker`, and both are
   operator CLIs.
 - **Fix (recommended):** in the loop's IBKR wiring, run the `ibkr_paper` exposure and P&L ingestion
@@ -435,10 +441,13 @@ task; the blockers map onto existing ones.
 ## 9. Script checksums
 
 ```
-4e7187c6338b3fc739f36889ad47d23eb5efbdd2ca92b16609ef76786a06d3fd  paper_p0_readonly.sh
+16d44c737283d457181c5ad057c133d495910fee4fae5a104ef0f196bb176127  paper_p0_readonly.sh
 ```
 
-It is fetched and verified like the A-2 scripts (A-2 plan §4), from `docs/runbooks/paper/`.
+Revision 2: every required read that fails is an attention item, exit 3. These include `signals.db` and its
+policy, M14-state and decision tables; the `.env` parse; the health and universe checks; and LIVE indicators (a
+listener on 4001/7496, `TradingMode=live`, a live account set). Absent optional stores are listed as optional.
+The script is fetched and verified like the A-2 scripts (A-2 plan §4), from `docs/runbooks/paper/`.
 
 ## 10. Decisions for the operator
 

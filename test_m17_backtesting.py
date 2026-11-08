@@ -4276,6 +4276,17 @@ class G10_Hygiene(unittest.TestCase):
             "docs/reviews/M21_Operational_Readiness_Roadmap_v3_2026-11-05.md",
             "docs/reviews/M21_Gate_A1_Review_Package_2026-11-06.md",
             "docs/reviews/M21_Gate_A1_Engineering_Review_2026-11-06.md",
+            # Gate A-1 record, Gate A-2 deployment plan + runbook scripts, IBKR PAPER plan + P0 (docs/runbooks only).
+            "docs/reviews/M21_Gate_A1_Execution_Record_2026-11-07.md",
+            "docs/reviews/M21_Gate_A2_Deployment_Plan_2026-11-07.md",
+            "docs/reviews/M21_IBKR_Paper_Operations_Plan_2026-11-07.md",
+            "docs/runbooks/a2/a2_containment.sh",
+            "docs/runbooks/a2/a2_precheck.sh",
+            "docs/runbooks/a2/a2_deploy.sh",
+            "docs/runbooks/a2/a2_rollback_code.sh",
+            "docs/runbooks/a2/a2_alpaca_keys.sh",
+            "docs/runbooks/a2/a2_dashboard_password.sh",
+            "docs/runbooks/paper/paper_p0_readonly.sh",
             # pre-M19 docs/test-infra cleanup: repo-wide duplicate-class
             # hygiene guard + testing notes (operator-approved bump).
             "test_hygiene_suite.py",

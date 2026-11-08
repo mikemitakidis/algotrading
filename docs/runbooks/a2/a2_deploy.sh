@@ -32,13 +32,13 @@ report() {
   [ -n "$LOCKED" ] && rmdir "$LOCK" 2>/dev/null
   if [ "$rc" = 0 ]; then return; fi
   case "$STAGE" in
-    preconditions|preserve|fetch|tests) echo "A-2 STOPPED BEFORE THE CODE CHANGED (the VPS still runs ${FROM:0:7}). Send this output.";;
+    preconditions|preserve|fetch|tests|pre-switch) echo "A-2 STOPPED BEFORE THE CODE CHANGED (the VPS still runs ${FROM:0:7}). Send this output.";;
     *) echo "A-2 DID NOT COMPLETE (stage $STAGE). Nothing was rolled back automatically. The bot unit is disabled and the kill switch was not touched."
        echo "Send this output; a code rollback (a2_rollback_code.sh) needs its own approval.";;
   esac
 }
 trap report EXIT
-stop() { echo "STOP: $*"; case "$STAGE" in preconditions|preserve|fetch|tests) exit 2;; *) exit 3;; esac; }
+stop() { echo "STOP: $*"; case "$STAGE" in preconditions|preserve|fetch|tests|pre-switch) exit 2;; *) exit 3;; esac; }
 
 echo "== Gate A-2 code deployment ${FROM:0:7} -> ${TO:0:7} at $TS"
 # 0. PRECONDITIONS (read-only)
@@ -132,11 +132,16 @@ else
   rm -rf "$TESTDIR"
 fi
 
-# 4. DEPLOY the code (the only change to /opt/algo-trader; git refuses to overwrite local work)
-STAGE=deploy
-"$PY" -I -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1])).get("active") is True else 1)' data/kill_switch.json || stop "kill switch not active"
-[ "$(systemctl is-active algo-trader.service)" = inactive ] || stop "bot unit not inactive"
+# 4a. PRE-SWITCH: the COMPLETE containment check again, immediately before the code changes (the test stage can
+#     take 30 minutes; anything that changed meanwhile - guard, allow-file, boot link, a started bot or sync.sh,
+#     the kill switch - stops the run here, before any change).
+STAGE=pre-switch
+bash "$HERE/a2_containment.sh" "$FROM" || stop "containment changed during the run (VPS-C did not pass immediately before the switch)"
 [ "$(git rev-parse HEAD)" = "$FROM" ] && [ -z "$(git status --porcelain --untracked-files=no)" ] || stop "checkout changed during the run"
+[ "$(systemctl is-active $DU)" = active ] || stop "the dashboard is no longer active"
+
+# 4b. DEPLOY the code (the only change to /opt/algo-trader; git refuses to overwrite local work)
+STAGE=deploy
 if [ "$BR" = main ]; then git merge --ff-only --quiet "$TO" || stop "fast-forward refused"
 else git checkout --quiet --detach "$TO" || stop "checkout refused"; fi
 [ "$(git rev-parse HEAD)" = "$TO" ] && [ "$(git rev-parse 'HEAD^{tree}')" = "$TREE" ] || stop "HEAD/tree not as expected after the checkout"

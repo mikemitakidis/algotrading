@@ -112,9 +112,11 @@ if vals.get("IBKR_LIVE_CONFIRMED", "").lower() == "yes": att.append("IBKR_LIVE_C
 if vals.get("IBKR_LIVE_ACCOUNT"): att.append("IBKR_LIVE_ACCOUNT is set")
 if "DASHBOARD_PASSWORD" in vals: att.append("plaintext DASHBOARD_PASSWORD present (A-2.4 removes it)")
 for a in att: print("ATTENTION_ENV: " + a)
+print("ENV_PARSE_OK")
 PY
 )
-grep -v "^ATTENTION_ENV: " <<< "$ENVOUT"
+grep -vE "^(ATTENTION_ENV: |ENV_PARSE_OK$)" <<< "$ENVOUT"
+grep -qx "ENV_PARSE_OK" <<< "$ENVOUT" || att ".env could not be read or parsed completely (see the lines above)"
 while IFS= read -r l; do att "${l#ATTENTION_ENV: }"; done < <(grep "^ATTENTION_ENV: " <<< "$ENVOUT")
 
 echo "== 5. services and dashboard"
@@ -151,26 +153,44 @@ echo "  root crontab lines mentioning algo/deploy/sync/git/main.py: $(crontab -l
 echo "  needrestart restart mode: $(grep -hE '^\s*\$nrconf\{restart\}' /etc/needrestart/needrestart.conf /etc/needrestart/conf.d/*.conf 2>/dev/null | tail -n1 | tr -d ' ' || true)"
 echo "  unattended upgrades: $(grep -hE 'Unattended-Upgrade|Update-Package-Lists' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
 
-echo "== 9. databases (read-only: size, quick_check, presence of the tables A-2/OP3 depend on)"
-for f in "$APP"/data/*.db; do
-  [ -e "$f" ] || continue
-  "$PY" -I - "$f" <<'PY'
-import os, sqlite3, sys
-p = sys.argv[1]
-want = {"signals.db": ["daily_state_per_broker", "broker_positions", "risk_decisions", "risk_snapshots",
-                       "portfolio_risk_state", "execution_intents", "candidate_ledger", "candidate_ledger_meta"],
-        "paper_lifecycles.db": ["loop_cycles", "loop_orders", "paper_trade_outcomes"]}.get(os.path.basename(p), [])
-try:
-    c = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=10)
-    qc = c.execute("PRAGMA quick_check").fetchone()[0]
-    have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    c.close()
-    tabs = " ".join("%s=%s" % (t, "yes" if t in have else "no") for t in want)
-    print("  %-28s %8.1f MiB quick_check=%s %s" % (os.path.basename(p), os.path.getsize(p) / 1048576, qc, tabs))
-except sqlite3.Error as e:
-    print("  %-28s READ FAILED (%s)" % (os.path.basename(p), type(e).__name__))
+echo "== 9. databases (read-only: existence, read, quick_check, required tables)"
+# signals.db is REQUIRED (exists, readable, quick_check ok, its core tables present). paper_lifecycles.db is optional
+# (created by the first loop run). Any other database that exists must be readable with quick_check ok.
+DBOUT=$("$PY" -I - "$APP/data" <<'PY' 2>&1
+import glob, os, sqlite3, sys
+d = sys.argv[1]
+REQUIRED_DB = "signals.db"
+REQUIRED_TABLES = {"signals.db": ["portfolio_risk_state", "execution_intents", "risk_decisions",
+                                  "daily_state_per_broker", "broker_positions"]}
+INFO_TABLES = {"signals.db": ["risk_snapshots", "candidate_ledger", "candidate_ledger_meta"],
+               "paper_lifecycles.db": ["loop_cycles", "loop_orders", "paper_trade_outcomes"]}
+paths = sorted(glob.glob(os.path.join(d, "*.db")))
+if not os.path.exists(os.path.join(d, REQUIRED_DB)):
+    print("DBATT: %s is missing" % REQUIRED_DB)
+for p in paths:
+    n = os.path.basename(p)
+    try:
+        c = sqlite3.connect("file:%s?mode=ro" % p, uri=True, timeout=10)
+        qc = c.execute("PRAGMA quick_check").fetchone()[0]
+        have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        c.close()
+    except Exception as e:                      # any failure to read is an attention item, never silent
+        print("  %-28s READ FAILED (%s)" % (n, type(e).__name__))
+        print("DBATT: %s could not be read (%s)" % (n, type(e).__name__)); continue
+    req, info = REQUIRED_TABLES.get(n, []), INFO_TABLES.get(n, [])
+    print("  %-28s %8.1f MiB quick_check=%s %s" % (n, os.path.getsize(p) / 1048576, qc,
+          " ".join("%s=%s" % (t, "yes" if t in have else "no") for t in req + info)))
+    if qc != "ok":
+        print("DBATT: %s quick_check is not ok" % n)
+    for t in req:
+        if t not in have:
+            print("DBATT: %s has no table %s" % (n, t))
+print("DBCHECK_DONE")
 PY
-done
+)
+grep -vE "^(DBATT: |DBCHECK_DONE$)" <<< "$DBOUT"
+grep -qx "DBCHECK_DONE" <<< "$DBOUT" || att "the database check did not complete (see the lines above)"
+while IFS= read -r l; do att "${l#DBATT: }"; done < <(grep "^DBATT: " <<< "$DBOUT")
 for f in "$APP"/logs/*.log; do [ -e "$f" ] && echo "  $(basename "$f"): $(du -h "$f" | cut -f1)"; done
 
 echo "== RESULT"
