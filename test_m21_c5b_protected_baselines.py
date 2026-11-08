@@ -148,9 +148,14 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
         ]))
         code = [l for l in added if l and not l.startswith("#")]
         for tok in ("subprocess", "systemctl", "placeOrder", "cancelOrder",
-                    "os.system", "Popen", "sqlite3", "open(", "environ",
+                    "os.system", "Popen", "sqlite3", "open(",
                     "_cap_usd =", "_cap =", "_limit ="):
             self.assertFalse([l for l in code if tok in l], tok)
+        # the only environment read added: the IBKR live confirmation
+        env_reads = [l for l in code if "environ" in l or "getenv" in l]
+        self.assertEqual(len(env_reads), 1, env_reads)
+        self.assertIn('os.environ.get("IBKR_LIVE_CONFIRMED")', env_reads[0])
+        self.assertTrue(env_reads[0].startswith("ibkr_live_confirmed = (env_overrides and"))
         self.assertEqual(sum("_aggregate_view(snap, ctx.broker_scope)" in l
                              for l in code), 5)
 

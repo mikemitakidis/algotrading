@@ -3728,7 +3728,7 @@ _PROTECTED_APPROVED_SHA256 = {
     # their own paper account; ibkr_paper authorised by its own time-boxed D0
     # lane, ibkr_live by family AND lane. Exact transition proven in
     # test_m21_c5b_protected_baselines; no threshold changed.
-    "bot/risk_authority/engine.py": "2bb413abe4c31727304e04d781f0ced9d7a28bbdd3daa7c80a15aeb752936153",
+    "bot/risk_authority/engine.py": "f51ceb6e15d8d3b59d57550be8145ece782ea05d37680baf00297d92e8c429fb",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except

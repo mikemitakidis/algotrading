@@ -110,12 +110,13 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
     ),
     "bot/risk_authority/engine.py": ApprovedChange(
         from_blob="e9251bc4e0e850b6c61af0b46346aebbfb9a8466",
-        to_blob="6ea78610c470bcb5240b2062e37e24ceccfb9616",
-        commit="6feb45dcd5df55163973b048b60bf587924b8b97",
-        approval="M21 PR-a (BLK-1/BLK-4): paper entries aggregate the cross-scope "
-                 "gates over their own paper account (real entries unchanged); "
-                 "ibkr_paper authorised by its own time-boxed D0 lane, ibkr_live by "
-                 "family flag AND lane; global auto time-boxed; no threshold changed. "
+        to_blob="4115c57e5e66b70e759ce68e535cdbac5a5c6738",
+        commit="cb69449c027a05ad15c41a9e22270d1a5730d874",
+        approval="M21 PR-a (BLK-1/BLK-4) [6feb45d + cb69449]: paper entries aggregate "
+                 "the cross-scope gates over their own paper account (real entries "
+                 "unchanged); ibkr_paper authorised by its own time-boxed D0 lane, "
+                 "ibkr_live by family flag AND lane AND IBKR_LIVE_CONFIRMED=yes; "
+                 "global auto time-boxed; no threshold changed. "
                  "Operator GO 2026-11-08 for offline development and draft PRs "
                  "only — PENDING independent review and protected-transition approval",
     ),
