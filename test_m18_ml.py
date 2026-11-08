@@ -10672,6 +10672,9 @@ class G10_Hygiene(unittest.TestCase):
             "infra/systemd/algo-paper-monitor.timer",
             "infra/systemd/install_paper_units.sh",
             "test_m21_paper_d_services.py",
+            # M21 PR-e: dashboard bot-start route hardening (protected transition).
+            "dashboard/app.py",
+            "test_m21_paper_e_dashboard_start_routes.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

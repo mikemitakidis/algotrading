@@ -92,11 +92,16 @@ APPROVED_CHANGES: Dict[str, ApprovedChange] = {
     ),
     "dashboard/app.py": ApprovedChange(
         from_blob="1bd8712c660348d0471ac8a56759c5880e868908",
-        to_blob="564fc812ef15e2cc088ab84f1e377021a18b8e99",
-        commit="7f65141329bb1a3af4e5a84203b3a1cf06037ca5",
+        to_blob="eb447673ab4eca0a6b924ed527e7c2e20b41fa03",
+        commit="08c3c363266ea91b4d3f1cf1dd89b385bb0c178d",
         approval="M21.1extra-D3b: one nav link + registration of the read-only, "
                  "GET-only, auth-required paper-metrics blueprint (reviewed "
-                 "patch a4986d2; sha256 97a3d678... pinned in test_m17)",
+                 "patch a4986d2, commit 7f65141, blob 564fc81); then M21 PR-e "
+                 "(H-1/F-7) [08c3c36]: the five bot-start routes go through systemd "
+                 "and refuse without ALLOW_BOT_START; no route launches main.py. "
+                 "sha256 pinned in test_m17. PR-e: operator GO 2026-11-08 for "
+                 "offline development and draft PRs only — PENDING independent "
+                 "review and protected-transition approval",
     ),
     "bot/gateway_watchdog.py": ApprovedChange(
         from_blob="6393afb93b1fce8f925fd5d5ff3b13fb4632ff2d",
