@@ -4492,6 +4492,16 @@ class G10_Hygiene(unittest.TestCase):
             "bot/paper_loop_d2/risk_gate.py",
             "tools/paper_loop/m21_1extra_d2_3_scheduler.py",
             "test_m21_paper_c_fresh_risk_data.py",
+            # M21 PR-d: paper-loop + monitoring units (installed disabled) and runner.
+            "bot/monitoring/risk_data.py",
+            "infra/systemd/algo-paper-loop.service",
+            "infra/systemd/algo-paper-loop.timer",
+            "infra/systemd/algo-paper-monitor.service",
+            "infra/systemd/algo-paper-monitor.timer",
+            "infra/systemd/install_paper_units.sh",
+            "tools/monitoring/__init__.py",
+            "tools/monitoring/run_checks.py",
+            "test_m21_paper_d_services.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

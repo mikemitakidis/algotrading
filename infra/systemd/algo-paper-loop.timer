@@ -1,0 +1,14 @@
+[Unit]
+# M21 PR-d (BLK-5). Installed DISABLED. Every 15 minutes, Monday-Friday,
+# 13:00-21:45 UTC: covers the US regular session in both EDT and EST. The
+# loop's D1 market-clock gate decides whether a session is actually open.
+Description=Algo Trader - M21 IBKR PAPER learning loop schedule
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13..21:00/15:00 UTC
+AccuracySec=1s
+Persistent=false
+Unit=algo-paper-loop.service
+
+[Install]
+WantedBy=timers.target

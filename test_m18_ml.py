@@ -10429,6 +10429,7 @@ class G10_Hygiene(unittest.TestCase):
             # this list (a "tools/...py" literal next to subprocess would read as
             # a CLI spawn to the C5a isolation guard).
             "tools/ingest_risk_state",
+            "tools/monitoring/",                            # M21 PR-d monitoring runner
             # M21 research lanes (Issues #2/#3): offline-only package, docs and
             # root test modules; never imported by production
             # (guarded in test_m21_research_foundation.py).
@@ -10663,6 +10664,14 @@ class G10_Hygiene(unittest.TestCase):
             "bot/paper_loop_d2/risk_refresh.py",
             "bot/paper_loop_d2/risk_gate.py",
             "test_m21_paper_c_fresh_risk_data.py",
+            # M21 PR-d: paper-loop + monitoring units (installed disabled) and runner.
+            "bot/monitoring/risk_data.py",
+            "infra/systemd/algo-paper-loop.service",
+            "infra/systemd/algo-paper-loop.timer",
+            "infra/systemd/algo-paper-monitor.service",
+            "infra/systemd/algo-paper-monitor.timer",
+            "infra/systemd/install_paper_units.sh",
+            "test_m21_paper_d_services.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

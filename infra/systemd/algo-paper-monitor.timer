@@ -1,0 +1,12 @@
+[Unit]
+# M21 PR-d (BLK-5). Installed DISABLED. Every 5 minutes, every day.
+Description=Algo Trader - M21 paper-loop monitoring schedule
+
+[Timer]
+OnCalendar=*-*-* *:00/5:00 UTC
+AccuracySec=1s
+Persistent=false
+Unit=algo-paper-monitor.service
+
+[Install]
+WantedBy=timers.target
