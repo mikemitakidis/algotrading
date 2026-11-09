@@ -3723,9 +3723,9 @@ _PROTECTED_APPROVED_SHA256 = {
     # keeps the warned fallback). No route/auth/CSRF logic changed.
     # M21.1extra-D3 integration: registers the read-only paper-metrics blueprint
     # (GET-only, auth-required) and adds one nav link. No other change.
-    # M21 PR-e (H-1/F-7): the five bot-start routes go through systemd and
-    # Gate A-0's ALLOW_BOT_START; no route launches main.py (re-pinned).
-    "dashboard/app.py": "aba217d41c9eafb49ebd3b08264922ba8d0f09d99c4670c5169a0f56a799c7f9",
+    # M21 PR-e (H-1/F-7): bot control only through systemd and Gate A-0's
+    # ALLOW_BOT_START; no route launches, kills or signals a process (re-pinned).
+    "dashboard/app.py": "f937b720d5fa1f0223d92a60ab7c0cce16cac94c247baffa9714cab39418c237",
     # M21 PR-a (BLK-1/BLK-4): paper entries aggregate the cross-scope gates over
     # their own paper account; ibkr_paper authorised by its own time-boxed D0
     # lane, ibkr_live by family AND lane. Exact transition proven in

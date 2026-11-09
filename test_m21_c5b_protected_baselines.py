@@ -210,8 +210,9 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
 
     def test_dashboard_app_pr_e_only_rewires_the_bot_start_routes(self):
         # PR-e: from the D3 content, the only removals are the old launcher
-        # (_run_bot's Popen of main.py) and the four copies of the
-        # pkill-then-relaunch thread; no route, decorator or auth line goes.
+        # (_run_bot's Popen of main.py), /api/stop's pkill and the four copies of
+        # the pkill-then-relaunch thread; no route, decorator or auth line goes,
+        # and the only command added is systemctl through _systemctl.
         e = PB.APPROVED_CHANGES["dashboard/app.py"]
         rc, out = _git("diff", "--unified=0", _D3_APP_BLOB, e.to_blob)
         self.assertEqual(rc, 0)
@@ -225,11 +226,17 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
                                            "def telegram_save", "def strategy_save",
                                            "def strategy_reset")), l)
         self.assertEqual(sum("subprocess.Popen(" in l for l in removed), 1)
-        self.assertFalse([l for l in added if "Popen" in l])
-        self.assertFalse([l for l in added if l.startswith(("@app.route", "def stop"))])
+        self.assertEqual(sum("'pkill'" in l for l in removed), 5)    # every pkill removed
+        for bad in ("Popen", "pkill", "os.kill", "killpg", "send_signal", "_run_bot"):
+            self.assertFalse([l for l in added if bad in l], bad)
+        self.assertFalse([l for l in added if l.startswith(("@app.route", "def stop("))])
         self.assertIn("_BOT_START_ALLOW_FILE = Path('/var/lib/algo-trader/ALLOW_BOT_START')", added)
-        self.assertIn("r = subprocess.run(['systemctl', 'start', _BOT_UNIT], capture_output=True, "
-                      "timeout=60)", added)
+        self.assertIn("_BOT_UNIT = 'algo-trader.service'", added)
+        runs = [l for l in added if "subprocess.run(" in l]
+        self.assertEqual(runs, ["r = subprocess.run(['systemctl', *args], capture_output=True, text=True,"])
+        rc, new = _git("cat-file", "-p", e.to_blob)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("pkill", new)
 
     def test_approving_commit_is_ancestor_and_produced_to_blob(self):
         for rel, e in PB.APPROVED_CHANGES.items():
