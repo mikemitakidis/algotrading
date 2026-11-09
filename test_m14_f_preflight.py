@@ -135,18 +135,24 @@ def _seed_fresh_state(conn: sqlite3.Connection, *,
                        scope: str = "etoro_real",
                        pnl_known: bool = True,
                        exposure_known: bool = True,
-                       trading_day: Optional[str] = None) -> None:
+                       trading_day: Optional[str] = None,
+                       fetched_at: Optional[str] = None) -> None:
     """Seed daily_state_per_broker with FRESH state for one scope.
     Defaults `trading_day` to today_utc() so the in-process
     assemble_snapshot (which also uses today_utc) finds the row."""
     from datetime import datetime, timezone
     if trading_day is None:
         trading_day = _today_utc()
+    now_iso = fetched_at or datetime.now(timezone.utc).isoformat()
     lifecycle = {
         "status": "fresh" if pnl_known else "unknown",
         "exposure_status": ("exposure_fresh" if exposure_known
                             else "exposure_unknown"),
         "exposure_fresh_reads_count": 3 if exposure_known else 0,
+        # M21 PR-c: M14 enforces reading ages; the real ingesters record
+        # these fetch times in the same lifecycle keys.
+        "latest_reading": {"fetched_at_utc": now_iso},
+        "exposure_latest_reading": {"fetched_at_utc": now_iso},
     }
     conn.execute(
         "INSERT OR REPLACE INTO daily_state_per_broker "
@@ -168,11 +174,13 @@ def _seed_fresh_state(conn: sqlite3.Connection, *,
 
 
 def _seed_fresh_all_scopes(conn: sqlite3.Connection,
-                            trading_day: Optional[str] = None) -> None:
+                            trading_day: Optional[str] = None,
+                            fetched_at: Optional[str] = None) -> None:
     if trading_day is None:
         trading_day = _today_utc()
     for s in ("ibkr_live", "ibkr_paper", "etoro_real", "etoro_paper"):
-        _seed_fresh_state(conn, scope=s, trading_day=trading_day)
+        _seed_fresh_state(conn, scope=s, trading_day=trading_day,
+                          fetched_at=fetched_at)
 
 
 def _request(**overrides) -> TradeRequest:

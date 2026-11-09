@@ -68,6 +68,12 @@ class ScopeView:
     # Per-position detail (defaulted; must come last in dataclass field order)
     positions:               Tuple[dict, ...] = field(default_factory=tuple)
 
+    # M21 PR-c: fetch time of the latest P&L reading and of the latest
+    # exposure reading (lifecycle latest_reading / exposure_latest_reading).
+    # The engine enforces the policy's max ages against these; None blocks.
+    pnl_fetched_at_utc:      Optional[str] = None
+    exposure_fetched_at_utc: Optional[str] = None
+
     # Helpers
     def is_pnl_known(self) -> bool:
         """Distinguishes known-zero from unknown-zero per M14.C
@@ -189,7 +195,17 @@ def _load_scope_row(conn: sqlite3.Connection, today: str,
         exposure_batch_id=exposure_batch_id,
         positions=positions,
         last_ingested_at=row[9],
+        pnl_fetched_at_utc=_fetched_at(lifecycle.get("latest_reading")),
+        exposure_fetched_at_utc=_fetched_at(lifecycle.get("exposure_latest_reading")),
     )
+
+
+def _fetched_at(summary) -> Optional[str]:
+    """M21 PR-c: the fetch time recorded in a lifecycle reading summary, as
+    stored (validation is the engine's job); None when absent."""
+    if isinstance(summary, dict) and isinstance(summary.get("fetched_at_utc"), str):
+        return summary["fetched_at_utc"]
+    return None
 
 
 def _load_positions_for_batch(conn: sqlite3.Connection, scope: str,

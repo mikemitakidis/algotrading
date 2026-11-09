@@ -34,6 +34,17 @@ PURE decision core. Per ChatGPT M14.E corrections:
        IBKR_LIVE_CONFIRMED=yes the IBKR live broker itself requires, so
        paper authorisation can never imply live.
 
+  #7 — M21 PR-c (BLK-3): reading ages are enforced. Every P&L and
+       exposure reading in the entry's aggregation domain (the paper
+       account alone for a paper entry; all four scopes for a real
+       entry) must carry a timezone-aware fetch time no older than
+       pnl_max_age_sec / exposure_max_age_sec and not in the future
+       (5 s skew). Missing, unparseable, naive, future or too-old ⇒
+       block: the entry's own P&L 'daily_pnl_unknown', own exposure
+       'exposure_stale'; another domain scope 'global_daily_loss_unknown'
+       / 'combined_exposure_unknown'. A same-day status alone no longer
+       passes all day. A non-positive or non-numeric limit blocks.
+
   #5 — Daily-loss latch uses UTC trading day.
 
 Hard invariants enforced here:
@@ -160,7 +171,8 @@ class RiskPolicyView:
     # Concentration (per-symbol)
     per_symbol_exposure_cap_usd: Optional[float] = None
 
-    # Staleness thresholds (seconds) — applied at gate 24 / 17 / 20
+    # Staleness thresholds (seconds). M21 PR-c: enforced in the data
+    # staleness gate against each reading's fetch time (see #7).
     pnl_max_age_sec: int = 300
     exposure_max_age_sec: int = 120
 
@@ -784,7 +796,65 @@ def _gate_data_staleness(ctx, snap, req, pol):
     # carries this state across reads.
     if sv.exposure_fresh_reads_count < 1:
         return "exposure_stale"
+    # M21 PR-c (BLK-3): every reading in the aggregation domain must be
+    # recent. The entry's own scope first, then the rest of its domain.
+    now = datetime.now(timezone.utc)
+    if not _age_ok(sv.exposure_fetched_at_utc, pol.exposure_max_age_sec, now):
+        return "exposure_stale"
+    if not _age_ok(sv.pnl_fetched_at_utc, pol.pnl_max_age_sec, now):
+        return "daily_pnl_unknown"
+    for other in _domain_scopes(snap, ctx.broker_scope):
+        if other == ctx.broker_scope:
+            continue
+        ov = snap.scopes.get(other)
+        if ov is None or not _age_ok(ov.exposure_fetched_at_utc,
+                                     pol.exposure_max_age_sec, now):
+            return "combined_exposure_unknown"
+        if not _age_ok(ov.pnl_fetched_at_utc, pol.pnl_max_age_sec, now):
+            return "global_daily_loss_unknown"
     return None
+
+
+# ── M21 PR-c: reading-age helpers (pure) ─────────────────────────────────────
+_MAX_FUTURE_SKEW_SEC = 5.0
+
+
+def _parse_utc_ts(raw: Any) -> Optional[datetime]:
+    """A timezone-aware ISO-8601 string as UTC, else None (missing,
+    unparseable or naive)."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    s = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        return None
+    return dt.astimezone(timezone.utc)
+
+
+def _age_ok(raw: Any, max_age_sec: Any, now: datetime) -> bool:
+    """True only for a reading fetched at most ``max_age_sec`` ago and not
+    in the future beyond the skew. Anything unusable is False (block)."""
+    if (not isinstance(max_age_sec, (int, float)) or isinstance(max_age_sec, bool)
+            or not max_age_sec > 0):
+        return False
+    t = _parse_utc_ts(raw)
+    if t is None:
+        return False
+    if t > now + timedelta(seconds=_MAX_FUTURE_SKEW_SEC):
+        return False
+    return (now - t).total_seconds() <= float(max_age_sec)
+
+
+def _domain_scopes(snapshot: RiskSnapshot, scope: str) -> Tuple[str, ...]:
+    """The scopes whose readings a decision for ``scope`` consumes: the paper
+    account alone for a paper entry (see _aggregate_view); every snapshot
+    scope otherwise."""
+    if scope in PAPER_SCOPES:
+        return (scope,)
+    return tuple(sorted(set(snapshot.scopes) | {scope}))
 
 
 # Ordered registry — first-failure-wins. The order matches M14.A §9.

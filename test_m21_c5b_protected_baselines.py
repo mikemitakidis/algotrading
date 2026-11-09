@@ -59,6 +59,9 @@ _GUARD_BASELINES = {
     # M21 PR-a: the same six guards freeze the M14 engine.
     "bot/risk_authority/engine.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
                                      "d73a04a", "ceb8cd5"),
+    # M21 PR-c: ...and the snapshot.
+    "bot/risk_authority/snapshot.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
+                                       "d73a04a", "ceb8cd5"),
 }
 # M21.1 A01's approved scanner content (produced by 6242bde); WP6 builds on it.
 _A01_SCANNER_BLOB = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"
@@ -125,10 +128,11 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
                     "def is_healthy_for_submission", "_declared_state ="):
             self.assertFalse([l for l in removed if tok in l], tok)
 
-    def test_risk_engine_transition_is_only_the_pr_a_split(self):
+    def test_risk_engine_transition_is_only_pr_a_and_pr_c(self):
         # PR-a replaces exactly five four-scope reads with the domain-aware
-        # view, time-boxes global auto, and adds the D0 lane rule. It removes
-        # no gate and no threshold and adds no I/O or order call.
+        # view, time-boxes global auto, and adds the D0 lane rule. PR-c adds
+        # the reading-age checks (and rewrites one comment). Neither removes
+        # a gate or a threshold or adds I/O or an order call.
         e = PB.APPROVED_CHANGES["bot/risk_authority/engine.py"]
         rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
         self.assertEqual(rc, 0)
@@ -145,6 +149,7 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
             "g = snap.global_view.combined_open_positions",
             "g = snap.global_view.combined_realised_daily_loss",
             "cur = snap.global_view.per_symbol_exposure.get(req.symbol, 0.0)",
+            "# Staleness thresholds (seconds) — applied at gate 24 / 17 / 20",
         ]))
         code = [l for l in added if l and not l.startswith("#")]
         for tok in ("subprocess", "systemctl", "placeOrder", "cancelOrder",
@@ -158,6 +163,28 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
         self.assertTrue(env_reads[0].startswith("ibkr_live_confirmed = (env_overrides and"))
         self.assertEqual(sum("_aggregate_view(snap, ctx.broker_scope)" in l
                              for l in code), 5)
+        rc, new = _git("cat-file", "-p", e.to_blob)                 # thresholds unchanged
+        self.assertEqual(rc, 0)
+        self.assertIn("pnl_max_age_sec: int = 300", new)
+        self.assertIn("exposure_max_age_sec: int = 120", new)
+        self.assertFalse([l for l in removed if "max_age_sec" in l and "=" in l])
+
+    def test_snapshot_transition_only_adds_the_fetch_times(self):
+        e = PB.APPROVED_CHANGES["bot/risk_authority/snapshot.py"]
+        rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:].strip() for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        self.assertEqual(removed, [])
+        code = [l for l in added if l and not l.startswith("#")
+                and not l.startswith(('"""', "times", "stored", "M21"))]
+        for tok in ("execute", "INSERT", "UPDATE", "DELETE", "connect", "open(",
+                    "subprocess", "environ"):
+            self.assertFalse([l for l in code if tok in l], tok)
+        self.assertEqual(sum(l.startswith(("pnl_fetched_at_utc", "exposure_fetched_at_utc"))
+                             for l in code), 4)
 
     def test_dashboard_app_transition_is_exactly_the_d3_wiring(self):
         # The fourth transition is narrow: from the frozen app.py it adds the

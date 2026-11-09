@@ -3728,7 +3728,10 @@ _PROTECTED_APPROVED_SHA256 = {
     # their own paper account; ibkr_paper authorised by its own time-boxed D0
     # lane, ibkr_live by family AND lane. Exact transition proven in
     # test_m21_c5b_protected_baselines; no threshold changed.
-    "bot/risk_authority/engine.py": "f51ceb6e15d8d3b59d57550be8145ece782ea05d37680baf00297d92e8c429fb",
+    # M21 PR-c (BLK-3): reading ages enforced (re-pinned after PR-a).
+    "bot/risk_authority/engine.py": "b970279e086c28374549cc461b26ad876621b9f370a8e1611e5028ea72a7feb8",
+    # M21 PR-c (BLK-3): ScopeView carries the readings' fetch times.
+    "bot/risk_authority/snapshot.py": "d886ed4c639e586dc7e91eb246e71cb87a968d8afd9e16ae9bfe440382fa7e9e",
 }
 
 # Forbidden imports for any module in bot/backtesting/ (except
@@ -4483,6 +4486,12 @@ class G10_Hygiene(unittest.TestCase):
             "bot/risk_authority/ibkr_paper_pnl_reader.py",
             "tools/ingest_risk_state.py",
             "test_m21_paper_b_pnl_source.py",
+            # M21 PR-c: M14 reading ages + fail-closed paper risk refresh.
+            "bot/risk_authority/snapshot.py",
+            "bot/paper_loop_d2/risk_refresh.py",
+            "bot/paper_loop_d2/risk_gate.py",
+            "tools/paper_loop/m21_1extra_d2_3_scheduler.py",
+            "test_m21_paper_c_fresh_risk_data.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

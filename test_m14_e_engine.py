@@ -108,7 +108,12 @@ def _scope(scope="ibkr_paper", *, pnl_known=True, exposure_known=True,
            open_positions=0, capital_deployed=0.0,
            peak_equity=None, drawdown_from_peak=0.0,
            daily_loss_block_active=False,
-           exposure_fresh_reads_count=3, positions=()) -> ScopeView:
+           exposure_fresh_reads_count=3, positions=(),
+           pnl_fetched_at="now", exposure_fetched_at="now") -> ScopeView:
+    # M21 PR-c: M14 enforces reading ages, so a "fresh" fixture carries
+    # fetch times of now unless a test passes its own (or None).
+    from datetime import datetime as _dt, timezone as _tz
+    _now = _dt.now(_tz.utc).isoformat()
     return ScopeView(
         scope=scope,
         realised_pnl_usd=realised_pnl,
@@ -126,6 +131,8 @@ def _scope(scope="ibkr_paper", *, pnl_known=True, exposure_known=True,
         exposure_batch_id="batch-1" if exposure_known else None,
         positions=tuple(positions),
         last_ingested_at="2026-05-29T10:00:00Z",
+        pnl_fetched_at_utc=(_now if pnl_fetched_at == "now" else pnl_fetched_at),
+        exposure_fetched_at_utc=(_now if exposure_fetched_at == "now" else exposure_fetched_at),
     )
 
 

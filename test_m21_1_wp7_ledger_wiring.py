@@ -636,7 +636,9 @@ class W8_RealM14GateProvenance(_AlpacaCreds):
                 "ibkr_paper.auto_trading_enabled_until_utc": F._future_utc_iso()}
         with fx.conn() as c:
             save_policy(c, F._valid_policy(**lane))
-            F._seed_fresh_all_scopes(c)
+            # M21 PR-c: the engine's clock is the tick (MS_NOW), so the
+            # readings are fresh as of the tick.
+            F._seed_fresh_all_scopes(c, fetched_at=MS_NOW.isoformat())
         self.m14 = fx.path
 
     def run_loop(self):
