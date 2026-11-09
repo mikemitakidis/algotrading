@@ -4507,6 +4507,12 @@ class G10_Hygiene(unittest.TestCase):
             # M21 PR-e: dashboard bot-start route hardening (protected transition).
             "dashboard/app.py",
             "test_m21_paper_e_dashboard_start_routes.py",
+            # M21 paper E2E: cross-lane end-to-end (real M14, simulated IBKR) and the
+            # A-1 review F4 carry-forward of the integration-branch cross-lane test.
+            "test_m21_paper_e2e_ibkr_paper.py",
+            "test_m21_e2e_cross_lane.py",
+            # M21 paper E2E: the real-gateway acceptance tests the simulation cannot replace.
+            "docs/runbooks/paper/IBKR_PAPER_gateway_acceptance_tests.md",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).
