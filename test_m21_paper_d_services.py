@@ -131,15 +131,74 @@ class UnitFiles(unittest.TestCase):
 
 
 # ─── 2. install script ──────────────────────────────────────────────────────
-STUB = r"""#!/bin/bash
+# Stand-ins for systemd, computed from the sandbox's installed files and drop-ins with
+# systemd's documented semantics (an empty Condition*= resets the list; "|" triggering;
+# "!" negated), as the Gate A-0 fake D-Bus does.
+SYSTEMCTL = r"""#!/bin/bash
 echo "systemctl $*" >> "$SANDBOX/systemctl.log"
+DST="$SANDBOX/etc"
+if [ "$1" = daemon-reload ] && [ -e "$SANDBOX/term_on_reload" ]; then
+  rm -f "$SANDBOX/term_on_reload"; kill -TERM "$PPID"; sleep 1; exit 0
+fi
 case "$1" in
-  is-enabled) cat "$SANDBOX/enabled_$2" 2>/dev/null || echo disabled ;;
+  is-enabled) cat "$SANDBOX/enabled_$2" 2>/dev/null || { [ "${2##*.}" = timer ] && echo disabled || echo static; } ;;
   is-active)  cat "$SANDBOX/active_$2" 2>/dev/null || echo inactive ;;
-  show)       echo loaded ;;
+  show)
+    prop="$3"; u="$5"
+    case "$prop" in
+      LoadState) [ -f "$DST/$u" ] && echo loaded || echo not-found ;;
+      FragmentPath) [ -f "$DST/$u" ] && echo "$DST/$u" || echo "" ;;
+      DropInPaths) ls "$DST/$u.d/"*.conf 2>/dev/null | tr '\n' ' ' | sed 's/ $//' ; echo ;;
+      NeedDaemonReload) cat "$SANDBOX/ndr_$u" 2>/dev/null || echo no ;;
+      UnitFileState) cat "$SANDBOX/enabled_$u" 2>/dev/null || { grep -q '^\[Install\]' "$DST/$u" && echo disabled || echo static; } ;;
+      ActiveState) cat "$SANDBOX/active_$u" 2>/dev/null || echo inactive ;;
+      Unit) sed -n 's/^Unit=//p' "$DST/$u" ;;
+      *) echo "?" ;;
+    esac ;;
 esac
 exit 0
 """
+BUSCTL = r"""#!/usr/bin/env python3
+import json, os, re, sys
+S = os.environ["SANDBOX"]
+if os.path.exists(os.path.join(S, "busctl_error")):
+    sys.stderr.write("Failed to get property\n"); sys.exit(1)
+path = sys.argv[4]
+units = {"/org/freedesktop/systemd1/unit/algo_2dpaper_2dloop_2eservice": "algo-paper-loop.service",
+         "/org/freedesktop/systemd1/unit/algo_2dpaper_2dmonitor_2eservice": "algo-paper-monitor.service"}
+u = units[path]
+d = os.path.join(S, "etc")
+files = [os.path.join(d, u)] + sorted(
+    os.path.join(d, u + ".d", f) for f in (os.listdir(os.path.join(d, u + ".d"))
+                                           if os.path.isdir(os.path.join(d, u + ".d")) else [])
+    if f.endswith(".conf"))
+conds = []
+for f in files:
+    sec = None
+    for line in open(f):
+        line = line.strip()
+        if not line or line[0] in "#;": continue
+        if line.startswith("["): sec = line; continue
+        m = re.match(r"(Condition[A-Za-z]+)=(.*)$", line)
+        if sec != "[Unit]" or not m: continue
+        typ, val = m.group(1), m.group(2).strip()
+        if val == "": conds = []; continue
+        trig = val.startswith("|"); val = val[1:] if trig else val
+        neg = val.startswith("!"); val = val[1:] if neg else val
+        conds.append([typ, trig, neg, val, 0])
+print(json.dumps({"type": "a(sbbsi)", "data": conds}))
+"""
+ANALYZE = r"""#!/bin/bash
+case "$1" in
+  verify) [ -e "$SANDBOX/verify_fail" ] && exit 1
+          [ -e "$SANDBOX/verify_fail_$(basename "$2")" ] && exit 1; exit 0 ;;
+  condition) [ -e "$SANDBOX/condition_true" ] && exit 0
+             p="${2#ConditionPathExists=}"; p="$SANDBOX/state${p#/var/lib/algo-trader}"
+             [ -e "$p" ] && exit 0 || exit 1 ;;
+esac
+exit 0
+"""
+REF = "issue-3#comment-6733991637"
 
 
 class InstallScript(unittest.TestCase):
@@ -156,27 +215,31 @@ class InstallScript(unittest.TestCase):
         py = self.base / "venv/bin/python3"
         py.write_text("#!/bin/sh\n")
         py.chmod(0o755)
-        (self.bin / "systemctl").write_text(STUB)
-        (self.bin / "systemctl").chmod(0o755)
+        for name, body in (("systemctl", SYSTEMCTL), ("busctl", BUSCTL), ("systemd-analyze", ANALYZE)):
+            (self.bin / name).write_text(body)
+            (self.bin / name).chmod(0o755)
         src = INSTALL.read_text()
         src = src.replace('[ "$EUID" -eq 0 ] || refuse "must run as root"', "true")
         src = src.replace("-o root -g root ", "")
         src = src.replace("BASE=/opt/algo-trader", "BASE=%s" % self.base)
         src = src.replace("DST=/etc/systemd/system", "DST=%s" % self.dst)
         src = src.replace("STATE=/var/lib/algo-trader", "STATE=%s" % self.state)
-        src = src.replace("'ConditionPathExists=/var/lib/algo-trader/", "'ConditionPathExists=/var/lib/algo-trader/")
+        self.assertIn("GUARD_DIR=/var/lib/algo-trader", src)            # guard text unchanged
         self.script = t / "install.sh"
         self.script.write_text(src)
         self.env = dict(os.environ, PATH="%s:/usr/bin:/bin" % self.bin, SANDBOX=str(t))
         self.t = t
 
-    def run_script(self, *args):
-        return subprocess.run(["bash", str(self.script), *args], capture_output=True, text=True,
-                              env=self.env, timeout=60)
+    def run_script(self, *args, ref=REF):
+        argv = ["bash", str(self.script), *args] + (["--approval-ref", ref] if ref else [])
+        return subprocess.run(argv, capture_output=True, text=True, env=self.env, timeout=60)
 
     def log(self):
         p = self.t / "systemctl.log"
         return p.read_text().splitlines() if p.exists() else []
+
+    def installed(self):
+        return {n: (self.dst / n).read_text() for n in UNITS if (self.dst / n).exists()}
 
     def test_syntax(self):
         self.assertEqual(subprocess.run(["bash", "-n", str(INSTALL)]).returncode, 0)
@@ -190,18 +253,29 @@ class InstallScript(unittest.TestCase):
             if "--now" in l:
                 self.assertIn("systemctl disable --now", l)
 
-    def test_install_copies_files_only(self):
+    def test_install_verifies_effective_guards(self):
         r = self.run_script()
-        self.assertEqual(r.returncode, 0, r.stderr)
-        for n in UNITS:
-            self.assertEqual((self.dst / n).read_text(), (SYSTEMD / n).read_text())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.installed(), {n: (SYSTEMD / n).read_text() for n in UNITS})
+        for svc in ("algo-paper-loop.service", "algo-paper-monitor.service"):
+            line = [l for l in r.stdout.splitlines() if l.strip().startswith(svc)][0]
+            for want in ("load=loaded", "drop_ins=none", "need_reload=no", "file_state=static",
+                         "active=inactive", "guard=effective", "guard_now=false", "verify=ok"):
+                self.assertIn(want, line, svc)
         calls = self.log()
         self.assertIn("systemctl daemon-reload", calls)
         self.assertFalse([c for c in calls if re.search(r"\b(enable|start|restart)\b", c)
                           and "is-enabled" not in c])
-        self.assertFalse(any((self.state / a).exists()
-                             for a in ("ALLOW_PAPER_LOOP", "ALLOW_PAPER_MONITOR")))
-        self.assertIn("verified: installed, disabled, inactive", r.stdout)
+        snaps = list((self.state / "paper_units_snapshots").iterdir())
+        self.assertEqual(len(snaps), 1)
+        self.assertIn("approval_ref=%s" % REF, (snaps[0] / "approval.txt").read_text())
+        self.assertIn("verified: installed, disabled, inactive; guards effective", r.stdout)
+
+    def test_approval_reference_required_and_checked(self):
+        for ref in (None, "x", "bad ref; rm -rf /", "a" * 201):
+            r = self.run_script(ref=ref)
+            self.assertEqual(r.returncode, 1, ref)
+            self.assertEqual(self.installed(), {})
 
     def test_refuses_with_allow_file(self):
         for a in ("ALLOW_PAPER_LOOP", "ALLOW_PAPER_MONITOR"):
@@ -209,7 +283,7 @@ class InstallScript(unittest.TestCase):
             r = self.run_script()
             self.assertEqual(r.returncode, 1)
             self.assertIn("allow-file present", r.stderr)
-            self.assertFalse(any((self.dst / n).exists() for n in UNITS))
+            self.assertEqual(self.installed(), {})
             (self.state / a).unlink()
 
     def test_refuses_when_enabled_or_active(self):
@@ -218,24 +292,117 @@ class InstallScript(unittest.TestCase):
             f.write_text(val + "\n")
             r = self.run_script()
             self.assertEqual(r.returncode, 1, r.stdout)
-            self.assertFalse(any((self.dst / n).exists() for n in UNITS))
+            self.assertEqual(self.installed(), {})
             f.unlink()
+
+    def test_refuses_without_the_verification_tools(self):
+        (self.bin / "busctl").unlink()
+        env = dict(self.env, PATH=str(self.bin))                        # no system busctl either
+        for tool in ("bash", "cat", "date", "mkdir", "cp", "install", "rm", "sed", "grep", "ls",
+                     "tr", "git", "python3", "sleep", "kill"):
+            src = shutil.which(tool)
+            if src and not (self.bin / tool).exists():
+                os.symlink(src, self.bin / tool)
+        r = subprocess.run(["bash", str(self.script), "--approval-ref", REF], capture_output=True,
+                           text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("busctl not available", r.stderr)
+        self.assertEqual(self.installed(), {})
 
     def test_unknown_argument_refused(self):
         self.assertEqual(self.run_script("--enable").returncode, 1)
 
-    def test_verification_failure_exit_3(self):
+    def _rolled_back(self, r, code, previous=None):
+        self.assertEqual(r.returncode, code, r.stdout + r.stderr)
+        self.assertIn("ROLLED BACK", r.stderr)
+        self.assertEqual(self.installed(), previous or {})
+        self.assertEqual(self.log()[-1], "systemctl daemon-reload")
+
+    def test_guard_missing_from_the_unit_rolls_back(self):
         (self.base / "infra/systemd/algo-paper-loop.service").write_text(
             (SYSTEMD / "algo-paper-loop.service").read_text().replace(
                 "ConditionPathExists=/var/lib/algo-trader/ALLOW_PAPER_LOOP", ""))
-        self.assertEqual(self.run_script().returncode, 3)
+        self._rolled_back(self.run_script(), 3)
+
+    def test_drop_in_resetting_the_guard_rolls_back(self):
+        d = self.dst / "algo-paper-loop.service.d"
+        d.mkdir()
+        (d / "override.conf").write_text("[Unit]\nConditionPathExists=\n")
+        r = self.run_script()
+        self._rolled_back(r, 3)
+        line = [l for l in r.stdout.splitlines() if l.strip().startswith("algo-paper-loop.service")][0]
+        self.assertIn("guard=NOT_EFFECTIVE", line)
+
+    def test_negated_or_triggering_guard_rolls_back(self):
+        for form in ("!/var/lib/algo-trader/ALLOW_PAPER_LOOP", "|/var/lib/algo-trader/ALLOW_PAPER_LOOP"):
+            (self.base / "infra/systemd/algo-paper-loop.service").write_text(
+                (SYSTEMD / "algo-paper-loop.service").read_text().replace(
+                    "ConditionPathExists=/var/lib/algo-trader/ALLOW_PAPER_LOOP",
+                    "ConditionPathExists=" + form))
+            r = self.run_script()
+            self._rolled_back(r, 3)
+            self.assertIn("guard=NOT_EFFECTIVE", r.stdout)
+
+    def test_guard_that_currently_passes_rolls_back(self):
+        (self.t / "condition_true").touch()
+        r = self.run_script()
+        self._rolled_back(r, 3)
+        self.assertIn("guard_now=PASSES", r.stdout)
+
+    def test_any_drop_in_rolls_back(self):
+        d = self.dst / "algo-paper-monitor.service.d"
+        d.mkdir()
+        (d / "harmless.conf").write_text("[Service]\nNice=5\n")
+        self._rolled_back(self.run_script(), 3)
+
+    def test_unreadable_conditions_roll_back(self):
+        (self.t / "busctl_error").touch()
+        r = self.run_script()
+        self._rolled_back(r, 3)
+        self.assertIn("guard=UNREADABLE", r.stdout)
+
+    def test_pending_daemon_reload_rolls_back(self):
+        (self.t / "ndr_algo-paper-loop.service").write_text("yes\n")
+        self._rolled_back(self.run_script(), 3)
+
+    def test_systemd_analyze_verify_failure_rolls_back(self):
+        (self.t / "verify_fail").touch()
+        self._rolled_back(self.run_script(), 3)
+
+    def test_each_unit_file_is_verified(self):
+        for n in UNITS:
+            flag = self.t / ("verify_fail_" + n)
+            flag.touch()
+            r = self.run_script()
+            self._rolled_back(r, 3)
+            line = [l for l in r.stdout.splitlines() if l.strip().startswith(n)][0]
+            self.assertIn("verify=FAILED", line, n)
+            flag.unlink()
+
+    def test_timer_pointing_elsewhere_rolls_back(self):
+        (self.base / "infra/systemd/algo-paper-loop.timer").write_text(
+            (SYSTEMD / "algo-paper-loop.timer").read_text().replace(
+                "Unit=algo-paper-loop.service", "Unit=algo-trader.service"))
+        self._rolled_back(self.run_script(), 3)
+
+    def test_previous_unit_files_restored_exactly(self):
+        prev = {n: "# previous %s\n" % n for n in UNITS}
+        for n, body in prev.items():
+            (self.dst / n).write_text(body)
+        (self.t / "verify_fail").touch()
+        self._rolled_back(self.run_script(), 3, previous=prev)
+
+    def test_interruption_rolls_back(self):
+        (self.t / "term_on_reload").touch()
+        r = self.run_script()
+        self._rolled_back(r, 4)
 
     def test_uninstall(self):
         self.assertEqual(self.run_script().returncode, 0)
         (self.state / "ALLOW_PAPER_LOOP").touch()
-        r = self.run_script("--uninstall")
+        r = self.run_script("--uninstall", ref=None)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(any((self.dst / n).exists() for n in UNITS))
+        self.assertEqual(self.installed(), {})
         self.assertFalse((self.state / "ALLOW_PAPER_LOOP").exists())
         calls = self.log()
         self.assertIn("systemctl disable --now algo-paper-loop.timer", calls)
@@ -281,21 +448,48 @@ class Runner(unittest.TestCase):
             return {r[0] for r in c.execute("SELECT check_name FROM monitor_alarms WHERE state "
                                             "IN ('ACTIVE','CLEARED_PENDING_ACK')")}
 
-    def test_quiet_closed_market_exit_0(self):
+    BROKER = {"duplicate_orders_broker"}                 # always open: NOT_EVALUATED
+
+    def run_json(self, market_open, **kw):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = self.main(market_open, **kw)
+        return rc, json.loads(buf.getvalue().strip().splitlines()[-1])
+
+    def test_quiet_closed_market_is_still_incomplete(self):
         before = Path(self.journal).read_bytes()
-        self.assertEqual(self.main(False), 0)
-        self.assertEqual(self.open_alarms(), set())
+        rc, out = self.run_json(False)
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.open_alarms(), self.BROKER)
+        self.assertFalse(out["coverage_complete"])
+        self.assertFalse(out["healthy"])
+        self.assertIn("duplicate_orders_broker", out["not_evaluated"])
         self.assertEqual(Path(self.journal).read_bytes(), before)       # journal read-only
-        self.assertIn("run done", Path(self.logf).read_text())
+        self.assertIn("coverage INCOMPLETE", Path(self.logf).read_text())
 
     def test_missing_heartbeat_when_open_alarms_exit_1(self):
         self.assertEqual(self.main(True), 1)
         self.assertIn("loop_heartbeat", self.open_alarms())
 
-    def test_healthy_open_market(self):
+    def test_all_journal_checks_green_never_reads_as_complete(self):
+        # Review #39-1: every evaluated check OK must not roll up as healthy while the
+        # broker side of the duplicate check was never evaluated.
         self.cycle("c1", 20)
         self.cycle("c2", 5)
-        self.assertEqual(self.main(True), 0, self.open_alarms())
+        obs = os.path.join(self.tmp.name, "obs.json")
+        Path(obs).write_text(json.dumps({"AAA": {"1h": "OK"}, "BBB": {"1h": "OK"}}))
+        rc, out = self.run_json(True, extra=("--observations", obs))
+        evaluated = {c: st for c, st, _ in out["checks"]}
+        self.assertEqual(evaluated["duplicate_orders_journal"], "OK")
+        self.assertEqual(evaluated["duplicate_orders_broker"], "UNKNOWN")
+        self.assertEqual({c for c, st in evaluated.items() if st != "OK"}, self.BROKER)
+        self.assertEqual(rc, 1)
+        self.assertFalse(out["coverage_complete"])
+        self.assertFalse(out["healthy"])
+        self.assertEqual(out["not_evaluated"], ["duplicate_orders_broker"])
+        self.assertEqual(self.open_alarms(), self.BROKER)
 
     def test_unknown_market_state_is_not_healthy(self):
         self.cycle("c1", 5)
@@ -313,39 +507,61 @@ class Runner(unittest.TestCase):
         self.cycle("c1", 20, "risk:risk_refresh_block:pnl_refresh_rc_1")
         self.cycle("c2", 5, "risk:risk_authority_block:exposure_stale")
         self.assertEqual(self.main(True), 1)
-        self.assertEqual(self.open_alarms(), {"risk_data_blocks"})
+        self.assertEqual(self.open_alarms() - self.BROKER - {"data_freshness"}, {"risk_data_blocks"})
 
     def test_one_data_block_then_allow_is_quiet(self):
         self.cycle("c1", 20, "risk:risk_authority_block:exposure_stale")
         self.cycle("c2", 5, None)
-        self.assertEqual(self.main(True), 0)
+        self.main(True)
+        self.assertNotIn("risk_data_blocks", self.open_alarms())
 
     def test_a_single_latest_data_block_is_not_yet_an_alarm(self):
         self.cycle("c1", 20, None)
         self.cycle("c2", 5, "risk:risk_refresh_block:pnl_refresh_timeout")
-        self.assertEqual(self.main(True), 0)
+        self.main(True)
         self.assertNotIn("risk_data_blocks", self.open_alarms())
 
-    def test_duplicate_check_is_journal_only_and_says_so(self):
+    def test_duplicate_check_is_split_and_scoped(self):
         from tools.monitoring.run_checks import collect
         res = collect(journal_db=self.journal, now=NOW, interval=timedelta(minutes=15),
                       market_open=False, gateway_health=healthy(), observations={})
         names = {r.check: r for r in res}
         self.assertNotIn("duplicate_orders", names)
-        self.assertIn("broker side NOT checked", names["duplicate_orders_journal"].detail)
+        j, b = names["duplicate_orders_journal"], names["duplicate_orders_broker"]
+        self.assertEqual((j.status, j.severity), ("OK", "CRITICAL"))
+        self.assertTrue(j.detail.startswith("journal only"))
+        self.assertEqual((b.status, b.severity), ("UNKNOWN", "CRITICAL"))
+        self.assertTrue(b.detail.startswith("NOT_EVALUATED"))
 
-    def test_journal_duplicates_still_alarm_under_the_full_name(self):
-        from bot.monitoring.checks import check_duplicate_orders
-        from tools.monitoring.run_checks import journal_only_duplicates
+    def test_split_keeps_journal_alarms_and_always_reports_the_broker_gap(self):
+        from bot.monitoring.checks import CheckResult, check_duplicate_orders
+        from tools.monitoring.run_checks import split_duplicates
         dup = [{"state": "OPEN", "symbol": "AAA", "client_ref": "a"},
                {"state": "OPEN", "symbol": "AAA", "client_ref": "b"}]
-        r = journal_only_duplicates(check_duplicate_orders(dup, None))
-        self.assertEqual((r.check, r.status), ("duplicate_orders", "ALARM"))
-        r = journal_only_duplicates(check_duplicate_orders([], [{"order_id": 1}]))
-        self.assertEqual((r.check, r.status), ("duplicate_orders", "ALARM"))
-        from bot.monitoring.checks import CheckResult
-        other = CheckResult("duplicate_orders", "UNKNOWN", "CRITICAL", "something else")
-        self.assertIs(journal_only_duplicates(other), other)
+        for src in (check_duplicate_orders(dup, None),
+                    check_duplicate_orders([], [{"order_id": 1}]),
+                    CheckResult("duplicate_orders", "UNKNOWN", "CRITICAL", "something else")):
+            j, b = split_duplicates(src)
+            self.assertEqual(j.check, "duplicate_orders_journal")
+            self.assertNotEqual(j.status, "OK")                    # never upgraded to OK
+            self.assertEqual((b.check, b.status, b.severity),
+                             ("duplicate_orders_broker", "UNKNOWN", "CRITICAL"))
+        other = CheckResult("gateway", "OK", "CRITICAL", "x")
+        self.assertEqual(split_duplicates(other), [other])
+
+    def test_incomplete_coverage_alone_keeps_the_run_unhealthy(self):
+        from bot.monitoring import alarms
+        with mock.patch.object(alarms.Monitor, "open_alarms", lambda self: []):
+            rc, out = self.run_json(False)
+        self.assertEqual(rc, 1)
+        self.assertFalse(out["healthy"])
+        self.assertEqual(out["open_alarms"], 0)
+
+    def test_data_freshness_without_observations_is_unknown_not_ok(self):
+        self.cycle("c1", 5)
+        rc, out = self.run_json(True)
+        self.assertEqual({c: st for c, st, _ in out["checks"]}["data_freshness"], "UNKNOWN")
+        self.assertIn("data_freshness", out["not_evaluated"])
 
     def test_data_freshness_evaluated_only_with_observations(self):
         self.cycle("c1", 5)
