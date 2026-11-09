@@ -4294,13 +4294,30 @@ def logs():
 
 
 # ── Bot control ──────────────────────────────────────────────────────────────
-# M21 PR-e (H-1 / F-7): the dashboard never launches main.py itself. The five
-# routes that (re)start the bot go through systemd (algo-trader.service) and
-# only while the Gate A-0 allow-file exists; otherwise they refuse and leave
-# any running bot untouched. Stopping (/api/stop) is unchanged.
+# M21 PR-e (H-1 / F-7; review: Issue #3 comment 6733991637, finding 4).
+# The dashboard controls the bot ONLY through systemd (algo-trader.service).
+# It never launches main.py, never signals or kills a process itself, and
+# reports success only after systemd shows the requested state.
+#   * start / restart: refused (409) unless ALLOW_BOT_START exists, the unit is
+#     loaded and no main.py of this checkout runs outside the unit. systemd
+#     re-checks the Gate A-0 guard (ConditionPathExists in the gate-a0 drop-in)
+#     at the moment it starts the bot; the outcome is read back from systemd
+#     (ConditionResult, ActiveState, MainPID) after a settle delay.
+#   * settings routes: save, then `systemctl try-restart` only if the unit is
+#     running; a settings change never starts a stopped bot.
+#   * stop: `systemctl stop`; a main.py running outside the unit is reported,
+#     never killed (that is an operations matter, e.g. the kill switch).
+#   * one operation at a time (409 while another is in progress).
 _BOT_UNIT = 'algo-trader.service'
 _BOT_START_ALLOW_FILE = Path('/var/lib/algo-trader/ALLOW_BOT_START')
+_BOT_MAIN = str(BASE_DIR / 'main.py')
 _BOT_START_REFUSED = 'bot start refused: ALLOW_BOT_START absent (Gate A-0 containment)'
+_PROC_ROOT = '/proc'
+_SYSTEMCTL_TIMEOUT_SEC = 90
+_BOT_SETTLE_SEC = 3
+_BOT_UNIT_PROPS = ('LoadState', 'ActiveState', 'SubState', 'MainPID', 'ConditionResult',
+                   'UnitFileState')
+_bot_op_lock = threading.Lock()
 _bot_log = logging.getLogger('dashboard.bot_control')
 
 
@@ -4308,62 +4325,177 @@ def _bot_start_allowed() -> bool:
     return _BOT_START_ALLOW_FILE.exists()
 
 
-def _run_bot() -> bool:
-    """Start the bot through systemd, never as a dashboard child process.
-    False (nothing done) unless the Gate A-0 allow-file exists."""
-    if not _bot_start_allowed():
-        _bot_log.warning('[bot_control] %s', _BOT_START_REFUSED)
-        return False
+def _systemctl(*args):
+    """(returncode, stdout) of `systemctl <args>`; returncode None when it could
+    not run or timed out, i.e. the outcome is unknown."""
     try:
-        r = subprocess.run(['systemctl', 'start', _BOT_UNIT], capture_output=True, timeout=60)
+        r = subprocess.run(['systemctl', *args], capture_output=True, text=True,
+                           timeout=_SYSTEMCTL_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        return None, 'timed out'
     except (OSError, subprocess.SubprocessError) as e:
-        _bot_log.error('[bot_control] systemctl start failed: %s', type(e).__name__)
-        return False
-    return r.returncode == 0
+        return None, type(e).__name__
+    return r.returncode, (r.stdout or '')
 
 
-def _restart_bot_async() -> dict:
-    """Shared by /api/restart and the settings routes that used to pkill and
-    re-launch main.py. Refused without the allow-file (the running bot, if
-    any, is left alone); otherwise stop any copy, then start the unit."""
+def _bot_unit_state() -> dict:
+    """The bot unit's properties as systemd reports them; {} if unreadable."""
+    rc, out = _systemctl('show', _BOT_UNIT, *('--property=%s' % p for p in _BOT_UNIT_PROPS))
+    if rc != 0:
+        return {}
+    st = {}
+    for line in out.splitlines():
+        k, _, v = line.partition('=')
+        if k in _BOT_UNIT_PROPS:
+            st[k] = v.strip()
+    return st if 'ActiveState' in st and 'LoadState' in st else {}
+
+
+def _bot_processes_outside_unit() -> list:
+    """PIDs of this checkout's main.py that the bot unit does not own. Reads
+    /proc only; nothing is signalled."""
+    stray = []
+    try:
+        pids = [d for d in os.listdir(_PROC_ROOT) if d.isdigit()]
+    except OSError:
+        return []
+    for d in pids:
+        base = os.path.join(_PROC_ROOT, d)
+        try:
+            with open(os.path.join(base, 'cmdline'), 'rb') as f:
+                argv = [a.decode(errors='replace') for a in f.read().split(b'\0') if a]
+            ours = _BOT_MAIN in argv or (
+                'main.py' in argv
+                and os.path.realpath(os.path.join(base, 'cwd')) == str(BASE_DIR))
+            if not ours:
+                continue
+            with open(os.path.join(base, 'cgroup')) as f:
+                cgroup = f.read()
+        except OSError:
+            continue
+        if '/' + _BOT_UNIT not in cgroup:
+            stray.append(int(d))
+    return sorted(stray)
+
+
+def _bot_readback(op: str, want_active: bool):
+    """(http_status, payload) from what systemd reports after `op`."""
+    time.sleep(_BOT_SETTLE_SEC)
+    st = _bot_unit_state()
+    if not st:
+        return 500, {'ok': False, 'error': 'systemd state unreadable after %s; outcome unknown' % op}
+    if want_active:
+        if st.get('ConditionResult') == 'no':
+            return 409, {'ok': False, 'state': st,
+                         'error': 'refused by the systemd Gate A-0 guard: ALLOW_BOT_START '
+                                  'was absent when systemd evaluated the start'}
+        if st.get('ActiveState') != 'active' or st.get('MainPID', '0') in ('', '0'):
+            return 500, {'ok': False, 'state': st,
+                         'error': '%s: bot not running afterwards (%s/%s)'
+                                  % (op, st.get('ActiveState'), st.get('SubState'))}
+        return 200, {'ok': True, 'state': st}
+    if st.get('ActiveState') not in ('inactive', 'failed'):
+        return 500, {'ok': False, 'state': st,
+                     'error': '%s: bot still %s' % (op, st.get('ActiveState'))}
+    return 200, {'ok': True, 'state': st}
+
+
+def _bot_operation(fn):
+    if not _bot_op_lock.acquire(blocking=False):
+        return 409, {'ok': False, 'error': 'another bot operation is in progress'}
+    try:
+        return fn()
+    finally:
+        _bot_op_lock.release()
+
+
+def _bot_start_or_restart(verb: str):
+    """verb: 'start', 'restart' or 'try-restart'."""
     if not _bot_start_allowed():
-        _bot_log.warning('[bot_control] restart: %s', _BOT_START_REFUSED)
-        return {'ok': False, 'error': _BOT_START_REFUSED}
+        _bot_log.warning('[bot_control] %s: %s', verb, _BOT_START_REFUSED)
+        return 409, {'ok': False, 'error': _BOT_START_REFUSED}
+    st = _bot_unit_state()
+    if not st:
+        return 500, {'ok': False, 'error': 'systemd state unreadable; nothing done'}
+    if st.get('LoadState') != 'loaded':
+        return 409, {'ok': False, 'state': st,
+                     'error': '%s not loaded (LoadState=%s); nothing done'
+                              % (_BOT_UNIT, st.get('LoadState'))}
+    stray = _bot_processes_outside_unit()
+    if stray:
+        return 409, {'ok': False, 'stray_pids': stray,
+                     'error': 'main.py is running outside systemd; nothing done. Resolve it '
+                              'through operations, not the dashboard'}
+    rc, out = _systemctl(verb, _BOT_UNIT)
+    if rc is None:
+        return 504, {'ok': False,
+                     'error': 'systemctl %s %s: %s; outcome unknown, check the unit status'
+                              % (verb, _BOT_UNIT, out)}
+    if rc != 0:
+        return 500, {'ok': False, 'error': 'systemctl %s %s failed (exit %d)' % (verb, _BOT_UNIT, rc)}
+    return _bot_readback(verb, want_active=True)
 
+
+def _bot_stop():
+    rc, out = _systemctl('stop', _BOT_UNIT)
+    if rc is None:
+        return 504, {'ok': False,
+                     'error': 'systemctl stop %s: %s; outcome unknown, check the unit status'
+                              % (_BOT_UNIT, out)}
+    if rc != 0:
+        return 500, {'ok': False, 'error': 'systemctl stop %s failed (exit %d)' % (_BOT_UNIT, rc)}
+    code, res = _bot_readback('stop', want_active=False)
+    stray = _bot_processes_outside_unit()
+    if stray:
+        return 409, {'ok': False, 'unit_stopped': res['ok'], 'stray_pids': stray,
+                     'error': 'main.py is still running outside systemd; the dashboard does '
+                              'not kill processes. Use the kill switch and operations'}
+    return code, res
+
+
+def _bot_after_settings_change():
+    """Settings were saved. Restart only a running bot, through systemd."""
     def _do():
-        time.sleep(1)
-        subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-        time.sleep(1)
-        _run_bot()
-    threading.Thread(target=_do, daemon=True).start()
-    return {'ok': True}
+        st = _bot_unit_state()
+        if not st:
+            return 500, {'ok': False, 'bot_restart': 'unknown',
+                         'error': 'systemd state unreadable; bot not restarted'}
+        if st.get('ActiveState') != 'active':
+            return 200, {'ok': True, 'bot_restart': 'not_running'}
+        code, res = _bot_start_or_restart('try-restart')
+        res = dict(res)
+        res['bot_restart'] = ('restarted' if res['ok'] else 'refused' if code == 409
+                              else 'unknown' if code == 504 else 'failed')
+        return code, res
+    code, res = _bot_operation(_do)
+    res = dict(res)
+    res.setdefault('bot_restart', 'busy')
+    res['saved'] = True
+    return code, res
 
 
 @app.route('/api/start', methods=['POST'])
 @require_auth
 @csrf_required
 def start():
-    if not _bot_start_allowed():
-        return jsonify({'ok': False, 'error': _BOT_START_REFUSED}), 409
-    if not _run_bot():
-        return jsonify({'ok': False, 'error': 'systemctl start %s failed' % _BOT_UNIT}), 500
-    return jsonify({'ok': True})
+    code, res = _bot_operation(lambda: _bot_start_or_restart('start'))
+    return jsonify(res), code
 
 
 @app.route('/api/stop', methods=['POST'])
 @require_auth
 @csrf_required
 def stop():
-    subprocess.run(['pkill', '-f', 'main.py'], capture_output=True)
-    return jsonify({'ok': True})
+    code, res = _bot_operation(_bot_stop)
+    return jsonify(res), code
 
 
 @app.route('/api/restart', methods=['POST'])
 @require_auth
 @csrf_required
 def restart():
-    res = _restart_bot_async()
-    return jsonify(res), (200 if res['ok'] else 409)
+    code, res = _bot_operation(lambda: _bot_start_or_restart('restart'))
+    return jsonify(res), code
 
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
@@ -4403,8 +4535,8 @@ def telegram_save():
             updates['TELEGRAM_CHAT_ID'] = data['chat_id'].strip()
         _write_env(updates)
         load_dotenv(BASE_DIR / '.env', override=True)
-        res = _restart_bot_async()
-        return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
+        code, res = _bot_after_settings_change()
+        return jsonify(res), code
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
 
@@ -5905,9 +6037,9 @@ def strategy_save():
     errors = _save(data, updated_by='dashboard')
     if errors:
         return jsonify({'ok': False, 'errors': errors}), 400
-    # Restart bot so it picks up new thresholds (M21 PR-e: via systemd, gated)
-    res = _restart_bot_async()
-    return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
+    # Restart a running bot so it picks up new thresholds (M21 PR-e: systemd only)
+    code, res = _bot_after_settings_change()
+    return jsonify(res), code
 
 
 @app.route('/api/strategy/reset', methods=['POST'])
@@ -5918,8 +6050,8 @@ def strategy_reset():
     sys.path.insert(0, str(BASE_DIR))
     from bot.strategy import reset as _reset
     _reset()
-    res = _restart_bot_async()
-    return jsonify({'ok': True, 'bot_restart': 'requested' if res['ok'] else res['error']})
+    code, res = _bot_after_settings_change()
+    return jsonify(res), code
 
 
 # ── .env helpers ─────────────────────────────────────────────────────────────
