@@ -99,11 +99,18 @@ def _build_etoro_adapter(scope: str):
     return EtoroPnLAdapter(broker_scope=scope, history_reader=_reader)
 
 
+# M21 PR-b: where the P&L reader keeps the execution ids it has proven today
+# (restart persistence, obligation P7). Local state, never committed.
+IBKR_PAPER_PNL_SEEN_PATH = os.path.join(_REPO_ROOT, "data", "ibkr_paper_pnl_seen.json")
+
+
 def _build_ibkr_paper_reader():
     """M21 PR-b: the read-only IBKR PAPER executions reader (scope ibkr_paper
     only). The expected paper account is the paper loop's pinned constant; an
     IBKR_ACCOUNT in the environment that names a different account refuses (the
-    reader raises, so the day is UNKNOWN). Any construction failure also yields
+    reader raises, so the day is UNKNOWN). The gateway's time zone comes from
+    IBKR_GATEWAY_TZ, set by the operator only after verifying it on the VPS (P0);
+    while it is unset every read is UNKNOWN. Any construction failure also yields
     a reader that raises: unknown is never replaced with zero."""
     try:
         from bot.paper_loop_d2.ibkr_adapter import EXPECTED_PAPER_ACCOUNT
@@ -117,6 +124,8 @@ def _build_ibkr_paper_reader():
             raise RuntimeError("IBKR_ACCOUNT does not name the expected paper account")
         return make_paper_pnl_reader(
             expected_account=EXPECTED_PAPER_ACCOUNT,
+            gateway_tz=(os.environ.get("IBKR_GATEWAY_TZ") or "").strip() or None,
+            seen_path=IBKR_PAPER_PNL_SEEN_PATH,
             journal_exec_ids=make_journal_exec_ids(default_db_path()),
         )
     except Exception as e:

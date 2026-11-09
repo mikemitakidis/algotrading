@@ -13,51 +13,76 @@ ZERO. This reader therefore returns a list ONLY when the day is proven complete 
 consistent, and raises ``PaperPnLUnavailable`` (the adapter turns any exception into
 UNKNOWN, which M14 blocks) in every other case. Unknown is never replaced with zero.
 
-What "complete and consistent" means here (each is a test):
-  1. Isolation, before any API call: the M15.4 gateway health gate says ready, mode
+What "complete and consistent" means here. Every obligation below must hold, or the
+day is UNKNOWN (each is a test; PR #37 review, Issue #3 comment 6733991637):
+
+  P1 Isolation, before any API call: the M15.4 gateway health gate says ready, mode
      paper, port 4002. The port is 4002 and never the live port. The connection is
-     ``readonly=True`` with a dedicated client id.
-  2. Account: ``managedAccounts()`` contains the expected paper account and ONLY paper
-     accounts (ids starting with "D"). Any other account, such as a live one, refuses.
-  3. Execution list: ``reqExecutions`` filtered to the paper account returns after
-     ``execDetailsEnd``. Every fill must belong to the paper account and carry a
-     timezone-aware timestamp that is not in the future. (ib_insync converts the
-     gateway's time to UTC; a gateway time string without a zone is read in the
-     host's zone, so the operations plan verifies the gateway and host zones match
-     before P3. A wrong zone moves fills across days and then fails item 9.)
-  4. Commission reports: every fill must have its commission report (execId match)
-     within ``commission_wait_sec``. A missing report makes the day UNKNOWN.
-  5. Currency: the contract and the commission must be USD. No FX is invented.
-  6. Values: commission must be finite and >= 0. ``realizedPNL`` must be finite, or
-     exactly IB's UNSET_DOUBLE, which IB uses for an opening execution (no realised
-     P&L). NaN or infinity is UNKNOWN.
-  7. Corrections: an execution corrected by IB (same execId base, a different revision
-     suffix) makes the day UNKNOWN. Exact duplicates of one execId are de-duplicated.
-  8. Accounting (conservative): realised P&L for the day = the sum of ``realizedPNL``
-     on closing fills, minus the commission of opening fills (IB books those in
-     ``realizedPNL`` only when the position closes). Daily loss is never understated.
-  9. Independent cross-check, IB's own account P&L (``reqPnL``):
+     ``readonly=True`` with a dedicated client id (16).
+  P2 Account: ``managedAccounts()`` contains the expected paper account and ONLY paper
+     accounts (ids starting with "D"). Every execution must be on that account.
+  P3 Period: the reader proves only the CURRENT UTC day (``today`` must be the UTC date
+     of now). IBKR's ``reqExecutions`` returns the executions since midnight of the
+     gateway's day (IBKR TWS API docs, "Execution details"). That list covers the whole
+     UTC day only when the gateway's day began at or before UTC midnight, so the
+     operator-verified gateway time zone (``gateway_tz``, IANA name, from P0) is
+     required: if the gateway day starts after UTC midnight (a zone west of UTC, or an
+     eastern zone late in the UTC day) the early part of the UTC day is not in the
+     list, and the day is UNKNOWN. ``ib.TimezoneTWS`` is set to the same zone, so a
+     gateway time without a zone is read in the gateway's zone, not the host's. The
+     zone claim is also checked against the data: an execution earlier than the
+     gateway day's start (as the claimed zone defines it) is UNKNOWN. The opposite
+     error (a gateway actually west of the claim, whose list silently starts later)
+     cannot be seen in the data; P0 verification, P8 and P9 are the guards there.
+  P4 List completion: ``reqExecutions`` (filtered to the paper account) returned after
+     ``execDetailsEnd``; every execution has its commission report (execId match)
+     within ``commission_wait_sec``; times are timezone-aware and not in the future.
+  P5 Currency and values: USD contract and USD commission only (no FX is invented);
+     commission finite and >= 0; ``realizedPNL`` finite, or IB's UNSET_DOUBLE, which
+     IB uses for an opening execution.
+  P6 Corrections: several revisions of one execution (same execId base) make the day
+     UNKNOWN; exact duplicates of one execId are de-duplicated.
+  P7 Restart persistence: every execution this reader has seen earlier in the same UTC
+     day (state file ``seen_path``) must still be listed under the same execId. An
+     execution that disappears (a gateway restart that lost the day's list) or is
+     replaced by a revision makes the day UNKNOWN. The state file is written only
+     after a fully proven read; an unreadable state file is UNKNOWN.
+  P8 Loop coverage: every execution the paper loop journalled for the day (read-only
+     journal, by leg fill time) must be in the gateway's list.
+  P9 Independent agreement with IB's account P&L (``reqPnL``):
        * ``realizedPnL`` must arrive and be finite within ``pnl_wait_sec``;
-       * it is in the account's BASE currency. The base currency is the account value
-         currency whose ``ExchangeRate`` is 1. A non-USD base converts with IB's own
-         ``ExchangeRate`` for USD (base units per USD). A missing or unusable rate is
-         UNKNOWN;
-       * the two figures must agree within max(``abs_tol_usd``, 1.5 x today's
-         commissions, ``rel_tol`` x the larger magnitude). The commission term covers
-         the documented accounting difference in point 8;
-       * the reqPnL day resets on the account's own schedule; with regular-hours-only
-         trading, the UTC day and the reset day contain the same session, and any
-         coverage gap shows up as a mismatch, which is UNKNOWN.
- 10. Verified zero-trade day: no executions AND ``reqPnL.realizedPnL`` == 0 (within
-     0.01 base units) AND, when a journal source is supplied, no loop execution today.
-     Only then is ``[]`` returned. An empty list is otherwise never returned.
- 11. Journal coverage (optional ``journal_exec_ids``): every execution the paper loop
-     journalled for today must be in the list the gateway returned. A missing one
-     means the broker list is incomplete, which is UNKNOWN.
+       * it is compared with the sum of ``realizedPNL`` on today's CLOSING executions.
+         IB books an opening execution's commission into the position's average cost,
+         so it reaches realised P&L inside the closing execution's ``realizedPNL``;
+         opening executions carry no realised P&L (UNSET). With aligned periods (P3),
+         the two figures are therefore the same quantity, and the tolerance covers
+         rounding only: ``ABS_TOL_USD`` ($1.00, i.e. $0.005 x 200 closing executions,
+         and more than ``MAX_CLOSING_FILLS`` closing executions is UNKNOWN);
+       * reqPnL is in the account's BASE currency (the currency whose ``ExchangeRate``
+         is 1). For a non-USD base it is converted with IB's own USD ``ExchangeRate``,
+         and the tolerance adds ``FX_REL_TOL`` (0.5 %) of the larger magnitude, capped
+         at ``FX_TOL_CAP_USD`` ($10). The tolerance therefore never exceeds $1 (USD
+         base) or $11 (any base), whatever the size of the P&L or of the commissions;
+         a larger difference is UNKNOWN. A missing or unusable rate is UNKNOWN;
+       * reqPnL resets on IB's own schedule. If that reset is not UTC midnight and an
+         execution falls between the two, the figures disagree and the day is
+         UNKNOWN; with regular-hours-only trading no execution falls there.
+  P10 Verified zero-trade day: no executions today AND ``reqPnL.realizedPnL`` == 0
+     (within 0.01 base units) AND no loop execution journalled today. Only then is
+     ``[]`` returned.
+
+The value returned for risk is conservative: realised P&L = the closing executions'
+``realizedPNL`` minus the commissions of today's opening executions, so daily loss is
+never understated (it double-counts an opening commission that IB will later book).
+
+What remains for the real-gateway acceptance tests (operations plan P0-P3), because a
+fake cannot establish it: the gateway's actual time zone and day boundary, that
+reqExecutions returns the full day after a gateway restart, the reqPnL reset time,
+the base currency and ExchangeRate rows of the paper account, and the account ids.
 
 No order method, no Order/Trade import, no live port literal (AST-tested).
-Credentials and identifiers are injected by the caller; this module reads no
-environment variable.
+Credentials, identifiers, the gateway time zone and file paths are injected by the
+caller; this module reads no environment variable. It writes only its own state file.
 """
 from __future__ import annotations
 
@@ -80,9 +105,14 @@ UNSET_DOUBLE = 1.7976931348623157e308
 DEFAULT_CONNECT_TIMEOUT_SEC = 5.0
 DEFAULT_COMMISSION_WAIT_SEC = 10.0
 DEFAULT_PNL_WAIT_SEC = 10.0
-DEFAULT_ABS_TOL_USD = 2.0
-DEFAULT_REL_TOL = 0.02
+# P9 tolerance (see the module docstring). Not constructor parameters: they cannot be
+# loosened by configuration.
+ABS_TOL_USD = 1.00
+FX_REL_TOL = 0.005
+FX_TOL_CAP_USD = 10.00
+MAX_CLOSING_FILLS = 200
 ZERO_TOL_BASE = 0.01
+FUTURE_SKEW = timedelta(seconds=60)
 _POLL_SEC = 0.25
 
 _REVISION_RE = re.compile(r"^(?P<base>.+)\.(?P<rev>\d+)$")
@@ -164,16 +194,34 @@ def _usd_per_base(account_values: Iterable[Any], account: str) -> Dict[str, Any]
     return {"base": base, "base_per_usd": rates["USD"]}
 
 
+def _gateway_day_start_utc(gateway_tz: str, now_utc: datetime) -> datetime:
+    """UTC instant at which the gateway's current local day began."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(gateway_tz)
+    local = now_utc.astimezone(tz)
+    return datetime(local.year, local.month, local.day, tzinfo=tz).astimezone(timezone.utc)
+
+
+def tolerance_usd(ib_usd: float, closing_usd: float, base_currency: str) -> float:
+    """P9 tolerance. At most ABS_TOL_USD for a USD base, ABS_TOL_USD + FX_TOL_CAP_USD
+    otherwise, independent of P&L size and commissions."""
+    tol = ABS_TOL_USD
+    if base_currency != "USD":
+        tol += min(FX_REL_TOL * max(abs(ib_usd), abs(closing_usd)), FX_TOL_CAP_USD)
+    return tol
+
+
 class PaperExecutionsReader:
     """Callable ``reader(today)`` for IBKRPnLAdapter(broker_scope='ibkr_paper')."""
 
-    def __init__(self, *, expected_account: str, host: str = IBKR_PAPER_HOST,
+    def __init__(self, *, expected_account: str, gateway_tz: Optional[str],
+                 seen_path: Optional[str],
+                 journal_exec_ids: Optional[Callable[[str], Set[str]]],
+                 host: str = IBKR_PAPER_HOST,
                  port: int = IBKR_PAPER_PORT, client_id: int = M21_PNL_CLIENT_ID,
                  connect_timeout_sec: float = DEFAULT_CONNECT_TIMEOUT_SEC,
                  commission_wait_sec: float = DEFAULT_COMMISSION_WAIT_SEC,
                  pnl_wait_sec: float = DEFAULT_PNL_WAIT_SEC,
-                 abs_tol_usd: float = DEFAULT_ABS_TOL_USD, rel_tol: float = DEFAULT_REL_TOL,
-                 journal_exec_ids: Optional[Callable[[str], Set[str]]] = None,
                  health_checker: Optional[Callable[[], dict]] = None,
                  ib_factory: Optional[Callable[[], Any]] = None,
                  filter_factory: Optional[Callable[[str], Any]] = None,
@@ -184,11 +232,12 @@ class PaperExecutionsReader:
         if port != IBKR_PAPER_PORT:
             raise ValueError("paper P&L reader is paper-port only (%d)" % IBKR_PAPER_PORT)
         self.expected_account = expected_account
+        self.gateway_tz = gateway_tz
+        self.seen_path = seen_path
         self.host, self.port, self.client_id = host, port, int(client_id)
         self.connect_timeout_sec = connect_timeout_sec
         self.commission_wait_sec = commission_wait_sec
         self.pnl_wait_sec = pnl_wait_sec
-        self.abs_tol_usd, self.rel_tol = abs_tol_usd, rel_tol
         self._journal = journal_exec_ids
         self._health = health_checker or _default_health_checker
         self._ib_factory = ib_factory or _default_ib_factory
@@ -199,25 +248,39 @@ class PaperExecutionsReader:
 
     # ── public ───────────────────────────────────────────────────────────────
     def __call__(self, today: str) -> List[dict]:
-        _check_gateway(self._health)                          # (1) before any API call
+        now = self._clock()
+        self._check_configured()                              # P3/P7/P8 inputs present
+        self._check_period(today, now)                        # P3, before any connection
+        seen = self._load_seen(today)                         # P7 state readable
+        _check_gateway(self._health)                          # P1 before any API call
         ib = self._ib_factory()
         pnl_requested = False
         try:
+            try:
+                ib.TimezoneTWS = self.gateway_tz              # P3: zone-less times in gateway zone
+            except Exception:
+                raise PaperPnLUnavailable("gateway_timezone_not_settable")
             try:
                 ib.connect(self.host, self.port, clientId=self.client_id,
                            timeout=self.connect_timeout_sec, readonly=True,
                            account=self.expected_account)
             except Exception as e:
                 raise PaperPnLUnavailable("connect_failed:%s" % type(e).__name__)
-            self._check_accounts(ib)                           # (2)
-            fills = self._executions(ib)                       # (3)
-            self._await_commissions(ib, fills)                 # (4)
-            rows, commissions_usd, all_ids = self._validate(fills, today)  # (3, 5-8)
+            self._check_accounts(ib)                           # P2
+            fills = self._executions(ib)                       # P4
+            self._await_commissions(ib, fills)                 # P4
+            rows, today_ids, all_ids = self._validate(fills, today, now)  # P2, P4-P6
+            self._check_seen(seen, all_ids)                    # P7
+            self._check_journal(today, all_ids)                # P8
             pnl_requested = True
-            xcheck = self._cross_check(ib, rows, commissions_usd)  # (9, 10)
-            self._check_journal(today, all_ids)                # (11)
-            self.last_evidence = {"executions": len(rows), "commissions_usd": round(commissions_usd, 4),
-                                  "realized_usd": round(sum(r["realized_pnl"] for r in rows), 4), **xcheck}
+            xcheck = self._cross_check(ib, rows)               # P9, P10
+            self._save_seen(today, seen | today_ids)           # only after a proven read
+            self.last_evidence = {
+                "executions": len(rows),
+                "closing_executions": sum(1 for r in rows if r["closing"]),
+                "commissions_usd": round(sum(r["commission_usd"] for r in rows), 4),
+                "realized_usd": round(sum(r["realized_pnl"] for r in rows), 4),
+                "gateway_tz": self.gateway_tz, **xcheck}
             return rows
         finally:
             if pnl_requested:
@@ -231,6 +294,55 @@ class PaperExecutionsReader:
                 pass
 
     # ── steps ────────────────────────────────────────────────────────────────
+    def _check_configured(self) -> None:
+        if not isinstance(self.gateway_tz, str) or not self.gateway_tz:
+            raise PaperPnLUnavailable("gateway_timezone_unverified")
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(self.gateway_tz)
+        except Exception:
+            raise PaperPnLUnavailable("gateway_timezone_invalid")
+        if not self.seen_path:
+            raise PaperPnLUnavailable("seen_state_unconfigured")
+        if self._journal is None:
+            raise PaperPnLUnavailable("journal_source_unconfigured")
+
+    def _check_period(self, today: str, now: datetime) -> None:
+        now = _to_utc(now)
+        if now.strftime("%Y-%m-%d") != today:
+            raise PaperPnLUnavailable("day_not_current")
+        utc_midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        if _gateway_day_start_utc(self.gateway_tz, now) > utc_midnight:
+            raise PaperPnLUnavailable("gateway_day_does_not_cover_utc_day")
+
+    def _load_seen(self, today: str) -> Set[str]:
+        import json
+        import os
+        if not os.path.exists(self.seen_path):
+            return set()
+        try:
+            with open(self.seen_path) as f:
+                st = json.load(f)
+            if not isinstance(st, dict) or not isinstance(st.get("exec_ids"), list) \
+                    or not all(isinstance(x, str) for x in st["exec_ids"]):
+                raise ValueError("shape")
+        except Exception:
+            raise PaperPnLUnavailable("seen_state_unreadable")
+        return set(st["exec_ids"]) if st.get("day") == today else set()
+
+    def _save_seen(self, today: str, ids: Set[str]) -> None:
+        import json
+        import os
+        d = os.path.dirname(os.path.abspath(self.seen_path))
+        os.makedirs(d, exist_ok=True)
+        tmp = "%s.tmp.%d" % (self.seen_path, os.getpid())
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"day": today, "exec_ids": sorted(ids)}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.seen_path)
+
     def _check_accounts(self, ib) -> None:
         accts = list(ib.managedAccounts() or [])
         if self.expected_account not in accts:
@@ -258,8 +370,8 @@ class PaperExecutionsReader:
                 raise PaperPnLUnavailable("commission_report_missing:%d" % len(missing))
             self._sleep(ib, _POLL_SEC)
 
-    def _validate(self, fills: List[Any], today: str):
-        now = self._clock()
+    def _validate(self, fills: List[Any], today: str, now: datetime):
+        now = _to_utc(now)
         by_id: Dict[str, Any] = {}
         for f in fills:
             ex = getattr(f, "execution", None)
@@ -273,17 +385,22 @@ class PaperExecutionsReader:
         for eid in by_id:
             bases.setdefault(_exec_base(eid), set()).add(eid)
         if any(len(v) > 1 for v in bases.values()):
-            raise PaperPnLUnavailable("execution_corrected")       # (7) corrections block
+            raise PaperPnLUnavailable("execution_corrected")       # P6
 
         rows: List[dict] = []
-        commissions = 0.0
+        today_ids: Set[str] = set()
+        day_start = _gateway_day_start_utc(self.gateway_tz, now)
         for eid, f in sorted(by_id.items()):
             ex, cr, ct = f.execution, f.commissionReport, getattr(f, "contract", None)
             if getattr(ex, "acctNumber", None) != self.expected_account:
                 raise PaperPnLUnavailable("execution_for_another_account")
             t = _to_utc(getattr(ex, "time", None))
-            if t > now + timedelta(seconds=60):
+            if t > now + FUTURE_SKEW:
                 raise PaperPnLUnavailable("execution_time_in_future")
+            if t < day_start:
+                # The list holds an execution from before the gateway's day as the
+                # configured zone defines it: the zone claim is wrong (P3).
+                raise PaperPnLUnavailable("execution_before_gateway_day")
             if getattr(ct, "currency", None) != "USD":
                 raise PaperPnLUnavailable("execution_currency_not_usd")
             if getattr(cr, "currency", None) != "USD":
@@ -293,19 +410,30 @@ class PaperExecutionsReader:
                 raise PaperPnLUnavailable("commission_invalid")
             rp = getattr(cr, "realizedPNL", None)
             if isinstance(rp, (int, float)) and not isinstance(rp, bool) and float(rp) == UNSET_DOUBLE:
-                realized = -float(com)                              # opening fill: its fee only
+                closing, ib_realized = False, 0.0                   # opening fill: no realised P&L
             elif _finite(rp):
-                realized = float(rp)                                # closing fill: IB's realised P&L
+                closing, ib_realized = True, float(rp)              # closing fill: IB's realised P&L
             else:
                 raise PaperPnLUnavailable("realized_pnl_invalid")
             if t.strftime("%Y-%m-%d") != today:
-                continue                                            # another UTC day
-            commissions += float(com)
-            rows.append({"exec_id": eid, "time_utc": t.isoformat(), "realized_pnl": realized,
+                continue                                            # another UTC day (P3)
+            today_ids.add(eid)
+            rows.append({"exec_id": eid, "time_utc": t.isoformat(), "closing": closing,
+                         "ib_realized_usd": ib_realized,
+                         # conservative value for risk: opening fills count their fee
+                         "realized_pnl": ib_realized if closing else -float(com),
                          "symbol": getattr(ct, "symbol", None), "commission_usd": float(com)})
-        return rows, commissions, set(by_id)
+        return rows, today_ids, set(by_id)
 
-    def _cross_check(self, ib, rows: List[dict], commissions_usd: float) -> Dict[str, Any]:
+    def _check_seen(self, seen: Set[str], listed: Set[str]) -> None:
+        gone = seen - listed
+        if gone:
+            raise PaperPnLUnavailable("execution_disappeared_or_corrected:%d" % len(gone))
+
+    def _cross_check(self, ib, rows: List[dict]) -> Dict[str, Any]:
+        closing = [r for r in rows if r["closing"]]
+        if len(closing) > MAX_CLOSING_FILLS:
+            raise PaperPnLUnavailable("too_many_closing_executions:%d" % len(closing))
         try:
             pnl = ib.reqPnL(self.expected_account)
         except Exception as e:
@@ -321,20 +449,19 @@ class PaperExecutionsReader:
             if abs(ib_realized_base) > ZERO_TOL_BASE:
                 raise PaperPnLUnavailable("zero_trade_day_not_verified")
             return {"cross_check": "verified_zero_trade_day", "base_currency": fx["base"]}
-        ours = sum(r["realized_pnl"] for r in rows)
+        closing_usd = sum(r["ib_realized_usd"] for r in closing)
         ib_usd = ib_realized_base / fx["base_per_usd"]
-        tol = max(self.abs_tol_usd, 1.5 * commissions_usd, self.rel_tol * max(abs(ours), abs(ib_usd)))
-        if abs(ours - ib_usd) > tol:
+        tol = tolerance_usd(ib_usd, closing_usd, fx["base"])
+        if abs(closing_usd - ib_usd) > tol:
             raise PaperPnLUnavailable("pnl_cross_check_mismatch")
-        return {"cross_check": "agree", "base_currency": fx["base"], "ib_realized_usd": round(ib_usd, 4),
+        return {"cross_check": "agree", "base_currency": fx["base"],
+                "ib_realized_usd": round(ib_usd, 4), "closing_realized_usd": round(closing_usd, 4),
                 "tolerance_usd": round(tol, 4)}
 
     def _check_journal(self, today: str, broker_ids: Set[str]) -> None:
-        """Every execution the paper loop journalled for ``today`` must be in the
+        """P8: every execution the paper loop journalled for ``today`` must be in the
         broker's execution list (any revision of it). The broker list is the one
         the gateway returned, before the UTC-day filter."""
-        if self._journal is None:
-            return
         try:
             expected = set(self._journal(today) or set())
         except Exception as e:
@@ -380,4 +507,5 @@ def make_paper_pnl_reader(**kwargs) -> PaperExecutionsReader:
 
 
 __all__ = ["PaperExecutionsReader", "PaperPnLUnavailable", "make_paper_pnl_reader",
-           "make_journal_exec_ids", "M21_PNL_CLIENT_ID", "IBKR_PAPER_PORT"]
+           "make_journal_exec_ids", "tolerance_usd", "M21_PNL_CLIENT_ID", "IBKR_PAPER_PORT",
+           "ABS_TOL_USD", "FX_REL_TOL", "FX_TOL_CAP_USD", "MAX_CLOSING_FILLS"]

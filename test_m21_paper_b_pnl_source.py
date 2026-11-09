@@ -142,7 +142,19 @@ class FakeIB:
             self._pnl.realizedPnL = self.pnl_value
 
 
+_TMP = tempfile.TemporaryDirectory()             # per-module scratch for seen-state files
+_N = [0]
+
+
+def seen_file():
+    _N[0] += 1
+    return os.path.join(_TMP.name, "seen_%d.json" % _N[0])
+
+
 def make(ib, **kw):
+    kw.setdefault("gateway_tz", "UTC")
+    kw.setdefault("seen_path", seen_file())
+    kw.setdefault("journal_exec_ids", lambda d: set())
     kw.setdefault("health_checker", lambda: dict(HEALTHY))
     kw.setdefault("commission_wait_sec", 0.05)
     kw.setdefault("pnl_wait_sec", 0.05)
@@ -179,12 +191,13 @@ class Isolation(_Base):
         self.assertFalse({"environ", "getenv", "putenv"} & attrs)
 
     def test_constructor_refuses_live_port_and_non_paper_account(self):
+        req = dict(gateway_tz="UTC", seen_path="/x", journal_exec_ids=lambda d: set())
         with self.assertRaises(ValueError):
-            PaperExecutionsReader(expected_account=ACCT, port=4001)
+            PaperExecutionsReader(expected_account=ACCT, port=4001, **req)
         with self.assertRaises(ValueError):
-            PaperExecutionsReader(expected_account="U1234567")
+            PaperExecutionsReader(expected_account="U1234567", **req)
         with self.assertRaises(ValueError):
-            PaperExecutionsReader(expected_account="")
+            PaperExecutionsReader(expected_account="", **req)
 
     def test_connect_is_readonly_paper_port_dedicated_client(self):
         ib = FakeIB()
@@ -201,6 +214,8 @@ class Isolation(_Base):
             h = dict(HEALTHY, **bad)
             created = []
             r = PaperExecutionsReader(expected_account=ACCT, health_checker=lambda h=h: h,
+                                      gateway_tz="UTC", seen_path=seen_file(),
+                                      journal_exec_ids=lambda d: set(), clock=lambda: NOW,
                                       ib_factory=lambda: created.append(1))
             with self.assertRaises(PaperPnLUnavailable):
                 r(TODAY)
@@ -210,6 +225,8 @@ class Isolation(_Base):
         def boom():
             raise OSError("no systemctl")
         r = PaperExecutionsReader(expected_account=ACCT, health_checker=boom,
+                                  gateway_tz="UTC", seen_path=seen_file(),
+                                  journal_exec_ids=lambda d: set(), clock=lambda: NOW,
                                   ib_factory=lambda: self.fail("must not connect"))
         with self.assertRaises(Exception):
             r(TODAY)
@@ -416,24 +433,213 @@ class ZeroDayAndCoverage(_Base):
                            "journal_read_failed")
 
     def test_previous_utc_day_fill_is_excluded(self):
-        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, day=8)),
+        # Athens gateway: its day began 22:00 UTC on the 8th, so its list may hold
+        # a fill from the previous UTC day; that fill is not part of the UTC day.
+        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, 30, day=8)),
                            fill("a.01", realized=-5.0)], pnl=-5.0)
-        rows = make(ib)(TODAY)
+        rows = make(ib, gateway_tz="Europe/Athens")(TODAY)
         self.assertEqual([r["exec_id"] for r in rows], ["a.01"])
 
     def test_reset_basis_mismatch_is_unknown(self):
         # IB's day still holds yesterday's fill; the UTC day does not -> disagree -> UNKNOWN
-        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, day=8)),
+        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, 30, day=8)),
                            fill("a.01", realized=-5.0)], pnl=-75.0)
-        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")
+        self.assertUnknown(make(ib, gateway_tz="Europe/Athens"), "pnl_cross_check_mismatch")
 
     def test_zero_day_before_ib_reset_is_unknown(self):
-        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, day=8))], pnl=-70.0)
-        self.assertUnknown(make(ib), "zero_trade_day_not_verified")
+        ib = FakeIB(fills=[fill("y.01", realized=-70.0, t=_t(22, 30, day=8))], pnl=-70.0)
+        self.assertUnknown(make(ib, gateway_tz="Europe/Athens"), "zero_trade_day_not_verified")
 
     def test_previous_day_fill_still_validated(self):
-        ib = FakeIB(fills=[fill("y.01", realized=float("nan"), t=_t(22, day=8))], pnl=0.0)
-        self.assertUnknown(make(ib), "realized_pnl_invalid")
+        ib = FakeIB(fills=[fill("y.01", realized=float("nan"), t=_t(22, 30, day=8))], pnl=0.0)
+        self.assertUnknown(make(ib, gateway_tz="Europe/Athens"), "realized_pnl_invalid")
+
+
+# ─── P9 tolerance: bounded, independent of P&L size and commissions ─────────
+class ToleranceBound(_Base):
+    """Review finding (#37): the tolerance must not grow with profits or fees."""
+
+    def _closing(self, n, realized_each, commission=1.0, with_openings=True):
+        fills = []
+        for i in range(n):
+            if with_openings:
+                fills.append(fill("o%03d.01" % i, realized=UNSET_DOUBLE, commission=commission,
+                                  t=_t(14, i % 60)))
+            fills.append(fill("c%03d.01" % i, realized=realized_each, commission=commission,
+                              t=_t(15, i % 60)))
+        return fills
+
+    def test_bound_is_explicit(self):
+        self.assertEqual((R.ABS_TOL_USD, R.FX_REL_TOL, R.FX_TOL_CAP_USD, R.MAX_CLOSING_FILLS),
+                         (1.00, 0.005, 10.00, 200))
+        for x in (0.0, 1.0, 1e3, 1e6, 1e9):
+            self.assertEqual(R.tolerance_usd(x, -x, "USD"), 1.00)
+            self.assertLessEqual(R.tolerance_usd(x, x, "EUR"), 11.00)
+        self.assertEqual(R.tolerance_usd(1e9, 1e9, "EUR"), 11.00)
+        self.assertNotIn("abs_tol_usd", inspect.signature(PaperExecutionsReader).parameters)
+        self.assertNotIn("rel_tol", inspect.signature(PaperExecutionsReader).parameters)
+
+    def test_large_profit_cannot_hide_a_material_difference(self):
+        ib = FakeIB(fills=[fill("c.01", realized=5000.0)], pnl=4900.0)     # old rule: 2% = $100
+        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")
+        ib = FakeIB(fills=[fill("c.01", realized=5000.0)], pnl=4998.5)     # $1.50 > $1.00
+        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")
+        ib = FakeIB(fills=[fill("c.01", realized=5000.0)], pnl=5000.6)     # rounding
+        self.assertEqual(len(make(ib)(TODAY)), 1)
+
+    def test_accumulated_commissions_cannot_hide_a_difference(self):
+        # 40 round trips, $1 per fill: the old rule allowed 1.5 x $80 = $120.
+        fills = self._closing(40, -10.0)
+        self.assertUnknown(make(FakeIB(fills=fills, pnl=-400.0 - 50.0)), "pnl_cross_check_mismatch")
+        self.assertUnknown(make(FakeIB(fills=fills, pnl=-400.0 - 40.0)), "pnl_cross_check_mismatch")
+        r = make(FakeIB(fills=fills, pnl=-400.0))                       # IB's own semantics
+        rows = r(TODAY)
+        self.assertAlmostEqual(r.last_evidence["closing_realized_usd"], -400.0)
+        self.assertAlmostEqual(sum(x["realized_pnl"] for x in rows), -440.0)   # conservative
+        self.assertEqual(r.last_evidence["tolerance_usd"], 1.0)
+
+    def test_too_many_closing_executions_is_unknown(self):
+        fills = [fill("c%03d.01" % i, realized=0.0, commission=0.0, t=_t(14, 0)) for i in range(201)]
+        self.assertUnknown(make(FakeIB(fills=fills, pnl=0.0)), "too_many_closing_executions:201")
+        fills = fills[:200]
+        self.assertEqual(len(make(FakeIB(fills=fills, pnl=0.0))(TODAY)), 200)
+
+    def test_non_usd_base_bounded(self):
+        eur = [av("ExchangeRate", "1.00", "EUR"), av("ExchangeRate", "0.9", "USD")]
+        ib = FakeIB(fills=[fill("c.01", realized=-5000.0)], pnl=-5020.0 * 0.9, values=eur)
+        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")              # $20 > $11 cap
+        ib = FakeIB(fills=[fill("c.01", realized=-5000.0)], pnl=-5008.0 * 0.9, values=eur)
+        self.assertEqual(len(make(ib)(TODAY)), 1)                             # $8 <= $11
+        ib = FakeIB(fills=[fill("c.01", realized=-100.0)], pnl=-103.0 * 0.9, values=eur)
+        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")              # $3 > 1 + 0.5
+
+    def test_opening_only_day_needs_ib_realized_zero(self):
+        ib = FakeIB(fills=[fill("o.01", realized=UNSET_DOUBLE, commission=1.0)], pnl=-1.0)
+        self.assertEqual(len(make(ib)(TODAY)), 1)                             # |0 - (-1)| <= 1
+        ib = FakeIB(fills=[fill("o.01", realized=UNSET_DOUBLE, commission=1.0)], pnl=-35.0)
+        self.assertUnknown(make(ib), "pnl_cross_check_mismatch")
+
+
+# ─── P3 period: only the current UTC day, and only when the gateway day covers it
+class Period(_Base):
+    def _at(self, tz, now, fills=(), pnl=0.0):
+        ib = FakeIB(fills=list(fills), pnl=pnl)
+        return ib, make(ib, gateway_tz=tz, clock=lambda: now)
+
+    def test_unset_or_invalid_zone_refuses_before_connecting(self):
+        for tz, frag in ((None, "gateway_timezone_unverified"), ("", "gateway_timezone_unverified"),
+                         ("Mars/Olympus", "gateway_timezone_invalid")):
+            created = []
+            r = make(None, gateway_tz=tz)
+            r._ib_factory = lambda: created.append(1)
+            self.assertUnknown(r, frag)
+            self.assertEqual(created, [])
+
+    def test_only_the_current_utc_day(self):
+        ib, r = self._at("UTC", NOW)
+        with self.assertRaises(PaperPnLUnavailable) as cm:
+            r("2026-11-08")
+        self.assertIn("day_not_current", str(cm.exception))
+        self.assertEqual(ib.calls, [])
+
+    def test_zone_coverage_matrix(self):
+        ok, refuse = [], []
+        cases = [("UTC", NOW, True), ("Etc/UTC", NOW, True),
+                 ("America/New_York", NOW, False),                       # day starts 05:00 UTC
+                 ("Europe/Athens", NOW, True),                           # began 22:00 UTC on the 8th
+                 ("Europe/Athens", datetime(2026, 11, 9, 22, 30, tzinfo=timezone.utc), False),
+                 ("Asia/Tokyo", datetime(2026, 11, 9, 10, 0, tzinfo=timezone.utc), True),
+                 ("Asia/Tokyo", datetime(2026, 11, 9, 16, 0, tzinfo=timezone.utc), False),
+                 ("Europe/Athens", datetime(2026, 7, 9, 20, 0, tzinfo=timezone.utc), True),  # EEST
+                 ("Europe/London", datetime(2026, 7, 9, 20, 0, tzinfo=timezone.utc), True),  # BST
+                 ("Europe/London", datetime(2026, 7, 9, 23, 30, tzinfo=timezone.utc), False)]
+        for tz, now, expect in cases:
+            ib, r = self._at(tz, now)
+            day = now.strftime("%Y-%m-%d")
+            try:
+                r(day)
+                ok.append((tz, now.isoformat()))
+                got = True
+            except PaperPnLUnavailable as e:
+                refuse.append((tz, now.isoformat(), str(e)))
+                got = False
+                self.assertIn("gateway_day_does_not_cover_utc_day", str(e))
+                self.assertEqual(ib.calls, [], tz)                         # refused before connecting
+            self.assertEqual(got, expect, (tz, now))
+
+    def test_gateway_zone_is_applied_to_the_session(self):
+        ib = FakeIB(fills=[], pnl=0.0)
+        make(ib, gateway_tz="Europe/Athens")(TODAY)
+        self.assertEqual(ib.TimezoneTWS, "Europe/Athens")
+
+    def test_execution_before_the_claimed_gateway_day_is_unknown(self):
+        ib = FakeIB(fills=[fill("y.01", realized=-1.0, t=_t(23, day=8)),
+                           fill("a.01", realized=-5.0)], pnl=-5.0)
+        self.assertUnknown(make(ib, gateway_tz="UTC"), "execution_before_gateway_day")
+
+
+# ─── P7 restart persistence ────────────────────────────────────────────────
+class RestartPersistence(_Base):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "data", "seen.json")
+
+    def read(self, fills, pnl, **kw):
+        return make(FakeIB(fills=fills, pnl=pnl), seen_path=self.path, **kw)
+
+    def state(self):
+        with open(self.path) as f:
+            return json.load(f)
+
+    def test_ids_are_remembered_only_after_a_proven_read(self):
+        self.assertUnknown(self.read([fill("a.01", realized=-5.0)], -50.0), "pnl_cross_check_mismatch")
+        self.assertFalse(os.path.exists(self.path))
+        self.read([fill("a.01", realized=-5.0)], -5.0)(TODAY)
+        self.assertEqual(self.state(), {"day": TODAY, "exec_ids": ["a.01"]})
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
+    def test_gateway_restart_that_loses_the_list_is_unknown(self):
+        self.read([fill("a.01", realized=-5.0)], -5.0)(TODAY)
+        # after a restart the gateway lists nothing; IB's P&L still says -5
+        self.assertUnknown(self.read([], -5.0), "execution_disappeared_or_corrected:1")
+        # ...even if IB's P&L were also lost (both sources empty)
+        self.assertUnknown(self.read([], 0.0), "execution_disappeared_or_corrected:1")
+        self.assertEqual(self.state()["exec_ids"], ["a.01"])         # not overwritten
+
+    def test_replacement_by_a_revision_is_unknown(self):
+        self.read([fill("x.01", realized=-5.0)], -5.0)(TODAY)
+        self.assertUnknown(self.read([fill("x.02", realized=-6.0)], -6.0),
+                           "execution_disappeared_or_corrected:1")
+
+    def test_additions_accumulate(self):
+        self.read([fill("a.01", realized=-5.0)], -5.0)(TODAY)
+        self.read([fill("a.01", realized=-5.0), fill("b.01", realized=2.0)], -3.0)(TODAY)
+        self.assertEqual(self.state()["exec_ids"], ["a.01", "b.01"])
+
+    def test_a_new_day_starts_empty(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            json.dump({"day": "2026-11-08", "exec_ids": ["old.01"]}, f)
+        self.read([], 0.0)(TODAY)
+        self.assertEqual(self.state(), {"day": TODAY, "exec_ids": []})
+
+    def test_unreadable_state_refuses_before_connecting(self):
+        os.makedirs(os.path.dirname(self.path))
+        for bad in ("not json", json.dumps({"day": TODAY, "exec_ids": "a"}),
+                    json.dumps({"day": TODAY, "exec_ids": [1]}), json.dumps([1])):
+            with open(self.path, "w") as f:
+                f.write(bad)
+            ib = FakeIB(fills=[], pnl=0.0)
+            with self.assertRaises(PaperPnLUnavailable) as cm:
+                make(ib, seen_path=self.path)(TODAY)
+            self.assertIn("seen_state_unreadable", str(cm.exception))
+            self.assertEqual(ib.calls, [])
+
+    def test_state_and_journal_are_mandatory(self):
+        self.assertUnknown(make(FakeIB(fills=[], pnl=0.0), seen_path=None), "seen_state_unconfigured")
+        self.assertUnknown(make(FakeIB(fills=[], pnl=0.0), journal_exec_ids=None),
+                           "journal_source_unconfigured")
 
 
 # ─── 12. clean-up ──────────────────────────────────────────────────────────
@@ -524,6 +730,21 @@ class Wiring(_Base):
         self.assertTrue(rd.expected_account == EXPECTED_PAPER_ACCOUNT)
         self.assertEqual((rd.port, rd.client_id), (4002, 16))
         self.assertIsNotNone(rd._journal)
+        self.assertEqual(rd.seen_path, self.cli.IBKR_PAPER_PNL_SEEN_PATH)
+
+    def test_gateway_zone_comes_only_from_the_operator_setting(self):
+        with mock.patch.dict(os.environ, {"IBKR_GATEWAY_TZ": " UTC "}):
+            os.environ.pop("IBKR_ACCOUNT", None)
+            self.assertEqual(self.cli._build_ibkr_adapter("ibkr_paper")._executions_reader.gateway_tz,
+                             "UTC")
+        with mock.patch.dict(os.environ, {}):
+            os.environ.pop("IBKR_GATEWAY_TZ", None)
+            os.environ.pop("IBKR_ACCOUNT", None)
+            ad = self.cli._build_ibkr_adapter("ibkr_paper")
+        self.assertIsNone(ad._executions_reader.gateway_tz)
+        rd = ad.read(today=TODAY)                          # unset -> UNKNOWN before any connection
+        self.assertEqual(rd.quality.value, "unknown")
+        self.assertIn("gateway_timezone_unverified", rd.error)
 
     def test_ibkr_live_stays_unknown_and_never_builds_paper_reader(self):
         with mock.patch.object(R, "make_paper_pnl_reader",
@@ -621,6 +842,10 @@ class IbInsyncContract(unittest.TestCase):
                   "disconnect", "sleep"):
             self.assertTrue(callable(getattr(I.IB, m)), m)
         self.assertEqual(I.util.UNSET_DOUBLE, UNSET_DOUBLE)
+        # P3: the session's zone-less execution times are parsed in TimezoneTWS
+        self.assertTrue(hasattr(I.IB, "TimezoneTWS"))
+        import ib_insync.decoder as Dm
+        self.assertIn("TimezoneTWS", inspect.getsource(Dm.Decoder.execDetails))
 
 
 if __name__ == "__main__":
