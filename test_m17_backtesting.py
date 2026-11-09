@@ -3723,7 +3723,9 @@ _PROTECTED_APPROVED_SHA256 = {
     # keeps the warned fallback). No route/auth/CSRF logic changed.
     # M21.1extra-D3 integration: registers the read-only paper-metrics blueprint
     # (GET-only, auth-required) and adds one nav link. No other change.
-    "dashboard/app.py": "97a3d678418add7be62ec14564a8bce1446ee6b261a7bc8c38250687c30180cd",
+    # M21 PR-e (H-1/F-7): bot control only through systemd and Gate A-0's
+    # ALLOW_BOT_START; no route launches, kills or signals a process (re-pinned).
+    "dashboard/app.py": "f937b720d5fa1f0223d92a60ab7c0cce16cac94c247baffa9714cab39418c237",
     # M21 PR-a (BLK-1/BLK-4): paper entries aggregate the cross-scope gates over
     # their own paper account; ibkr_paper authorised by its own time-boxed D0
     # lane, ibkr_live by family AND lane. Exact transition proven in
@@ -4502,6 +4504,9 @@ class G10_Hygiene(unittest.TestCase):
             "tools/monitoring/__init__.py",
             "tools/monitoring/run_checks.py",
             "test_m21_paper_d_services.py",
+            # M21 PR-e: dashboard bot-start route hardening (protected transition).
+            "dashboard/app.py",
+            "test_m21_paper_e_dashboard_start_routes.py",
             # M21.1extra-B2flat: deliberate, ChatGPT-approved narrow edit to add
             # the paper-only flatten_paper_position primitive (purely additive;
             # existing submit/reconcile/cancel behaviour unchanged).

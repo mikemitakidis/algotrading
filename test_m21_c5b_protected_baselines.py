@@ -63,6 +63,8 @@ _GUARD_BASELINES = {
     "bot/risk_authority/snapshot.py": ("648682c", "60281c4", "ae8fb0d", "384e484",
                                        "d73a04a", "ceb8cd5"),
 }
+# M21.1extra-D3's approved dashboard/app.py content (7f65141); M21 PR-e builds on it.
+_D3_APP_BLOB = "564fc812ef15e2cc088ab84f1e377021a18b8e99"
 # M21.1 A01's approved scanner content (produced by 6242bde); WP6 builds on it.
 _A01_SCANNER_BLOB = "08dc7512f019ae9fa1706dcf7776c2b2036e1ee3"
 
@@ -189,8 +191,9 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
     def test_dashboard_app_transition_is_exactly_the_d3_wiring(self):
         # The fourth transition is narrow: from the frozen app.py it adds the
         # nav link and the read-only blueprint registration, removes nothing.
+        # (M21 PR-e builds on the D3 content, blob _D3_APP_BLOB; checked below.)
         e = PB.APPROVED_CHANGES["dashboard/app.py"]
-        rc, out = _git("diff", "--unified=0", e.from_blob, e.to_blob)
+        rc, out = _git("diff", "--unified=0", e.from_blob, _D3_APP_BLOB)
         self.assertEqual(rc, 0)
         removed = [l for l in out.splitlines()
                    if l.startswith("-") and not l.startswith("---")]
@@ -204,6 +207,36 @@ class TestApprovedTableMatchesHistory(unittest.TestCase):
             "_d3_paper_metrics_bp  # noqa: E402",
             "app.register_blueprint(_d3_paper_metrics_bp)",
         ])
+
+    def test_dashboard_app_pr_e_only_rewires_the_bot_start_routes(self):
+        # PR-e: from the D3 content, the only removals are the old launcher
+        # (_run_bot's Popen of main.py), /api/stop's pkill and the four copies of
+        # the pkill-then-relaunch thread; no route, decorator or auth line goes,
+        # and the only command added is systemctl through _systemctl.
+        e = PB.APPROVED_CHANGES["dashboard/app.py"]
+        rc, out = _git("diff", "--unified=0", _D3_APP_BLOB, e.to_blob)
+        self.assertEqual(rc, 0)
+        removed = [l[1:].strip() for l in out.splitlines()
+                   if l.startswith("-") and not l.startswith("---")]
+        added = [l[1:].strip() for l in out.splitlines()
+                 if l.startswith("+") and not l.startswith("+++")]
+        for l in removed:
+            self.assertFalse(l.startswith(("@app.route", "@require_auth", "@csrf_required",
+                                           "def start", "def stop", "def restart",
+                                           "def telegram_save", "def strategy_save",
+                                           "def strategy_reset")), l)
+        self.assertEqual(sum("subprocess.Popen(" in l for l in removed), 1)
+        self.assertEqual(sum("'pkill'" in l for l in removed), 5)    # every pkill removed
+        for bad in ("Popen", "pkill", "os.kill", "killpg", "send_signal", "_run_bot"):
+            self.assertFalse([l for l in added if bad in l], bad)
+        self.assertFalse([l for l in added if l.startswith(("@app.route", "def stop("))])
+        self.assertIn("_BOT_START_ALLOW_FILE = Path('/var/lib/algo-trader/ALLOW_BOT_START')", added)
+        self.assertIn("_BOT_UNIT = 'algo-trader.service'", added)
+        runs = [l for l in added if "subprocess.run(" in l]
+        self.assertEqual(runs, ["r = subprocess.run(['systemctl', *args], capture_output=True, text=True,"])
+        rc, new = _git("cat-file", "-p", e.to_blob)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("pkill", new)
 
     def test_approving_commit_is_ancestor_and_produced_to_blob(self):
         for rel, e in PB.APPROVED_CHANGES.items():
