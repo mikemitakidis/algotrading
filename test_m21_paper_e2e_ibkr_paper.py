@@ -1,5 +1,15 @@
 """test_m21_paper_e2e_ibkr_paper.py: M21 paper-trading cross-lane end-to-end (PR-a..PR-e).
 
+EVIDENCE CLASS: OFFLINE SIMULATION. NOT IBKR PAPER GATEWAY ACCEPTANCE.
+The gateway below is a fake. These tests prove how OUR code behaves when the gateway
+answers in the ways modelled here; they cannot establish anything about the real IBKR
+gateway: its account ids, its time zone and day boundary, whether it re-lists the day's
+executions after a restart, the reqPnL reset time and accounting, delayed-market-data
+policy, the paper account's base currency, or live-account isolation at IBKR itself.
+Those are the mandatory real-gateway acceptance tests of operations plan phases P0-P3,
+listed in docs/runbooks/paper/IBKR_PAPER_gateway_acceptance_tests.md; passing this
+module does not replace any of them.
+
 One simulated IBKR PAPER gateway (a shared fake broker world, no socket) behind every
 component that talks to IBKR, and the REAL code everywhere else:
 
@@ -128,14 +138,19 @@ class ReadOnlyIB(D23.FakeIB):
 
 # ─── the chain ──────────────────────────────────────────────────────────────
 class Chain:
-    def __init__(self, tc, *, lane=True, policy_overrides=None):
+    def __init__(self, tc, *, lane=True, policy_overrides=None, gateway_tz="UTC"):
         self.tc = tc
+        self.gateway_tz = gateway_tz
         self.dir = tempfile.mkdtemp(prefix="paper_e2e_")
         tc.addCleanup(__import__("shutil").rmtree, self.dir, True)
         self.now = utc_now()
         et = self.now.astimezone(ZoneInfo("America/New_York"))
         if et.hour == 23 and et.minute >= 50:
             tc.skipTest("too close to the end of the New York day for the session fixture")
+        if self.now.hour >= 22:
+            # the loop clock advances up to an hour; the P&L reader proves only the
+            # current UTC day, which the real-time M14 snapshot also uses
+            tc.skipTest("too close to UTC midnight for a one-day scenario")
         self.clock = D23.LoopClock(self.now)
         self.world = PaperWorld(self.clock)
         self.signals = os.path.join(self.dir, "signals.db")
@@ -187,7 +202,9 @@ class Chain:
             pos = make_ibkr_paper_positions_reader(health_checker=lambda: dict(w.health),
                                                    ib_session_factory=session)
             pnl = PaperExecutionsReader(
-                expected_account=SYN, health_checker=lambda: dict(w.pnl_health or w.health),
+                expected_account=SYN, gateway_tz=self.gateway_tz,
+                seen_path=os.path.join(self.dir, "ibkr_paper_pnl_seen.json"),
+                health_checker=lambda: dict(w.pnl_health or w.health),
                 ib_factory=lambda: ReadOnlyIB(w), filter_factory=lambda a: SimpleNamespace(acctCode=a),
                 clock=self.clock, commission_wait_sec=0.05, pnl_wait_sec=0.05,
                 journal_exec_ids=make_journal_exec_ids(self.journal_db), sleep=lambda ib, s: None)
@@ -481,6 +498,25 @@ class MissingData(_E2E):
         ch.loop = ch.make_loop(refresher=lambda: (True, "refreshed"))
         self._blocked(ch, "risk_authority_block:exposure_stale")
 
+    def test_profit_day_with_a_material_reqpnl_difference(self):
+        ch = Chain(self)
+        ch.world.add_execution("CCC", 333, "SLD", 10, 900.0, realized=5000.0)
+        ch.world.ib_realized = 4900.0                    # $100 apart on a $5,000 day
+        self._blocked(ch, "risk_refresh_block:pnl_refresh_rc_1")
+
+    def test_gateway_restart_that_loses_the_day_blocks(self):
+        ch = Chain(self)
+        ch.world.add_execution("CCC", 333, "SLD", 1, 40.0, realized=-5.0)
+        self.assertEqual(ch.refresher()(), (True, "refreshed"))    # proven once
+        ch.world.executions = []                                    # gateway restarted, list lost
+        ch.world.ib_realized = 0.0                                  # ...and its P&L reset too:
+        self._blocked(ch, "risk_refresh_block:pnl_refresh_rc_1")    # only the state file sees it
+
+    def test_gateway_zone_not_covering_the_utc_day_blocks(self):
+        ch = Chain(self, gateway_tz="America/New_York")             # its day starts 04/05:00 UTC
+        self._blocked(ch, "risk_refresh_block:pnl_refresh_rc_1")
+        self.assertEqual([c for c in ch.world.connects if c[0] == 16], [])
+
     def test_monitor_flags_repeated_data_blocks(self):
         from bot.monitoring.risk_data import check_risk_data_blocks
         ch = Chain(self)
@@ -553,6 +589,28 @@ class StartupAndRecovery(_E2E):
         r = ch.tick()
         self.assertEqual(r["entry_block"], "risk:risk_refresh_error:RuntimeError")
         self.assertNoOrder(ch)
+
+
+class EvidenceClass(unittest.TestCase):
+    """Review finding 5: simulated evidence must stay distinguishable from the
+    real-gateway acceptance tests, which remain mandatory."""
+
+    DOC = REPO / "docs" / "runbooks" / "paper" / "IBKR_PAPER_gateway_acceptance_tests.md"
+
+    def test_module_declares_its_evidence_class(self):
+        doc = sys.modules[__name__].__doc__
+        self.assertIn("EVIDENCE CLASS: OFFLINE SIMULATION. NOT IBKR PAPER GATEWAY ACCEPTANCE.", doc)
+        self.assertIn("docs/runbooks/paper/IBKR_PAPER_gateway_acceptance_tests.md", doc)
+
+    def test_acceptance_tests_are_listed_and_name_their_offline_counterparts(self):
+        text = self.DOC.read_text()
+        for row in ("A1", "A2", "B1", "B2", "B3", "B4", "B5", "C1", "C2", "C3", "C4", "C5", "C6"):
+            self.assertRegex(text, r"\n\| %s \| P[0-4] \|" % row, row)
+        names = set(dir(sys.modules[__name__]))
+        for cls in ("LiveIsolation", "Duplication", "HappyPath"):
+            self.assertIn(cls, names)
+            self.assertIn("`%s`" % cls, text)
+        self.assertIn("does not replace any of them", text)
 
 
 if __name__ == "__main__":
